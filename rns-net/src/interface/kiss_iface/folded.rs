@@ -7,6 +7,11 @@
 //! frames held until the TNC reports it is ready. The flow-control timeout
 //! and the beacon are checked on the driver's tick.
 
+#![allow(
+    unsafe_code,
+    reason = "descriptors registered with the poller and OS calls through libc"
+)]
+
 use std::collections::VecDeque;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd};

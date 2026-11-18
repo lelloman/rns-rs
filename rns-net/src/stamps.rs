@@ -4,6 +4,8 @@
 //! proof-of-work stamps over `destination_hash || public_key || name_hash`,
 //! persisted per destination under `storage/stamps/<hash>.dstamp`.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::io;
 use std::path::{Path, PathBuf};
 

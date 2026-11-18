@@ -1,3 +1,5 @@
+#![allow(unsafe_code, reason = "JNI entry points")]
+
 use std::{io, path::Path, ptr, sync::Arc};
 
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};

@@ -272,6 +272,7 @@ fn should_adopt_interface_name(
 /// Enumerate network interfaces that have IPv6 link-local addresses (fe80::/10).
 ///
 /// Uses `libc::getifaddrs()`. Filters by allowed/ignored interface lists.
+#[allow(unsafe_code, reason = "getifaddrs/freeifaddrs")]
 pub fn enumerate_interfaces(allowed: &[String], ignored: &[String]) -> Vec<LocalInterface> {
     let mut result = Vec::new();
     let platform_ignored = platform_ignored_interfaces();
@@ -1168,6 +1169,7 @@ struct DiscoverySenderContext {
     underlay_mark: Option<u32>,
 }
 
+#[allow(unsafe_code, reason = "setsockopt(IP_MULTICAST_IF)")]
 fn discovery_sender_loop(context: DiscoverySenderContext) {
     let DiscoverySenderContext {
         group_id,

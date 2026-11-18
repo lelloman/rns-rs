@@ -1,3 +1,5 @@
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use super::*;
 use rns_core::transport::types::PacketBytes;
 use rns_core::transport::{DecodedInboundFrame, DecodedPacket, RxMetadata};

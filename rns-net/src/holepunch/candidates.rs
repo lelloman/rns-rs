@@ -9,6 +9,8 @@
 //! the candidate is on a network one of this node's interfaces is on, so a
 //! peer cannot point a punch at an arbitrary private address.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use rns_core::holepunch::types::MAX_HOST_CANDIDATES;

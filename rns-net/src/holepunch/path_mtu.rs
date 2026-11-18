@@ -20,6 +20,8 @@
 //! acknowledged, whether the network or the sending host drops it, is
 //! simply not used.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 

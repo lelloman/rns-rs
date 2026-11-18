@@ -5,6 +5,8 @@
 //! timer, which on an idle node woke each listener up to a hundred times a
 //! second.
 
+#![allow(unsafe_code, reason = "descriptors registered with the poller")]
+
 use std::io;
 use std::os::fd::{AsFd, AsRawFd};
 use std::sync::Arc;

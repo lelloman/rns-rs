@@ -1,5 +1,7 @@
 //! Weave Device Control Link (WDCL) framing and interface state.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;

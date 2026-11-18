@@ -1,5 +1,7 @@
 //! Standard-library Resource streaming and disk-delivery types.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::fs::{self, File, OpenOptions};
 #[cfg(test)]
 use std::io::Read;

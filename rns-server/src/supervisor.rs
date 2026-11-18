@@ -430,6 +430,7 @@ impl Supervisor {
 }
 
 #[cfg(test)]
+#[allow(unsafe_code, reason = "test code")]
 mod tests {
     use super::drain::{
         drain_complete_for_shutdown, format_drain_status_detail, log_rnsd_drain_progress,

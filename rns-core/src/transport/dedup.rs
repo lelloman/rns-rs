@@ -1,3 +1,8 @@
+#![allow(
+    unsafe_code,
+    reason = "uninitialised slots and volatile wipes in the dedup table"
+)]
+
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec;

@@ -8,6 +8,8 @@
 //! on a thread of its own, at start and after the connection is lost, which
 //! exits once the configured device is served on the driver.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::io::{self, Write};
 use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};

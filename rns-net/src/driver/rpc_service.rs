@@ -7,6 +7,8 @@
 //! the request is then answered by the driver itself, with no event queue
 //! and no thread in between.
 
+#![allow(unsafe_code, reason = "descriptors registered with the poller")]
+
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};

@@ -7,6 +7,8 @@
 //! interfaces, culling silent peers, and multicasting the discovery token.
 //! Peers' writers are called by the driver directly (see `UdpWriter`).
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::collections::HashMap;
 use std::io;
 use std::net::{SocketAddrV6, UdpSocket};

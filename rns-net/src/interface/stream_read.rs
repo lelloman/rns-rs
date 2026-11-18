@@ -1,6 +1,8 @@
 //! Reading stream sockets and accepting connections on the driver loop,
 //! shared by the interfaces whose I/O runs there.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::io;
 
 use rns_core::transport::types::InterfaceId;

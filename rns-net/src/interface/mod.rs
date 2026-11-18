@@ -140,6 +140,7 @@ fn protect_underlay_socket(fd: std::os::unix::io::RawFd) -> io::Result<()> {
 ///
 /// Requires `CAP_NET_RAW` or root on Linux.
 #[cfg(target_os = "linux")]
+#[allow(unsafe_code, reason = "setsockopt(SO_BINDTODEVICE)")]
 pub fn bind_to_device(fd: std::os::unix::io::RawFd, device: &str) -> io::Result<()> {
     let dev_bytes = device.as_bytes();
     if dev_bytes.len() >= libc::IFNAMSIZ {
@@ -173,6 +174,7 @@ pub fn bind_to_device(fd: std::os::unix::io::RawFd, device: &str) -> io::Result<
 /// is fail-closed: callers must not silently create an unmarked socket when the
 /// operation is not permitted.
 #[cfg(target_os = "linux")]
+#[allow(unsafe_code, reason = "setsockopt(SO_MARK)")]
 pub fn apply_underlay_mark(fd: std::os::unix::io::RawFd, mark: Option<u32>) -> io::Result<()> {
     protect_underlay_socket(fd)?;
     let Some(mark) = mark else {
@@ -667,6 +669,7 @@ impl ListenerControl {
 }
 
 /// Wait for serial input without keeping a detached reader blocked forever.
+#[allow(unsafe_code, reason = "poll(2) on one descriptor")]
 pub(crate) fn poll_readable(fd: std::os::fd::RawFd, timeout: Duration) -> io::Result<bool> {
     let mut pfd = libc::pollfd {
         fd,

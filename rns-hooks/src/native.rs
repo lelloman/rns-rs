@@ -1,3 +1,8 @@
+#![allow(
+    unsafe_code,
+    reason = "loading native hook libraries and their C ABI callbacks"
+)]
+
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 

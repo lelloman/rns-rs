@@ -6,6 +6,8 @@
 //! (`upstream_parsers.rs`), and of argparse's error reporting: the usage
 //! line, `<prog>: error: <message>` and exit status 2.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use crate::args::{Args, Seen};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

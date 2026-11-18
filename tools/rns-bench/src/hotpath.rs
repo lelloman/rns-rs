@@ -137,6 +137,7 @@ pub const CASES: &[Case] = &[
 
 /// The measured window. Not inlined and not mangled, so callgrind can toggle
 /// collection on exactly this function.
+#[allow(unsafe_code, reason = "unmangled so callgrind can find it by name")]
 #[no_mangle]
 #[inline(never)]
 pub fn rns_bench_hotpath_measured(op: &mut dyn FnMut(), iterations: u64) {

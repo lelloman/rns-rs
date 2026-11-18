@@ -2,6 +2,8 @@
 //!
 //! Provides raw serial I/O without external crate dependencies.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 

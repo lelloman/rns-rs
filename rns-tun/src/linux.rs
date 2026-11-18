@@ -1,3 +1,5 @@
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};

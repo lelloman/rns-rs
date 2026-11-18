@@ -2,6 +2,8 @@
 //! `RNode` class writes, and a port of its `readLoop`, which collects the
 //! device's replies in the background.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};

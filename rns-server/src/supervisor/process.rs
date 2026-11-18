@@ -1,3 +1,5 @@
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use super::readiness::observe_sidecar_draining;
 use super::*;
 

@@ -1,3 +1,8 @@
+#![allow(
+    unsafe_code,
+    reason = "packing into uninitialised buffers on the hot path"
+)]
+
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;

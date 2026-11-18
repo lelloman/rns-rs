@@ -2,6 +2,8 @@
 //!
 //! Matches Python `TCPClientInterface` from `TCPInterface.py`.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::io::{self, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::os::unix::io::AsRawFd;

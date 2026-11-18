@@ -1,6 +1,8 @@
 //! Upstream's `RNS.log` lines and Python's exception texts, for the
 //! messages upstream's utilities print to stdout through them.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::sync::atomic::{AtomicI32, Ordering};
 
 pub const LOG_NONE: i32 = -1;

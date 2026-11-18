@@ -3,6 +3,8 @@
 //! did with a timer thread; a timed wait would arm and cancel a kernel timer
 //! on every wait, which a busy endpoint does thousands of times a second.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

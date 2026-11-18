@@ -9,6 +9,11 @@
 //!
 //! Matches Python `BackboneInterface.py`.
 
+#![allow(
+    unsafe_code,
+    reason = "descriptors registered with the poller and OS calls through libc"
+)]
+
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hasher};
 use std::io;

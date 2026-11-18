@@ -6,6 +6,8 @@
 //! threads write to a peer that went away; this hook only turns that one
 //! panic into the exit status a shell reports for SIGPIPE.
 
+#![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
+
 /// Exit status of a process ended by SIGPIPE, as shells report it.
 pub const CLOSED_STDOUT_EXIT: i32 = 128 + 13;
 

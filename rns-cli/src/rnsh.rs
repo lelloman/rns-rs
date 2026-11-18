@@ -3,6 +3,8 @@
 //! Protocol and behaviour are based on the first-party Python `rnsh` utility,
 //! which itself credits Aaron Heise's original `rnsh` program.
 
+#![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::CString;
 use std::fs;

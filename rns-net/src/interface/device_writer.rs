@@ -1,6 +1,8 @@
 //! A device writer that several interface writers share, run by the
 //! driver on the compact engine (see [`DeviceWriter`]).
 
+#![allow(unsafe_code, reason = "descriptors registered with the poller")]
+
 use std::io::{self, Write};
 use std::os::fd::{AsRawFd, RawFd};
 

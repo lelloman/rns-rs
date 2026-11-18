@@ -1,3 +1,8 @@
+#![allow(
+    unsafe_code,
+    reason = "hook runtime state shared with host functions by raw pointer"
+)]
+
 #[cfg(any(feature = "wasm", feature = "native"))]
 use crate::arena;
 use crate::engine_access::EngineAccess;

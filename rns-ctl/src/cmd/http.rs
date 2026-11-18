@@ -1,5 +1,7 @@
 //! HTTP/WebSocket control server subcommand.
 
+#![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
+
 use std::io::{IsTerminal, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
