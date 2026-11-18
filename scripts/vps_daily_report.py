@@ -434,10 +434,16 @@ def ensure_schema(conn: sqlite3.Connection) -> int:
     return repair_packet_freshness_history(conn)
 
 
-def interface_kind(name: str, display_name: str = "") -> str:
-    if name == "LocalInterface" or display_name.startswith("Shared Instance["):
+def interface_kind(name: str, display_name: str = "", iface_type: str = "") -> str:
+    # Builds since 0.6.2247 name local clients upstream's way,
+    # "LocalInterface[rns/default]", and list each inbound backbone client as
+    # a BackboneInterfacePeer ("Client on <listener>"); earlier ones named
+    # those "LocalInterface" and "BackboneInterface/<n>".
+    if name == "LocalInterface" or display_name.startswith(
+        ("Shared Instance[", "LocalInterface[")
+    ):
         return "local"
-    if name.startswith("BackboneInterface/"):
+    if name.startswith("BackboneInterface/") or iface_type == "BackboneInterfacePeer":
         return "backbone_discovered"
     return "configured_public"
 
@@ -460,7 +466,10 @@ def parse_interface_snapshots(
         # `short_name` the interface's own name, which history is keyed on.
         short_name = iface.get("short_name")
         name = short_name if isinstance(short_name, str) and short_name else iface["name"]
-        kind = interface_kind(name, iface["name"])
+        iface_type = iface.get("type")
+        kind = interface_kind(
+            name, iface["name"], iface_type if isinstance(iface_type, str) else ""
+        )
         started_epoch = iface.get("started")
         uptime_seconds = None
         if isinstance(started_epoch, (int, float)) and started_epoch > 0:
@@ -588,7 +597,9 @@ echo "RNS_SERVER_VERSION=$(/usr/local/bin/rns-server --version)"
 echo "RNS_CTL_VERSION=$(/usr/local/bin/rns-ctl --version)"
 listeners=$(ss -ltnH | awk '{{print $4}}')
 if printf '%s\\n' "$listeners" | grep -qx '0.0.0.0:4242'; then echo 'LISTENER_PUBLIC=1'; else echo 'LISTENER_PUBLIC=0'; fi
-if printf '%s\\n' "$listeners" | grep -qx '127.0.0.1:37429'; then echo 'LISTENER_RPC=1'; else echo 'LISTENER_RPC=0'; fi
+# rnsd's RPC: TCP on older builds, an abstract Unix socket (upstream's on
+# Linux) on current ones.
+if printf '%s\\n' "$listeners" | grep -qx '127.0.0.1:37429' || ss -xlH 2>/dev/null | grep -qE '@rns/[^ ]*/rpc'; then echo 'LISTENER_RPC=1'; else echo 'LISTENER_RPC=0'; fi
 if printf '%s\\n' "$listeners" | grep -qx '127.0.0.1:{http_port}'; then echo 'LISTENER_CONTROL=1'; else echo 'LISTENER_CONTROL=0'; fi
 echo "ESTABLISHED_4242=$(ss -tn state established | awk '$4 ~ /:4242$/ || $5 ~ /:4242$/ {{count++}} END {{print count+0}}')"
 """
