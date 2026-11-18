@@ -69,7 +69,13 @@ fn has(dict: &PickleValue, key: &str) -> bool {
 
 /// `d[key] != None` (a missing key reads as `None` instead of raising).
 fn not_none(dict: &PickleValue, key: &str) -> bool {
-    !matches!(dict.get(key), None | Some(PickleValue::None))
+    present(dict, key).is_some()
+}
+
+/// `d[key]` when it is there and not `None`.
+fn present<'a>(dict: &'a PickleValue, key: &str) -> Option<&'a PickleValue> {
+    dict.get(key)
+        .filter(|value| !matches!(value, PickleValue::None))
 }
 
 fn num(dict: &PickleValue, key: &str) -> Num {
@@ -1142,7 +1148,9 @@ pub fn render_discovered(
                 "Disabled"
             };
             let has_cost_info = has(i, "dst_cost") && has(i, "pr_cost");
-            let location = if not_none(i, "latitude") && not_none(i, "longitude") {
+            let location = if let (Some(latitude), Some(longitude)) =
+                (present(i, "latitude"), present(i, "longitude"))
+            {
                 let height = if not_none(i, "height") {
                     format!(", {}m h", s(i, "height"))
                 } else {
@@ -1150,8 +1158,8 @@ pub fn render_discovered(
                 };
                 format!(
                     "{}, {}{height}",
-                    coordinate(get(i, "latitude").unwrap()),
-                    coordinate(get(i, "longitude").unwrap())
+                    coordinate(latitude),
+                    coordinate(longitude)
                 )
             } else {
                 "Unknown".to_string()
@@ -1167,14 +1175,14 @@ pub fn render_discovered(
             if idx > 0 {
                 p!("\n{}\n", "=".repeat(47));
             }
-            if truthy(network) {
-                p!("Network   ID : {}", str_of(network.unwrap()));
+            if let Some(network) = network.filter(|value| truthy(Some(value))) {
+                p!("Network   ID : {}", str_of(network));
             }
-            if truthy(transport_id) {
-                p!("Transport ID : {}", str_of(transport_id.unwrap()));
+            if let Some(transport_id) = transport_id.filter(|value| truthy(Some(value))) {
+                p!("Transport ID : {}", str_of(transport_id));
             }
-            if truthy(lxmf_addr) {
-                p!("LXMF address : {}", str_of(lxmf_addr.unwrap()));
+            if let Some(lxmf_addr) = lxmf_addr.filter(|value| truthy(Some(value))) {
+                p!("LXMF address : {}", str_of(lxmf_addr));
             }
             p!("Name         : {}", s(i, "name"));
             p!("Type         : {}", s(i, "type"));
@@ -1277,12 +1285,10 @@ pub fn render_discovered(
                 format!("{}d ago", (diff / 86400.0) as i64)
             };
             let value = cost(get(i, "value"));
-            let location = if not_none(i, "latitude") && not_none(i, "longitude") {
-                format!(
-                    "{}, {}",
-                    coordinate(get(i, "latitude").unwrap()),
-                    coordinate(get(i, "longitude").unwrap())
-                )
+            let location = if let (Some(latitude), Some(longitude)) =
+                (present(i, "latitude"), present(i, "longitude"))
+            {
+                format!("{}, {}", coordinate(latitude), coordinate(longitude))
             } else {
                 "N/A".to_string()
             };

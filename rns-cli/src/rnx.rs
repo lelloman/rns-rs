@@ -1155,8 +1155,8 @@ fn execute_request(data: &[u8], cancel: &AtomicBool, remote: Option<[u8; 16]>) -
             let _ = stdin.write_all(&input[..input.len().min(MAX_STDIN)]);
         }
     }
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
+    let stdout = child.stdout.take().expect("stdout is piped");
+    let stderr = child.stderr.take().expect("stderr is piped");
     let stdout_limit = request
         .stdout_limit
         .unwrap_or(DEFAULT_OUTPUT_LIMIT)
