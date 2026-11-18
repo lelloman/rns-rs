@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use rns_cli::args::{Args, Opt, OptionSpec};
 use rns_cli::format::python_float;
-use rns_cli::pyfmt::{round_float, str_of};
+use rns_cli::pyfmt::{prettyhexrep, round_float, str_of};
 use rns_core::types::{DestHash, PacketHash};
 use rns_net::event::{QueryRequest, QueryResponse, MAX_PROBE_PAYLOAD_SIZE};
 use rns_net::pickle::PickleValue;
@@ -516,11 +516,6 @@ fn rtt_string(rtt: f64) -> String {
             python_float(round_float(rtt * 1000.0, 3))
         )
     }
-}
-
-/// `RNS.prettyhexrep`.
-fn prettyhexrep(hash: &[u8]) -> String {
-    rns_cli::pyfmt::prettyhexrep(hash)
 }
 
 /// The shared instance's RPC, for what upstream's shared clients ask it:
