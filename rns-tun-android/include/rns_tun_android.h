@@ -11,6 +11,8 @@ extern "C" {
 typedef bool (*rntun_protect_callback)(int fd, void *user_data);
 
 uint64_t rntun_android_create(const char *config_json);
+/* callback must be callable with user_data and any fd, from any thread,
+   until the handle is destroyed. */
 int rntun_android_set_protector(uint64_t handle,
                                 rntun_protect_callback callback,
                                 void *user_data);
