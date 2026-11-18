@@ -14,7 +14,9 @@ pub struct Decrypted {
 }
 
 pub fn ratchet_id(public: &[u8; 32]) -> [u8; 10] {
-    crate::sha256::sha256(public)[..10].try_into().unwrap()
+    let mut id = [0u8; 10];
+    id.copy_from_slice(&crate::sha256::sha256(public)[..10]);
+    id
 }
 
 /// Newest-first private key history. Clones and retired keys are zeroized on drop.

@@ -66,25 +66,19 @@ pub struct Token {
 
 impl Token {
     pub fn new(key: &[u8]) -> Result<Self, TokenError> {
-        match key.len() {
-            32 => {
-                let signing_key = &key[..16];
-                let encryption_key: [u8; 16] = key[16..32].try_into().unwrap();
-                Ok(Token {
-                    mac: HmacSha256::new(signing_key),
-                    mode: AesMode::Aes128(Aes128::new(&encryption_key)),
-                })
-            }
-            64 => {
-                let signing_key = &key[..32];
-                let encryption_key: [u8; 32] = key[32..64].try_into().unwrap();
-                Ok(Token {
-                    mac: HmacSha256::new(signing_key),
-                    mode: AesMode::Aes256(Aes256::new(&encryption_key)),
-                })
-            }
-            _ => Err(TokenError::InvalidKeyLength),
+        if let (32, Some((signing_key, encryption_key))) = (key.len(), key.split_last_chunk()) {
+            return Ok(Token {
+                mac: HmacSha256::new(signing_key),
+                mode: AesMode::Aes128(Aes128::new(encryption_key)),
+            });
         }
+        if let (64, Some((signing_key, encryption_key))) = (key.len(), key.split_last_chunk()) {
+            return Ok(Token {
+                mac: HmacSha256::new(signing_key),
+                mode: AesMode::Aes256(Aes256::new(encryption_key)),
+            });
+        }
+        Err(TokenError::InvalidKeyLength)
     }
 
     pub fn encrypt(&self, plaintext: &[u8], rng: &mut dyn Rng) -> Vec<u8> {
@@ -199,15 +193,17 @@ impl Token {
         {
             return Err(TokenError::HmacMismatch);
         }
-        let iv: [u8; 16] = token[..16].try_into().unwrap();
+        let Some(iv) = token.first_chunk::<16>() else {
+            return Err(TokenError::InvalidToken);
+        };
         let ciphertext = &token[16..token.len() - 32];
         if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) {
             return Err(TokenError::DecryptionFailed);
         }
         out.extend_from_slice(ciphertext);
         let decrypted = match &self.mode {
-            AesMode::Aes128(aes) => aes.decrypt_cbc_in_place(out, &iv),
-            AesMode::Aes256(aes) => aes.decrypt_cbc_in_place(out, &iv),
+            AesMode::Aes128(aes) => aes.decrypt_cbc_in_place(out, iv),
+            AesMode::Aes256(aes) => aes.decrypt_cbc_in_place(out, iv),
         };
         let unpadded_len = decrypted
             .ok()
@@ -236,7 +232,9 @@ impl Token {
             return Err(TokenError::HmacMismatch);
         }
 
-        let iv: [u8; 16] = token[..16].try_into().unwrap();
+        let Some(iv) = token.first_chunk::<16>() else {
+            return Err(TokenError::InvalidToken);
+        };
         let ciphertext = &token[16..token.len() - 32];
 
         // CBC ciphertext must be a non-empty whole number of 16-byte blocks.
@@ -245,8 +243,8 @@ impl Token {
         }
 
         let mut decrypted = match &self.mode {
-            AesMode::Aes128(aes) => aes.decrypt_cbc(ciphertext, &iv),
-            AesMode::Aes256(aes) => aes.decrypt_cbc(ciphertext, &iv),
+            AesMode::Aes128(aes) => aes.decrypt_cbc(ciphertext, iv),
+            AesMode::Aes256(aes) => aes.decrypt_cbc(ciphertext, iv),
         }
         .map_err(|_| TokenError::DecryptionFailed)?;
 
