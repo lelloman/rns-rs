@@ -39,7 +39,7 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::TrySendError;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -588,15 +588,7 @@ pub(crate) fn tcp_hardware_mtu(bitrate: Option<u64>, fixed_mtu: Option<u32>) -> 
     })
 }
 
-pub(crate) fn lock_or_recover<'a, T>(mutex: &'a Mutex<T>, label: &str) -> MutexGuard<'a, T> {
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            log::warn!("recovering poisoned mutex: {}", label);
-            poisoned.into_inner()
-        }
-    }
-}
+pub(crate) use crate::sync::lock_or_recover;
 
 #[derive(Clone, Default)]
 pub struct ListenerControl {

@@ -385,13 +385,10 @@ impl Driver {
     ) {
         use crate::common::link_manager::{Decryption, DecryptionKey};
         // Ratchets attached by the application decrypt as its owner does.
-        let ratchets = self
-            .event_tx
-            .local_ratchets()
-            .lock()
-            .unwrap()
-            .get(&destination)
-            .cloned();
+        let ratchets =
+            crate::sync::lock_or_recover(self.event_tx.local_ratchets(), "local ratchets")
+                .get(&destination)
+                .cloned();
         let key = match ratchets {
             Some(owner) => DecryptionKey::Ratchets(owner),
             None => DecryptionKey::Identity(identity),

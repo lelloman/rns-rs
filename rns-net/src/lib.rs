@@ -71,6 +71,7 @@ pub mod stamps;
 pub mod state_snapshot;
 pub mod storage;
 pub mod storage_sqlite;
+pub(crate) mod sync;
 pub use common::compressor;
 pub use common::link_manager;
 pub mod engine;

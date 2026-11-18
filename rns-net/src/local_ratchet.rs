@@ -24,6 +24,8 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+use crate::sync::lock_or_recover;
+
 pub(crate) type Registry = Arc<Mutex<HashMap<[u8; 16], Arc<LocalRatchets>>>>;
 
 /// Implementations must atomically replace a complete signed snapshot. An error
@@ -40,10 +42,12 @@ pub trait LocalRatchetStore: Send + Sync {
 pub struct MemoryRatchetStore(Mutex<Option<Zeroizing<Vec<u8>>>>);
 impl LocalRatchetStore for MemoryRatchetStore {
     fn load(&self) -> io::Result<Option<Vec<u8>>> {
-        Ok(self.0.lock().unwrap().as_ref().map(|v| v.to_vec()))
+        Ok(lock_or_recover(&self.0, "memory ratchet store")
+            .as_ref()
+            .map(|v| v.to_vec()))
     }
     fn save(&self, data: &[u8]) -> io::Result<()> {
-        *self.0.lock().unwrap() = Some(Zeroizing::new(data.to_vec()));
+        *lock_or_recover(&self.0, "memory ratchet store") = Some(Zeroizing::new(data.to_vec()));
         Ok(())
     }
 }
@@ -247,7 +251,7 @@ impl LocalRatchets {
         // Also commits binding for legacy files. Never discard imported history
         // before the first rotation; that allows decryption immediately on load.
         {
-            let state = owner.state.lock().unwrap();
+            let state = lock_or_recover(&owner.state, "local ratchet state");
             owner
                 .store
                 .save(&encode(&state.ring, &owner.identity, &owner.destination)?)?;
@@ -267,7 +271,7 @@ impl LocalRatchets {
                 "interval must be positive",
             ));
         }
-        self.state.lock().unwrap().interval = seconds;
+        lock_or_recover(&self.state, "local ratchet state").interval = seconds;
         Ok(())
     }
     pub fn set_retained(&self, count: usize) -> io::Result<()> {
@@ -277,7 +281,7 @@ impl LocalRatchets {
                 "retention must be 1..=4096",
             ));
         }
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock_or_recover(&self.state, "local ratchet state");
         let mut next = state.ring.clone();
         next.prune(count);
         self.commit(&mut state, next)?;
@@ -287,7 +291,7 @@ impl LocalRatchets {
     /// Reconcile storage after an I/O failure without clearing enforcement or
     /// swapping the owner attached to a running node. Missing/corrupt files fail.
     pub fn recover(&self) -> io::Result<()> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock_or_recover(&self.state, "local ratchet state");
         state.blocked = true;
         let bytes = Zeroizing::new(
             self.store
@@ -309,20 +313,20 @@ impl LocalRatchets {
         Ok(())
     }
     pub fn enforce(&self) {
-        self.state.lock().unwrap().enforce = true;
+        lock_or_recover(&self.state, "local ratchet state").enforce = true;
     }
     pub fn decrypt(
         &self,
         ciphertext: &[u8],
     ) -> Result<Decrypted, rns_crypto::identity::CryptoError> {
-        let state = self.state.lock().unwrap();
+        let state = lock_or_recover(&self.state, "local ratchet state");
         self.identity
             .decrypt_with_ratchets(ciphertext, &state.ring, state.enforce)
     }
     /// Generates and commits a key if due. Restart rotates on the first call;
     /// clock rollback postpones rotation until the previous interval elapses.
     pub fn public_for_announce(&self, now: u64) -> io::Result<[u8; 32]> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock_or_recover(&self.state, "local ratchet state");
         if state.blocked {
             return Err(invalid(
                 "ratchet storage failed; recover or reopen owner before announcing",
@@ -340,10 +344,14 @@ impl LocalRatchets {
             .ok_or_else(|| invalid("missing ratchet"))
     }
     pub fn current_public(&self) -> Option<[u8; 32]> {
-        self.state.lock().unwrap().ring.current_public()
+        lock_or_recover(&self.state, "local ratchet state")
+            .ring
+            .current_public()
     }
     pub fn retains(&self, public: &[u8; 32]) -> bool {
-        self.state.lock().unwrap().ring.retains(public)
+        lock_or_recover(&self.state, "local ratchet state")
+            .ring
+            .retains(public)
     }
     fn commit(&self, state: &mut State, next: RatchetRing) -> io::Result<()> {
         if state.blocked {
@@ -539,7 +547,7 @@ struct LeaseInner {
 }
 impl Drop for LeaseInner {
     fn drop(&mut self) {
-        let mut state = self.owner.state.lock().unwrap();
+        let mut state = lock_or_recover(&self.owner.state, "local ratchet state");
         if let Some(count) = state.pins.get_mut(&self.public) {
             *count -= 1;
             if *count == 0 {
@@ -564,9 +572,7 @@ impl AnnouncementLease {
             Ok(p) if p.flags.packet_type == PACKET_TYPE_ANNOUNCE => p,
             _ => return Ok(None),
         };
-        let owner = registry
-            .lock()
-            .unwrap()
+        let owner = lock_or_recover(registry, "local ratchets")
             .get(&packet.destination_hash)
             .cloned();
         let Some(owner) = owner else {
@@ -581,7 +587,7 @@ impl AnnouncementLease {
             .ratchet
             .ok_or_else(|| invalid("local ratchet announce cannot downgrade"))?;
         {
-            let mut state = owner.state.lock().unwrap();
+            let mut state = lock_or_recover(&owner.state, "local ratchet state");
             if state.blocked || !state.ring.retains(&public) {
                 return Err(invalid("stale or blocked local ratchet announce"));
             }

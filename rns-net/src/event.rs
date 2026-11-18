@@ -402,10 +402,7 @@ impl QueueShared {
         if self.async_waiter_count.load(Ordering::SeqCst) == 0 {
             return;
         }
-        let waiters: Vec<_> = self
-            .async_waiters
-            .lock()
-            .unwrap()
+        let waiters: Vec<_> = crate::sync::lock_or_recover(&self.async_waiters, "async waiters")
             .iter()
             .filter_map(|w| w.upgrade())
             .collect();
@@ -579,7 +576,8 @@ impl EventSender {
         use crate::link_send::{LinkSendError, Waiter};
         let waiter = Arc::new(Waiter::default());
         {
-            let mut waiters = self.shared.async_waiters.lock().unwrap();
+            let mut waiters =
+                crate::sync::lock_or_recover(&self.shared.async_waiters, "async waiters");
             waiters.retain(|w| w.strong_count() > 0);
             waiters.push(Arc::downgrade(&waiter));
             self.shared

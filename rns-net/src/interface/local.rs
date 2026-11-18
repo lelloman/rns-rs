@@ -22,6 +22,7 @@ use crate::event::{Event, EventSender};
 use crate::hdlc;
 use crate::interface::transmit_buffer::TransmitBuffer;
 use crate::interface::{ListenerControl, Writer};
+use crate::sync::lock_or_recover;
 
 mod folded;
 
@@ -176,18 +177,11 @@ impl ClientSleepHold {
     }
 
     fn refresh(&self) {
-        *lock_or_recover(&self.deadline) = Instant::now() + self.timeout;
+        *lock_or_recover(&self.deadline, "local client deadline") = Instant::now() + self.timeout;
     }
 
     fn should_drop_outbound(&self) -> bool {
-        Instant::now() > *lock_or_recover(&self.deadline)
-    }
-}
-
-fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
+        Instant::now() > *lock_or_recover(&self.deadline, "local client deadline")
     }
 }
 
