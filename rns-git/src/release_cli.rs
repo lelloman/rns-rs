@@ -881,11 +881,12 @@ fn validate_rsg_parts(
     envelope: Option<Value>,
 ) -> Result<ValidRsg> {
     const SIG_LEN: usize = 64;
-    if rsg.len() <= SIG_LEN {
+    let Some((&signature, envelope_bytes)) = rsg
+        .split_first_chunk::<SIG_LEN>()
+        .filter(|(_, envelope)| !envelope.is_empty())
+    else {
         return Err(Error::msg("invalid RSG"));
-    }
-    let signature: [u8; SIG_LEN] = rsg[..SIG_LEN].try_into().unwrap();
-    let envelope_bytes = &rsg[SIG_LEN..];
+    };
     let envelope = match envelope {
         Some(envelope) => envelope,
         None => msgpack::unpack_exact(envelope_bytes)

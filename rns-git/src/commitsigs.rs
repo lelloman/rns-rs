@@ -350,11 +350,12 @@ fn create_rsg(identity: &Identity, message: &[u8]) -> Result<Vec<u8>> {
 }
 
 fn validate_rsg(rsg: &[u8], message: &[u8]) -> Result<[u8; 16]> {
-    if rsg.len() <= SIG_LEN {
+    let Some((&signature, envelope_bytes)) = rsg
+        .split_first_chunk::<SIG_LEN>()
+        .filter(|(_, envelope)| !envelope.is_empty())
+    else {
         return Err(Error::msg("invalid RSG"));
-    }
-    let signature: [u8; SIG_LEN] = rsg[..SIG_LEN].try_into().unwrap();
-    let envelope_bytes = &rsg[SIG_LEN..];
+    };
     let envelope = rsg_envelope(rsg)?;
     if envelope.map_get("hashtype").and_then(Value::as_str) != Some("sha256") {
         return Err(Error::msg("unsupported RSG hash type"));
@@ -470,10 +471,10 @@ fn push_ssh_string(out: &mut Vec<u8>, data: &[u8]) {
 }
 
 fn read_u32(data: &[u8], offset: &mut usize) -> Result<u32> {
-    if data.len().saturating_sub(*offset) < 4 {
+    let Some(bytes) = data.get(*offset..).and_then(<[u8]>::first_chunk) else {
         return Err(Error::msg("truncated SSH signature"));
-    }
-    let value = u32::from_be_bytes(data[*offset..*offset + 4].try_into().unwrap());
+    };
+    let value = u32::from_be_bytes(*bytes);
     *offset += 4;
     Ok(value)
 }
@@ -492,7 +493,7 @@ fn armor_ssh_signature(blob: &[u8]) -> String {
     let encoded = base64_encode(blob);
     let mut out = String::from("-----BEGIN SSH SIGNATURE-----\n");
     for chunk in encoded.as_bytes().chunks(70) {
-        out.push_str(std::str::from_utf8(chunk).unwrap());
+        out.push_str(&String::from_utf8_lossy(chunk));
         out.push('\n');
     }
     out.push_str("-----END SSH SIGNATURE-----\n");
