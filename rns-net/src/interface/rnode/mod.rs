@@ -277,17 +277,18 @@ impl Writer for RNodeSubWriter {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        if self.confirmed_pending.is_none() {
+        let Some(frame) = self.confirmed_pending.as_deref() else {
             return Ok(());
-        }
+        };
         let mut state = lock_or_recover(&self.flow_state, "rnode flow state");
         if !state.ready || !state.queue.is_empty() {
             return Err(io::ErrorKind::WouldBlock.into());
         }
         state.ready = false;
         drop(state);
-        lock_or_recover(&self.writer, "rnode shared writer")
-            .write_all(&self.confirmed_pending.take().unwrap())
+        let written = lock_or_recover(&self.writer, "rnode shared writer").write_all(frame);
+        self.confirmed_pending = None;
+        written
     }
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         let frame = if self.multi {

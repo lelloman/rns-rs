@@ -3034,12 +3034,9 @@ impl RnsNode {
                 let mgmt_dest = crate::management::management_dest_hash(&identity_hash);
 
                 // Extract Ed25519 signing keys from the identity
-                let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(
-                    &prv_key[32..64].try_into().unwrap(),
-                );
-                let sig_pub_bytes: [u8; 32] = transport_id.get_public_key().unwrap()[32..64]
-                    .try_into()
-                    .unwrap();
+                let (_, sig_seed) = rns_crypto::identity::split_key(&prv_key);
+                let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(&sig_seed);
+                let sig_pub_bytes = sig_prv.public_key().public_bytes();
 
                 // Register as SINGLE destination in transport engine
                 driver
@@ -3088,12 +3085,9 @@ impl RnsNode {
                 let identity_hash = *transport_id.hash();
                 let bh_dest = crate::management::blackhole_dest_hash(&identity_hash);
 
-                let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(
-                    &prv_key[32..64].try_into().unwrap(),
-                );
-                let sig_pub_bytes: [u8; 32] = transport_id.get_public_key().unwrap()[32..64]
-                    .try_into()
-                    .unwrap();
+                let (_, sig_seed) = rns_crypto::identity::split_key(&prv_key);
+                let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(&sig_seed);
+                let sig_pub_bytes = sig_prv.public_key().public_bytes();
 
                 driver
                     .engine
@@ -3166,7 +3160,9 @@ impl RnsNode {
 
             // Register PROVE_ALL proof strategy with transport identity
             let probe_identity = rns_crypto::identity::Identity::from_private_key(
-                &transport_id.get_private_key().unwrap(),
+                &transport_id
+                    .get_private_key()
+                    .expect("the transport identity was built from its private key"),
             );
             driver.proof_strategies.insert(
                 probe_dest,
@@ -5503,7 +5499,7 @@ fn single_proof_key(dest: &crate::destination::Destination) -> Option<[u8; 32]> 
         return None;
     }
     dest.public_key
-        .map(|key| key[32..].try_into().expect("64-byte public key"))
+        .map(|key| rns_crypto::identity::split_key(&key).1)
 }
 
 /// Build an announce packet for `dest`, signed by `identity`.

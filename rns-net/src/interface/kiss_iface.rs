@@ -104,9 +104,9 @@ impl Writer for KissWriter {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        if self.confirmed_pending.is_none() {
+        let Some(frame) = self.confirmed_pending.as_deref() else {
             return Ok(());
-        }
+        };
         let mut state = lock_or_recover(&self.flow_state, "kiss flow state");
         if !state.ready || !state.queue.is_empty() {
             return Err(io::ErrorKind::WouldBlock.into());
@@ -114,7 +114,9 @@ impl Writer for KissWriter {
         state.ready = false;
         state.lock_time = Instant::now();
         drop(state);
-        self.file.write_all(&self.confirmed_pending.take().unwrap())
+        let written = self.file.write_all(frame);
+        self.confirmed_pending = None;
+        written
     }
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
         let data = self

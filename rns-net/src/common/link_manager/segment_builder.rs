@@ -238,7 +238,9 @@ impl LinkManager {
             total_segments,
             original_hash,
         };
-        let builder = self.segment_builder.as_mut().unwrap();
+        let Some(builder) = self.segment_builder.as_mut() else {
+            return;
+        };
         let key = (*link_id, original_hash);
         let sent = builder
             .tx

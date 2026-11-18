@@ -601,6 +601,10 @@ impl RnsNode {
 }
 
 #[doc(hidden)]
+#[allow(
+    clippy::unwrap_used,
+    reason = "benchmark harness: a failure aborts the run"
+)]
 pub fn bench_shared_client_replay_once(
     announce_count: usize,
     reconnect_wait: Duration,

@@ -150,7 +150,7 @@ impl Worker {
             metadata,
             cancelled: cancelled.clone(),
         };
-        match self.tx.as_ref().unwrap().try_send(job) {
+        match self.tx.as_ref().expect("live worker sender").try_send(job) {
             Ok(()) => {
                 self.next_id = next_id;
                 self.pending.insert(

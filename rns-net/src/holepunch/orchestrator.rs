@@ -1194,8 +1194,17 @@ impl HolePunchManager {
                             session.engine.punch_succeeded(now).unwrap_or_default();
                         for action in engine_actions {
                             match action {
-                                HolePunchAction::Succeeded { session_id } if started.is_some() => {
-                                    let (writer, info) = started.take().unwrap();
+                                HolePunchAction::Succeeded { session_id } => {
+                                    let Some((writer, info)) = started.take() else {
+                                        all_actions.push(
+                                            HolePunchManagerAction::DirectConnectFailed {
+                                                link_id: completion.link_id,
+                                                session_id,
+                                                reason: rns_core::holepunch::types::FAIL_TIMEOUT,
+                                            },
+                                        );
+                                        continue;
+                                    };
                                     // One direct interface per link: a
                                     // repeated upgrade replaces the old one.
                                     if let Some(old) = self.direct.insert(
@@ -1241,13 +1250,6 @@ impl HolePunchManager {
                                             peer_max_packet,
                                         },
                                     );
-                                }
-                                HolePunchAction::Succeeded { session_id } => {
-                                    all_actions.push(HolePunchManagerAction::DirectConnectFailed {
-                                        link_id: completion.link_id,
-                                        session_id,
-                                        reason: rns_core::holepunch::types::FAIL_TIMEOUT,
-                                    });
                                 }
                                 _ => {
                                     let mgr = convert_engine_actions(completion.link_id, &[action]);

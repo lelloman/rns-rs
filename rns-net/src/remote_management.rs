@@ -440,9 +440,7 @@ impl RemoteManagementClient {
         }
         let announced = self.wait_for_destination(dest_hash)?;
         self.report(RemoteProgress::EstablishingLink);
-        let sig_pub: [u8; 32] = announced.public_key[32..64]
-            .try_into()
-            .expect("slice length checked");
+        let (_, sig_pub) = rns_crypto::identity::split_key(&announced.public_key);
         let link_id = self
             .node
             .create_link(dest_hash, sig_pub)

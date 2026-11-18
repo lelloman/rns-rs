@@ -505,15 +505,15 @@ impl ServerSession {
 /// Split one length-prefixed message off the front of `input`, as
 /// [`recv_bytes`] reads one, once all of it has arrived.
 fn take_message(input: &mut Vec<u8>, max: usize) -> io::Result<Option<Vec<u8>>> {
-    let Some(prefix) = input.get(..4) else {
+    let Some(prefix) = input.first_chunk() else {
         return Ok(None);
     };
-    let len = i32::from_be_bytes(prefix.try_into().unwrap());
+    let len = i32::from_be_bytes(*prefix);
     let (header, len) = if len < 0 {
-        let Some(extended) = input.get(4..12) else {
+        let Some(extended) = input.get(4..).and_then(<[u8]>::first_chunk) else {
             return Ok(None);
         };
-        (12, u64::from_be_bytes(extended.try_into().unwrap()))
+        (12, u64::from_be_bytes(*extended))
     } else {
         (4, len as u64)
     };

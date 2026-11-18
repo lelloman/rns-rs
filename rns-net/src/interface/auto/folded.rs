@@ -87,14 +87,17 @@ impl DiscoverySender {
     }
 
     fn socket(&mut self, if_index: u32, underlay_mark: Option<u32>) -> io::Result<&UdpSocket> {
-        if self.socket.is_none() {
-            let socket = UdpSocket::bind("[::]:0")?;
-            crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
-            socket.set_multicast_if_v6_compat(if_index)?;
-            socket.set_nonblocking(true)?;
-            self.socket = Some(socket);
-        }
-        Ok(self.socket.as_ref().expect("set above"))
+        let socket = match self.socket.take() {
+            Some(socket) => socket,
+            None => {
+                let socket = UdpSocket::bind("[::]:0")?;
+                crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+                socket.set_multicast_if_v6_compat(if_index)?;
+                socket.set_nonblocking(true)?;
+                socket
+            }
+        };
+        Ok(self.socket.insert(socket))
     }
 
     fn send(&mut self, key: &AutoWorkerKey, context: &AutoWorkerContext) {
