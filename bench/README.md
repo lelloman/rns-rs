@@ -5,6 +5,10 @@ processes and the public `rns-net` API over loopback TCP. It is an exploratory
 workload runner. Its current results do not establish maximum stack throughput
 or release performance guarantees.
 
+For refactoring, `./scripts/hotpath` is a deterministic gate on fixed hot-path
+operations: instructions per operation (callgrind) may rise at most 1 % and
+heap allocations per operation may not rise. See [hotpath.md](hotpath.md).
+
 ## Run
 
 From the repository root:

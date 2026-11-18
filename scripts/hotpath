@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""Hot-path performance-invariance gate: instructions and heap allocations per operation.
+
+    ./scripts/hotpath record DIR              # writes DIR/hotpath.json
+    ./scripts/hotpath check BASELINE.json     # re-measures; nonzero exit on a regression
+    ./scripts/hotpath measure                 # prints the current numbers only
+
+Each case of `rns-bench hotpath` runs once under callgrind with collection
+toggled on the measured loop, so instruction counts are exact and exclude
+setup. The same process counts Rust heap allocations around that loop. A
+check fails when a case's instructions per operation rise by more than
+INSTRUCTION_TOLERANCE, or its allocation calls or allocated bytes rise at
+all. See bench/hotpath.md.
+"""
+
+import argparse
+import concurrent.futures
+import datetime
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+SCHEMA = 1
+INSTRUCTION_TOLERANCE = 0.01
+MEASURED_FUNCTION = "rns_bench_hotpath_measured"
+
+
+def target_dir():
+    return Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target/hotpath")
+
+
+def build():
+    subprocess.run(
+        ["cargo", "build", "--locked", "--release", "-p", "rns-bench",
+         "--features", "allocation-profiler", "--target-dir", str(target_dir())],
+        cwd=ROOT, check=True)
+    return target_dir() / "release/rns-bench"
+
+
+def output(*command):
+    return subprocess.run(command, cwd=ROOT, check=True, capture_output=True,
+                          text=True).stdout.strip()
+
+
+def environment():
+    return {
+        "commit": output("git", "rev-parse", "HEAD"),
+        "dirty": bool(output("git", "status", "--porcelain", "--untracked-files=no")),
+        "rustc": output("rustc", "--version"),
+        "valgrind": output("valgrind", "--version"),
+        "profile": "release",
+        "features": ["allocation-profiler"],
+    }
+
+
+def measure_case(binary, name, iterations):
+    with tempfile.TemporaryDirectory(prefix="rns-hotpath-") as tmp:
+        out = Path(tmp) / "callgrind.out"
+        result = subprocess.run(
+            ["valgrind", "--tool=callgrind", "--collect-atstart=no",
+             f"--toggle-collect={MEASURED_FUNCTION}", f"--callgrind-out-file={out}",
+             str(binary), "hotpath", "run", name, str(iterations)],
+            capture_output=True, text=True)
+        if result.returncode != 0:
+            raise SystemExit(f"hotpath: case {name} failed:\n{result.stderr}")
+        counts = json.loads(result.stdout.strip().splitlines()[-1])
+        totals = [line.split()[1] for line in out.read_text().splitlines()
+                  if line.startswith("totals:")]
+        if len(totals) != 1 or int(totals[0]) == 0:
+            raise SystemExit(f"hotpath: no instructions collected for {name}")
+    instructions = int(totals[0])
+    allocations = counts["allocations"] + counts["reallocations"]
+    return {
+        "iterations": iterations,
+        "instructions_per_op": instructions / iterations,
+        "allocations_per_op": allocations / iterations,
+        "bytes_per_op": counts["bytes"] / iterations,
+        "instructions": instructions,
+        "allocation_calls": counts["allocations"],
+        "reallocation_calls": counts["reallocations"],
+        "bytes": counts["bytes"],
+    }
+
+
+def measure(iterations_by_case, jobs):
+    """Measure every case; `iterations_by_case` overrides the default counts."""
+    binary = build()
+    cases = json.loads(output(str(binary), "hotpath", "list"))
+    plan = {c["name"]: iterations_by_case.get(c["name"], c["iterations"]) for c in cases}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = {name: pool.submit(measure_case, binary, name, n)
+                   for name, n in plan.items()}
+        results = {name: future.result() for name, future in futures.items()}
+    for case in cases:
+        if case["name"] in results:
+            results[case["name"]]["about"] = case["about"]
+    return results
+
+
+def report(env, results):
+    return {"schema": SCHEMA,
+            "recorded_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            **env, "cases": results}
+
+
+def table(baseline, current):
+    rows = [("case", "instr/op base", "current", "delta", "allocs/op base", "current",
+             "bytes/op base", "current", "verdict")]
+    failed = False
+    for name in sorted(set(baseline) | set(current)):
+        base, cur = baseline.get(name), current.get(name)
+        if base is None:
+            rows.append((name, "-", f"{cur['instructions_per_op']:.1f}", "new", "-",
+                         f"{cur['allocations_per_op']:g}", "-", f"{cur['bytes_per_op']:g}", "new"))
+            continue
+        if cur is None:
+            failed = True
+            rows.append((name, f"{base['instructions_per_op']:.1f}", "-", "-",
+                         f"{base['allocations_per_op']:g}", "-", f"{base['bytes_per_op']:g}", "-",
+                         "FAIL missing"))
+            continue
+        delta = cur["instructions_per_op"] / base["instructions_per_op"] - 1
+        problems = []
+        if delta > INSTRUCTION_TOLERANCE:
+            problems.append("instr")
+        if cur["allocations_per_op"] > base["allocations_per_op"]:
+            problems.append("allocs")
+        if cur["bytes_per_op"] > base["bytes_per_op"]:
+            problems.append("bytes")
+        failed |= bool(problems)
+        rows.append((name, f"{base['instructions_per_op']:.1f}", f"{cur['instructions_per_op']:.1f}",
+                     f"{delta * 100:+.3f}%", f"{base['allocations_per_op']:g}",
+                     f"{cur['allocations_per_op']:g}", f"{base['bytes_per_op']:g}",
+                     f"{cur['bytes_per_op']:g}",
+                     "FAIL " + ",".join(problems) if problems else "ok"))
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+    for row in rows:
+        print("  ".join(cell.ljust(width) if i in (0, 8) else cell.rjust(width)
+                        for i, (cell, width) in enumerate(zip(row, widths))).rstrip())
+    return failed
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("-j", "--jobs", type=int, default=min(8, os.cpu_count() or 1),
+                        help="cases measured in parallel (results do not depend on it)")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("record").add_argument("dir", type=Path)
+    sub.add_parser("check").add_argument("baseline", type=Path)
+    sub.add_parser("measure")
+    args = parser.parse_args()
+
+    if args.command == "check":
+        baseline = json.loads(args.baseline.read_text())
+        if baseline.get("schema") != SCHEMA:
+            raise SystemExit(f"hotpath: unsupported baseline schema {baseline.get('schema')}")
+        env = environment()
+        # The baseline's iteration counts, so totals compare exactly. Cases
+        # added since the baseline are reported, not gated.
+        current = measure({n: c["iterations"] for n, c in baseline["cases"].items()}, args.jobs)
+        print(f"baseline: {baseline['commit'][:12]}{' (dirty)' if baseline['dirty'] else ''}, "
+              f"{baseline['rustc']}, {baseline['valgrind']}")
+        print(f"current:  {env['commit'][:12]}{' (dirty)' if env['dirty'] else ''}, "
+              f"{env['rustc']}, {env['valgrind']}")
+        if (baseline["rustc"], baseline["valgrind"]) != (env["rustc"], env["valgrind"]):
+            print("warning: toolchain differs from the baseline; instruction counts may shift")
+        print(f"bar: instructions/op +{INSTRUCTION_TOLERANCE:.0%} at most; "
+              "allocations/op and bytes/op must not rise\n")
+        failed = table(baseline["cases"], current)
+        print("\nFAIL" if failed else "\nPASS")
+        return 1 if failed else 0
+
+    results = measure({}, args.jobs)
+    env = environment()
+    if args.command == "measure":
+        print(json.dumps(report(env, results), indent=2))
+        return 0
+    args.dir.mkdir(parents=True, exist_ok=True)
+    path = args.dir / "hotpath.json"
+    path.write_text(json.dumps(report(env, results), indent=2) + "\n")
+    print(f"recorded {len(results)} cases at {env['commit'][:12]}"
+          f"{' (dirty working tree)' if env['dirty'] else ''}: {path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
