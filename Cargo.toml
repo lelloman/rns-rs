@@ -27,8 +27,10 @@ unimplemented = "warn"
 mem_forget = "warn"
 missing_safety_doc = "warn"
 undocumented_unsafe_blocks = "warn"
-# Panics in production code (clippy.toml lets tests use them).
+# Panics in production code (clippy.toml lets tests use them). An expect
+# stays allowed: its message names the invariant that holds.
 panic = "warn"
+unwrap_used = "warn"
 
 [workspace.dependencies]
 rns-crypto = { version = "0.3.0", path = "rns-crypto" }
