@@ -410,7 +410,9 @@ fn reader_loop(
                     while frame.len() < 15 {
                         frame.push(0x00);
                     }
-                    let _ = flow_writer.write_all(&kiss::frame(&frame));
+                    if let Err(e) = flow_writer.write_all(&kiss::frame(&frame)) {
+                        log::debug!("[{}] beacon not written: {e}", config.name);
+                    }
                     first_tx = None;
                 }
             }
@@ -423,14 +425,17 @@ fn process_queue(
     flow_state: &Arc<Mutex<FlowState>>,
     writer: &mut std::fs::File,
     first_tx: &mut Option<Instant>,
-    _config: &KissIfaceConfig,
+    config: &KissIfaceConfig,
 ) {
     let mut state = lock_or_recover(flow_state, "kiss flow state");
     if let Some(data) = state.queue.pop_front() {
         state.ready = false;
         state.lock_time = Instant::now();
         drop(state);
-        let _ = writer.write_all(&kiss::frame(&data));
+        // A port that fails is noticed and reopened by the reader.
+        if let Err(e) = writer.write_all(&kiss::frame(&data)) {
+            log::debug!("[{}] queued frame not written: {e}", config.name);
+        }
         if first_tx.is_none() {
             *first_tx = Some(Instant::now());
         }

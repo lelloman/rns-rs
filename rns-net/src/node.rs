@@ -2228,6 +2228,19 @@ impl RnsNode {
                 .unwrap_or_else(|| std::path::Path::new("."))
                 .join("storage")
         });
+        // The directories the node keeps state in, created before anything
+        // starts; as upstream does, failing to create one fails startup.
+        if let (Some(cache_dir), Some(storage_dir)) = (&config.cache_dir, &storage_dir) {
+            for dir in [
+                cache_dir.join("announces"),
+                storage_dir.join("discovery").join("interfaces"),
+                storage_dir.join("blackhole"),
+            ] {
+                std::fs::create_dir_all(&dir).map_err(|e| {
+                    io::Error::new(e.kind(), format!("could not create {}: {e}", dir.display()))
+                })?;
+            }
+        }
         let transport_state_dir = if config.transport_enabled {
             storage_dir.clone()
         } else {
@@ -2383,7 +2396,6 @@ impl RnsNode {
         // Set up announce cache if cache directory is configured
         if let Some(ref cache_dir) = config.cache_dir {
             let announces_dir = cache_dir.join("announces");
-            let _ = std::fs::create_dir_all(&announces_dir);
             driver.announce_cache = Some(crate::announce_cache::AnnounceCache::new(announces_dir));
         }
 
@@ -2937,7 +2949,6 @@ impl RnsNode {
                 .join("storage")
                 .join("discovery")
                 .join("interfaces");
-            let _ = std::fs::create_dir_all(&disc_path);
             driver.discovered_interfaces =
                 crate::discovery::DiscoveredInterfaceStorage::new(disc_path);
             // Upstream's `storage/blackhole`, beside the discovery storage.
@@ -2946,7 +2957,6 @@ impl RnsNode {
                 .unwrap_or(std::path::Path::new("."))
                 .join("storage")
                 .join("blackhole");
-            let _ = std::fs::create_dir_all(&blackhole_path);
             driver.blackhole_sources = config.management.blackhole_sources.clone();
             driver.load_blackhole(blackhole_path);
             driver.enable_blackhole_updater(config.management.blackhole_update_interval);
@@ -7273,6 +7283,31 @@ share_instance = False
 
         node.shutdown();
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn startup_creates_state_directories_or_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = "[reticulum]\nshare_instance = No\nenable_transport = False\n";
+        fs::write(dir.path().join("config"), config).unwrap();
+        let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+        node.shutdown();
+        for made in [
+            "cache/announces",
+            "storage/discovery/interfaces",
+            "storage/blackhole",
+        ] {
+            assert!(dir.path().join(made).is_dir(), "{made}");
+        }
+
+        let blocked = tempfile::tempdir().unwrap();
+        fs::write(blocked.path().join("config"), config).unwrap();
+        fs::create_dir_all(blocked.path().join("storage")).unwrap();
+        fs::write(blocked.path().join("storage/blackhole"), b"").unwrap();
+        let err = RnsNode::from_config(Some(blocked.path()), Box::new(NoopCallbacks))
+            .err()
+            .expect("startup fails");
+        assert!(err.to_string().contains("storage/blackhole"), "{err}");
     }
 
     #[test]

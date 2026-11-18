@@ -529,21 +529,23 @@ fn with_leave_on_finish(
     control.with_on_finish(move || {
         let mut writer = lock_or_recover(&writer, "rnode shared writer");
         let off = [rnode_kiss::RADIO_STATE_OFF];
+        let mut commands = Vec::new();
         if multi {
             for &vport in &vports {
-                let _ = writer.write_all(&rnode_kiss::rnode_select_command(
+                commands.push(rnode_kiss::rnode_select_command(
                     vport,
                     rnode_kiss::CMD_RADIO_STATE,
                     &off,
                 ));
             }
         } else {
-            let _ = writer.write_all(&rnode_kiss::rnode_command(
-                rnode_kiss::CMD_RADIO_STATE,
-                &off,
-            ));
+            commands.push(rnode_kiss::rnode_command(rnode_kiss::CMD_RADIO_STATE, &off));
         }
-        let _ = writer.write_all(&rnode_kiss::leave_request());
+        commands.push(rnode_kiss::leave_request());
+        // The device may already be gone: there is nothing left to do then.
+        if let Err(e) = commands.iter().try_for_each(|c| writer.write_all(c)) {
+            log::debug!("[{}] radio off and leave not sent: {e}", config.name);
+        }
         // Nothing serves a driven writer any more: send what it holds.
         let deadline = std::time::Instant::now() + Duration::from_millis(500);
         while writer.holds_unwritten() && std::time::Instant::now() < deadline {
@@ -1433,7 +1435,10 @@ fn process_flow_queue(
         } else {
             rnode_kiss::rnode_data_frame(index, &data)
         };
-        let _ = lock_or_recover(writer, "rnode shared writer").write_all(&frame);
+        // A device that fails is noticed and reopened by the reader.
+        if let Err(e) = lock_or_recover(writer, "rnode shared writer").write_all(&frame) {
+            log::debug!("rnode subinterface {index}: queued frame not written: {e}");
+        }
     } else {
         state.ready = true;
     }
