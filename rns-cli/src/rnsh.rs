@@ -1023,6 +1023,10 @@ impl ChildProcess {
         let parent_stderr = stderr_pipe.map(|p| p.0).or(pty_master).unwrap_or(-1);
         let child_stderr = stderr_pipe.map(|p| p.1).or(pty_child).unwrap_or(-1);
 
+        // Everything the child needs is built here: between fork and exec
+        // the child of a multithreaded process may only make
+        // async-signal-safe calls, and allocating is not one.
+        let exec = ExecPlan::new(argv, env_overrides);
         let pid = unsafe { libc::fork() };
         if pid < 0 {
             return Err(io::Error::last_os_error());
@@ -1050,19 +1054,8 @@ impl ChildProcess {
                 for fd in 3..1024 {
                     libc::close(fd);
                 }
-                for (key, value) in env_overrides {
-                    if let (Ok(k), Ok(v)) = (CString::new(*key), CString::new(value.as_str())) {
-                        libc::setenv(k.as_ptr(), v.as_ptr(), 1);
-                    }
-                }
-                let c_args = argv
-                    .iter()
-                    .map(|arg| CString::new(arg.as_str()))
-                    .collect::<Result<Vec<_>, _>>();
-                if let Ok(c_args) = c_args {
-                    let mut ptrs = c_args.iter().map(|s| s.as_ptr()).collect::<Vec<_>>();
-                    ptrs.push(std::ptr::null());
-                    libc::execvp(ptrs[0], ptrs.as_ptr());
+                if let Some(mut exec) = exec {
+                    exec.exec();
                 }
                 libc::_exit(255);
             }
@@ -1167,6 +1160,124 @@ impl Drop for ChildProcess {
             self.stdout_fd.take(),
             self.stderr_fd.take(),
         ]);
+    }
+}
+
+/// A program to exec in a forked child, prepared before the fork: the
+/// candidate paths execvp would try, argv, and the environment with the
+/// overrides applied. `exec` only makes async-signal-safe calls.
+struct ExecPlan {
+    candidates: Vec<CString>,
+    _argv: Vec<CString>,
+    argv: Vec<*const libc::c_char>,
+    /// `sh <path> <args...>` for a file without a valid executable header,
+    /// as execvp runs it; slot 1 is filled with the candidate in the child.
+    sh_argv: Vec<*const libc::c_char>,
+    _envp: Vec<CString>,
+    envp: Vec<*const libc::c_char>,
+}
+
+const EXEC_SHELL: &std::ffi::CStr = c"/bin/sh";
+
+impl ExecPlan {
+    /// None when an argument holds a NUL byte: such a command cannot run.
+    fn new(argv: &[String], env_overrides: &[(&str, String)]) -> Option<Self> {
+        use std::os::unix::ffi::OsStrExt;
+
+        let args = argv
+            .iter()
+            .map(|arg| CString::new(arg.as_str()))
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        let program = argv.first()?;
+        let candidates = if program.contains('/') {
+            vec![args[0].clone()]
+        } else {
+            let path = std::env::var_os("PATH");
+            let path = path
+                .as_deref()
+                .map_or(b"/bin:/usr/bin".as_slice(), |p| p.as_bytes());
+            path.split(|&b| b == b':')
+                .filter_map(|dir| {
+                    let mut full = if dir.is_empty() {
+                        b".".to_vec()
+                    } else {
+                        dir.to_vec()
+                    };
+                    full.push(b'/');
+                    full.extend_from_slice(program.as_bytes());
+                    CString::new(full).ok()
+                })
+                .collect()
+        };
+
+        let mut env: Vec<(Vec<u8>, Vec<u8>)> = std::env::vars_os()
+            .map(|(k, v)| (k.as_bytes().to_vec(), v.as_bytes().to_vec()))
+            .collect();
+        for (key, value) in env_overrides {
+            if key.is_empty() || key.contains('=') || key.contains('\0') || value.contains('\0') {
+                continue;
+            }
+            match env.iter_mut().find(|(k, _)| k == key.as_bytes()) {
+                Some(entry) => entry.1 = value.as_bytes().to_vec(),
+                None => env.push((key.as_bytes().to_vec(), value.as_bytes().to_vec())),
+            }
+        }
+        let envs: Vec<CString> = env
+            .into_iter()
+            .filter_map(|(mut k, v)| {
+                k.push(b'=');
+                k.extend_from_slice(&v);
+                CString::new(k).ok()
+            })
+            .collect();
+
+        let null_terminated = |strings: &[CString]| {
+            strings
+                .iter()
+                .map(|s| s.as_ptr())
+                .chain(std::iter::once(std::ptr::null()))
+                .collect::<Vec<_>>()
+        };
+        let argv_ptrs = null_terminated(&args);
+        let mut sh_argv = vec![EXEC_SHELL.as_ptr(), std::ptr::null()];
+        sh_argv.extend_from_slice(&argv_ptrs[1..]);
+        let envp = null_terminated(&envs);
+        Some(ExecPlan {
+            candidates,
+            _argv: args,
+            argv: argv_ptrs,
+            sh_argv,
+            _envp: envs,
+            envp,
+        })
+    }
+
+    /// Replace the process image as execvp would: try each candidate in
+    /// turn, run a file without an executable header with /bin/sh. Returns
+    /// only when every attempt failed.
+    ///
+    /// # Safety
+    /// Call only in a forked child that will `_exit` if this returns.
+    unsafe fn exec(&mut self) {
+        for path in &self.candidates {
+            unsafe { libc::execve(path.as_ptr(), self.argv.as_ptr(), self.envp.as_ptr()) };
+            match io::Error::last_os_error().raw_os_error() {
+                Some(libc::ENOEXEC) => {
+                    self.sh_argv[1] = path.as_ptr();
+                    unsafe {
+                        libc::execve(
+                            EXEC_SHELL.as_ptr(),
+                            self.sh_argv.as_ptr(),
+                            self.envp.as_ptr(),
+                        )
+                    };
+                    return;
+                }
+                Some(libc::ENOENT | libc::ENOTDIR | libc::EACCES | libc::ESTALE) => continue,
+                _ => return,
+            }
+        }
     }
 }
 
@@ -2830,6 +2941,75 @@ mod tests {
 
         assert_eq!(received, PROCESS_OUTPUT_BUFFER_MAX + EXTRA_OUTPUT);
         assert_eq!(exit, Some(0));
+    }
+
+    /// Run `argv` with piped streams; its stdout and exit code.
+    fn run_piped(argv: &[&str], env: &[(&str, String)]) -> (Vec<u8>, i32) {
+        let (tx, rx) = mpsc::channel();
+        let command = ExecuteCommand {
+            cmdline: Vec::new(),
+            pipe_stdin: true,
+            pipe_stdout: true,
+            pipe_stderr: true,
+            term: None,
+            rows: None,
+            cols: None,
+            hpix: None,
+            vpix: None,
+        };
+        let argv: Vec<String> = argv.iter().map(|a| a.to_string()).collect();
+        let mut process = ChildProcess::spawn(TEST_LINK, &argv, env, &command, tx).unwrap();
+        process.close_stdin();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut stdout = Vec::new();
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(RnshEvent::ProcessOutput {
+                    stream_id,
+                    data,
+                    budget,
+                    ..
+                }) => {
+                    budget.release(data.len());
+                    if stream_id == STREAM_STDOUT {
+                        stdout.extend_from_slice(&data);
+                    }
+                }
+                Ok(RnshEvent::ProcessExited { code, .. }) => return (stdout, code),
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        panic!("{argv:?} did not exit");
+    }
+
+    #[test]
+    fn spawned_programs_are_found_and_get_the_environment() {
+        let env = [
+            ("RNS_REMOTE_IDENTITY", "<abcd>".to_string()),
+            ("HOME", "/nowhere".to_string()),
+        ];
+        let (out, code) = run_piped(
+            &[
+                "sh",
+                "-c",
+                "printf '%s %s' \"$RNS_REMOTE_IDENTITY\" \"$HOME\"; exit 3",
+            ],
+            &env,
+        );
+        assert_eq!(out, b"<abcd> /nowhere");
+        assert_eq!(code, 3);
+
+        assert_eq!(run_piped(&["rns-no-such-program"], &[]).1, 255);
+        assert_eq!(run_piped(&["/nonexistent/program"], &[]).1, 255);
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("no-header");
+        std::fs::write(&script, "printf script\nexit 7\n").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let (out, code) = run_piped(&[script.to_str().unwrap()], &[]);
+        assert_eq!((out.as_slice(), code), (b"script".as_slice(), 7));
     }
 
     #[test]
