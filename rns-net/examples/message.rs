@@ -104,9 +104,8 @@ impl Callbacks for TransportCallbacks {
 
 fn find_free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
+        .and_then(|listener| listener.local_addr())
+        .expect("bind a free local port")
         .port()
 }
 
@@ -279,7 +278,9 @@ fn main() {
             static_transport_identity: false,
             local_hops_delta: false,
             identity: Some(Identity::from_private_key(
-                &alice_identity.get_private_key().unwrap(),
+                &alice_identity
+                    .get_private_key()
+                    .expect("a new identity has its private key"),
             )),
             network_identity: None,
             interfaces: vec![InterfaceConfig {
@@ -374,7 +375,11 @@ fn main() {
     alice_node
         .register_destination_with_proof(
             &alice_dest,
-            Some(alice_identity.get_private_key().unwrap()),
+            Some(
+                alice_identity
+                    .get_private_key()
+                    .expect("a new identity has its private key"),
+            ),
         )
         .expect("Failed to register Alice's destination");
 
@@ -393,7 +398,9 @@ fn main() {
             static_transport_identity: false,
             local_hops_delta: false,
             identity: Some(Identity::from_private_key(
-                &bob_identity.get_private_key().unwrap(),
+                &bob_identity
+                    .get_private_key()
+                    .expect("a new identity has its private key"),
             )),
             network_identity: None,
             interfaces: vec![InterfaceConfig {
@@ -486,7 +493,14 @@ fn main() {
     .expect("Failed to start Bob");
 
     bob_node
-        .register_destination_with_proof(&bob_dest, Some(bob_identity.get_private_key().unwrap()))
+        .register_destination_with_proof(
+            &bob_dest,
+            Some(
+                bob_identity
+                    .get_private_key()
+                    .expect("a new identity has its private key"),
+            ),
+        )
         .expect("Failed to register Bob's destination");
 
     // ─── Wait for TCP connections ────────────────────────────────────────
@@ -501,24 +515,32 @@ fn main() {
     // both across restarts. Never put private files in the remote-ratchet cache.
     let alice_ratchets = rns_net::LocalRatchets::persistent(
         &alice_dest,
-        Identity::from_private_key(&alice_identity.get_private_key().unwrap()),
+        Identity::from_private_key(
+            &alice_identity
+                .get_private_key()
+                .expect("a new identity has its private key"),
+        ),
         ratchet_dir.path().join("alice-private"),
     )
-    .unwrap();
+    .expect("create Alice's ratchet store");
     let bob_ratchets = rns_net::LocalRatchets::persistent(
         &bob_dest,
-        Identity::from_private_key(&bob_identity.get_private_key().unwrap()),
+        Identity::from_private_key(
+            &bob_identity
+                .get_private_key()
+                .expect("a new identity has its private key"),
+        ),
         ratchet_dir.path().join("bob-private"),
     )
-    .unwrap();
+    .expect("create Bob's ratchet store");
     alice_ratchets.enforce();
     bob_ratchets.enforce();
     alice_node
         .attach_local_ratchets(alice_ratchets.clone())
-        .unwrap();
+        .expect("attach Alice's ratchets");
     bob_node
         .attach_local_ratchets(bob_ratchets.clone())
-        .unwrap();
+        .expect("attach Bob's ratchets");
 
     futures::executor::block_on(alice_node.announce(&alice_dest, &alice_identity, Some(b"Alice")))
         .expect("Alice announce failed");
@@ -560,17 +582,14 @@ fn main() {
     // Alice → Bob
     let dest_to_bob = Destination::single_out(APP_NAME, &["message", "rx"], &bob_announced);
     let alice_msg = b"Hello Bob!";
-    println!(
-        "Alice sending: {:?}",
-        std::str::from_utf8(alice_msg).unwrap()
-    );
+    println!("Alice sending: {:?}", String::from_utf8_lossy(alice_msg));
     let alice_pkt = futures::executor::block_on(alice_node.send_packet(&dest_to_bob, alice_msg))
         .expect("Alice send failed");
 
     // Bob → Alice
     let dest_to_alice = Destination::single_out(APP_NAME, &["message", "rx"], &alice_announced);
     let bob_msg = b"Hello Alice!";
-    println!("Bob sending: {:?}", std::str::from_utf8(bob_msg).unwrap());
+    println!("Bob sending: {:?}", String::from_utf8_lossy(bob_msg));
     let bob_pkt = bob_node
         .try_send_packet(&dest_to_alice, bob_msg)
         .expect("Bob send admission failed")
