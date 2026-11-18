@@ -1,0 +1,82 @@
+$ rnprobe --help
+exit: Some(0)
+--- stdout
+usage: rnprobe [-h] [--config CONFIG] [-s SIZE] [-n PROBES] [-t seconds]
+               [-w seconds] [--version] [-v]
+               [full_name] [destination_hash]
+
+Reticulum Probe Utility
+
+positional arguments:
+  full_name             full destination name in dotted notation
+  destination_hash      hexadecimal hash of the destination
+
+options:
+  -h, --help            show this help message and exit
+  --config CONFIG       path to alternative Reticulum config directory
+  -s SIZE, --size SIZE  size of probe packet payload in bytes
+  -n PROBES, --probes PROBES
+                        number of probes to send
+  -t seconds, --timeout seconds
+                        timeout before giving up
+  -w seconds, --wait seconds
+                        time between each probe
+  --version             show program's version number and exit
+  -v, --verbose
+--- stderr
+--- end
+
+$ rnprobe --version
+exit: Some(0)
+--- stdout
+rnprobe 0.10.2268-544b45b4
+--- stderr
+--- end
+
+$ rnprobe --no-such-option
+exit: Some(2)
+--- stdout
+--- stderr
+usage: rnprobe [-h] [--config CONFIG] [-s SIZE] [-n PROBES] [-t seconds]
+               [-w seconds] [--version] [-v]
+               [full_name] [destination_hash]
+rnprobe: error: unrecognized arguments: --no-such-option
+--- end
+
+$ rnprobe example.aspect zz
+exit: Some(0)
+--- stdout
+Destination length is invalid, must be 32 hexadecimal characters (16 bytes).
+--- stderr
+--- end
+
+$ rnprobe 
+exit: Some(0)
+--- stdout
+
+usage: rnprobe [-h] [--config CONFIG] [-s SIZE] [-n PROBES] [-t seconds]
+               [-w seconds] [--version] [-v]
+               [full_name] [destination_hash]
+
+Reticulum Probe Utility
+
+positional arguments:
+  full_name             full destination name in dotted notation
+  destination_hash      hexadecimal hash of the destination
+
+options:
+  -h, --help            show this help message and exit
+  --config CONFIG       path to alternative Reticulum config directory
+  -s SIZE, --size SIZE  size of probe packet payload in bytes
+  -n PROBES, --probes PROBES
+                        number of probes to send
+  -t seconds, --timeout seconds
+                        timeout before giving up
+  -w seconds, --wait seconds
+                        time between each probe
+  --version             show program's version number and exit
+  -v, --verbose
+
+--- stderr
+--- end
+
