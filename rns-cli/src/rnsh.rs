@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::CString;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
-use std::os::fd::RawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
@@ -958,11 +958,16 @@ impl RnshTransport for RnsNode {
     }
 }
 
+/// A program running for a session. Its parent-side descriptors are shared
+/// with the reader threads, so each is closed only when the last user is
+/// done with it, never under a thread still reading it. The waiter thread
+/// reaps the pid; `reaped` tells `terminate` not to signal it after that.
 struct ChildProcess {
     pid: libc::pid_t,
-    stdin_fd: Option<RawFd>,
-    stdout_fd: Option<RawFd>,
-    stderr_fd: Option<RawFd>,
+    reaped: Arc<Mutex<bool>>,
+    stdin_fd: Option<Arc<OwnedFd>>,
+    stdout_fd: Option<Arc<OwnedFd>>,
+    stderr_fd: Option<Arc<OwnedFd>>,
     output_budget: Arc<OutputBudget>,
 }
 
@@ -1079,42 +1084,56 @@ impl ChildProcess {
             stderr_pipe.map(|p| p.1),
         ]);
 
-        let stdout_fd = if parent_stdout >= 0 {
-            Some(parent_stdout)
-        } else {
-            None
+        // The parent's ends, each owned once: the pty master may serve
+        // several streams.
+        let mut owned: Vec<Arc<OwnedFd>> = Vec::new();
+        let mut own = |fd: RawFd| -> Option<Arc<OwnedFd>> {
+            if fd < 0 {
+                return None;
+            }
+            if let Some(shared) = owned.iter().find(|o| o.as_raw_fd() == fd) {
+                return Some(shared.clone());
+            }
+            // SAFETY: `fd` is a parent-side pipe end or the pty master,
+            // opened above, used by nothing else; this is its only owner.
+            let fd = Arc::new(unsafe { OwnedFd::from_raw_fd(fd) });
+            owned.push(fd.clone());
+            Some(fd)
         };
-        let stderr_fd = if parent_stderr >= 0 && Some(parent_stderr) != stdout_fd {
-            Some(parent_stderr)
-        } else {
-            None
-        };
+        let stdin_fd = own(parent_stdin);
+        let stdout_fd = own(parent_stdout);
+        let stderr_fd = own(parent_stderr);
 
         let output_budget = Arc::new(OutputBudget::new());
         let mut reader_handles = Vec::new();
-        if let Some(fd) = stdout_fd {
+        if let Some(fd) = &stdout_fd {
             reader_handles.push(spawn_reader(
                 link_id,
                 STREAM_STDOUT,
-                fd,
+                fd.clone(),
                 event_tx.clone(),
                 output_budget.clone(),
             ));
         }
-        if let Some(fd) = stderr_fd {
+        if let Some(fd) = stderr_fd
+            .as_ref()
+            .filter(|fd| !stdout_fd.as_ref().is_some_and(|out| Arc::ptr_eq(fd, out)))
+        {
             reader_handles.push(spawn_reader(
                 link_id,
                 STREAM_STDERR,
-                fd,
+                fd.clone(),
                 event_tx.clone(),
                 output_budget.clone(),
             ));
         }
-        spawn_waiter(link_id, pid, reader_handles, event_tx);
+        let reaped = Arc::new(Mutex::new(false));
+        spawn_waiter(link_id, pid, reaped.clone(), reader_handles, event_tx);
 
         Ok(ChildProcess {
             pid,
-            stdin_fd: (parent_stdin >= 0).then_some(parent_stdin),
+            reaped,
+            stdin_fd,
             stdout_fd,
             stderr_fd,
             output_budget,
@@ -1122,29 +1141,29 @@ impl ChildProcess {
     }
 
     fn write_stdin(&self, data: &[u8]) {
-        if let Some(fd) = self.stdin_fd {
-            let _ = write_all_fd(fd, data);
+        if let Some(fd) = &self.stdin_fd {
+            let _ = write_all_fd(fd.as_raw_fd(), data);
         }
     }
 
     fn close_stdin(&mut self) {
-        if let Some(fd) = self.stdin_fd.take() {
-            if Some(fd) == self.stdout_fd || Some(fd) == self.stderr_fd {
-                let _ = write_all_fd(fd, b"\x04");
-                self.stdin_fd = Some(fd);
-            } else {
-                // SAFETY: `fd` is a pipe write end this struct owns (it differs from the
-                // stdout/stderr fds) and was just taken out of `stdin_fd`, so it is closed
-                // exactly once.
-                unsafe {
-                    libc::close(fd);
-                }
-            }
+        let Some(fd) = self.stdin_fd.take() else {
+            return;
+        };
+        let shared = [&self.stdout_fd, &self.stderr_fd]
+            .into_iter()
+            .flatten()
+            .any(|other| Arc::ptr_eq(&fd, other));
+        if shared {
+            // The pty: end of input is ^D, and the descriptor stays open.
+            let _ = write_all_fd(fd.as_raw_fd(), b"\x04");
+            self.stdin_fd = Some(fd);
         }
+        // Otherwise the stdin pipe's write end closes as `fd` drops.
     }
 
     fn set_winsize(&self, size: &WindowSize) {
-        let Some(fd) = self.stdout_fd.or(self.stdin_fd) else {
+        let Some(fd) = self.stdout_fd.as_ref().or(self.stdin_fd.as_ref()) else {
             return;
         };
         let ws = libc::winsize {
@@ -1153,32 +1172,33 @@ impl ChildProcess {
             ws_xpixel: size.hpix.unwrap_or(0),
             ws_ypixel: size.vpix.unwrap_or(0),
         };
-        // SAFETY: `fd` is a descriptor this struct still owns (Drop closes it), and `ws` is a
-        // live local `winsize` that TIOCSWINSZ only reads.
+        // SAFETY: `fd` is open while this struct holds its Arc, and `ws` is a live local
+        // `winsize` that TIOCSWINSZ only reads.
         unsafe {
-            libc::ioctl(fd, libc::TIOCSWINSZ, &ws);
+            libc::ioctl(fd.as_raw_fd(), libc::TIOCSWINSZ, &ws);
         }
     }
 
     fn terminate(&mut self) {
-        // SAFETY: `kill` takes no pointers. `pid` is the forked child; the session drops this
-        // `ChildProcess` on `ProcessExited`, but the waiter thread reaps the pid before joining
-        // the readers and sending that event, so in that window the pid may already be reaped.
-        unsafe {
-            libc::kill(self.pid, libc::SIGTERM);
+        let reaped = self.reaped.lock().unwrap_or_else(|p| p.into_inner());
+        if !*reaped {
+            // SAFETY: `kill` takes no pointers. While `reaped` is false and its lock is held
+            // the waiter cannot reap the child, so `pid` still names it (a zombie at worst),
+            // never a reused pid.
+            unsafe {
+                libc::kill(self.pid, libc::SIGTERM);
+            }
         }
+        drop(reaped);
         self.close_stdin();
     }
 }
 
 impl Drop for ChildProcess {
     fn drop(&mut self) {
+        // The readers stop at their next chunk; each descriptor closes when
+        // its last user, this struct or a reader, lets it go.
         self.output_budget.close();
-        close_unique(&[
-            self.stdin_fd.take(),
-            self.stdout_fd.take(),
-            self.stderr_fd.take(),
-        ]);
     }
 }
 
@@ -1329,17 +1349,16 @@ fn close_unique(fds: &[Option<RawFd>]) {
 fn spawn_reader(
     link_id: [u8; 16],
     stream_id: u16,
-    fd: RawFd,
+    fd: Arc<OwnedFd>,
     event_tx: mpsc::Sender<RnshEvent>,
     output_budget: Arc<OutputBudget>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
-            // SAFETY: `buf` is a live local of `buf.len()` bytes. `fd` is the stdout/stderr
-            // descriptor of a `ChildProcess`, open while it lives; its Drop may close it while
-            // this thread still loops (see `ChildProcess::drop`).
-            let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+            // SAFETY: `buf` is a live local of `buf.len()` bytes; `fd` stays open while this
+            // thread holds its Arc.
+            let n = unsafe { libc::read(fd.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
             if n > 0 {
                 let bytes = n as usize;
                 if !output_budget.reserve(bytes) {
@@ -1367,14 +1386,36 @@ fn spawn_reader(
 fn spawn_waiter(
     link_id: [u8; 16],
     pid: libc::pid_t,
+    reaped: Arc<Mutex<bool>>,
     reader_handles: Vec<std::thread::JoinHandle<()>>,
     event_tx: mpsc::Sender<RnshEvent>,
 ) {
     std::thread::spawn(move || {
+        // Wait for the exit without reaping, then reap under the lock
+        // `terminate` takes: the pid is never signalled once it may be reused.
+        loop {
+            // SAFETY: an all-zero siginfo_t is a valid value for this plain C struct.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            // SAFETY: `info` is a live local waitid writes into; `pid` is our child.
+            let rc = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            };
+            if rc == 0 || io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+                break;
+            }
+        }
+        let mut reaped = reaped.lock().unwrap_or_else(|p| p.into_inner());
         let mut status = 0;
         // SAFETY: `status` is a live local `c_int` waitpid writes into; `pid` is the forked
         // child, reaped only here.
         let _ = unsafe { libc::waitpid(pid, &mut status, 0) };
+        *reaped = true;
+        drop(reaped);
         let code = if libc::WIFEXITED(status) {
             libc::WEXITSTATUS(status)
         } else if libc::WIFSIGNALED(status) {
@@ -3026,6 +3067,69 @@ mod tests {
             }
         }
         panic!("{argv:?} did not exit");
+    }
+
+    #[test]
+    fn exited_child_is_reaped_before_its_exit_is_reported_and_not_signalled() {
+        let (tx, rx) = mpsc::channel();
+        let command = ExecuteCommand {
+            cmdline: Vec::new(),
+            pipe_stdin: true,
+            pipe_stdout: true,
+            pipe_stderr: true,
+            term: None,
+            rows: None,
+            cols: None,
+            hpix: None,
+            vpix: None,
+        };
+        let argv = ["sh".to_string(), "-c".to_string(), "exit 5".to_string()];
+        let mut process = ChildProcess::spawn(TEST_LINK, &argv, &[], &command, tx).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let code = loop {
+            assert!(Instant::now() < deadline, "no exit reported");
+            if let Ok(RnshEvent::ProcessExited { code, .. }) =
+                rx.recv_timeout(Duration::from_millis(100))
+            {
+                break code;
+            }
+        };
+        assert_eq!(code, 5);
+        assert!(*process.reaped.lock().unwrap());
+        // The pid is gone: terminating must not signal whatever reuses it.
+        process.terminate();
+        drop(process);
+    }
+
+    #[test]
+    fn readers_keep_their_descriptors_after_the_process_is_dropped() {
+        let (tx, rx) = mpsc::channel();
+        let command = ExecuteCommand {
+            cmdline: Vec::new(),
+            pipe_stdin: true,
+            pipe_stdout: true,
+            pipe_stderr: true,
+            term: None,
+            rows: None,
+            cols: None,
+            hpix: None,
+            vpix: None,
+        };
+        let argv = ["sh".to_string(), "-c".to_string(), "sleep 0.2".to_string()];
+        let process = ChildProcess::spawn(TEST_LINK, &argv, &[], &command, tx).unwrap();
+        let stdout = Arc::downgrade(process.stdout_fd.as_ref().unwrap());
+        drop(process);
+        // A reader still holds the pipe, so it is not closed under it.
+        assert!(stdout.upgrade().is_some());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if let Ok(RnshEvent::ProcessExited { .. }) = rx.recv_timeout(Duration::from_millis(100))
+            {
+                break;
+            }
+        }
+        // Readers are joined before the exit is reported: the pipe is closed now.
+        assert!(stdout.upgrade().is_none());
     }
 
     #[test]
