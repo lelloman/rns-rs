@@ -61,10 +61,10 @@ pub fn run_linux_client(
 
     let accept = wait_for_accept(&private, link_id, SETUP_TIMEOUT)?;
     validate_accept(client, &requested, &accept)?;
-    session
+    let mut accepted = session
         .accept(&accept, Duration::ZERO)
-        .map_err(session_error)?;
-    let mut accepted = session.accepted().cloned().unwrap();
+        .map_err(session_error)?
+        .clone();
     let full_tunnel = accepted.routes.iter().any(|route| route.prefix_len() == 0);
     let tunnel_config = TunnelConfig {
         interface_name: client.tun_name.clone(),
@@ -315,10 +315,10 @@ fn reconnect(
     session.hello_sent().map_err(session_error)?;
     let accept = wait_for_accept(private, link_id, SETUP_TIMEOUT)?;
     validate_accept(client, requested, &accept)?;
-    session
+    let accepted = session
         .accept(&accept, Duration::ZERO)
-        .map_err(session_error)?;
-    let accepted = session.accepted().cloned().unwrap();
+        .map_err(session_error)?
+        .clone();
     if accepted.address != previous.address
         || accepted.prefix_len != previous.prefix_len
         || accepted.gateway != previous.gateway

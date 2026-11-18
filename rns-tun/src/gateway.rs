@@ -344,7 +344,10 @@ pub fn run_linux_gateway(
                                 .machine
                                 .client_ready(session_epoch)
                                 .map_err(session_error)?;
-                            let grant = entry.grant.as_ref().unwrap();
+                            let grant = entry
+                                .grant
+                                .as_ref()
+                                .expect("an identified session has its grant");
                             entry.transport = Some(
                                 PacketTransport::new(
                                     session_epoch,

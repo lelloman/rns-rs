@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
 use std::net::Ipv4Addr;
@@ -150,24 +151,23 @@ impl Reassembler {
         if total == 0 || total > PACKET_MAX || end > total || fragment.payload.is_empty() {
             return Err(PacketError::InvalidFragment);
         }
-        if !self.entries.contains_key(&key) {
-            if self.entries.len() >= self.max_entries || self.used_bytes + total > self.max_bytes {
-                return Err(PacketError::ReassemblyLimit);
-            }
-            self.entries.insert(
-                key,
-                PartialPacket {
+        let full =
+            self.entries.len() >= self.max_entries || self.used_bytes + total > self.max_bytes;
+        let entry = match self.entries.entry(key) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(_) if full => return Err(PacketError::ReassemblyLimit),
+            Entry::Vacant(entry) => {
+                self.used_bytes += total;
+                entry.insert(PartialPacket {
                     total,
                     bytes: vec![0; total],
                     received: vec![false; total],
                     received_count: 0,
                     fragments: 0,
                     updated: now,
-                },
-            );
-            self.used_bytes += total;
-        }
-        let entry = self.entries.get_mut(&key).unwrap();
+                })
+            }
+        };
         if entry.total != total {
             return Err(PacketError::InvalidFragment);
         }
@@ -200,9 +200,10 @@ impl Reassembler {
         entry.fragments += 1;
         entry.updated = now;
         if entry.received_count == entry.total {
-            let entry = self.entries.remove(&key).unwrap();
-            self.used_bytes -= entry.total;
-            Ok(Some(entry.bytes))
+            let bytes = std::mem::take(&mut entry.bytes);
+            self.entries.remove(&key);
+            self.used_bytes -= total;
+            Ok(Some(bytes))
         } else {
             Ok(None)
         }

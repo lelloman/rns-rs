@@ -428,10 +428,10 @@ fn negotiate(
                 let message = ControlMessage::decode(&payload).map_err(io::Error::other)?;
                 match message {
                     ControlMessage::ServerAccept { .. } => {
-                        session
+                        let accepted = session
                             .accept(&message, Duration::ZERO)
-                            .map_err(io::Error::other)?;
-                        let accepted = session.accepted().cloned().unwrap();
+                            .map_err(io::Error::other)?
+                            .clone();
                         return Ok((link_id, session, accepted));
                     }
                     ControlMessage::ServerReject { diagnostic, .. } => {
