@@ -1048,11 +1048,7 @@ impl Driver {
     /// application's own for destinations it attached ratchets to, else the
     /// latest one the destination announced.
     pub(crate) fn single_ratchet_for(&self, dest_hash: &[u8; 16]) -> Option<[u8; 32]> {
-        let local = self
-            .event_tx
-            .local_ratchets()
-            .lock()
-            .unwrap()
+        let local = crate::sync::lock_or_recover(self.event_tx.local_ratchets(), "local ratchets")
             .get(dest_hash)
             .and_then(|owner| owner.current_public());
         local.or_else(|| {

@@ -6,6 +6,8 @@ use std::task::{Context, Poll, Waker};
 
 use futures::channel::oneshot;
 
+use crate::sync::lock_or_recover;
+
 /// A local send failure. Success never implies acknowledgement by the peer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkSendError {
@@ -109,10 +111,10 @@ pub(crate) struct Waiter(Mutex<Option<Waker>>);
 
 impl Waiter {
     pub(crate) fn register(&self, cx: &Context<'_>) {
-        *self.0.lock().unwrap() = Some(cx.waker().clone());
+        *lock_or_recover(&self.0, "link send waiter") = Some(cx.waker().clone());
     }
     pub(crate) fn wake(&self) {
-        let waker = self.0.lock().unwrap().take();
+        let waker = lock_or_recover(&self.0, "link send waiter").take();
         if let Some(waker) = waker {
             waker.wake();
         }
@@ -147,7 +149,7 @@ pub(crate) struct SendTracking {
 
 impl SendTracking {
     fn admit(&mut self) {
-        let mut state = self.pool.state.lock().unwrap();
+        let mut state = lock_or_recover(&self.pool.state, "link send pool");
         if state.closed {
             return;
         }
@@ -164,7 +166,7 @@ impl SendTracking {
 
 impl Drop for SendTracking {
     fn drop(&mut self) {
-        let mut state = self.pool.state.lock().unwrap();
+        let mut state = lock_or_recover(&self.pool.state, "link send pool");
         if let Some(counts) = state.links.get_mut(&self.link_id) {
             match self.phase {
                 SendPhase::Waiting => counts.waiting -= 1,
@@ -198,7 +200,7 @@ impl SendPool {
     }
 
     pub(crate) fn try_acquire(self: &Arc<Self>) -> Result<Permit, LinkSendError> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock_or_recover(&self.state, "link send pool");
         if state.closed {
             return Err(LinkSendError::DriverStopped);
         }
@@ -210,7 +212,7 @@ impl SendPool {
     }
 
     pub(crate) fn track(self: &Arc<Self>, link_id: [u8; 16], waiting: bool) -> SendTracking {
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock_or_recover(&self.state, "link send pool");
         let phase = if waiting && !state.closed {
             state.links.entry(link_id).or_default().waiting += 1;
             SendPhase::Waiting
@@ -225,13 +227,13 @@ impl SendPool {
     }
 
     pub(crate) fn snapshot(&self) -> std::collections::HashMap<[u8; 16], SendCounts> {
-        self.state.lock().unwrap().links.clone()
+        lock_or_recover(&self.state, "link send pool").links.clone()
     }
 
     pub(crate) async fn acquire(self: &Arc<Self>) -> Result<Permit, LinkSendError> {
         let waiter = Arc::new(Waiter::default());
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = lock_or_recover(&self.state, "link send pool");
             state.waiters.retain(|waiter| waiter.strong_count() > 0);
             state.waiters.push(Arc::downgrade(&waiter));
         }
@@ -247,7 +249,7 @@ impl SendPool {
 
     pub(crate) fn close(&self) {
         let (waiters, completions) = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = lock_or_recover(&self.state, "link send pool");
             state.closed = true;
             state.links.clear();
             (
@@ -264,7 +266,7 @@ impl SendPool {
     }
 
     pub(crate) fn in_flight(&self) -> usize {
-        self.state.lock().unwrap().used
+        lock_or_recover(&self.state, "link send pool").used
     }
 }
 
@@ -272,7 +274,7 @@ pub(crate) struct Permit(Arc<SendPool>);
 impl Drop for Permit {
     fn drop(&mut self) {
         let waiters = {
-            let mut state = self.0.state.lock().unwrap();
+            let mut state = lock_or_recover(&self.0.state, "link send pool");
             state.used -= 1;
             state.waiters.retain(|waiter| waiter.strong_count() > 0);
             state.waiters.clone()
@@ -308,7 +310,7 @@ impl Drop for CompletionState {
 }
 impl CompletionState {
     fn finish(&self, result: Result<(), LinkSendError>) {
-        let data = self.0.lock().unwrap().take();
+        let data = lock_or_recover(&self.0, "link send completion").take();
         if let Some(data) = data {
             drop(data.tracking);
             drop(data.permit);
@@ -344,7 +346,7 @@ impl Completion {
             error: None,
         }))));
         {
-            let mut pool = pool.state.lock().unwrap();
+            let mut pool = lock_or_recover(&pool.state, "link send pool");
             pool.completions.retain(|w| w.strong_count() > 0);
             if pool.closed {
                 drop(pool);
@@ -379,7 +381,7 @@ impl Completion {
     /// Each selected interface gets a branch. The permit and receipt remain
     /// live until every branch settles, even if one branch fails early.
     pub(crate) fn branch(&self) -> Self {
-        if let Some(data) = self.state.0.lock().unwrap().as_mut() {
+        if let Some(data) = lock_or_recover(&self.state.0, "link send completion").as_mut() {
             data.remaining += 1;
         }
         Self {
@@ -396,7 +398,7 @@ impl Completion {
         self.ratchet_lease = None;
         self.settled = true;
         let final_data = {
-            let mut guard = self.state.0.lock().unwrap();
+            let mut guard = lock_or_recover(&self.state.0, "link send completion");
             let Some(data) = guard.as_mut() else { return };
             if data.error.is_none() {
                 data.error = result.err();
@@ -415,11 +417,11 @@ impl Completion {
         }
     }
     pub(crate) fn is_finished(&self) -> bool {
-        self.state.0.lock().unwrap().is_none()
+        lock_or_recover(&self.state.0, "link send completion").is_none()
     }
 
     pub(crate) fn admit(&self) {
-        if let Some(data) = self.state.0.lock().unwrap().as_mut() {
+        if let Some(data) = lock_or_recover(&self.state.0, "link send completion").as_mut() {
             if let Some(tracking) = data.tracking.as_mut() {
                 tracking.admit();
             }

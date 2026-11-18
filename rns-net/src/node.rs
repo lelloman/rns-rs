@@ -4304,7 +4304,7 @@ impl RnsNode {
     /// Reattaching that Arc is idempotent; conflicting owners are rejected. The
     /// owner remains attached across destination deregistration/re-registration.
     pub fn attach_local_ratchets(&self, owner: Arc<crate::LocalRatchets>) -> io::Result<()> {
-        let mut owners = self.tx.local_ratchets().lock().unwrap();
+        let mut owners = crate::sync::lock_or_recover(self.tx.local_ratchets(), "local ratchets");
         if let Some(existing) = owners.get(&owner.destination_hash()) {
             if !Arc::ptr_eq(existing, &owner) {
                 return Err(io::Error::new(
@@ -4769,13 +4769,10 @@ impl RnsNode {
     /// The ratchet to encrypt a packet for `dest` with: this node's own for
     /// its destinations, else the latest one `dest` announced.
     fn single_ratchet(&self, dest: &crate::destination::Destination) -> Option<[u8; 32]> {
-        let local_ratchet = self
-            .tx
-            .local_ratchets()
-            .lock()
-            .unwrap()
-            .get(&dest.hash.0)
-            .and_then(|owner| owner.current_public());
+        let local_ratchet =
+            crate::sync::lock_or_recover(self.tx.local_ratchets(), "local ratchets")
+                .get(&dest.hash.0)
+                .and_then(|owner| owner.current_public());
         local_ratchet.or_else(|| {
             self.ratchet_store.as_ref().and_then(|store| {
                 match store.current(&dest.hash.0, time::now(), self.ratchet_expiry.as_secs_f64()) {
@@ -5449,7 +5446,7 @@ impl RnsNode {
         }
         // Reader/ticker EventSender clones may outlive the driver. They must not
         // retain private owners (and their file locks) after node shutdown.
-        self.tx.local_ratchets().lock().unwrap().clear();
+        crate::sync::lock_or_recover(self.tx.local_ratchets(), "local ratchets").clear();
         if let Some(handle) = self.verify_handle.take() {
             let _ = handle.join();
         }
@@ -5547,10 +5544,7 @@ pub(crate) fn build_announce_packet(
         .as_secs();
     random_hash[5..10].copy_from_slice(&now_secs.to_be_bytes()[3..8]);
 
-    let owner = tx
-        .local_ratchets()
-        .lock()
-        .unwrap()
+    let owner = crate::sync::lock_or_recover(tx.local_ratchets(), "local ratchets")
         .get(&dest.hash.0)
         .cloned();
     let ratchet = if let Some(owner) = owner {

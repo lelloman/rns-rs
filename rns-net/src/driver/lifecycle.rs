@@ -577,11 +577,7 @@ impl Driver {
             .as_secs();
         random_hash[5..10].copy_from_slice(&now_secs.to_be_bytes()[3..8]);
 
-        let owner = self
-            .event_tx
-            .local_ratchets()
-            .lock()
-            .unwrap()
+        let owner = crate::sync::lock_or_recover(self.event_tx.local_ratchets(), "local ratchets")
             .get(dest_hash)
             .cloned();
         let ratchet = match owner {
