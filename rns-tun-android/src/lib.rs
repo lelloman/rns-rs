@@ -25,11 +25,9 @@ struct HostProtector {
 }
 impl SocketProtector for HostProtector {
     fn protect(&self, fd: RawFd) -> io::Result<()> {
-        // SAFETY: `callback` and `user_data` are exactly the pair the host registered
-        // through `rntun_android_set_protector`, and the host promises the callback
-        // may be called with that `user_data` and any fd, from any thread, for as long
-        // as the protector is installed. Nothing on the Rust side enforces this; see
-        // `install_protector`, which is safe to call.
+        // SAFETY: `callback` and `user_data` are the pair given to the unsafe
+        // `install_protector`, whose contract is that the callback may be called with
+        // that `user_data` and any fd, from any thread, while the protector is installed.
         if unsafe { (self.callback)(fd, self.user_data as *mut c_void) } {
             Ok(())
         } else {
@@ -88,7 +86,14 @@ pub fn install_protector_object(
     Ok(())
 }
 
-pub fn install_protector(
+/// Install a host callback as the handle's socket protector.
+///
+/// # Safety
+///
+/// `callback` must be safe to call with `user_data` and any fd, from any
+/// thread, until the handle is destroyed: `user_data` must stay valid (and
+/// usable from other threads) for that long.
+pub unsafe fn install_protector(
     handle: u64,
     callback: ProtectCallback,
     user_data: *mut c_void,
@@ -309,8 +314,13 @@ pub unsafe extern "C" fn rntun_android_create(config_json: *const c_char) -> u64
 }
 
 /// Register the required `VpnService.protect(fd)` callback.
+///
+/// # Safety
+///
+/// As [`install_protector`]: `callback` must be safe to call with
+/// `user_data` and any fd, from any thread, until the handle is destroyed.
 #[no_mangle]
-pub extern "C" fn rntun_android_set_protector(
+pub unsafe extern "C" fn rntun_android_set_protector(
     handle: u64,
     callback: Option<ProtectCallback>,
     user_data: *mut c_void,
@@ -318,7 +328,8 @@ pub extern "C" fn rntun_android_set_protector(
     let Some(callback) = callback else {
         return libc::EINVAL;
     };
-    install_protector(handle, callback, user_data).map_or_else(|_| libc::EINVAL, |_| 0)
+    // SAFETY: this function's contract is install_protector's.
+    unsafe { install_protector(handle, callback, user_data) }.map_or_else(|_| libc::EINVAL, |_| 0)
 }
 
 /// Start Reticulum negotiation. Install the protector first, then poll until
