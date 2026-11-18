@@ -1769,7 +1769,8 @@ fn blackhole_source_fetch(publisher: Daemon, fetcher: Daemon) {
         format!(
             "{CHEAP_STAMPS}[reticulum]\n  enable_transport = No\n  share_instance = Yes\n  \
              instance_name = bh-fetcher-{label}-{pid}\n  shared_instance_port = {fetch_shared}\n  \
-             instance_control_port = {fetch_control}\n  blackhole_sources = {source}\n\
+             instance_control_port = {fetch_control}\n  blackhole_sources = {source}\n  \
+             blackhole_update_interval = 2\n\
              [logging]\n  loglevel = 4\n\
              [interfaces]\n  [[fetcher client]]\n    type = TCPClientInterface\n    \
              enabled = Yes\n    target_host = 127.0.0.1\n    target_port = {transport_port}\n"
@@ -1820,8 +1821,13 @@ fn blackhole_source_fetch(publisher: Daemon, fetcher: Daemon) {
     );
 
     // Each implementation's rnpath lists the fetcher's blackhole entries.
+    // Upstream's updater first tries 20 s after start and counts the try as
+    // done once it opens the link, even if the link then fails: the next try
+    // waits a whole update interval. The fetcher retries every 2 minutes,
+    // the least upstream allows, so one failed try on a busy runner is not
+    // the end of the test.
     let fetcher_config = fetcher_dir.to_str().unwrap().to_string();
-    let deadline = Instant::now() + Duration::from_secs(90);
+    let deadline = Instant::now() + Duration::from_secs(200);
     loop {
         publisher_daemon.assert_running("publisher");
         fetcher_daemon.assert_running("fetcher");
