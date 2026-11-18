@@ -86,7 +86,12 @@ impl ClientSession {
         self.state = ClientState::Negotiating;
         Ok(())
     }
-    pub fn accept(&mut self, message: &ControlMessage, now: Duration) -> Result<(), SessionError> {
+    /// Take the server's accept, returning the configuration it grants.
+    pub fn accept(
+        &mut self,
+        message: &ControlMessage,
+        now: Duration,
+    ) -> Result<&AcceptedConfig, SessionError> {
         let ControlMessage::ServerAccept {
             session_epoch,
             assigned_address,
@@ -104,7 +109,9 @@ impl ClientSession {
         if self.state != ClientState::Negotiating {
             return Err(SessionError::InvalidState);
         };
-        self.accepted = Some(AcceptedConfig {
+        self.deadline = Some(now + Duration::from_secs(*setup_timeout_secs as u64));
+        self.state = ClientState::DeviceSetup;
+        Ok(self.accepted.insert(AcceptedConfig {
             epoch: *session_epoch,
             address: *assigned_address,
             prefix_len: *prefix_len,
@@ -113,10 +120,7 @@ impl ClientSession {
             dns_servers: dns_servers.clone(),
             mtu: *packet_mtu,
             setup_timeout: Duration::from_secs(*setup_timeout_secs as u64),
-        });
-        self.deadline = Some(now + Duration::from_secs(*setup_timeout_secs as u64));
-        self.state = ClientState::DeviceSetup;
-        Ok(())
+        }))
     }
     pub fn device_ready(
         &mut self,

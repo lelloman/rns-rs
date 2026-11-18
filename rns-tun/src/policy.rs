@@ -130,12 +130,12 @@ impl GatewayPolicy {
         if gateway.prefix_len == 0 || gateway.prefix_len > 30 {
             return Err(PolicyError::InvalidGatewaySubnet);
         }
-        let gateway_ip: Ipv4Addr = raw
+        let (gateway_ip, _) = raw
             .gateway
             .address
             .split_once('/')
-            .unwrap()
-            .0
+            .ok_or(PolicyError::InvalidGatewaySubnet)?;
+        let gateway_ip: Ipv4Addr = gateway_ip
             .parse()
             .map_err(|_| PolicyError::InvalidGatewaySubnet)?;
         let mut clients = BTreeMap::new();

@@ -462,13 +462,15 @@ impl<'a> Reader<'a> {
         let v = self.bytes(2)?;
         Ok(u16::from_be_bytes([v[0], v[1]]))
     }
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], ProtocolError> {
+        let v = self.bytes(N)?;
+        v.first_chunk().copied().ok_or(ProtocolError::Truncated)
+    }
     fn u32(&mut self) -> Result<u32, ProtocolError> {
-        let v = self.bytes(4)?;
-        Ok(u32::from_be_bytes(v.try_into().unwrap()))
+        self.array().map(u32::from_be_bytes)
     }
     fn u64(&mut self) -> Result<u64, ProtocolError> {
-        let v = self.bytes(8)?;
-        Ok(u64::from_be_bytes(v.try_into().unwrap()))
+        self.array().map(u64::from_be_bytes)
     }
     fn epoch(&mut self) -> Result<u64, ProtocolError> {
         let v = self.u64()?;
