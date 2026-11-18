@@ -105,6 +105,55 @@ pub struct WeaveLogFrame {
     pub data: Vec<u8>,
 }
 
+/// What a log frame reports, once its data has the length its event needs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum LogEvent {
+    BoardInit,
+    Connected,
+    HostEndpoint([u8; 8]),
+    EndpointAlive([u8; 8]),
+    EndpointTimeout([u8; 8]),
+    EndpointVia {
+        endpoint: [u8; 8],
+        via: [u8; 4],
+    },
+    CpuLoad(u8),
+    Memory {
+        free: u32,
+        total: u32,
+    },
+    /// Any other event, or a known one whose data has the wrong length.
+    Other,
+}
+
+impl WeaveLogFrame {
+    fn parse(&self) -> LogEvent {
+        let data = self.data.as_slice();
+        let parsed = match self.event {
+            ET_BOARD_INIT => Some(LogEvent::BoardInit),
+            ET_PROTO_WDCL_CONNECTION => Some(LogEvent::Connected),
+            ET_PROTO_WDCL_HOST_ENDPOINT => data.try_into().ok().map(LogEvent::HostEndpoint),
+            ET_PROTO_WEAVE_EP_ALIVE => data.try_into().ok().map(LogEvent::EndpointAlive),
+            ET_PROTO_WEAVE_EP_TIMEOUT => data.try_into().ok().map(LogEvent::EndpointTimeout),
+            ET_PROTO_WEAVE_EP_VIA => data.split_first_chunk().and_then(|(endpoint, via)| {
+                Some(LogEvent::EndpointVia {
+                    endpoint: *endpoint,
+                    via: via.try_into().ok()?,
+                })
+            }),
+            ET_STAT_CPU => data.first().copied().map(LogEvent::CpuLoad),
+            ET_STAT_MEMORY => data.split_first_chunk().and_then(|(free, total)| {
+                Some(LogEvent::Memory {
+                    free: u32::from_be_bytes(*free),
+                    total: u32::from_be_bytes(total.try_into().ok()?),
+                })
+            }),
+            _ => None,
+        };
+        parsed.unwrap_or(LogEvent::Other)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum WeaveInput {
     Discovery {
@@ -215,14 +264,11 @@ impl WeaveState {
             self.logs.pop_front();
         }
         self.logs.push_back(frame.clone());
-        match frame.event {
-            ET_BOARD_INIT => {}
-            ET_PROTO_WDCL_CONNECTION => self.connected = true,
-            ET_PROTO_WDCL_HOST_ENDPOINT if frame.data.len() == 8 => {
-                self.endpoint_id = frame.data.as_slice().try_into().ok();
-            }
-            ET_PROTO_WEAVE_EP_ALIVE if frame.data.len() == 8 => {
-                let endpoint_id: [u8; 8] = frame.data.as_slice().try_into().unwrap();
+        match frame.parse() {
+            LogEvent::BoardInit => {}
+            LogEvent::Connected => self.connected = true,
+            LogEvent::HostEndpoint(endpoint_id) => self.endpoint_id = Some(endpoint_id),
+            LogEvent::EndpointAlive(endpoint_id) => {
                 self.peers
                     .entry(endpoint_id)
                     .and_modify(|peer| peer.last_heard = now)
@@ -232,25 +278,20 @@ impl WeaveState {
                         last_heard: now,
                     });
             }
-            ET_PROTO_WEAVE_EP_TIMEOUT if frame.data.len() == 8 => {
-                if let Ok(endpoint) = <[u8; 8]>::try_from(frame.data.as_slice()) {
-                    self.peers.remove(&endpoint);
-                }
+            LogEvent::EndpointTimeout(endpoint) => {
+                self.peers.remove(&endpoint);
             }
-            ET_PROTO_WEAVE_EP_VIA if frame.data.len() == 12 => {
-                let endpoint: [u8; 8] = frame.data[..8].try_into().unwrap();
-                let via: [u8; 4] = frame.data[8..].try_into().unwrap();
+            LogEvent::EndpointVia { endpoint, via } => {
                 if let Some(peer) = self.peers.get_mut(&endpoint) {
                     peer.via_switch_id = Some(via);
                 }
             }
-            ET_STAT_CPU if !frame.data.is_empty() => self.cpu_load = Some(frame.data[0]),
-            ET_STAT_MEMORY if frame.data.len() == 8 => {
-                let free = u32::from_be_bytes(frame.data[..4].try_into().unwrap()) as f64;
-                let total = u32::from_be_bytes(frame.data[4..].try_into().unwrap()) as f64;
+            LogEvent::CpuLoad(load) => self.cpu_load = Some(load),
+            LogEvent::Memory { free, total } => {
+                let (free, total) = (f64::from(free), f64::from(total));
                 self.mem_load = (total > 0.0).then_some(((total - free) / total) * 100.0);
             }
-            _ => self.unknown_events.push_back(frame),
+            LogEvent::Other => self.unknown_events.push_back(frame),
         }
     }
 
@@ -599,26 +640,23 @@ impl WeaveSession {
 
     fn process_log(self: &Arc<Self>, frame: WeaveLogFrame) {
         let now = crate::time::now();
-        let event = frame.event;
-        let data = frame.data.clone();
+        let event = frame.parse();
+        let telemetry_changed = matches!(
+            frame.event,
+            ET_PROTO_WDCL_HOST_ENDPOINT | ET_STAT_CPU | ET_STAT_MEMORY
+        );
         super::lock_or_recover(&self.config.state, "weave state").handle_log(frame, now);
 
         match event {
-            ET_PROTO_WDCL_CONNECTION => {
+            LogEvent::Connected => {
                 self.emit(Event::InterfaceUp(self.config.interface_id, None, None));
                 self.publish_parent_telemetry();
             }
-            ET_PROTO_WEAVE_EP_ALIVE if data.len() == 8 => {
-                let endpoint: [u8; 8] = data.as_slice().try_into().unwrap();
+            LogEvent::EndpointAlive(endpoint) => {
                 self.ensure_peer(endpoint, now);
             }
-            ET_PROTO_WEAVE_EP_TIMEOUT if data.len() == 8 => {
-                let endpoint: [u8; 8] = data.as_slice().try_into().unwrap();
-                self.remove_peer(endpoint);
-            }
-            ET_PROTO_WEAVE_EP_VIA if data.len() == 12 => {
-                let endpoint: [u8; 8] = data[..8].try_into().unwrap();
-                let via: [u8; 4] = data[8..].try_into().unwrap();
+            LogEvent::EndpointTimeout(endpoint) => self.remove_peer(endpoint),
+            LogEvent::EndpointVia { endpoint, via } => {
                 if let Some(interface_id) =
                     super::lock_or_recover(&self.peer_interfaces, "weave peer interfaces")
                         .get(&endpoint)
@@ -633,10 +671,10 @@ impl WeaveSession {
                     });
                 }
             }
-            ET_PROTO_WDCL_HOST_ENDPOINT | ET_STAT_CPU | ET_STAT_MEMORY => {
-                self.publish_parent_telemetry()
-            }
             _ => {}
+        }
+        if telemetry_changed {
+            self.publish_parent_telemetry();
         }
     }
 
@@ -1111,6 +1149,58 @@ mod tests {
         assert!(state.accept_packet(b"packet", 3.0));
         assert!(!state.accept_packet(b"packet", 3.1));
         assert!(state.accept_packet(b"packet", 4.0));
+    }
+
+    #[test]
+    fn log_events_apply_only_with_their_data_length() {
+        let endpoint = [1, 2, 3, 4, 5, 6, 7, 8];
+        let via = [9, 10, 11, 12];
+        let mut state = WeaveState::default();
+        let mut log = |event, data: &[u8], now| {
+            state.handle_log(
+                WeaveLogFrame {
+                    timestamp: 0.0,
+                    level: 1,
+                    event,
+                    data: data.to_vec(),
+                },
+                now,
+            )
+        };
+        log(ET_PROTO_WDCL_HOST_ENDPOINT, &endpoint, 5.0);
+        log(ET_PROTO_WEAVE_EP_ALIVE, &endpoint, 5.0);
+        log(
+            ET_PROTO_WEAVE_EP_VIA,
+            &[&endpoint[..], &via[..]].concat(),
+            5.0,
+        );
+        log(ET_STAT_CPU, &[42, 0], 5.0);
+        log(ET_STAT_MEMORY, &[0, 0, 0, 25, 0, 0, 0, 100], 5.0);
+        // A byte short or over: kept as an unknown event, applied nowhere.
+        log(ET_PROTO_WDCL_HOST_ENDPOINT, &endpoint[..7], 6.0);
+        log(ET_PROTO_WEAVE_EP_ALIVE, &[0; 9], 6.0);
+        log(ET_PROTO_WEAVE_EP_TIMEOUT, &endpoint[..7], 6.0);
+        log(ET_PROTO_WEAVE_EP_VIA, &[0; 11], 6.0);
+        log(ET_STAT_CPU, &[], 6.0);
+        log(ET_STAT_MEMORY, &[0; 9], 6.0);
+        assert_eq!(state.endpoint_id, Some(endpoint));
+        assert_eq!(state.peers.len(), 1);
+        assert_eq!(state.peers[&endpoint].via_switch_id, Some(via));
+        assert_eq!(state.peers[&endpoint].last_heard, 5.0);
+        assert_eq!(state.cpu_load, Some(42));
+        assert_eq!(state.mem_load, Some(75.0));
+        assert_eq!(state.unknown_events.len(), 6);
+
+        state.handle_log(
+            WeaveLogFrame {
+                timestamp: 0.0,
+                level: 1,
+                event: ET_PROTO_WEAVE_EP_TIMEOUT,
+                data: endpoint.to_vec(),
+            },
+            7.0,
+        );
+        assert!(state.peers.is_empty());
     }
 
     #[test]
