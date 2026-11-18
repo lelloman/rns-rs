@@ -10,6 +10,16 @@ use crate::Rng;
 
 pub const KEYSIZE: usize = 512; // bits
 pub const DERIVED_KEY_LENGTH: usize = 64; // bytes
+
+/// The X25519 and Ed25519 halves of a 64-byte identity key, public or
+/// private, in that order.
+pub fn split_key(key: &[u8; 64]) -> ([u8; 32], [u8; 32]) {
+    let mut encryption = [0u8; 32];
+    let mut signing = [0u8; 32];
+    encryption.copy_from_slice(&key[..32]);
+    signing.copy_from_slice(&key[32..]);
+    (encryption, signing)
+}
 pub const TRUNCATED_HASHLENGTH: usize = 128; // bits (16 bytes)
 
 #[derive(Debug)]
@@ -147,8 +157,7 @@ impl Identity {
     /// Valid input is represented by the 64-byte type itself, so successful
     /// construction returns `Self` directly instead of a fall-through status.
     pub fn from_private_key(prv_bytes: &[u8; 64]) -> Self {
-        let x_prv_bytes: [u8; 32] = prv_bytes[..32].try_into().unwrap();
-        let ed_seed: [u8; 32] = prv_bytes[32..].try_into().unwrap();
+        let (x_prv_bytes, ed_seed) = split_key(prv_bytes);
 
         let prv = X25519PrivateKey::from_bytes(&x_prv_bytes);
         let sig_prv = Ed25519PrivateKey::from_bytes(&ed_seed);
@@ -177,8 +186,7 @@ impl Identity {
     /// decode to a valid curve point; otherwise this returns
     /// `CryptoError::InvalidPublicKey`.
     pub fn from_public_key(pub_bytes: &[u8; 64]) -> Result<Self, CryptoError> {
-        let x_pub_bytes: [u8; 32] = pub_bytes[..32].try_into().unwrap();
-        let ed_pub_bytes: [u8; 32] = pub_bytes[32..].try_into().unwrap();
+        let (x_pub_bytes, ed_pub_bytes) = split_key(pub_bytes);
 
         let pub_key = X25519PublicKey::from_bytes(&x_pub_bytes);
         let sig_pub = Ed25519PublicKey::from_bytes(&ed_pub_bytes)
