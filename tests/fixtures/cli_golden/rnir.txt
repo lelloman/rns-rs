@@ -1,0 +1,31 @@
+$ rnir --help
+exit: Some(0)
+--- stdout
+usage: rnir [-h] [--config CONFIG] [-v] [-q] [--version]
+
+Reticulum Distributed Identity Resolver
+
+options:
+  -h, --help       show this help message and exit
+  --config CONFIG  path to alternative Reticulum config directory
+  -v, --verbose
+  -q, --quiet
+  --version        show program's version number and exit
+--- stderr
+--- end
+
+$ rnir --version
+exit: Some(0)
+--- stdout
+rnir 0.10.2268-544b45b4
+--- stderr
+--- end
+
+$ rnir --no-such-option
+exit: Some(2)
+--- stdout
+--- stderr
+usage: rnir [-h] [--config CONFIG] [-v] [-q] [--version]
+rnir: error: unrecognized arguments: --no-such-option
+--- end
+

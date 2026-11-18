@@ -1,0 +1,60 @@
+$ rnpath --help
+exit: Some(0)
+--- stdout
+usage: rnpath [-h] [--config CONFIG] [--version] [-t] [-u] [-m hops] [-r] [-d]
+              [-D] [-x] [-w seconds] [-R hash] [-i path] [-W seconds] [-b]
+              [-B] [-U] [--duration DURATION] [--reason REASON] [-p] [-j] [-v]
+              [destination] [list_filter]
+
+Reticulum Path Management Utility
+
+positional arguments:
+  destination           hexadecimal hash of the destination
+  list_filter           filter for remote blackhole list view
+
+options:
+  -h, --help            show this help message and exit
+  --config CONFIG       path to alternative Reticulum config directory
+  --version             show program's version number and exit
+  -t, --table           show all known paths
+  -u, --usage           show path usage time
+  -m hops, --max hops   maximum hops to filter path table by
+  -r, --rates           show announce rate info
+  -d, --drop            remove the path to a destination
+  -D, --drop-announces  drop all queued announces
+  -x, --drop-via        drop all paths via specified transport instance
+  -w seconds            timeout before giving up
+  -R hash               transport identity hash of remote instance to manage
+  -i path               path to identity used for remote management
+  -W seconds            timeout before giving up on remote queries
+  -b, --blackholed      list blackholed identities
+  -B, --blackhole       blackhole identity
+  -U, --unblackhole     unblackhole identity
+  --duration DURATION   duration of blackhole enforcement in hours
+  --reason REASON       reason for blackholing identity
+  -p, --blackholed-list
+                        view published blackhole list for remote transport
+                        instance
+  -j, --json            output in JSON format
+  -v, --verbose
+--- stderr
+--- end
+
+$ rnpath --version
+exit: Some(0)
+--- stdout
+rnpath 0.10.2268-544b45b4
+--- stderr
+--- end
+
+$ rnpath --no-such-option
+exit: Some(2)
+--- stdout
+--- stderr
+usage: rnpath [-h] [--config CONFIG] [--version] [-t] [-u] [-m hops] [-r] [-d]
+              [-D] [-x] [-w seconds] [-R hash] [-i path] [-W seconds] [-b]
+              [-B] [-U] [--duration DURATION] [--reason REASON] [-p] [-j] [-v]
+              [destination] [list_filter]
+rnpath: error: unrecognized arguments: --no-such-option
+--- end
+

@@ -1,0 +1,36 @@
+$ rnsd --help
+exit: Some(0)
+--- stdout
+usage: rnsd [-h] [--config CONFIG] [-v] [-q] [-s] [-i] [--exampleconfig]
+            [--version]
+
+Reticulum Network Stack Daemon
+
+options:
+  -h, --help         show this help message and exit
+  --config CONFIG    path to alternative Reticulum config directory
+  -v, --verbose
+  -q, --quiet
+  -s, --service      rnsd is running as a service and should log to file
+  -i, --interactive  drop into interactive shell after initialisation
+  --exampleconfig    print verbose configuration example to stdout and exit
+  --version          show program's version number and exit
+--- stderr
+--- end
+
+$ rnsd --version
+exit: Some(0)
+--- stdout
+rnsd 0.10.2268-544b45b4
+--- stderr
+--- end
+
+$ rnsd --no-such-option
+exit: Some(2)
+--- stdout
+--- stderr
+usage: rnsd [-h] [--config CONFIG] [-v] [-q] [-s] [-i] [--exampleconfig]
+            [--version]
+rnsd: error: unrecognized arguments: --no-such-option
+--- end
+

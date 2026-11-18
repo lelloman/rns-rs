@@ -1,0 +1,66 @@
+$ rncp --help
+exit: Some(0)
+--- stdout
+usage: rncp [-h] [--config path] [-v] [-q] [-S] [-l] [-C] [-F] [-f] [-j path]
+            [-s path] [-O] [-b seconds] [-a allowed_hash] [-n] [-p]
+            [-i identity] [-w seconds] [-P] [--version]
+            [file] [destination]
+
+Reticulum File Transfer Utility
+
+positional arguments:
+  file                  file to be transferred
+  destination           hexadecimal hash of the receiver
+
+options:
+  -h, --help            show this help message and exit
+  --config path         path to alternative Reticulum config directory
+  -v, --verbose         increase verbosity
+  -q, --quiet           decrease verbosity
+  -S, --silent          disable transfer progress output
+  -l, --listen          listen for incoming transfer requests
+  -C, --no-compress     disable automatic compression
+  -F, --allow-fetch     allow authenticated clients to fetch files
+  -f, --fetch           fetch file from remote listener instead of sending
+  -j path, --jail path  restrict fetch requests to specified path
+  -s path, --save path  save received files in specified path
+  -O, --overwrite       Allow overwriting received files, instead of adding
+                        postfix
+  -b seconds            announce interval, 0 to only announce at startup
+  -a allowed_hash       allow this identity (or add in
+                        ~/.rncp/allowed_identities)
+  -n, --no-auth         accept requests from anyone
+  -p, --print-identity  print identity and destination info and exit
+  -i identity           path to identity to use
+  -w seconds            sender timeout before giving up
+  -P, --phy-rates       display physical layer transfer rates
+  --version             show program's version number and exit
+--- stderr
+--- end
+
+$ rncp --version
+exit: Some(0)
+--- stdout
+rncp 0.10.2268-544b45b4
+--- stderr
+--- end
+
+$ rncp --no-such-option
+exit: Some(2)
+--- stdout
+--- stderr
+usage: rncp [-h] [--config path] [-v] [-q] [-S] [-l] [-C] [-F] [-f] [-j path]
+            [-s path] [-O] [-b seconds] [-a allowed_hash] [-n] [-p]
+            [-i identity] [-w seconds] [-P] [--version]
+            [file] [destination]
+rncp: error: unrecognized arguments: --no-such-option
+--- end
+
+$ rncp /nonexistent/file zz
+exit: Some(1)
+--- stdout
+Allowed destination length is invalid, must be 32 hexadecimal characters (16 bytes).
+--- stderr
+AttributeError: 'NoneType' object has no attribute 'unwants_all_destination_types'
+--- end
+

@@ -1,0 +1,32 @@
+$ rnpkg --help
+exit: Some(0)
+--- stdout
+usage: rnpkg [-h] [--config CONFIG] [-v] [-q] [--exampleconfig] [--version]
+
+Reticulum Meta Package Manager
+
+options:
+  -h, --help       show this help message and exit
+  --config CONFIG  path to alternative Reticulum config directory
+  -v, --verbose
+  -q, --quiet
+  --exampleconfig  print verbose configuration example to stdout and exit
+  --version        show program's version number and exit
+--- stderr
+--- end
+
+$ rnpkg --version
+exit: Some(0)
+--- stdout
+rnpkg 0.10.2268-544b45b4
+--- stderr
+--- end
+
+$ rnpkg --no-such-option
+exit: Some(2)
+--- stdout
+--- stderr
+usage: rnpkg [-h] [--config CONFIG] [-v] [-q] [--exampleconfig] [--version]
+rnpkg: error: unrecognized arguments: --no-such-option
+--- end
+

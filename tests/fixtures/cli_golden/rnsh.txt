@@ -1,0 +1,60 @@
+$ rnsh --help
+exit: Some(0)
+--- stdout
+--- stderr
+Usage:
+  rnsh -l [options] [-- command...]
+  rnsh [options] <destination> [-- command...]
+
+Options:
+  -c, --config PATH        rnsh application config directory
+      --rnsconfig PATH     Reticulum config directory
+  -i, --identity PATH      Identity file to use
+  -p, --print-identity     Print identity and destination info
+  -Z, --base256            Also print compact base256 display for hashes
+  -l, --listen             Listen for remote shell links
+  -s, --service NAME       Listener identity service name
+  -b, --announce PERIOD    Announce on startup and every PERIOD seconds (0 = once)
+  -a, --allowed HASH       Allow initiator identity hash (repeatable)
+  -n, --no-auth            Allow any initiator identity
+  -A, --remote-command-as-args
+  -C, --no-remote-command
+  -N, --no-id              Do not identify to the listener
+  -m, --mirror             Return remote command exit code
+  -w, --timeout SECONDS    Path/link/protocol timeout
+--- end
+
+$ rnsh --version
+exit: Some(0)
+--- stdout
+rnsh 0.10.2268-544b45b4 (protocol 1)
+--- stderr
+--- end
+
+$ rnsh --no-such-option
+exit: Some(1)
+--- stdout
+--- stderr
+unknown option --no-such-option
+Usage:
+  rnsh -l [options] [-- command...]
+  rnsh [options] <destination> [-- command...]
+
+Options:
+  -c, --config PATH        rnsh application config directory
+      --rnsconfig PATH     Reticulum config directory
+  -i, --identity PATH      Identity file to use
+  -p, --print-identity     Print identity and destination info
+  -Z, --base256            Also print compact base256 display for hashes
+  -l, --listen             Listen for remote shell links
+  -s, --service NAME       Listener identity service name
+  -b, --announce PERIOD    Announce on startup and every PERIOD seconds (0 = once)
+  -a, --allowed HASH       Allow initiator identity hash (repeatable)
+  -n, --no-auth            Allow any initiator identity
+  -A, --remote-command-as-args
+  -C, --no-remote-command
+  -N, --no-id              Do not identify to the listener
+  -m, --mirror             Return remote command exit code
+  -w, --timeout SECONDS    Path/link/protocol timeout
+--- end
+
