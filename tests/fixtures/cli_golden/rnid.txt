@@ -70,7 +70,7 @@ options:
 $ rnid --version
 exit: Some(0)
 --- stdout
-rnid 0.10.2268-544b45b4
+rnid <VERSION>
 --- stderr
 --- end
 

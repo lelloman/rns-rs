@@ -17,7 +17,7 @@ options:
 $ rnir --version
 exit: Some(0)
 --- stdout
-rnir 0.10.2268-544b45b4
+rnir <VERSION>
 --- stderr
 --- end
 

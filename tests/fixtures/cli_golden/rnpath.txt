@@ -43,7 +43,7 @@ options:
 $ rnpath --version
 exit: Some(0)
 --- stdout
-rnpath 0.10.2268-544b45b4
+rnpath <VERSION>
 --- stderr
 --- end
 

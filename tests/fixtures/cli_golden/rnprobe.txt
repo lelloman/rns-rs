@@ -29,7 +29,7 @@ options:
 $ rnprobe --version
 exit: Some(0)
 --- stdout
-rnprobe 0.10.2268-544b45b4
+rnprobe <VERSION>
 --- stderr
 --- end
 

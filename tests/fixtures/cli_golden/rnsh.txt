@@ -27,7 +27,7 @@ Options:
 $ rnsh --version
 exit: Some(0)
 --- stdout
-rnsh 0.10.2268-544b45b4 (protocol 1)
+rnsh <VERSION> (protocol 1)
 --- stderr
 --- end
 

@@ -18,7 +18,7 @@ options:
 $ rnpkg --version
 exit: Some(0)
 --- stdout
-rnpkg 0.10.2268-544b45b4
+rnpkg <VERSION>
 --- stderr
 --- end
 
