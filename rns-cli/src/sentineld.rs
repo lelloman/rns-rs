@@ -1004,8 +1004,7 @@ fn read_provider_envelope(stream: &mut UnixStream) -> io::Result<Option<Provider
 
 fn install_signal_handlers() {
     // SAFETY: `signal_handler` is an `extern "C" fn(c_int)`, the shape `sighandler_t` expects. It
-    // stores an atomic flag, which is async-signal-safe, but its `eprintln!` is not: it takes the
-    // stderr lock and may allocate.
+    // only makes async-signal-safe calls: a raw `write` and an atomic store.
     unsafe {
         libc::signal(
             libc::SIGINT,
@@ -1023,7 +1022,12 @@ fn install_signal_handlers() {
 }
 
 extern "C" fn signal_handler(_sig: libc::c_int) {
-    eprintln!("rns-sentineld: received signal, requesting shutdown");
+    // Only async-signal-safe calls here: a raw write, not eprintln!, which
+    // takes the stderr lock and may allocate.
+    const MESSAGE: &[u8] = b"rns-sentineld: received signal, requesting shutdown\n";
+    // SAFETY: `MESSAGE` is a static of `MESSAGE.len()` bytes; a closed
+    // stderr only makes the write fail.
+    unsafe { libc::write(2, MESSAGE.as_ptr().cast(), MESSAGE.len()) };
     SHOULD_STOP.store(true, Ordering::Relaxed);
 }
 
