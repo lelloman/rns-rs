@@ -84,6 +84,46 @@ class StatusJsonTests(unittest.TestCase):
         ])
         self.assertEqual(status["named_peers_down"], ["Named Peer"])
 
+    def test_classifies_current_local_and_inbound_backbone_interfaces(self) -> None:
+        status, rows = status_from_json(
+            {
+                "transport_uptime": 30,
+                "interfaces": [
+                    {
+                        "name": "LocalInterface[rns/default]",
+                        "short_name": "0@\x00rns/default",
+                        "type": "LocalClientInterface",
+                        "status": True,
+                    },
+                    {
+                        "name": "BackboneInterface[Node/0.0.0.0:4242]",
+                        "short_name": "Node",
+                        "type": "BackboneInterface",
+                        "status": True,
+                    },
+                    {
+                        "name": "BackboneInterface[Client on Node/10.0.0.3:49626]",
+                        "short_name": "Client on Node",
+                        "type": "BackboneInterfacePeer",
+                        "status": True,
+                    },
+                    {
+                        "name": "BackboneInterface[Peer (0fe90deb)/10.0.0.4:4242]",
+                        "short_name": "Peer (0fe90deb)",
+                        "type": "BackboneClientInterface",
+                        "autoconnect_source": "46f82e43e9c7890d56de0b37fdae87c5",
+                        "status": True,
+                    },
+                ],
+            },
+            parse_utc("2026-11-18 08:00:00 UTC"),
+        )
+        self.assertEqual([row["interface_kind"] for row in rows], [
+            "local", "configured_public", "backbone_discovered", "configured_public"
+        ])
+        self.assertEqual(status["backbone_up_count"], 1)
+        self.assertEqual(status["named_peer_total_count"], 2)
+
     def test_counts_every_interface_regardless_of_order(self) -> None:
         status, _ = status_from_json(
             {
