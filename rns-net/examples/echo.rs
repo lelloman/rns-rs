@@ -89,9 +89,8 @@ impl Callbacks for ClientCallbacks {
 
 fn find_free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
+        .and_then(|listener| listener.local_addr())
+        .expect("bind a free local port")
         .port()
 }
 
@@ -123,7 +122,9 @@ fn main() {
             static_transport_identity: false,
             local_hops_delta: false,
             identity: Some(Identity::from_private_key(
-                &server_identity.get_private_key().unwrap(),
+                &server_identity
+                    .get_private_key()
+                    .expect("a new identity has its private key"),
             )),
             network_identity: None,
             interfaces: vec![InterfaceConfig {
@@ -211,7 +212,9 @@ fn main() {
     .expect("Failed to start server");
 
     // Register the destination with proof strategy
-    let signing_key = server_identity.get_private_key().unwrap();
+    let signing_key = server_identity
+        .get_private_key()
+        .expect("a new identity has its private key");
     server_node
         .register_destination_with_proof(&server_dest, Some(signing_key))
         .expect("Failed to register destination");
