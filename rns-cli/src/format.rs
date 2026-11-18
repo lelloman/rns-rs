@@ -34,15 +34,6 @@ pub fn speed_str(bps: u64) -> String {
     format!("{:.2} {}", val, units[unit_idx])
 }
 
-/// Format a destination hash as a hex string.
-/// Matches Python's `RNS.prettyhexrep()`.
-pub fn prettyhexrep(hash: &[u8]) -> String {
-    hash.iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<Vec<_>>()
-        .join("")
-}
-
 /// upstream's `RNS.prettytime(time)`: days, hours and minutes, and seconds
 /// rounded to two decimals as Python writes them (`1m and 5.5s`, `2h`,
 /// `0s`).
@@ -154,7 +145,7 @@ pub fn python_json(value: &rns_net::pickle::PickleValue) -> String {
         }
         PickleValue::Float(f) => python_float(*f),
         PickleValue::String(s) => json_string(s),
-        PickleValue::Bytes(b) => format!("\"{}\"", prettyhexrep(b)),
+        PickleValue::Bytes(b) => format!("\"{}\"", crate::pyfmt::hexrep(b)),
         PickleValue::List(items) => {
             let inner: Vec<String> = items.iter().map(python_json).collect();
             format!("[{}]", inner.join(", "))
@@ -350,12 +341,6 @@ mod tests {
         assert_eq!(speed_str(500), "500 b/s");
         assert_eq!(speed_str(10_000_000), "10.00 Mb/s");
         assert_eq!(speed_str(1_000_000), "1.00 Mb/s");
-    }
-
-    #[test]
-    fn test_prettyhexrep() {
-        assert_eq!(prettyhexrep(&[0xab, 0xcd, 0xef]), "abcdef");
-        assert_eq!(prettyhexrep(&[0x00, 0xff]), "00ff");
     }
 
     #[test]

@@ -9,8 +9,7 @@ use std::time::Duration;
 
 use rns_cli::args::{Args, Opt, OptionSpec};
 use rns_cli::format::{
-    prettycost, prettyhexrep, python_float, python_json, upstream_prettytime,
-    upstream_prettytime_compact,
+    prettycost, python_float, python_json, upstream_prettytime, upstream_prettytime_compact,
 };
 use rns_net::config;
 use rns_net::pickle::PickleValue;
@@ -299,7 +298,7 @@ fn parse_hex_hash(s: &str) -> Option<Vec<u8>> {
 
 /// `RNS.prettyhexrep`: the hash in hex, between angle brackets.
 fn pretty(hash: &[u8]) -> String {
-    format!("<{}>", prettyhexrep(hash))
+    rns_cli::pyfmt::prettyhexrep(hash)
 }
 
 /// upstream's destination argument check, with its messages.
@@ -1005,7 +1004,7 @@ fn lookup_path(
     };
     let mut dest_hash = [0u8; 16];
     dest_hash.copy_from_slice(&hash_bytes);
-    let pretty = format!("<{}>", prettyhexrep(&dest_hash));
+    let pretty = pretty(&dest_hash);
     let has_path = || match node {
         Some(node) => node
             .has_path(&rns_net::DestHash(dest_hash))
@@ -1065,7 +1064,7 @@ fn lookup_path(
             println!("\r                                                       \rError: Invalid path data returned");
             process::exit(1);
         };
-        let next_hop = format!("<{}>", prettyhexrep(next_hop));
+        let next_hop = rns_cli::pyfmt::prettyhexrep(next_hop);
         let interface = get_for(connect, "next_hop_if_name", &dest_hash)
             .as_str()
             .map(str::to_string)
