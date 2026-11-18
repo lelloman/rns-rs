@@ -251,14 +251,18 @@ pub fn read_result(
 ) -> Result<HookResult, HookError> {
     let size = std::mem::size_of::<HookResult>();
     let mem_size = memory.data_size(&store);
-    if offset.checked_add(size).is_none_or(|end| end > mem_size) {
-        return Err(HookError::InvalidResult(format!(
+    let out_of_bounds = || {
+        HookError::InvalidResult(format!(
             "result offset {} + size {} exceeds memory size {}",
             offset, size, mem_size
-        )));
+        ))
+    };
+    if offset.checked_add(size).is_none_or(|end| end > mem_size) {
+        return Err(out_of_bounds());
     }
     let data = memory.data(&store);
-    let verdict = read_u32(data, offset);
+    let word = |at: usize| read_u32(data, offset + at).ok_or_else(out_of_bounds);
+    let verdict = word(0)?;
     if Verdict::from_u32(verdict).is_none() {
         return Err(HookError::InvalidResult(format!(
             "invalid verdict value: {}",
@@ -267,12 +271,12 @@ pub fn read_result(
     }
     Ok(HookResult {
         verdict,
-        modified_data_offset: read_u32(data, offset + 4),
-        modified_data_len: read_u32(data, offset + 8),
-        inject_actions_offset: read_u32(data, offset + 12),
-        inject_actions_count: read_u32(data, offset + 16),
-        log_offset: read_u32(data, offset + 20),
-        log_len: read_u32(data, offset + 24),
+        modified_data_offset: word(4)?,
+        modified_data_len: word(8)?,
+        inject_actions_offset: word(12)?,
+        inject_actions_count: word(16)?,
+        log_offset: word(20)?,
+        log_len: word(24)?,
     })
 }
 
@@ -307,8 +311,9 @@ fn peer_ip_bytes(ip: &std::net::IpAddr) -> [u8; 16] {
 }
 
 #[cfg(feature = "wasm")]
-fn read_u32(data: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
+fn read_u32(data: &[u8], offset: usize) -> Option<u32> {
+    let bytes = data.get(offset..)?.first_chunk()?;
+    Some(u32::from_le_bytes(*bytes))
 }
 
 fn read_slice(data: &[u8], offset: usize, len: usize) -> Option<Vec<u8>> {
