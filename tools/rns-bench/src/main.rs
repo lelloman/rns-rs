@@ -1,3 +1,10 @@
+//! Benchmark driver: runs scenarios between nodes and records what they
+//! cost.
+
+// A failed precondition aborts the measurement, which is what a benchmark
+// run should do; the workspace lint against unwrap is for shipped code.
+#![allow(clippy::unwrap_used, reason = "a benchmark run aborts on failure")]
+
 #[cfg(feature = "allocation-profiler")]
 mod allocations;
 #[cfg(feature = "allocation-profiler")]
