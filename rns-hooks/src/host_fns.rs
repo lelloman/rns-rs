@@ -1,3 +1,8 @@
+#![allow(
+    unsafe_code,
+    reason = "wasm host functions reach the engine through a raw pointer"
+)]
+
 use crate::runtime::{
     StoreData, MAX_INJECTED_ACTIONS_PER_CALL, MAX_INJECTED_ACTION_BYTES_PER_CALL,
     MAX_LOG_MESSAGES_PER_CALL, MAX_LOG_MESSAGE_BYTES, MAX_PROVIDER_EVENTS_PER_CALL,

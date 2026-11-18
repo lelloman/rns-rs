@@ -912,6 +912,7 @@ fn reader_loop_connected(
     }
 }
 
+#[allow(unsafe_code, reason = "poll(2) on the reader")]
 fn reader_ready(reader: &impl AsRawFd, timeout: Duration) -> bool {
     let mut pfd = libc::pollfd {
         fd: reader.as_raw_fd(),

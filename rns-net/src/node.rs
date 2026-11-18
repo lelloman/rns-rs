@@ -2,6 +2,8 @@
 //!
 //! Wires together the driver, interfaces, and timer thread.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read};
 use std::path::Path;

@@ -6,6 +6,8 @@
 //! in their own process group, with bounded output and a hard kill on
 //! timeout or link loss.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::os::unix::process::CommandExt;

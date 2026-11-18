@@ -291,6 +291,7 @@ fn now() -> i64 {
 }
 
 /// Format `timestamp` in local time with `strftime`.
+#[allow(unsafe_code, reason = "localtime_r")]
 fn local_time(format: &str, timestamp: i64) -> String {
     // SAFETY: `libc::tm` is a plain C struct of integers plus a nullable `tm_zone` pointer;
     // all-zero bytes are a valid value.
@@ -1186,6 +1187,7 @@ fn installed_firmware_hash(
 
 /// Run a flasher as upstream's `subprocess.call` does, with the output
 /// going to the terminal: its exit status, negative for a signal.
+#[allow(unsafe_code, reason = "strerror for the flasher's exit reason")]
 fn run_flasher(call: Option<Vec<String>>) -> Result<i32, String> {
     let Some(call) = call else {
         return Err("expected str, bytes or os.PathLike object, not NoneType".into());

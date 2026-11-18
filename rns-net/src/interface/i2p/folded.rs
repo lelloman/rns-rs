@@ -12,6 +12,8 @@
 //! outbound peer, and one asks for the next incoming connection. Each exits
 //! once its stream is served on the driver.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::os::fd::AsRawFd;

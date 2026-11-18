@@ -1,3 +1,5 @@
+#![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
+
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};

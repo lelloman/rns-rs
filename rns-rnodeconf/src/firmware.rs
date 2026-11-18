@@ -7,6 +7,8 @@
 //! flasher upstream runs (the `esptool.py` shipped in an ESP32 package,
 //! `avrdude`, or `adafruit-nrfutil`).
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

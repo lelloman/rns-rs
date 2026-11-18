@@ -19,6 +19,8 @@
 //! waits at a time (a concurrent wait returns no events), and `notify` wakes
 //! the current or next wait once.
 
+#![allow(unsafe_code, reason = "the poller's epoll/kqueue/poll calls")]
+
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 pub use polling::{Event, Events, PollMode, Poller};
 

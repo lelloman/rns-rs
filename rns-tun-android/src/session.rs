@@ -1,3 +1,5 @@
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::net::Ipv4Addr;

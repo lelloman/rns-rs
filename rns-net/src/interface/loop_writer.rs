@@ -11,6 +11,11 @@
 //! registers writable interest on the driver's poller and finishes when the
 //! driver reports the socket writable.
 
+#![allow(
+    unsafe_code,
+    reason = "descriptors registered with the poller and OS calls through libc"
+)]
+
 use std::collections::VecDeque;
 use std::io;
 use std::os::fd::{BorrowedFd, RawFd};

@@ -112,6 +112,7 @@ struct OutgoingStreamTransfer {
 /// pages, the faults were most of the time spent storing each received
 /// segment of a split Resource.
 #[cfg(target_os = "linux")]
+#[allow(unsafe_code, reason = "madvise on the link buffer")]
 fn advise_huge_pages(buffer: &Vec<u8>) {
     const HUGE_PAGE: usize = 2 << 20;
     if buffer.capacity() < 2 * HUGE_PAGE {

@@ -16,6 +16,7 @@ authors = ["rns-rs contributors"]
 # here once the code passes it; never relax one to land a change.
 # scripts/lint-host.sh turns warnings into errors.
 [workspace.lints.rust]
+unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "warn"
 unused_lifetimes = "warn"
 

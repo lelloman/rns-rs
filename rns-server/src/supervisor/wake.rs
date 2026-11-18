@@ -6,6 +6,8 @@
 //! which become readable when the process exits without reaping it, so the
 //! loop's `try_wait` still collects the status.
 
+#![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
+
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicI32, Ordering};

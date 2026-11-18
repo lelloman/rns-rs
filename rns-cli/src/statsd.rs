@@ -1,3 +1,5 @@
+#![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
+
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read};

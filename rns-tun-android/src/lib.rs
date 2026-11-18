@@ -3,6 +3,11 @@
 //! The C ABI has explicit descriptor ownership. Protocol and session logic
 //! remains in `rns-tun`; Java/Kotlin can bind this directly or via thin JNI.
 
+#![allow(
+    unsafe_code,
+    reason = "the crate is the C and JNI boundary of the Android tunnel"
+)]
+
 mod bundle;
 mod jni_api;
 mod session;

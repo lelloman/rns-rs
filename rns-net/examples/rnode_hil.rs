@@ -10,7 +10,7 @@
 //! - sends LEAVE and verifies each board can be detected again
 
 // Bench-top test code, outside the code-quality lints' scope.
-#![allow(clippy::undocumented_unsafe_blocks)]
+#![allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
 
 use std::env;
 use std::fs::File;

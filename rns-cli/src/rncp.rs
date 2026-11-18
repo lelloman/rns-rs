@@ -4,6 +4,8 @@
 //! (progress lines, messages, `RNS.log` lines on stdout), exit codes,
 //! identity location, allowed identities, fetch jail and saved file names.
 
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;

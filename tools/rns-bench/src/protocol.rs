@@ -1,3 +1,5 @@
+#![allow(unsafe_code, reason = "OS calls through libc")]
+
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Write};

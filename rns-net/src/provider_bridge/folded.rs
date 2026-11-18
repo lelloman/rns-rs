@@ -10,6 +10,8 @@
 //! the overflow policy applies. The threaded bridge instead drops it after a
 //! write blocks for a second.
 
+#![allow(unsafe_code, reason = "descriptors registered with the poller")]
+
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsFd, AsRawFd};

@@ -9,6 +9,8 @@
 //! The server answers each source within the limits of a
 //! [`ProbeRateLimit`] and drops what is over them (see [`ProbeLimiter`]).
 
+#![allow(unsafe_code, reason = "descriptors registered with the poller")]
+
 use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, SocketAddr, UdpSocket};

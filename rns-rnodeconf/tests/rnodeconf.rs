@@ -6,7 +6,7 @@
 //! `pyserial` and `cryptography`, and are ignored by default.
 
 // Test code is outside the code-quality lints' scope.
-#![allow(clippy::undocumented_unsafe_blocks)]
+#![allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
 
 #[path = "support/fake_rnode.rs"]
 mod fake_rnode;

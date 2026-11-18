@@ -74,14 +74,16 @@ impl Counters {
 pub static COUNTERS: Counters = Counters::new();
 
 #[cfg(feature = "allocation-profiler")]
+#[allow(unsafe_code, reason = "a counting global allocator wrapping System")]
 mod allocator {
     use super::COUNTERS;
     use std::alloc::{GlobalAlloc, Layout, System};
     pub struct Tracked;
-    // Safety: requests are forwarded unchanged to System, using its original
+    // SAFETY: requests are forwarded unchanged to System, using its original
     // pointer and layout. Accounting uses only atomics and never allocates.
     unsafe impl GlobalAlloc for Tracked {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            // SAFETY: the caller's GlobalAlloc contract, passed on to System unchanged.
             let ptr = unsafe { System.alloc(layout) };
             if !ptr.is_null() {
                 COUNTERS.allocate(layout.size() as u64);
@@ -89,6 +91,7 @@ mod allocator {
             ptr
         }
         unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            // SAFETY: the caller's GlobalAlloc contract, passed on to System unchanged.
             let ptr = unsafe { System.alloc_zeroed(layout) };
             if !ptr.is_null() {
                 COUNTERS.allocate(layout.size() as u64);
@@ -96,10 +99,12 @@ mod allocator {
             ptr
         }
         unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: `ptr` came from System with this `layout` (every allocation here does).
             unsafe { System.dealloc(ptr, layout) };
             COUNTERS.deallocate(layout.size() as u64);
         }
         unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            // SAFETY: the caller's GlobalAlloc contract, passed on to System unchanged.
             let new = unsafe { System.realloc(ptr, layout, size) };
             if !new.is_null() {
                 COUNTERS.reallocate(layout.size() as u64, size as u64);

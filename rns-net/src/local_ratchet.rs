@@ -4,6 +4,8 @@
 //! Files are compatible with Python's signed ratchet list. Additional signed
 //! destination binding is checked when present; legacy imports must be assigned
 //! to the correct destination by the caller. Keys are not encrypted at rest.
+
+#![allow(unsafe_code, reason = "OS calls through libc")]
 use rns_core::{
     msgpack::{self, Value},
     types::Direction,

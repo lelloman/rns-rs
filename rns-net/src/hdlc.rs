@@ -2,6 +2,8 @@
 //!
 //! Matches Python `TCPInterface.py` HDLC encoding/decoding.
 
+#![allow(unsafe_code, reason = "SIMD byte scanning on the framing hot path")]
+
 use rns_core::constants::HEADER_MINSIZE;
 use rns_core::transport::types::PacketBytes;
 

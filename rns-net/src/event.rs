@@ -1,5 +1,7 @@
 //! Event types for the driver loop — concrete sync instantiation.
 
+#![allow(unsafe_code, reason = "descriptors registered with the poller")]
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};

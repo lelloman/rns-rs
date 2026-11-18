@@ -15,3 +15,5 @@ cargo clippy -p rns-hooks --all-targets --features wasm,native -- -D warnings
 # The BLE RNode transport is not a default feature (it links libdbus).
 cargo clippy -p rns-net -p rns-cli -p rns-ctl --all-targets \
   --features rns-net/iface-rnode-ble,rns-cli/iface-rnode-ble,rns-ctl/iface-rnode-ble -- -D warnings
+# The bench's counting allocator is behind a feature (scripts/hotpath).
+cargo clippy -p rns-bench --all-targets --features allocation-profiler -- -D warnings
