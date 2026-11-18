@@ -327,17 +327,16 @@ impl Channel {
         let mut actions = Vec::new();
 
         loop {
-            let front_match = self
+            if self
                 .rx_ring
                 .front()
-                .map(|e| e.sequence == self.next_rx_sequence)
-                .unwrap_or(false);
-
-            if !front_match {
+                .is_none_or(|e| e.sequence != self.next_rx_sequence)
+            {
                 break;
             }
-
-            let envelope = self.rx_ring.pop_front().unwrap();
+            let Some(envelope) = self.rx_ring.pop_front() else {
+                break;
+            };
 
             // Re-parse the envelope to get payload
             if let Ok((msgtype, _seq, payload)) = unpack_envelope(&envelope.raw) {
