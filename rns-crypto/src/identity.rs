@@ -270,7 +270,7 @@ impl Identity {
         ratchet: Option<&[u8; 32]>,
         rng: &mut dyn Rng,
     ) -> Result<Vec<u8>, CryptoError> {
-        let x_pub: [u8; 32] = public[..32].try_into().unwrap();
+        let (x_pub, _) = split_key(public);
         let target = X25519PublicKey::from_bytes(ratchet.unwrap_or(&x_pub));
         encrypt_to(&truncated_hash(public), &target, plaintext, rng)
     }
@@ -349,8 +349,10 @@ impl Identity {
         if ciphertext_token.len() <= 32 + crate::token::TOKEN_OVERHEAD {
             return Err(CryptoError::TokenError(TokenError::InvalidToken));
         }
-        let peer_pub_bytes: [u8; 32] = ciphertext_token[..32].try_into().unwrap();
-        let peer_pub = X25519PublicKey::from_bytes(&peer_pub_bytes);
+        let Some(peer_pub_bytes) = ciphertext_token.first_chunk() else {
+            return Err(CryptoError::InvalidCiphertext);
+        };
+        let peer_pub = X25519PublicKey::from_bytes(peer_pub_bytes);
         let shared_key = zeroize::Zeroizing::new(private.exchange(&peer_pub));
         let derived_key = zeroize::Zeroizing::new(
             hkdf::hkdf(DERIVED_KEY_LENGTH, &*shared_key, Some(&self.hash), None)
