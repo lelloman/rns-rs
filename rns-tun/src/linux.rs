@@ -627,10 +627,19 @@ fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }
 
+/// Whether a process with this pid exists. A pid read from a damaged
+/// journal can be 0 or out of range, which kill() would take as a process
+/// group or every process: no process has such a pid.
 fn process_is_alive(process_id: u32) -> bool {
-    // SAFETY: `kill` takes no pointers, and signal 0 only checks for existence and
-    // permission without delivering anything.
-    let result = unsafe { libc::kill(process_id as libc::pid_t, 0) };
+    let Ok(pid) = libc::pid_t::try_from(process_id) else {
+        return false;
+    };
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: `kill` takes no pointers, and signal 0 to a positive pid only checks
+    // that process for existence and permission without delivering anything.
+    let result = unsafe { libc::kill(pid, 0) };
     result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
@@ -677,6 +686,13 @@ fn _cstring(value: &str) -> io::Result<CString> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_real_pids_are_alive() {
+        assert!(process_is_alive(std::process::id()));
+        assert!(!process_is_alive(0));
+        assert!(!process_is_alive(u32::MAX));
+        assert!(!process_is_alive(i32::MAX as u32 + 1));
+    }
     #[test]
     fn rejects_unsafe_names() {
         assert!(validate_interface_name("rntun0").is_ok());
