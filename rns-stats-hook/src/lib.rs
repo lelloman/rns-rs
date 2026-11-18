@@ -1,4 +1,10 @@
 #![cfg_attr(target_arch = "wasm32", no_std)]
+// As a wasm guest the crate exports its entry point unmangled and reads the
+// context the host wrote into its memory: that is the hook ABI.
+#![cfg_attr(
+    target_arch = "wasm32",
+    allow(unsafe_code, reason = "the wasm guest side of the hook ABI")
+)]
 
 #[cfg(any(target_arch = "wasm32", feature = "builtin"))]
 use rns_hooks_abi::stats::{
@@ -54,8 +60,12 @@ fn identity_hash(public_key: &[u8]) -> [u8; 16] {
 #[no_mangle]
 pub extern "C" fn on_hook(ctx_ptr: i32) -> i32 {
     let ptr = ctx_ptr as *const u8;
+    // SAFETY: the host calls on_hook with the address of the context it
+    // has just written at the arena base.
     match unsafe { context::context_type(ptr) } {
         context::CTX_TYPE_PACKET => {
+            // SAFETY: the context is a PacketContext, as its type says, and
+            // the arena base is 4096-aligned, enough for any repr(C) context.
             let ctx = unsafe { &*(ptr as *const PacketContext) };
 
             let payload = PacketStatsPayload {
@@ -71,6 +81,7 @@ pub extern "C" fn on_hook(ctx_ptr: i32) -> i32 {
             }
         }
         context::CTX_TYPE_LINK => {
+            // SAFETY: as for the packet context above, for a LinkContext.
             let ctx = unsafe { &*(ptr as *const LinkContext) };
             let payload = LinkStatsPayload {
                 link_id: ctx.link_id,
@@ -82,6 +93,8 @@ pub extern "C" fn on_hook(ctx_ptr: i32) -> i32 {
         _ => {}
     }
 
+    // SAFETY: a wasm guest runs one call at a time, so nothing else touches
+    // RESULT while it is written and its address handed to the host.
     unsafe {
         let rptr = &raw mut RESULT;
         rptr.write(HookResult::continue_result());
@@ -91,6 +104,8 @@ pub extern "C" fn on_hook(ctx_ptr: i32) -> i32 {
 
 #[cfg(target_arch = "wasm32")]
 fn emit_announce_stats(ctx: &PacketContext) {
+    // SAFETY: the host writes the packet's data_len bytes at the arena base
+    // plus data_offset together with the context that names them.
     let raw = unsafe { context::packet_data(ctx) };
 
     let header_type = (ctx.flags >> 6) & 0x01;

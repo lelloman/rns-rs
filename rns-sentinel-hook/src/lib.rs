@@ -1,4 +1,10 @@
 #![cfg_attr(target_arch = "wasm32", no_std)]
+// As a wasm guest the crate exports its entry point unmangled and reads the
+// context the host wrote into its memory: that is the hook ABI.
+#![cfg_attr(
+    target_arch = "wasm32",
+    allow(unsafe_code, reason = "the wasm guest side of the hook ABI")
+)]
 
 #[cfg(target_arch = "wasm32")]
 use rns_hooks_abi::context::{self, BackbonePeerContext, CTX_TYPE_BACKBONE_PEER};
@@ -52,7 +58,11 @@ static mut RESULT: HookResult = HookResult {
 #[no_mangle]
 pub extern "C" fn on_hook(ctx_ptr: i32) -> i32 {
     let ptr = ctx_ptr as *const u8;
+    // SAFETY: the host calls on_hook with the address of the context it
+    // has just written at the arena base.
     if unsafe { context::context_type(ptr) } == CTX_TYPE_BACKBONE_PEER {
+        // SAFETY: the context is a BackbonePeerContext, as its type says;
+        // the read does not rely on alignment.
         let ctx = unsafe { core::ptr::read_unaligned(ptr as *const BackbonePeerContext) };
         let mut server_interface_name = [0u8; BACKBONE_PEER_INTERFACE_NAME_MAX];
         let server_interface_name_len =
@@ -79,6 +89,8 @@ pub extern "C" fn on_hook(ctx_ptr: i32) -> i32 {
         let _ = host::emit_event(BACKBONE_PEER_PAYLOAD_TYPE, &payload);
     }
 
+    // SAFETY: a wasm guest runs one call at a time, so nothing else touches
+    // RESULT while it is written and its address handed to the host.
     unsafe {
         let rptr = &raw mut RESULT;
         rptr.write(HookResult::continue_result());

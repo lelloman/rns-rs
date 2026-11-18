@@ -25,3 +25,7 @@ lint -p rns-net -p rns-cli -p rns-ctl \
   --features rns-net/iface-rnode-ble,rns-cli/iface-rnode-ble,rns-ctl/iface-rnode-ble
 # The bench's counting allocator is behind a feature (scripts/hotpath).
 production_targets=--bins lint -p rns-bench --features allocation-profiler
+# The hooks' guest code exists only on wasm32, where rns-cli's build script
+# compiles them for the rns-hooks-wasm feature.
+cargo clippy -p rns-stats-hook -p rns-sentinel-hook --lib --target wasm32-unknown-unknown \
+  -- -D warnings
