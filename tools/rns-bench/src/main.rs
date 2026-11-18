@@ -2,6 +2,8 @@
 mod allocations;
 #[cfg(feature = "allocation-profiler")]
 mod heap;
+#[cfg(feature = "allocation-profiler")]
+mod hotpath;
 mod network;
 mod participant;
 mod probes;
@@ -50,6 +52,12 @@ fn main_result() -> Result<()> {
         }
         #[cfg(not(feature = "allocation-profiler"))]
         bail!("use ./scripts/bench-allocations to build the allocation profiler");
+    }
+    if command == "hotpath" {
+        #[cfg(feature = "allocation-profiler")]
+        return hotpath::main(&args[1..]);
+        #[cfg(not(feature = "allocation-profiler"))]
+        bail!("use ./scripts/hotpath to build the hot-path gate");
     }
     anyhow::ensure!(!cfg!(feature = "allocation-profiler") || matches!(command, "help" | "--help" | "doctor"),
         "allocation-instrumented executable cannot run timing workloads; rebuild with ./scripts/bench");
