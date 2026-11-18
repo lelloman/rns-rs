@@ -403,14 +403,39 @@ pub fn expanduser(path: &str) -> String {
     }
 }
 
+/// The user's home directory from the password database. Uses the
+/// reentrant lookup: other threads may be resolving users too.
 fn home_of(user: &str) -> Option<String> {
     let name = std::ffi::CString::new(user).ok()?;
-    let entry = unsafe { libc::getpwnam(name.as_ptr()) };
-    if entry.is_null() {
-        return None;
+    let mut buf = vec![0 as libc::c_char; 1024];
+    loop {
+        // SAFETY: an all-zero passwd is a valid value for these plain C
+        // fields; getpwnam_r fills it, pointing into `buf`.
+        let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut found: *mut libc::passwd = std::ptr::null_mut();
+        // SAFETY: every pointer is valid for the call and `buf.len()` is
+        // the buffer's real size.
+        let rc = unsafe {
+            libc::getpwnam_r(
+                name.as_ptr(),
+                &mut entry,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut found,
+            )
+        };
+        if rc == libc::ERANGE && buf.len() < 1 << 20 {
+            buf.resize(buf.len() * 2, 0);
+            continue;
+        }
+        if rc != 0 || found.is_null() || entry.pw_dir.is_null() {
+            return None;
+        }
+        // SAFETY: on success pw_dir points to a NUL-terminated string in
+        // `buf`, which is alive here.
+        let dir = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) };
+        return Some(dir.to_string_lossy().into_owned());
     }
-    let dir = unsafe { std::ffi::CStr::from_ptr((*entry).pw_dir) };
-    Some(dir.to_string_lossy().into_owned())
 }
 
 /// `os.path.normpath` (POSIX): `.` and `..` resolved by name, not by
@@ -635,6 +660,22 @@ mod tests {
         assert_eq!(basename("/x/y.txt"), "y.txt");
         assert_eq!(basename("y/"), "");
         assert_eq!(expanduser("a/~"), "a/~");
+    }
+
+    #[test]
+    fn named_users_home_from_the_password_database() {
+        let root = home_of("root").expect("root is in the password database");
+        assert!(root.starts_with('/'));
+        assert_eq!(
+            expanduser("~root/x"),
+            format!("{}/x", root.trim_end_matches('/'))
+        );
+        assert_eq!(home_of("no-such-user-rns"), None);
+        assert_eq!(expanduser("~no-such-user-rns/x"), "~no-such-user-rns/x");
+        let threads: Vec<_> = (0..8)
+            .map(|_| std::thread::spawn(|| (0..200).all(|_| home_of("root").is_some())))
+            .collect();
+        assert!(threads.into_iter().all(|t| t.join().unwrap()));
     }
 
     #[test]
