@@ -80,7 +80,11 @@ impl Rng for OsRng {
                     if error.kind() == std::io::ErrorKind::Interrupted {
                         continue;
                     }
-                    panic!("getrandom failed: {error}");
+                    // No safe way on without randomness: keys and IVs would be weak.
+                    #[allow(clippy::panic, reason = "the OS RNG failing is unrecoverable")]
+                    {
+                        panic!("getrandom failed: {error}");
+                    }
                 }
                 rest = &mut rest[n as usize..];
             }
