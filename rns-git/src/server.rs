@@ -118,8 +118,8 @@ pub fn register_repository_destination(
     let private_key = identity
         .get_private_key()
         .ok_or_else(|| Error::msg("repository identity has no private key"))?;
-    let sig_prv: [u8; 32] = private_key[32..64].try_into().unwrap();
-    let sig_pub: [u8; 32] = public_key[32..64].try_into().unwrap();
+    let (_, sig_prv) = rns_crypto::identity::split_key(&private_key);
+    let (_, sig_pub) = rns_crypto::identity::split_key(&public_key);
 
     node.register_link_destination(
         destination.hash.0,
@@ -1288,10 +1288,9 @@ fn validate_work_signature(
     let Some(signature) = signature else {
         return Ok(None);
     };
-    if signature.len() != 64 {
+    let Ok(signature) = <&[u8; 64]>::try_from(signature) else {
         return Err(Error::msg("invalid signature"));
-    }
-    let signature: &[u8; 64] = signature.try_into().unwrap();
+    };
     let identity =
         Identity::from_public_key(remote_pubkey).map_err(|_| Error::msg("invalid signature"))?;
     if !identity.verify(signature, content.trim().as_bytes()) {

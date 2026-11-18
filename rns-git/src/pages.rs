@@ -83,8 +83,8 @@ pub fn register_nomadnet_destination(
     let private_key = identity
         .get_private_key()
         .ok_or_else(|| Error::msg("repository identity has no private key"))?;
-    let sig_prv: [u8; 32] = private_key[32..64].try_into().unwrap();
-    let sig_pub: [u8; 32] = public_key[32..64].try_into().unwrap();
+    let (_, sig_prv) = rns_crypto::identity::split_key(&private_key);
+    let (_, sig_pub) = rns_crypto::identity::split_key(&public_key);
 
     node.register_link_destination(
         destination.hash.0,
@@ -1572,34 +1572,25 @@ fn resolve_work_document(
     requested_scope: &str,
     id: u64,
 ) -> Result<(crate::work::WorkScope, Option<crate::work::WorkDocument>)> {
-    let requested_scope = if matches!(requested_scope, "active" | "completed" | "proposed" | "all")
+    if requested_scope != "all" {
+        // One list; a scope it does not know reads as the active one.
+        let scope = crate::work::WorkScope::parse(requested_scope)
+            .unwrap_or(crate::work::WorkScope::Active);
+        return Ok((scope, crate::work::view_document(work_path, scope, id)?));
+    }
+    if let Some(document) =
+        crate::work::view_document(work_path, crate::work::WorkScope::Active, id)?
     {
-        requested_scope
+        Ok((crate::work::WorkScope::Active, Some(document)))
+    } else if let Some(document) =
+        crate::work::view_document(work_path, crate::work::WorkScope::Completed, id)?
+    {
+        Ok((crate::work::WorkScope::Completed, Some(document)))
     } else {
-        "active"
-    };
-    match requested_scope {
-        "active" | "completed" | "proposed" => {
-            let scope = crate::work::WorkScope::parse(requested_scope).unwrap();
-            Ok((scope, crate::work::view_document(work_path, scope, id)?))
-        }
-        "all" => {
-            if let Some(document) =
-                crate::work::view_document(work_path, crate::work::WorkScope::Active, id)?
-            {
-                Ok((crate::work::WorkScope::Active, Some(document)))
-            } else if let Some(document) =
-                crate::work::view_document(work_path, crate::work::WorkScope::Completed, id)?
-            {
-                Ok((crate::work::WorkScope::Completed, Some(document)))
-            } else {
-                Ok((
-                    crate::work::WorkScope::Proposed,
-                    crate::work::view_document(work_path, crate::work::WorkScope::Proposed, id)?,
-                ))
-            }
-        }
-        _ => unreachable!(),
+        Ok((
+            crate::work::WorkScope::Proposed,
+            crate::work::view_document(work_path, crate::work::WorkScope::Proposed, id)?,
+        ))
     }
 }
 

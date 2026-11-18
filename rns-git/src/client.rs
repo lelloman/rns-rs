@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use rns_core::msgpack::{self, Value};
@@ -210,11 +210,11 @@ impl RemoteHelper {
     }
 
     fn record_remote_refs(&self, refs: &[u8]) {
-        *self.remote_refs.lock().unwrap() = parse_remote_refs(refs);
+        *lock_or_recover(&self.remote_refs) = parse_remote_refs(refs);
     }
 
     fn fetch_have_set(&self, refs: &[FetchRef]) -> Vec<String> {
-        let remote_refs = self.remote_refs.lock().unwrap();
+        let remote_refs = lock_or_recover(&self.remote_refs);
         build_fetch_have_set(
             &remote_refs,
             refs,
@@ -224,7 +224,7 @@ impl RemoteHelper {
     }
 
     fn push_exclusion_set(&self) -> Vec<String> {
-        let remote_refs = self.remote_refs.lock().unwrap();
+        let remote_refs = lock_or_recover(&self.remote_refs);
         build_push_exclusion_set(&remote_refs, git::object_exists_local)
     }
 }
@@ -317,7 +317,7 @@ impl SyncClient {
             .recall_identity(&dest)
             .map_err(|_| Error::msg("failed to recall destination identity"))?
             .ok_or_else(|| Error::msg("destination identity is unknown"))?;
-        let sig_pub: [u8; 32] = recalled.public_key[32..64].try_into().unwrap();
+        let (_, sig_pub) = rns_crypto::identity::split_key(&recalled.public_key);
         let link_id = node
             .create_link(dest_hash, sig_pub)
             .map_err(|_| Error::msg("failed to create RNS link"))?;
@@ -365,7 +365,7 @@ impl SyncClient {
     ) -> Result<Response> {
         {
             let (lock, _) = &*self.state;
-            let mut state = lock.lock().unwrap();
+            let mut state = lock_or_recover(lock);
             state.responses.clear();
             state.progress = ProgressState::default();
         }
@@ -374,7 +374,7 @@ impl SyncClient {
             .map_err(|_| Error::msg("failed to send request"))?;
         let deadline = Instant::now() + timeout;
         let (lock, cv) = &*self.state;
-        let mut state = lock.lock().unwrap();
+        let mut state = lock_or_recover(lock);
         loop {
             if let Some(response) = state.responses.pop_front() {
                 return Ok(response);
@@ -384,7 +384,9 @@ impl SyncClient {
                 return Err(Error::msg("request timed out"));
             }
             let wait = deadline.saturating_duration_since(now);
-            let (next, _) = cv.wait_timeout(state, wait).unwrap();
+            let (next, _) = cv
+                .wait_timeout(state, wait)
+                .unwrap_or_else(PoisonError::into_inner);
             state = next;
         }
     }
@@ -435,7 +437,7 @@ impl Callbacks for SharedCallbacks {
         _is_initiator: bool,
     ) {
         let (lock, cv) = &*self.state;
-        lock.lock().unwrap().established.push(link_id.0);
+        lock_or_recover(lock).established.push(link_id.0);
         cv.notify_all();
     }
 
@@ -447,8 +449,7 @@ impl Callbacks for SharedCallbacks {
         metadata: Option<Vec<u8>>,
     ) {
         let (lock, cv) = &*self.state;
-        lock.lock()
-            .unwrap()
+        lock_or_recover(lock)
             .responses
             .push_back(Response { data, metadata });
         cv.notify_all();
@@ -459,7 +460,7 @@ impl Callbacks for SharedCallbacks {
             return;
         }
         let (lock, _) = &*self.state;
-        let mut state = lock.lock().unwrap();
+        let mut state = lock_or_recover(lock);
         let progress = &mut state.progress;
         let started_at = *progress.started_at.get_or_insert_with(Instant::now);
         let percent = ((received.saturating_mul(100)) / total).min(100);
@@ -484,7 +485,7 @@ fn wait_for_link(
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
     let (lock, cv) = &**state;
-    let mut state = lock.lock().unwrap();
+    let mut state = lock_or_recover(lock);
     loop {
         if state.established.contains(&link_id) {
             return Ok(());
@@ -495,7 +496,7 @@ fn wait_for_link(
         }
         let (next, _) = cv
             .wait_timeout(state, deadline.saturating_duration_since(now))
-            .unwrap();
+            .unwrap_or_else(PoisonError::into_inner);
         state = next;
     }
 }
@@ -626,6 +627,11 @@ impl ClientOptions {
 
 fn usage() -> &'static str {
     "usage: git-remote-rns [--config DIR] [--rnsconfig DIR] <remote-name> <rns://destination/repo>"
+}
+
+/// Lock `mutex`, taking it over if a thread panicked while holding it.
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]
