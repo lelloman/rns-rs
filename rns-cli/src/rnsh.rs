@@ -1028,7 +1028,7 @@ impl ChildProcess {
         // Everything the child needs is built here: between fork and exec
         // the child of a multithreaded process may only make
         // async-signal-safe calls, and allocating is not one.
-        let exec = ExecPlan::new(argv, env_overrides);
+        let mut exec = ExecPlan::new(argv, env_overrides);
         // SAFETY: `fork` takes no arguments; the child branch below only makes async-signal-safe
         // calls with data (`exec`, the fds) prepared before the fork.
         let pid = unsafe { libc::fork() };
@@ -1039,8 +1039,8 @@ impl ChildProcess {
             // SAFETY: in the forked child only async-signal-safe calls run: `setsid`, `dup2` of
             // descriptors opened above (never -1: with `use_pty` false all three streams are
             // pipes, otherwise the pty child fills the gaps), `ioctl(TIOCSCTTY)` on a stdio fd
-            // that is the pty, `close`, `execve` via the prepared `ExecPlan`, and `_exit`. Note
-            // `exec` is dropped (freeing its buffers) if `exec()` returns, before `_exit`.
+            // that is the pty, `close`, `execve` via the prepared `ExecPlan`, and `_exit`. `exec` is
+            // only borrowed here and never dropped in the child.
             unsafe {
                 if use_pty {
                     libc::setsid();
@@ -1063,7 +1063,9 @@ impl ChildProcess {
                 for fd in 3..1024 {
                     libc::close(fd);
                 }
-                if let Some(mut exec) = exec {
+                // Borrowed, not moved: `exec` must not be dropped (freeing is
+                // not async-signal-safe); _exit leaves it as it is.
+                if let Some(exec) = exec.as_mut() {
                     exec.exec();
                 }
                 libc::_exit(255);
