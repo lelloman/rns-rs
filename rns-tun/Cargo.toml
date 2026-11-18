@@ -49,3 +49,6 @@ tempfile = "3"
 name = "rntun"
 path = "src/bin/rntun.rs"
 required-features = ["linux-cli"]
+
+[lints]
+workspace = true

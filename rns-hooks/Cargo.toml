@@ -33,3 +33,6 @@ required-features = ["wasm"]
 name = "hook_dispatch"
 harness = false
 required-features = ["wasm"]
+
+[lints]
+workspace = true

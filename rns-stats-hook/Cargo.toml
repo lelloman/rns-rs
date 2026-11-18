@@ -21,3 +21,6 @@ rns-hooks = { version = "0.3.0", path = "../rns-hooks", default-features = false
 rns-hooks-sdk = { version = "0.2.0", path = "../rns-hooks/sdk/rns-hooks-sdk" }
 rns-hooks-abi = { version = "0.2.0", path = "../rns-hooks/sdk/rns-hooks-abi" }
 sha2 = { version = "0.11", default-features = false }
+
+[lints]
+workspace = true

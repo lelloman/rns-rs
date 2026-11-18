@@ -106,7 +106,8 @@ impl StoreData {
     /// # Safety
     /// The caller must ensure the pointer is still valid.
     pub unsafe fn engine(&self) -> &dyn EngineAccess {
-        &*self.engine_access
+        // SAFETY: valid, by the caller's contract.
+        unsafe { &*self.engine_access }
     }
 
     /// Reset per-call fields while preserving the store (and WASM linear memory).

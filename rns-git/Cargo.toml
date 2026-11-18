@@ -31,3 +31,6 @@ path = "src/bin/git-remote-rns.rs"
 [[bin]]
 name = "rngcs"
 path = "src/bin/rngcs.rs"
+
+[lints]
+workspace = true

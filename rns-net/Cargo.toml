@@ -110,3 +110,6 @@ required-features = ["iface-rnode-ble"]
 [[example]]
 name = "weave_hil"
 required-features = ["iface-weave"]
+
+[lints]
+workspace = true

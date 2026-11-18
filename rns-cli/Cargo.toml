@@ -118,3 +118,6 @@ required-features = ["sidecars"]
 name = "rns-sentineld"
 path = "src/bin/rns-sentineld.rs"
 required-features = ["sidecars"]
+
+[lints]
+workspace = true

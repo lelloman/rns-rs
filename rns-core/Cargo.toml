@@ -31,3 +31,6 @@ harness = false
 [[bench]]
 name = "dedup"
 harness = false
+
+[lints]
+workspace = true

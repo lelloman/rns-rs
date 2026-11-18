@@ -8,10 +8,8 @@ set -euo pipefail
 # `rns-crypto/espidf`, which pulls in `esp-idf-sys` and fails on normal
 # x86_64 Linux/macOS development machines. ESP32 validation lives in its
 # own target-specific lane under `rns-esp32/`.
-cargo clippy --workspace --all-targets --features rns-hooks -- \
-  -D warnings \
-  -A clippy::approx_constant \
-  -A clippy::never_loop
+# Which lints apply is set in the root Cargo.toml's [workspace.lints].
+cargo clippy --workspace --all-targets --features rns-hooks -- -D warnings
 # rns-hooks has no backend by default; lint both of its backends too.
 cargo clippy -p rns-hooks --all-targets --features wasm,native -- -D warnings
 # The BLE RNode transport is not a default feature (it links libdbus).
