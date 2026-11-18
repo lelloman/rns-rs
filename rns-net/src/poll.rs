@@ -155,6 +155,8 @@ mod epoll {
             // SAFETY: plain syscalls; each returned descriptor is owned once.
             let epoll =
                 unsafe { OwnedFd::from_raw_fd(check(libc::epoll_create1(libc::EPOLL_CLOEXEC))?) };
+            // SAFETY: `eventfd` takes no pointers; `check` rejects the error return, so
+            // the fd is a fresh descriptor that nothing else owns.
             let notify_fd = unsafe {
                 OwnedFd::from_raw_fd(check(libc::eventfd(
                     0,

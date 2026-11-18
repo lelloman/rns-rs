@@ -50,10 +50,14 @@ impl TunDevice {
     /// the caller.
     pub fn duplicate_fd(fd: RawFd, name: &str) -> io::Result<Self> {
         validate_interface_name(name)?;
+        // SAFETY: `dup` takes no pointers and does not consume `fd`; a closed `fd` only
+        // makes it fail with EBADF, reported below.
         let duplicate = unsafe { libc::dup(fd) };
         if duplicate < 0 {
             return Err(io::Error::last_os_error());
         }
+        // SAFETY: `dup` just returned this fd (checked non-negative) and nothing else
+        // owns it.
         let owned = unsafe { OwnedFd::from_raw_fd(duplicate) };
         Self::from_owned_fd(owned, name)
     }
@@ -67,6 +71,10 @@ impl TunDevice {
         for (slot, byte) in request.name.iter_mut().zip(requested_name.bytes()) {
             *slot = byte as libc::c_char;
         }
+        // SAFETY: the fd belongs to `file`, open for this function; `request` is a live
+        // `#[repr(C)]` local of 40 bytes, the size of `struct ifreq` the kernel reads
+        // and writes, and its name is NUL-terminated because `validate_interface_name`
+        // keeps it below IFNAMSIZ.
         if unsafe { libc::ioctl(file.as_raw_fd(), TUNSETIFF, &mut request) } < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -93,6 +101,8 @@ impl TunDevice {
     }
 
     pub fn set_nonblocking(&self, enabled: bool) -> io::Result<()> {
+        // SAFETY: F_GETFL takes no pointer argument; the fd belongs to `self.file`,
+        // open while `self` is borrowed.
         let flags = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_GETFL) };
         if flags < 0 {
             return Err(io::Error::last_os_error());
@@ -102,6 +112,8 @@ impl TunDevice {
         } else {
             flags & !libc::O_NONBLOCK
         };
+        // SAFETY: F_SETFL takes an integer argument; the fd belongs to `self.file`,
+        // open while `self` is borrowed.
         if unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_SETFL, updated) } < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -616,6 +628,8 @@ fn strings(values: &[&str]) -> Vec<String> {
 }
 
 fn process_is_alive(process_id: u32) -> bool {
+    // SAFETY: `kill` takes no pointers, and signal 0 only checks for existence and
+    // permission without delivering anything.
     let result = unsafe { libc::kill(process_id as libc::pid_t, 0) };
     result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }

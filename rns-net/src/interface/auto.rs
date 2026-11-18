@@ -276,6 +276,12 @@ pub fn enumerate_interfaces(allowed: &[String], ignored: &[String]) -> Vec<Local
     let mut result = Vec::new();
     let platform_ignored = platform_ignored_interfaces();
 
+    // SAFETY: `getifaddrs` fills `ifaddrs` with a list that stays valid until the
+    // single `freeifaddrs` at the end (the early return happens before anything
+    // was allocated). Each node is non-null when dereferenced, `ifa_addr` is
+    // checked for null before reading `sa_family`, it is cast to `sockaddr_in6`
+    // only when the family is AF_INET6, and `ifa_name` is the NUL-terminated name
+    // the kernel sets on every entry.
     unsafe {
         let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
         if libc::getifaddrs(&mut ifaddrs) != 0 {
@@ -1185,6 +1191,9 @@ fn discovery_sender_loop(context: DiscoverySenderContext) {
             }
             // Set multicast interface
             let if_bytes = if_index.to_ne_bytes();
+            // SAFETY: the fd belongs to `socket`, which is open for this whole
+            // iteration; the option value is `if_bytes`, a live 4-byte local, and
+            // the length passed is 4.
             unsafe {
                 libc::setsockopt(
                     socket_fd(&socket),

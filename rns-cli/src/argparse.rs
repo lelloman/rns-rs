@@ -72,6 +72,8 @@ pub fn terminal_columns() -> usize {
     {
         return columns as usize;
     }
+    // SAFETY: `winsize` is a plain C struct of integers, for which all-zero bytes are a valid
+    // value.
     let mut size: libc::winsize = unsafe { std::mem::zeroed() };
     // SAFETY: TIOCGWINSZ fills a winsize; on failure it is left zeroed.
     let ok = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut size) } == 0;

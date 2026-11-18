@@ -86,6 +86,8 @@ impl FileRatchetStore {
         #[cfg(unix)]
         {
             use std::os::fd::AsRawFd;
+            // SAFETY: the fd belongs to `lock`, the file opened just above and still
+            // owned here; `flock` takes no pointers.
             if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,

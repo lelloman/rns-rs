@@ -148,6 +148,9 @@ pub fn bind_to_device(fd: std::os::unix::io::RawFd, device: &str) -> io::Result<
             format!("device name too long: {}", device),
         ));
     }
+    // SAFETY: the option value is `dev_bytes`, borrowed from `device` for the call,
+    // with its exact length (below IFNAMSIZ, checked above; the kernel copies it
+    // and NUL-terminates). A stale `fd` only makes the call fail with EBADF.
     let ret = unsafe {
         libc::setsockopt(
             fd,
@@ -175,6 +178,8 @@ pub fn apply_underlay_mark(fd: std::os::unix::io::RawFd, mark: Option<u32>) -> i
     let Some(mark) = mark else {
         return Ok(());
     };
+    // SAFETY: the option value points to `mark`, a live u32 local, and the length
+    // passed is `size_of::<u32>()`. A stale `fd` only makes the call fail.
     let ret = unsafe {
         libc::setsockopt(
             fd,
@@ -669,6 +674,8 @@ pub(crate) fn poll_readable(fd: std::os::fd::RawFd, timeout: Duration) -> io::Re
         revents: 0,
     };
     let timeout_ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
+    // SAFETY: `pfd` is a live, exclusively borrowed `pollfd` and the count is 1. An
+    // invalid fd is reported through POLLNVAL, handled below.
     let result = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
     if result < 0 {
         let error = io::Error::last_os_error();

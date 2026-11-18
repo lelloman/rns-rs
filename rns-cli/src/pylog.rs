@@ -277,7 +277,11 @@ fn timestamp() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as libc::time_t)
         .unwrap_or(0);
+    // SAFETY: `libc::tm` is a plain C struct of integers plus a nullable `tm_zone` pointer;
+    // all-zero bytes are a valid value.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: `now` and `tm` are live locals; the reentrant `localtime_r` only reads `now` and
+    // writes into `tm`, using no shared static buffer.
     if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() {
         return String::new();
     }

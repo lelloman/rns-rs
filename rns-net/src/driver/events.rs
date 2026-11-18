@@ -1114,6 +1114,8 @@ impl Driver {
             .name("rns-destination-cleanup".into())
             .spawn(move || {
                 #[cfg(target_family = "unix")]
+                // SAFETY: `nice` takes a plain integer and only lowers scheduling
+                // priority (per thread on Linux); no memory is involved.
                 unsafe {
                     libc::nice(5);
                 }

@@ -25,6 +25,11 @@ struct HostProtector {
 }
 impl SocketProtector for HostProtector {
     fn protect(&self, fd: RawFd) -> io::Result<()> {
+        // SAFETY: `callback` and `user_data` are exactly the pair the host registered
+        // through `rntun_android_set_protector`, and the host promises the callback
+        // may be called with that `user_data` and any fd, from any thread, for as long
+        // as the protector is installed. Nothing on the Rust side enforces this; see
+        // `install_protector`, which is safe to call.
         if unsafe { (self.callback)(fd, self.user_data as *mut c_void) } {
             Ok(())
         } else {
@@ -205,10 +210,14 @@ pub fn attach_duplicated_tun(
     fd: RawFd,
     applied: Option<AppliedTunConfig>,
 ) -> io::Result<()> {
+    // SAFETY: `dup` takes no pointers and does not consume `fd`; a closed `fd` only
+    // makes it fail with EBADF, reported below.
     let duplicate = unsafe { libc::dup(fd) };
     if duplicate < 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: `dup` just returned this fd (checked non-negative) and nothing else owns
+    // it.
     attach_owned_tun(handle, unsafe { OwnedFd::from_raw_fd(duplicate) }, applied)
 }
 
@@ -291,6 +300,8 @@ pub unsafe extern "C" fn rntun_android_create(config_json: *const c_char) -> u64
     if config_json.is_null() {
         return 0;
     }
+    // SAFETY: `config_json` was checked non-null above and, by this function's
+    // contract, points to a NUL-terminated string valid for the call.
     let Ok(config) = unsafe { CStr::from_ptr(config_json) }.to_str() else {
         return 0;
     };
@@ -349,6 +360,9 @@ pub unsafe extern "C" fn rntun_android_poll_event(
     if output.is_null() || capacity < required {
         return required as isize;
     }
+    // SAFETY: `output` is non-null and `capacity >= event.len() + 1` (checked above),
+    // so by this function's contract it is writable for all `event.len() + 1` bytes
+    // written here; `event` is a Rust-owned String, so the regions cannot overlap.
     unsafe {
         std::ptr::copy_nonoverlapping(event.as_ptr(), output.cast::<u8>(), event.len());
         *output.add(event.len()) = 0;
@@ -372,6 +386,8 @@ pub unsafe extern "C" fn rntun_android_attach_tun_owned(
     if fd < 0 {
         return libc::EBADF;
     }
+    // SAFETY: `fd` is non-negative (checked above), so by this function's contract it
+    // is open and its ownership is transferred to us on entry.
     let owned = unsafe { OwnedFd::from_raw_fd(fd) };
     attach_owned_tun(handle, owned, None).map_or_else(|_| libc::EINVAL, |_| 0)
 }
@@ -398,6 +414,8 @@ pub unsafe extern "C" fn rntun_android_attach_tun_dup_v2(
     if applied_json.is_null() {
         return libc::EINVAL;
     }
+    // SAFETY: `applied_json` was checked non-null above and, by this function's
+    // contract, points to a NUL-terminated string valid for the call.
     let Ok(value) = unsafe { CStr::from_ptr(applied_json) }.to_str() else {
         return libc::EINVAL;
     };

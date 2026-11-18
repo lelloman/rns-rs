@@ -984,6 +984,8 @@ impl ChildProcess {
         if use_pty {
             let mut master: libc::c_int = -1;
             let mut child: libc::c_int = -1;
+            // SAFETY: `master` and `child` are live locals `openpty` writes the two descriptors
+            // into; the name, termios and winsize arguments may be null.
             let rc = unsafe {
                 libc::openpty(
                     &mut master,
@@ -1027,11 +1029,18 @@ impl ChildProcess {
         // the child of a multithreaded process may only make
         // async-signal-safe calls, and allocating is not one.
         let exec = ExecPlan::new(argv, env_overrides);
+        // SAFETY: `fork` takes no arguments; the child branch below only makes async-signal-safe
+        // calls with data (`exec`, the fds) prepared before the fork.
         let pid = unsafe { libc::fork() };
         if pid < 0 {
             return Err(io::Error::last_os_error());
         }
         if pid == 0 {
+            // SAFETY: in the forked child only async-signal-safe calls run: `setsid`, `dup2` of
+            // descriptors opened above (never -1: with `use_pty` false all three streams are
+            // pipes, otherwise the pty child fills the gaps), `ioctl(TIOCSCTTY)` on a stdio fd
+            // that is the pty, `close`, `execve` via the prepared `ExecPlan`, and `_exit`. Note
+            // `exec` is dropped (freeing its buffers) if `exec()` returns, before `_exit`.
             unsafe {
                 if use_pty {
                     libc::setsid();
@@ -1122,6 +1131,9 @@ impl ChildProcess {
                 let _ = write_all_fd(fd, b"\x04");
                 self.stdin_fd = Some(fd);
             } else {
+                // SAFETY: `fd` is a pipe write end this struct owns (it differs from the
+                // stdout/stderr fds) and was just taken out of `stdin_fd`, so it is closed
+                // exactly once.
                 unsafe {
                     libc::close(fd);
                 }
@@ -1139,12 +1151,17 @@ impl ChildProcess {
             ws_xpixel: size.hpix.unwrap_or(0),
             ws_ypixel: size.vpix.unwrap_or(0),
         };
+        // SAFETY: `fd` is a descriptor this struct still owns (Drop closes it), and `ws` is a
+        // live local `winsize` that TIOCSWINSZ only reads.
         unsafe {
             libc::ioctl(fd, libc::TIOCSWINSZ, &ws);
         }
     }
 
     fn terminate(&mut self) {
+        // SAFETY: `kill` takes no pointers. `pid` is the forked child; the session drops this
+        // `ChildProcess` on `ProcessExited`, but the waiter thread reaps the pid before joining
+        // the readers and sending that event, so in that window the pid may already be reaped.
         unsafe {
             libc::kill(self.pid, libc::SIGTERM);
         }
@@ -1261,10 +1278,14 @@ impl ExecPlan {
     /// Call only in a forked child that will `_exit` if this returns.
     unsafe fn exec(&mut self) {
         for path in &self.candidates {
+            // SAFETY: `path`, `argv` and `envp` point into CStrings and null-terminated pointer
+            // vectors owned by `self`, built before the fork; `execve` is async-signal-safe.
             unsafe { libc::execve(path.as_ptr(), self.argv.as_ptr(), self.envp.as_ptr()) };
             match io::Error::last_os_error().raw_os_error() {
                 Some(libc::ENOEXEC) => {
                     self.sh_argv[1] = path.as_ptr();
+                    // SAFETY: as above; `sh_argv` is null-terminated and slot 1 now points at
+                    // `path`, which `self.candidates` keeps alive.
                     unsafe {
                         libc::execve(
                             EXEC_SHELL.as_ptr(),
@@ -1283,6 +1304,7 @@ impl ExecPlan {
 
 fn pipe_pair() -> io::Result<(RawFd, RawFd)> {
     let mut fds = [-1; 2];
+    // SAFETY: `fds` is a live local array of two c_ints, the room `pipe` writes into.
     if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
         return Err(io::Error::last_os_error());
     }
@@ -1293,6 +1315,8 @@ fn close_unique(fds: &[Option<RawFd>]) {
     let mut seen = HashSet::new();
     for fd in fds.iter().flatten().copied() {
         if fd >= 0 && seen.insert(fd) {
+            // SAFETY: callers pass descriptors they own and give up; `seen` makes each one closed
+            // only once here.
             unsafe {
                 libc::close(fd);
             }
@@ -1310,6 +1334,9 @@ fn spawn_reader(
     std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
         loop {
+            // SAFETY: `buf` is a live local of `buf.len()` bytes. `fd` is the stdout/stderr
+            // descriptor of a `ChildProcess`, open while it lives; its Drop may close it while
+            // this thread still loops (see `ChildProcess::drop`).
             let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
             if n > 0 {
                 let bytes = n as usize;
@@ -1343,6 +1370,8 @@ fn spawn_waiter(
 ) {
     std::thread::spawn(move || {
         let mut status = 0;
+        // SAFETY: `status` is a live local `c_int` waitpid writes into; `pid` is the forked
+        // child, reaped only here.
         let _ = unsafe { libc::waitpid(pid, &mut status, 0) };
         let code = if libc::WIFEXITED(status) {
             libc::WEXITSTATUS(status)
@@ -1360,6 +1389,8 @@ fn spawn_waiter(
 
 fn write_all_fd(fd: RawFd, mut data: &[u8]) -> io::Result<()> {
     while !data.is_empty() {
+        // SAFETY: `data` is a live slice and `write` reads at most `data.len()` bytes from it;
+        // the caller passes a descriptor it owns.
         let n = unsafe { libc::write(fd, data.as_ptr().cast(), data.len()) };
         if n < 0 {
             return Err(io::Error::last_os_error());
@@ -1376,7 +1407,11 @@ struct TtyRestorer {
 
 impl TtyRestorer {
     fn new(fd: RawFd) -> Self {
+        // SAFETY: `termios` is a plain C struct of integers and arrays; all-zero bytes are a
+        // valid value.
         let mut original = unsafe { std::mem::zeroed() };
+        // SAFETY: `original` is a live local `termios` that `tcgetattr` writes into; a bad `fd`
+        // only makes it fail.
         let original = if unsafe { libc::tcgetattr(fd, &mut original) } == 0 {
             Some(original)
         } else {
@@ -1389,6 +1424,8 @@ impl TtyRestorer {
         let Some(mut raw) = self.original else {
             return;
         };
+        // SAFETY: `raw` is a live local copy of the saved `termios`; `cfmakeraw` edits it in
+        // place and `tcsetattr` only reads it.
         unsafe {
             libc::cfmakeraw(&mut raw);
             libc::tcsetattr(self.fd, libc::TCSANOW, &raw);
@@ -1399,6 +1436,8 @@ impl TtyRestorer {
 impl Drop for TtyRestorer {
     fn drop(&mut self) {
         if let Some(original) = self.original {
+            // SAFETY: `original` is a live local `termios` that `tcsetattr` only reads; a stale
+            // `fd` only makes it fail.
             unsafe {
                 libc::tcsetattr(self.fd, libc::TCSADRAIN, &original);
             }
@@ -1413,6 +1452,8 @@ fn current_winsize(fd: RawFd) -> WindowSize {
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
+    // SAFETY: `ws` is a live local `winsize` that TIOCGWINSZ writes into; a bad `fd` only makes
+    // it fail.
     if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) } == 0 {
         WindowSize {
             rows: nonzero_u16(ws.ws_row),
@@ -2141,6 +2182,8 @@ fn initiate(opts: CliOptions) -> Result<i32, RnshError> {
     let tty = stdin_is_tty.then(|| {
         let restorer = TtyRestorer::new(0);
         restorer.raw();
+        // SAFETY: `sigwinch_handler` is an `extern "C" fn(c_int)` and only stores an atomic flag,
+        // which is async-signal-safe.
         unsafe {
             libc::signal(libc::SIGWINCH, sigwinch_handler as *const () as usize);
         }

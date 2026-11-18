@@ -204,6 +204,8 @@ fn rename_final(source: &Path, destination: &Path, overwrite: bool) -> io::Resul
     let destination = CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
         io::Error::new(io::ErrorKind::InvalidInput, "destination path contains NUL")
     })?;
+    // SAFETY: `source` and `destination` are live `CString`s, so both pointers are
+    // NUL-terminated and valid for the call; AT_FDCWD needs no open fd.
     let result = unsafe {
         libc::renameat2(
             libc::AT_FDCWD,

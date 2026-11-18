@@ -3340,6 +3340,8 @@ impl RnsNode {
                     .spawn(move || {
                         #[cfg(target_family = "unix")]
                         {
+                            // SAFETY: `nice` takes a plain integer and only lowers scheduling
+                            // priority (per thread on Linux); no memory is involved.
                             unsafe {
                                 libc::nice(5);
                             }
@@ -3412,6 +3414,8 @@ impl RnsNode {
                 .name("rns-persist".into())
                 .spawn(move || {
                     #[cfg(target_family = "unix")]
+                    // SAFETY: `nice` takes a plain integer and only lowers scheduling
+                    // priority (per thread on Linux); no memory is involved.
                     unsafe {
                         libc::nice(5);
                     }

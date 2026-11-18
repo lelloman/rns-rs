@@ -919,6 +919,8 @@ fn reader_ready(reader: &impl AsRawFd, timeout: Duration) -> bool {
         revents: 0,
     };
     let timeout_ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
+    // SAFETY: `pfd` is a live, exclusively borrowed `pollfd` and the count is 1; its fd
+    // belongs to `reader`, borrowed for the call.
     unsafe { libc::poll(&mut pfd, 1, timeout_ms) > 0 }
 }
 

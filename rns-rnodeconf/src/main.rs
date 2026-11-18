@@ -292,6 +292,8 @@ fn now() -> i64 {
 
 /// Format `timestamp` in local time with `strftime`.
 fn local_time(format: &str, timestamp: i64) -> String {
+    // SAFETY: `libc::tm` is a plain C struct of integers plus a nullable `tm_zone` pointer;
+    // all-zero bytes are a valid value.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let time: libc::time_t = timestamp as libc::time_t;
     // SAFETY: localtime_r and strftime write only into the buffers given.

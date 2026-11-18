@@ -39,9 +39,15 @@ impl NativeProgram {
     pub fn load(path: &Path) -> Result<Self, HookError> {
         let path = loader_path(path);
         let path = path.as_path();
+        // SAFETY: loading runs the library's initializers; native hooks are trusted
+        // code the operator configured, and `loader_path` keeps the loader from
+        // resolving a bare name through its search path.
         let library = unsafe { Library::new(path) }
             .map_err(|e| HookError::CompileError(format!("failed to load native hook: {}", e)))?;
 
+        // SAFETY: `NativeHookAbiVersionFn` is the type the native hook ABI
+        // (rns-hooks-abi) defines for this symbol; the copied fn pointer is only
+        // called below while `library` is still loaded.
         let abi_version = unsafe {
             let symbol = library
                 .get::<NativeHookAbiVersionFn>(NATIVE_HOOK_ABI_VERSION_SYMBOL)
@@ -53,6 +59,8 @@ impl NativeProgram {
                 })?;
             *symbol
         };
+        // SAFETY: `abi_version` comes from `library`, which is alive in this scope,
+        // and takes no arguments.
         let found = unsafe { abi_version() };
         if found != rns_hooks_abi::ABI_VERSION {
             return Err(HookError::AbiVersionMismatch {
@@ -62,6 +70,9 @@ impl NativeProgram {
             });
         }
 
+        // SAFETY: `NativeHookOnCallFn` is the ABI-defined type for this symbol (and
+        // the ABI version was checked above); the fn pointer is stored next to
+        // `_library` in `Self`, so the code stays mapped for as long as it is callable.
         let on_call = unsafe {
             let symbol = library
                 .get::<NativeHookOnCallFn>(NATIVE_HOOK_ON_CALL_SYMBOL)
@@ -109,6 +120,10 @@ impl NativeProgram {
             set_modified_data: Some(native_set_modified_data),
         };
 
+        // SAFETY: `self._library` keeps `on_call` loaded; `ctx_bytes` is a live slice
+        // of the length passed, `api` and `result` are live locals, and
+        // `api.user_data` points to `state`, alive and not otherwise accessed until
+        // the call returns (the ABI contract above `NativeCallState`).
         let rc = unsafe { (self.on_call)(ctx_bytes.as_ptr(), ctx_bytes.len(), &api, &mut result) };
         if rc != 0 {
             return Err(HookError::Trap(format!(

@@ -25,6 +25,7 @@ todo = "warn"
 unimplemented = "warn"
 mem_forget = "warn"
 missing_safety_doc = "warn"
+undocumented_unsafe_blocks = "warn"
 
 [workspace.dependencies]
 rns-crypto = { version = "0.3.0", path = "rns-crypto" }
