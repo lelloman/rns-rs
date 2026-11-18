@@ -8,7 +8,8 @@
 //!     RNS_GOLDEN_BLESS=1 cargo test -p rns-cli --test cli_golden
 //!
 //! Each run gets its own HOME and config directory, whose path is replaced
-//! by `<TMP>` in the recorded output.
+//! by `<TMP>` in the recorded output, and the build's version (which names
+//! the commit) is replaced by `<VERSION>`.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -94,7 +95,11 @@ fn run(tool: &Tool, args: &[&str]) -> String {
         .output()
         .unwrap_or_else(|e| panic!("run {}: {e}", tool.name));
     let tmp_path = tmp.path().display().to_string();
-    let clean = |bytes: &[u8]| String::from_utf8_lossy(bytes).replace(&tmp_path, "<TMP>");
+    let clean = |bytes: &[u8]| {
+        String::from_utf8_lossy(bytes)
+            .replace(&tmp_path, "<TMP>")
+            .replace(env!("FULL_VERSION"), "<VERSION>")
+    };
     let mut out = String::new();
     writeln!(out, "$ {} {}", tool.name, args.join(" ")).unwrap();
     writeln!(out, "exit: {:?}", output.status.code()).unwrap();

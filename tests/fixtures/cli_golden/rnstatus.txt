@@ -57,7 +57,7 @@ options:
 $ rnstatus --version
 exit: Some(0)
 --- stdout
-rnstatus 0.10.2268-544b45b4
+rnstatus <VERSION>
 --- stderr
 --- end
 
