@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Behaviour and performance gate for refactoring commits.
+#
+#   scripts/quality-gate commit BASELINE_DIR   every refactoring commit
+#   scripts/quality-gate full BASELINE_DIR     end of a series of commits
+#
+# BASELINE_DIR holds what `scripts/hotpath record` wrote (hotpath.json) and
+# a file `rev` with the commit the baseline was taken at.
+#
+# commit: formatting, lints, the whole workspace's tests under the default,
+# compact and parallel I/O builds (these include the golden CLI and engine
+# trace snapshots), the public API diff against the baseline commit (shown,
+# not gated: API changes are allowed when intended) and the hot-path bar
+# (instructions/op +1 % at most, allocations and bytes/op never higher).
+#
+# full: commit, then live interop with upstream. Needs upstream's checkout
+# in RETICULUM_UPSTREAM_DIR (default ~/Reticulum). End-to-end timing, memory
+# and soak runs are separate: see bench/hotpath.md and docs/soak-test.md.
+set -euo pipefail
+
+tier=${1:-}
+baseline=${2:-}
+if [[ $tier != commit && $tier != full ]] || [[ -z $baseline ]]; then
+  echo "usage: scripts/quality-gate commit|full BASELINE_DIR" >&2
+  exit 2
+fi
+baseline=$(cd -- "$baseline" && pwd)
+base_rev=$(cat "$baseline/rev")
+
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+compact=compact-threads-timers,compact-threads-work,compact-threads-services,compact-threads-io
+
+step() { printf '\n=== %s\n' "$*"; }
+
+step "format"
+cargo fmt --check
+
+step "lints"
+bash scripts/lint-host.sh
+
+step "tests: workspace (default build)"
+cargo test --workspace
+
+step "tests: rns-net, compact engine with helper threads"
+cargo test -p rns-net --features "$compact"
+
+step "tests: rns-net, parallel engine"
+cargo test -p rns-net --features engine-parallel
+
+step "public API against $base_rev (informational)"
+cargo semver-checks -p rns-crypto -p rns-core -p rns-net \
+  --default-features --baseline-rev "$base_rev" || true
+
+step "hot paths against $baseline/hotpath.json"
+scripts/hotpath check "$baseline/hotpath.json"
+
+if [[ $tier == full ]]; then
+  upstream=${RETICULUM_UPSTREAM_DIR:-$HOME/Reticulum}
+  export RETICULUM_UPSTREAM_DIR=$upstream
+  export PYTHONPATH=$upstream${PYTHONPATH:+:$PYTHONPATH}
+
+  step "interop with upstream: compact engine, helpers folded"
+  cargo test -p rns-net --test python_interop
+  step "interop with upstream: compact engine, helper threads"
+  cargo test -p rns-net --features "$compact" --test python_interop
+  step "interop with upstream: parallel engine"
+  cargo test -p rns-net --features engine-parallel --test python_interop
+  step "interop with upstream: utilities"
+  cargo test -p rns-cli --test utility_interop -- --ignored
+fi
+
+step "PASS ($tier)"
