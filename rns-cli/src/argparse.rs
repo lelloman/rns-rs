@@ -438,23 +438,21 @@ fn wrap(text: &str, width: usize, initial_indent: &str, subsequent_indent: &str)
         if !lines.is_empty() && chunks.last().is_some_and(|c| c.trim().is_empty()) {
             chunks.pop();
         }
-        while let Some(chunk) = chunks.last() {
-            let l = len(chunk);
-            if (cur_len + l) as i64 <= width {
-                cur_len += l;
-                cur_line.push(chunks.pop().unwrap());
-            } else {
+        while let Some(l) = chunks.last().map(|chunk| len(chunk)) {
+            if (cur_len + l) as i64 > width {
                 break;
             }
+            cur_len += l;
+            cur_line.extend(chunks.pop());
         }
-        if chunks.last().is_some_and(|c| len(c) as i64 > width) {
+        if let Some(last) = chunks.last_mut().filter(|c| len(c) as i64 > width) {
             // _handle_long_word, break_long_words and break_on_hyphens on.
             let space_left = if width < 1 {
                 1
             } else {
                 (width - cur_len as i64) as usize
             };
-            let chunk: Vec<char> = chunks.last().unwrap().chars().collect();
+            let chunk: Vec<char> = last.chars().collect();
             let mut end = space_left;
             if chunk.len() > space_left {
                 if let Some(hyphen) = chunk[..space_left].iter().rposition(|c| *c == '-') {
@@ -465,7 +463,7 @@ fn wrap(text: &str, width: usize, initial_indent: &str, subsequent_indent: &str)
             }
             let end = end.min(chunk.len());
             cur_line.push(chunk[..end].iter().collect());
-            *chunks.last_mut().unwrap() = chunk[end..].iter().collect();
+            *last = chunk[end..].iter().collect();
             if chunks.last().is_some_and(|c| c.is_empty()) {
                 chunks.pop();
             }
