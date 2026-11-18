@@ -1066,7 +1066,9 @@ fn read_proc_sample(pid: u32) -> Option<ProcessSample> {
     let num_threads: u32 = fields[17].parse().ok()?;
     let rss_pages: u64 = fields[21].parse().ok()?;
 
+    // SAFETY: `sysconf` takes no pointers and only queries a system constant.
     let clk_tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as u64;
+    // SAFETY: `sysconf` takes no pointers and only queries a system constant.
     let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
 
     let fds = fs::read_dir(format!("/proc/{}/fd", pid))
@@ -1235,6 +1237,8 @@ fn now_unix_ms() -> u64 {
 }
 
 fn install_signal_handlers() {
+    // SAFETY: `signal_handler` is an `extern "C" fn(c_int)`, the shape `sighandler_t` expects,
+    // and only stores an atomic flag, which is async-signal-safe.
     unsafe {
         libc::signal(
             libc::SIGINT,

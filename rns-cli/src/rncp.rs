@@ -375,6 +375,8 @@ fn checked_save_path(save: &str) -> Result<String, (i32, &'static str)> {
         return Err((3, "Output directory not found"));
     }
     let writable = std::ffi::CString::new(sp.clone())
+        // SAFETY: `c` is a NUL-terminated CString that outlives the call; `access` only reads the
+        // path.
         .map(|c| unsafe { libc::access(c.as_ptr(), libc::W_OK) } == 0)
         .unwrap_or(false);
     if !writable {

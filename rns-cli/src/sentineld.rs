@@ -1003,6 +1003,9 @@ fn read_provider_envelope(stream: &mut UnixStream) -> io::Result<Option<Provider
 }
 
 fn install_signal_handlers() {
+    // SAFETY: `signal_handler` is an `extern "C" fn(c_int)`, the shape `sighandler_t` expects. It
+    // stores an atomic flag, which is async-signal-safe, but its `eprintln!` is not: it takes the
+    // stderr lock and may allocate.
     unsafe {
         libc::signal(
             libc::SIGINT,

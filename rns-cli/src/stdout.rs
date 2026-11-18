@@ -29,8 +29,12 @@ extern "C" fn exit_now(_: libc::c_int) {
     // every write that matters, as upstream's `os._exit` does not flush
     // either.
     if INTERRUPT_NEWLINE.load(std::sync::atomic::Ordering::Relaxed) {
+        // SAFETY: `write(2)` is async-signal-safe and reads one byte from a static literal; if fd
+        // 1 is closed it only fails with EBADF.
         unsafe { libc::write(1, b"\n".as_ptr().cast(), 1) };
     }
+    // SAFETY: `_exit` is async-signal-safe, takes no pointers and runs no destructors or atexit
+    // handlers.
     unsafe { libc::_exit(INTERRUPT_EXIT.load(std::sync::atomic::Ordering::Relaxed)) }
 }
 
@@ -40,6 +44,8 @@ extern "C" fn exit_now(_: libc::c_int) {
 pub fn exit_on_interrupt(code: i32) {
     INTERRUPT_NEWLINE.store(false, std::sync::atomic::Ordering::Relaxed);
     INTERRUPT_EXIT.store(code, std::sync::atomic::Ordering::Relaxed);
+    // SAFETY: `exit_now` is an `extern "C" fn(c_int)`, the shape `sighandler_t` expects, and only
+    // does atomic loads, `write(2)` and `_exit`, all async-signal-safe.
     unsafe {
         libc::signal(libc::SIGINT, exit_now as *const () as libc::sighandler_t);
         libc::signal(libc::SIGTERM, exit_now as *const () as libc::sighandler_t);

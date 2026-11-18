@@ -60,11 +60,13 @@ pub struct StoreData {
     pub limits: wasmtime::StoreLimits,
 }
 
-// Safety: StoreData is only used within a single-threaded driver loop.
+// SAFETY: StoreData is only used within a single-threaded driver loop.
 // The `engine_access` raw pointer is refreshed each call and only dereferenced
 // during that call while the borrow is live.
 #[cfg(feature = "wasm")]
 unsafe impl Send for StoreData {}
+// SAFETY: as for Send: no shared access to `engine_access` outside the
+// active call, which runs on one thread.
 #[cfg(feature = "wasm")]
 unsafe impl Sync for StoreData {}
 

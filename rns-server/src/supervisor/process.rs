@@ -227,6 +227,8 @@ pub(crate) fn terminate_child(
     }
 
     #[cfg(unix)]
+    // SAFETY: `kill` takes no pointers. `try_wait` just returned no status and only
+    // `managed.child` reaps this pid, so it still names our child and cannot have been reused.
     unsafe {
         libc::kill(managed.child.id() as i32, libc::SIGTERM);
     }

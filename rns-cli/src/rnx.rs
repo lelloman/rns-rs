@@ -1131,6 +1131,9 @@ fn execute_request(data: &[u8], cancel: &AtomicBool, remote: Option<[u8; 16]>) -
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // SAFETY: the closure runs in the forked child before exec and only calls `setsid` and reads
+    // errno through `last_os_error` (an OS error does not allocate), all async-signal-safe; it
+    // captures nothing.
     unsafe {
         command.pre_exec(|| {
             if libc::setsid() == -1 {
@@ -1213,6 +1216,9 @@ fn execute_request(data: &[u8], cancel: &AtomicBool, remote: Option<[u8; 16]>) -
 }
 
 fn terminate_process_group(pid: libc::pid_t, child: &mut std::process::Child) {
+    // SAFETY: `kill` takes no pointers. `pid` is the child spawned with `setsid`, so it leads its
+    // own process group, and it is not reaped yet (the caller just saw `try_wait` return no
+    // status and only `child` reaps it), so `-pid` still names that group.
     unsafe {
         libc::kill(-pid, libc::SIGTERM);
     }
@@ -1223,6 +1229,8 @@ fn terminate_process_group(pid: libc::pid_t, child: &mut std::process::Child) {
         }
         thread::sleep(Duration::from_millis(20));
     }
+    // SAFETY: `kill` takes no pointers. The loop above returns as soon as `try_wait` reaps the
+    // child, so it is still unreaped here and `-pid` still names its process group.
     unsafe {
         libc::kill(-pid, libc::SIGKILL);
     }

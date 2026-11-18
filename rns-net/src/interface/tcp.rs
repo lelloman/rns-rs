@@ -132,6 +132,9 @@ impl Writer for TcpWriter {
 /// by the TCP server.
 pub(crate) fn set_socket_options(stream: &TcpStream) -> io::Result<()> {
     let fd = stream.as_raw_fd();
+    // SAFETY: `fd` belongs to `stream`, borrowed (and so open) for the whole
+    // function; each option value points to a live `c_int` local and the length
+    // passed is `size_of::<c_int>()`.
     unsafe {
         // TCP_NODELAY = 1
         let val: libc::c_int = 1;

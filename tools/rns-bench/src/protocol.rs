@@ -68,9 +68,13 @@ pub fn metrics() -> Result<Metrics> {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
     // getrusage initializes the structure on success; RUSAGE_SELF includes threads.
     ensure!(
+        // SAFETY: `usage` is a live, zeroed `MaybeUninit<rusage>`, so `as_mut_ptr` is valid and
+        // aligned for the write.
         unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } == 0,
         "getrusage failed"
     );
+    // SAFETY: `getrusage` succeeded above and filled `usage`; it was also zero-initialized, a
+    // valid `rusage` either way.
     let usage = unsafe { usage.assume_init() };
     let seconds = |t: libc::timeval| t.tv_sec as f64 + t.tv_usec as f64 / 1e6;
     #[cfg(target_os = "linux")]

@@ -647,7 +647,10 @@ fn node_error(error: rns_tun::RnsSendError) -> io::Error {
 }
 
 fn set_nonblocking(fd: libc::c_int) -> io::Result<()> {
+    // SAFETY: F_GETFL takes no pointer argument; a stale `fd` only makes the call
+    // fail, reported below.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    // SAFETY: F_SETFL takes an integer argument and touches no memory.
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err(io::Error::last_os_error());
     }

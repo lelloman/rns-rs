@@ -4,6 +4,8 @@
 //! Reads standard Python RNS config files, opens TCP server/client, UDP, and
 //! Local interfaces, persists identity and known destinations.
 
+// Test code is outside the code-quality lints' scope.
+#![cfg_attr(test, allow(clippy::undocumented_unsafe_blocks))]
 // Builds with only some of the built-in interfaces (rns-tun-android uses just
 // TCP, UDP and Auto) leave parts of the shared socket, writer and event-loop
 // machinery without callers. Silence the resulting unused-code lints for such

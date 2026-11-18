@@ -401,6 +401,8 @@ impl WeaveSession {
                 events: libc::POLLIN,
                 revents: 0,
             };
+            // SAFETY: `pollfd` is a live, exclusively borrowed `pollfd` and the count
+            // is 1; its fd belongs to `reader`, which is open for this loop.
             let ready = unsafe { libc::poll(&mut pollfd, 1, 250) };
             if ready < 0 {
                 return Err(io::Error::last_os_error());

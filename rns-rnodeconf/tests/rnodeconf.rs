@@ -5,6 +5,9 @@
 //! sent to the device. They need Python Reticulum on `PYTHONPATH`, with
 //! `pyserial` and `cryptography`, and are ignored by default.
 
+// Test code is outside the code-quality lints' scope.
+#![allow(clippy::undocumented_unsafe_blocks)]
+
 #[path = "support/fake_rnode.rs"]
 mod fake_rnode;
 

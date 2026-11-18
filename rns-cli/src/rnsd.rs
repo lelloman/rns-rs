@@ -233,6 +233,9 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
         }
     };
 
+    // SAFETY: `signal_handler` is an `extern "C" fn(c_int)`, the shape `sighandler_t` expects,
+    // and only calls `wake`, which does an atomic load and a `write(2)` of a local byte: both
+    // async-signal-safe.
     unsafe {
         libc::signal(
             libc::SIGINT,

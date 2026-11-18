@@ -117,6 +117,11 @@ fn host_has_path(mut caller: Caller<'_, StoreData>, dest_ptr: i32) -> i32 {
     let Some(dest) = read_16(data, dest_ptr) else {
         return 0;
     };
+    // SAFETY: host functions only run inside a guest call on this store, and every
+    // such call happens while `engine_access` is valid: `execute_wasm_program`
+    // sets it (`StoreData::new`/`reset_per_call`) from a `&dyn EngineAccess`
+    // borrowed for the whole call, and the ABI probe in `manager.rs` uses the
+    // `NULL_ENGINE` static.
     let result = unsafe { caller.data().engine().has_path(&dest) };
     result as i32
 }
@@ -130,6 +135,11 @@ fn host_get_hops(mut caller: Caller<'_, StoreData>, dest_ptr: i32) -> i32 {
     let Some(dest) = read_16(data, dest_ptr) else {
         return -1;
     };
+    // SAFETY: host functions only run inside a guest call on this store, and every
+    // such call happens while `engine_access` is valid: `execute_wasm_program`
+    // sets it (`StoreData::new`/`reset_per_call`) from a `&dyn EngineAccess`
+    // borrowed for the whole call, and the ABI probe in `manager.rs` uses the
+    // `NULL_ENGINE` static.
     match unsafe { caller.data().engine().hops_to(&dest) } {
         Some(h) => h as i32,
         None => -1,
@@ -145,6 +155,11 @@ fn host_get_next_hop(mut caller: Caller<'_, StoreData>, dest_ptr: i32, out_ptr: 
     let Some(dest) = read_16(data, dest_ptr) else {
         return 0;
     };
+    // SAFETY: host functions only run inside a guest call on this store, and every
+    // such call happens while `engine_access` is valid: `execute_wasm_program`
+    // sets it (`StoreData::new`/`reset_per_call`) from a `&dyn EngineAccess`
+    // borrowed for the whole call, and the ABI probe in `manager.rs` uses the
+    // `NULL_ENGINE` static.
     match unsafe { caller.data().engine().next_hop(&dest) } {
         Some(hop) => write_bytes(memory.data_mut(&mut caller), out_ptr, &hop) as i32,
         None => 0,
@@ -160,6 +175,11 @@ fn host_is_blackholed(mut caller: Caller<'_, StoreData>, identity_ptr: i32) -> i
     let Some(identity) = read_16(data, identity_ptr) else {
         return 0;
     };
+    // SAFETY: host functions only run inside a guest call on this store, and every
+    // such call happens while `engine_access` is valid: `execute_wasm_program`
+    // sets it (`StoreData::new`/`reset_per_call`) from a `&dyn EngineAccess`
+    // borrowed for the whole call, and the ABI probe in `manager.rs` uses the
+    // `NULL_ENGINE` static.
     let result = unsafe { caller.data().engine().is_blackholed(&identity) };
     result as i32
 }
@@ -174,6 +194,11 @@ fn host_get_interface_name(
     if out_len < 0 {
         return -1;
     }
+    // SAFETY: host functions only run inside a guest call on this store, and every
+    // such call happens while `engine_access` is valid: `execute_wasm_program`
+    // sets it (`StoreData::new`/`reset_per_call`) from a `&dyn EngineAccess`
+    // borrowed for the whole call, and the ABI probe in `manager.rs` uses the
+    // `NULL_ENGINE` static.
     let name = unsafe { caller.data().engine().interface_name(id as u64) };
     let Some(name) = name else { return -1 };
     let Some(memory) = get_memory(&mut caller) else {
@@ -188,6 +213,11 @@ fn host_get_interface_name(
 }
 /// Get interface mode. Returns mode byte, or -1 if not found.
 fn host_get_interface_mode(caller: Caller<'_, StoreData>, id: i64) -> i32 {
+    // SAFETY: host functions only run inside a guest call on this store, and every
+    // such call happens while `engine_access` is valid: `execute_wasm_program`
+    // sets it (`StoreData::new`/`reset_per_call`) from a `&dyn EngineAccess`
+    // borrowed for the whole call, and the ABI probe in `manager.rs` uses the
+    // `NULL_ENGINE` static.
     match unsafe { caller.data().engine().interface_mode(id as u64) } {
         Some(m) => m as i32,
         None => -1,
@@ -196,6 +226,11 @@ fn host_get_interface_mode(caller: Caller<'_, StoreData>, id: i64) -> i32 {
 
 /// Get transport identity hash. Writes 16 bytes to out_ptr. Returns 1 if available, 0 otherwise.
 fn host_get_transport_identity(mut caller: Caller<'_, StoreData>, out_ptr: i32) -> i32 {
+    // SAFETY: host functions only run inside a guest call on this store, and every
+    // such call happens while `engine_access` is valid: `execute_wasm_program`
+    // sets it (`StoreData::new`/`reset_per_call`) from a `&dyn EngineAccess`
+    // borrowed for the whole call, and the ABI probe in `manager.rs` uses the
+    // `NULL_ENGINE` static.
     let hash = unsafe { caller.data().engine().identity_hash() };
     let Some(hash) = hash else { return 0 };
     let Some(memory) = get_memory(&mut caller) else {
@@ -207,6 +242,11 @@ fn host_get_transport_identity(mut caller: Caller<'_, StoreData>, out_ptr: i32) 
 /// Get the outgoing announce rate for an interface in millihertz.
 /// Returns -1 if the interface is not found.
 fn host_get_announce_rate(caller: Caller<'_, StoreData>, id: i64) -> i32 {
+    // SAFETY: host functions only run inside a guest call on this store, and every
+    // such call happens while `engine_access` is valid: `execute_wasm_program`
+    // sets it (`StoreData::new`/`reset_per_call`) from a `&dyn EngineAccess`
+    // borrowed for the whole call, and the ABI probe in `manager.rs` uses the
+    // `NULL_ENGINE` static.
     unsafe { caller.data().engine().announce_rate(id as u64) }.unwrap_or(-1)
 }
 
@@ -220,6 +260,11 @@ fn host_get_link_state(mut caller: Caller<'_, StoreData>, link_hash_ptr: i32) ->
     let Some(hash) = read_16(data, link_hash_ptr) else {
         return -1;
     };
+    // SAFETY: host functions only run inside a guest call on this store, and every
+    // such call happens while `engine_access` is valid: `execute_wasm_program`
+    // sets it (`StoreData::new`/`reset_per_call`) from a `&dyn EngineAccess`
+    // borrowed for the whole call, and the ABI probe in `manager.rs` uses the
+    // `NULL_ENGINE` static.
     match unsafe { caller.data().engine().link_state(&hash) } {
         Some(state) => state as i32,
         None => -1,

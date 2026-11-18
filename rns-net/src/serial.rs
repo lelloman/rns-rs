@@ -53,6 +53,8 @@ impl SerialPort {
         let c_path = std::ffi::CString::new(config.path.as_str())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid path"))?;
 
+        // SAFETY: `c_path` is a live `CString`, so the pointer is NUL-terminated and
+        // valid for the call.
         let fd = unsafe {
             libc::open(
                 c_path.as_ptr(),
@@ -68,7 +70,11 @@ impl SerialPort {
         let raw = fd.as_raw_fd();
 
         // Configure termios
+        // SAFETY: `termios` is a plain C struct of integers and integer arrays, for
+        // which all-zero bytes are a valid value.
         let mut termios: libc::termios = unsafe { std::mem::zeroed() };
+        // SAFETY: `raw` is the fd owned by `fd`, open for this whole function, and
+        // `termios` is a live, exclusively borrowed `termios`.
         if unsafe { libc::tcgetattr(raw, &mut termios) } != 0 {
             return Err(io::Error::last_os_error());
         }
@@ -126,6 +132,8 @@ impl SerialPort {
 
         // Baud rate
         let speed = baud_to_speed(config.baud)?;
+        // SAFETY: both calls only write the speed fields of `termios`, a live,
+        // exclusively borrowed local.
         unsafe {
             libc::cfsetispeed(&mut termios, speed);
             libc::cfsetospeed(&mut termios, speed);
@@ -135,15 +143,19 @@ impl SerialPort {
         termios.c_cc[libc::VMIN] = 1;
         termios.c_cc[libc::VTIME] = 0;
 
+        // SAFETY: `raw` is the fd owned by `fd`, still open, and `termios` is a live
+        // local the call only reads.
         if unsafe { libc::tcsetattr(raw, libc::TCSANOW, &termios) } != 0 {
             return Err(io::Error::last_os_error());
         }
 
         // Clear O_NONBLOCK for blocking reads
+        // SAFETY: F_GETFL takes no pointer argument; `raw` is owned by `fd`, still open.
         let flags = unsafe { libc::fcntl(raw, libc::F_GETFL) };
         if flags < 0 {
             return Err(io::Error::last_os_error());
         }
+        // SAFETY: F_SETFL takes an integer argument; `raw` is owned by `fd`, still open.
         if unsafe { libc::fcntl(raw, libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -183,6 +195,8 @@ impl AsRawFd for SerialPort {
 /// process inherited. The duplicate is owned by the result; an fd that is
 /// not open is reported as an error.
 pub fn dup_fd(fd: RawFd) -> io::Result<OwnedFd> {
+    // SAFETY: F_DUPFD_CLOEXEC takes an integer argument and does not consume `fd`;
+    // a closed `fd` only makes the call fail with EBADF, reported below.
     let new_fd = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
     if new_fd < 0 {
         return Err(io::Error::last_os_error());
