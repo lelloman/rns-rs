@@ -124,12 +124,15 @@ impl Transport {
         }
     }
 
+    /// Reader and writer on duplicates of `fd`, which stays the caller's:
+    /// it is not closed here.
     pub fn open_from_fd(fd: i32) -> io::Result<(Transport, Transport)> {
-        let port = SerialPort::from_raw_fd(fd);
-        let reader = port.reader()?;
-        let writer = port.writer()?;
-        std::mem::forget(port);
-        Ok((Transport::Serial(reader), Transport::Serial(writer)))
+        let reader = crate::serial::dup_fd(fd)?;
+        let writer = crate::serial::dup_fd(fd)?;
+        Ok((
+            Transport::Serial(reader.into()),
+            Transport::Serial(writer.into()),
+        ))
     }
 }
 

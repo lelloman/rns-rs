@@ -3,7 +3,7 @@
 //! Provides raw serial I/O without external crate dependencies.
 
 use std::io;
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 
 /// Serial port parity setting.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -35,15 +35,16 @@ impl Default for SerialConfig {
     }
 }
 
-/// A serial port backed by a file descriptor.
+/// A serial port backed by a file descriptor it owns.
 pub struct SerialPort {
-    fd: RawFd,
+    fd: OwnedFd,
 }
 
 impl SerialPort {
-    /// Wrap a pre-opened file descriptor (e.g. from a USB bridge socketpair).
-    /// No termios configuration is applied — the fd is used as-is.
-    pub fn from_raw_fd(fd: RawFd) -> Self {
+    /// Wrap an already open file descriptor (e.g. from a USB bridge
+    /// socketpair), taking ownership of it. No termios configuration is
+    /// applied: the fd is used as is.
+    pub fn from_owned_fd(fd: OwnedFd) -> Self {
         SerialPort { fd }
     }
 
@@ -61,11 +62,14 @@ impl SerialPort {
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
+        // SAFETY: open just returned this fd and nothing else owns it. From
+        // here on it is closed when `fd` drops, after any error is read.
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        let raw = fd.as_raw_fd();
 
         // Configure termios
         let mut termios: libc::termios = unsafe { std::mem::zeroed() };
-        if unsafe { libc::tcgetattr(fd, &mut termios) } != 0 {
-            unsafe { libc::close(fd) };
+        if unsafe { libc::tcgetattr(raw, &mut termios) } != 0 {
             return Err(io::Error::last_os_error());
         }
 
@@ -131,19 +135,16 @@ impl SerialPort {
         termios.c_cc[libc::VMIN] = 1;
         termios.c_cc[libc::VTIME] = 0;
 
-        if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios) } != 0 {
-            unsafe { libc::close(fd) };
+        if unsafe { libc::tcsetattr(raw, libc::TCSANOW, &termios) } != 0 {
             return Err(io::Error::last_os_error());
         }
 
         // Clear O_NONBLOCK for blocking reads
-        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        let flags = unsafe { libc::fcntl(raw, libc::F_GETFL) };
         if flags < 0 {
-            unsafe { libc::close(fd) };
             return Err(io::Error::last_os_error());
         }
-        if unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
-            unsafe { libc::close(fd) };
+        if unsafe { libc::fcntl(raw, libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
             return Err(io::Error::last_os_error());
         }
 
@@ -152,40 +153,42 @@ impl SerialPort {
 
     /// Get the raw fd.
     pub fn as_raw_fd(&self) -> RawFd {
-        self.fd
+        self.fd.as_raw_fd()
     }
 
-    /// Get a Read handle (File wrapping a dup'd fd).
+    /// Get a Read handle (File wrapping a duplicate of the fd).
     pub fn reader(&self) -> io::Result<std::fs::File> {
-        let new_fd = unsafe { libc::dup(self.fd) };
-        if new_fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(unsafe { std::fs::File::from_raw_fd(new_fd) })
+        Ok(self.fd.try_clone()?.into())
     }
 
-    /// Get a Write handle (File wrapping a dup'd fd).
+    /// Get a Write handle (File wrapping a duplicate of the fd).
     pub fn writer(&self) -> io::Result<std::fs::File> {
-        let new_fd = unsafe { libc::dup(self.fd) };
-        if new_fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(unsafe { std::fs::File::from_raw_fd(new_fd) })
+        Ok(self.fd.try_clone()?.into())
+    }
+}
+
+impl AsFd for SerialPort {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.fd.as_fd()
     }
 }
 
 impl AsRawFd for SerialPort {
     fn as_raw_fd(&self) -> RawFd {
-        self.fd
+        self.fd.as_raw_fd()
     }
 }
 
-impl Drop for SerialPort {
-    fn drop(&mut self) {
-        unsafe {
-            libc::close(self.fd);
-        }
+/// Duplicate a file descriptor the caller keeps owning, such as one the
+/// process inherited. The duplicate is owned by the result; an fd that is
+/// not open is reported as an error.
+pub fn dup_fd(fd: RawFd) -> io::Result<OwnedFd> {
+    let new_fd = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if new_fd < 0 {
+        return Err(io::Error::last_os_error());
     }
+    // SAFETY: fcntl just created this fd and nothing else owns it.
+    Ok(unsafe { OwnedFd::from_raw_fd(new_fd) })
 }
 
 /// Map baud rate u32 to libc speed_t constant.
@@ -337,14 +340,14 @@ mod tests {
     }
 
     #[test]
-    fn from_raw_fd_works() {
+    fn from_owned_fd_works() {
         let (master, slave) = open_pty_pair().unwrap();
 
-        let port = SerialPort::from_raw_fd(slave);
+        let port = SerialPort::from_owned_fd(unsafe { OwnedFd::from_raw_fd(slave) });
         let mut writer = port.writer().unwrap();
         let mut reader_file = unsafe { std::fs::File::from_raw_fd(master) };
 
-        let data = b"from_raw_fd test";
+        let data = b"from_owned_fd test";
         writer.write_all(data).unwrap();
         writer.flush().unwrap();
 
@@ -359,6 +362,19 @@ mod tests {
         let mut buf = [0u8; 64];
         let n = reader_file.read(&mut buf).unwrap();
         assert_eq!(&buf[..n], data);
+    }
+
+    #[test]
+    fn dup_fd_leaves_the_original_open() {
+        let (master, slave) = open_pty_pair().unwrap();
+        let copy = dup_fd(slave).unwrap();
+        drop(copy);
+        assert!(unsafe { libc::fcntl(slave, libc::F_GETFD) } >= 0);
+        assert!(dup_fd(-1).is_err());
+        unsafe {
+            libc::close(master);
+            libc::close(slave);
+        }
     }
 
     #[test]
