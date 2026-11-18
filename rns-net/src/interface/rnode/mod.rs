@@ -1850,7 +1850,8 @@ mod tests {
     }
 
     unsafe fn transport_from_raw_fd(fd: i32) -> Transport {
-        Transport::Serial(std::fs::File::from_raw_fd(fd))
+        // SAFETY: the caller hands over an open fd it no longer uses.
+        Transport::Serial(unsafe { std::fs::File::from_raw_fd(fd) })
     }
 
     fn wait_for_interface_event<F>(

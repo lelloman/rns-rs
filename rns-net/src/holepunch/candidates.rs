@@ -91,15 +91,18 @@ pub(crate) fn local_networks() -> Vec<LocalNetwork> {
 /// # Safety
 /// `sa` must point to a valid `sockaddr` of the family it claims.
 unsafe fn sockaddr_ip(sa: *const libc::sockaddr) -> Option<IpAddr> {
-    match i32::from((*sa).sa_family) {
+    // SAFETY: `sa` points to a valid sockaddr (the caller's contract).
+    match i32::from(unsafe { (*sa).sa_family }) {
         libc::AF_INET => {
-            let sin = &*(sa as *const libc::sockaddr_in);
+            // SAFETY: the family says this is a sockaddr_in.
+            let sin = unsafe { &*(sa as *const libc::sockaddr_in) };
             Some(IpAddr::V4(Ipv4Addr::from(u32::from_be(
                 sin.sin_addr.s_addr,
             ))))
         }
         libc::AF_INET6 => {
-            let sin6 = &*(sa as *const libc::sockaddr_in6);
+            // SAFETY: the family says this is a sockaddr_in6.
+            let sin6 = unsafe { &*(sa as *const libc::sockaddr_in6) };
             Some(IpAddr::V6(Ipv6Addr::from(sin6.sin6_addr.s6_addr)))
         }
         _ => None,

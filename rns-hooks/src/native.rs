@@ -140,6 +140,14 @@ impl NativeProgram {
     }
 }
 
+// The host API callbacks below are called by the hook's code during
+// `on_call`. The contract of the native hook ABI, which every callback
+// relies on: `user_data` is the pointer `call` put in the API table, to a
+// `NativeCallState` alive for the whole call; every (pointer, length) pair
+// the hook passes is either null or valid for reading that many bytes;
+// every output pointer is either null or valid for writing the size the
+// callback documents (16 bytes for hashes, `out_len` for names).
+
 struct NativeCallState<'a> {
     engine_access: &'a dyn EngineAccess,
     injected_actions: Vec<ActionWire>,
@@ -148,49 +156,71 @@ struct NativeCallState<'a> {
     modified_data: Option<Vec<u8>>,
 }
 
+/// The call's state from the API table's `user_data`.
+///
+/// # Safety
+/// `user_data` is null or the pointer `call` put in the API table, during
+/// that call.
 unsafe fn state<'a>(user_data: *mut c_void) -> Option<&'a mut NativeCallState<'a>> {
-    user_data.cast::<NativeCallState<'a>>().as_mut()
+    // SAFETY: the caller's contract: null or a live, unaliased state.
+    unsafe { user_data.cast::<NativeCallState<'a>>().as_mut() }
 }
 
+/// The `len` bytes at `ptr`, or None for a null pointer.
+///
+/// # Safety
+/// `ptr` is null or valid for reading `len` bytes for `'a`.
 unsafe fn read_bytes<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
     if ptr.is_null() {
         return None;
     }
-    Some(std::slice::from_raw_parts(ptr, len))
+    // SAFETY: not null, so valid for `len` bytes by the caller's contract.
+    Some(unsafe { std::slice::from_raw_parts(ptr, len) })
 }
 
+/// The 16 bytes at `ptr`, or None for a null pointer.
+///
+/// # Safety
+/// `ptr` is null or valid for reading 16 bytes.
 unsafe fn read_16(ptr: *const u8) -> Option<[u8; 16]> {
-    let bytes = read_bytes(ptr, 16)?;
+    // SAFETY: the caller's contract is read_bytes' for 16 bytes.
+    let bytes = unsafe { read_bytes(ptr, 16) }?;
     let mut out = [0u8; 16];
     out.copy_from_slice(bytes);
     Some(out)
 }
 
 unsafe extern "C" fn native_log(user_data: *mut c_void, ptr: *const u8, len: usize) {
-    if state(user_data).is_none() {
+    // SAFETY: user_data comes from the API table (see the ABI contract above).
+    if unsafe { state(user_data) }.is_none() {
         return;
     }
-    let Some(bytes) = read_bytes(ptr, len) else {
+    // SAFETY: a pointer the hook passed, null or readable (ABI contract).
+    let Some(bytes) = (unsafe { read_bytes(ptr, len) }) else {
         return;
     };
     log::debug!("[native-hook] {}", String::from_utf8_lossy(bytes));
 }
 
 unsafe extern "C" fn native_has_path(user_data: *mut c_void, dest_ptr: *const u8) -> i32 {
-    let Some(state) = state(user_data) else {
+    // SAFETY: user_data comes from the API table (see the ABI contract above).
+    let Some(state) = (unsafe { state(user_data) }) else {
         return 0;
     };
-    let Some(dest) = read_16(dest_ptr) else {
+    // SAFETY: a pointer the hook passed, null or readable (ABI contract).
+    let Some(dest) = (unsafe { read_16(dest_ptr) }) else {
         return 0;
     };
     state.engine_access.has_path(&dest) as i32
 }
 
 unsafe extern "C" fn native_get_hops(user_data: *mut c_void, dest_ptr: *const u8) -> i32 {
-    let Some(state) = state(user_data) else {
+    // SAFETY: user_data comes from the API table (see the ABI contract above).
+    let Some(state) = (unsafe { state(user_data) }) else {
         return -1;
     };
-    let Some(dest) = read_16(dest_ptr) else {
+    // SAFETY: a pointer the hook passed, null or readable (ABI contract).
+    let Some(dest) = (unsafe { read_16(dest_ptr) }) else {
         return -1;
     };
     state
@@ -205,10 +235,12 @@ unsafe extern "C" fn native_get_next_hop(
     dest_ptr: *const u8,
     out_ptr: *mut u8,
 ) -> i32 {
-    let Some(state) = state(user_data) else {
+    // SAFETY: user_data comes from the API table (see the ABI contract above).
+    let Some(state) = (unsafe { state(user_data) }) else {
         return 0;
     };
-    let Some(dest) = read_16(dest_ptr) else {
+    // SAFETY: a pointer the hook passed, null or readable (ABI contract).
+    let Some(dest) = (unsafe { read_16(dest_ptr) }) else {
         return 0;
     };
     let Some(next_hop) = state.engine_access.next_hop(&dest) else {
@@ -217,15 +249,19 @@ unsafe extern "C" fn native_get_next_hop(
     if out_ptr.is_null() {
         return 0;
     }
-    std::ptr::copy_nonoverlapping(next_hop.as_ptr(), out_ptr, next_hop.len());
+    // SAFETY: out_ptr is not null, so writable for the documented size
+    // (ABI contract); the source is a distinct host-owned buffer.
+    unsafe { std::ptr::copy_nonoverlapping(next_hop.as_ptr(), out_ptr, next_hop.len()) };
     1
 }
 
 unsafe extern "C" fn native_is_blackholed(user_data: *mut c_void, ptr: *const u8) -> i32 {
-    let Some(state) = state(user_data) else {
+    // SAFETY: user_data comes from the API table (see the ABI contract above).
+    let Some(state) = (unsafe { state(user_data) }) else {
         return 0;
     };
-    let Some(identity) = read_16(ptr) else {
+    // SAFETY: a pointer the hook passed, null or readable (ABI contract).
+    let Some(identity) = (unsafe { read_16(ptr) }) else {
         return 0;
     };
     state.engine_access.is_blackholed(&identity) as i32
@@ -237,7 +273,8 @@ unsafe extern "C" fn native_get_interface_name(
     out_ptr: *mut u8,
     out_len: usize,
 ) -> isize {
-    let Some(state) = state(user_data) else {
+    // SAFETY: user_data comes from the API table (see the ABI contract above).
+    let Some(state) = (unsafe { state(user_data) }) else {
         return -1;
     };
     let Some(name) = state.engine_access.interface_name(id) else {
@@ -248,12 +285,15 @@ unsafe extern "C" fn native_get_interface_name(
     }
     let bytes = name.as_bytes();
     let write_len = bytes.len().min(out_len);
-    std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, write_len);
+    // SAFETY: out_ptr is not null, so writable for the documented size
+    // (ABI contract); the source is a distinct host-owned buffer.
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, write_len) };
     write_len as isize
 }
 
 unsafe extern "C" fn native_get_interface_mode(user_data: *mut c_void, id: u64) -> i32 {
-    let Some(state) = state(user_data) else {
+    // SAFETY: user_data comes from the API table (see the ABI contract above).
+    let Some(state) = (unsafe { state(user_data) }) else {
         return -1;
     };
     state
@@ -267,7 +307,8 @@ unsafe extern "C" fn native_get_transport_identity(
     user_data: *mut c_void,
     out_ptr: *mut u8,
 ) -> i32 {
-    let Some(state) = state(user_data) else {
+    // SAFETY: user_data comes from the API table (see the ABI contract above).
+    let Some(state) = (unsafe { state(user_data) }) else {
         return 0;
     };
     let Some(hash) = state.engine_access.identity_hash() else {
@@ -276,22 +317,27 @@ unsafe extern "C" fn native_get_transport_identity(
     if out_ptr.is_null() {
         return 0;
     }
-    std::ptr::copy_nonoverlapping(hash.as_ptr(), out_ptr, hash.len());
+    // SAFETY: out_ptr is not null, so writable for the documented size
+    // (ABI contract); the source is a distinct host-owned buffer.
+    unsafe { std::ptr::copy_nonoverlapping(hash.as_ptr(), out_ptr, hash.len()) };
     1
 }
 
 unsafe extern "C" fn native_get_announce_rate(user_data: *mut c_void, id: u64) -> i32 {
-    let Some(state) = state(user_data) else {
+    // SAFETY: user_data comes from the API table (see the ABI contract above).
+    let Some(state) = (unsafe { state(user_data) }) else {
         return -1;
     };
     state.engine_access.announce_rate(id).unwrap_or(-1)
 }
 
 unsafe extern "C" fn native_get_link_state(user_data: *mut c_void, ptr: *const u8) -> i32 {
-    let Some(state) = state(user_data) else {
+    // SAFETY: user_data comes from the API table (see the ABI contract above).
+    let Some(state) = (unsafe { state(user_data) }) else {
         return -1;
     };
-    let Some(link_hash) = read_16(ptr) else {
+    // SAFETY: a pointer the hook passed, null or readable (ABI contract).
+    let Some(link_hash) = (unsafe { read_16(ptr) }) else {
         return -1;
     };
     state
@@ -306,10 +352,12 @@ unsafe extern "C" fn native_inject_action(
     ptr: *const u8,
     len: usize,
 ) -> i32 {
-    let Some(state) = state(user_data) else {
+    // SAFETY: user_data comes from the API table (see the ABI contract above).
+    let Some(state) = (unsafe { state(user_data) }) else {
         return -1;
     };
-    let Some(bytes) = read_bytes(ptr, len) else {
+    // SAFETY: a pointer the hook passed, null or readable (ABI contract).
+    let Some(bytes) = (unsafe { read_bytes(ptr, len) }) else {
         return -1;
     };
     match crate::arena::read_action_wire(bytes, 0, bytes.len()) {
@@ -328,16 +376,19 @@ unsafe extern "C" fn native_emit_event(
     payload_ptr: *const u8,
     payload_len: usize,
 ) -> i32 {
-    let Some(state) = state(user_data) else {
+    // SAFETY: user_data comes from the API table (see the ABI contract above).
+    let Some(state) = (unsafe { state(user_data) }) else {
         return -1;
     };
     if !state.provider_events_enabled {
         return -1;
     }
-    let Some(payload_type) = read_bytes(type_ptr, type_len) else {
+    // SAFETY: a pointer the hook passed, null or readable (ABI contract).
+    let Some(payload_type) = (unsafe { read_bytes(type_ptr, type_len) }) else {
         return -1;
     };
-    let Some(payload) = read_bytes(payload_ptr, payload_len) else {
+    // SAFETY: a pointer the hook passed, null or readable (ABI contract).
+    let Some(payload) = (unsafe { read_bytes(payload_ptr, payload_len) }) else {
         return -1;
     };
     state.provider_events.push(RawProviderEvent {
@@ -352,10 +403,12 @@ unsafe extern "C" fn native_set_modified_data(
     ptr: *const u8,
     len: usize,
 ) -> i32 {
-    let Some(state) = state(user_data) else {
+    // SAFETY: user_data comes from the API table (see the ABI contract above).
+    let Some(state) = (unsafe { state(user_data) }) else {
         return -1;
     };
-    let Some(bytes) = read_bytes(ptr, len) else {
+    // SAFETY: a pointer the hook passed, null or readable (ABI contract).
+    let Some(bytes) = (unsafe { read_bytes(ptr, len) }) else {
         return -1;
     };
     state.modified_data = Some(bytes.to_vec());

@@ -12,6 +12,20 @@ publish = false
 repository = "https://github.com/lelloman/rns-rs"
 authors = ["rns-rs contributors"]
 
+# Lints every member opts into with `[lints] workspace = true`. Add a lint
+# here once the code passes it; never relax one to land a change.
+# scripts/lint-host.sh turns warnings into errors.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+unused_lifetimes = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+mem_forget = "warn"
+missing_safety_doc = "warn"
+
 [workspace.dependencies]
 rns-crypto = { version = "0.3.0", path = "rns-crypto" }
 rns-core = { version = "0.9.0", path = "rns-core" }
