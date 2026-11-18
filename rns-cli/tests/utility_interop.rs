@@ -1902,8 +1902,18 @@ fn compare_rnpath_blackhole_views(config: &str, publisher: &str, blackholed: &st
         &["-p", "0123"],
     ];
     for args in cases {
-        let python = rnpath(true, args);
         let rust = rnpath(false, args);
+        // Python's rnpath, a client of the running instance, now and then
+        // exits 0 where it calls exit(20) (seen on CI with 1.6.0, while
+        // shutting down its shared instance connection): ask it again
+        // before calling the two different.
+        let mut python = rnpath(true, args);
+        for _ in 0..2 {
+            if python == rust {
+                break;
+            }
+            python = rnpath(true, args);
+        }
         assert_eq!(rust, python, "rnpath {args:?}");
         if !args.contains(&"no such entry") && args.len() > 1 && args[1] != "0123" {
             assert!(python.1.contains(blackholed), "rnpath {args:?}: {python:?}");
