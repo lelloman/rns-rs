@@ -587,7 +587,7 @@ impl EventSender {
         let mut pending = Some(event);
         futures::future::poll_fn(|cx| {
             waiter.register(cx);
-            match self.try_send(pending.take().unwrap()) {
+            match self.try_send(pending.take().expect("not polled after it completed")) {
                 Ok(()) => std::task::Poll::Ready(Ok(())),
                 Err(std::sync::mpsc::TrySendError::Full(event)) => {
                     pending = Some(event);

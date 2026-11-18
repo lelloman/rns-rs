@@ -95,7 +95,10 @@ impl Keepalives {
         if !super::constant_time_eq(&tag[..KEEPALIVE_TAG_LEN], &data[signed.len()..]) {
             return false;
         }
-        let counter = u64::from_be_bytes(data[20..28].try_into().unwrap());
+        let Some(counter) = data.get(20..).and_then(<[u8]>::first_chunk) else {
+            return false;
+        };
+        let counter = u64::from_be_bytes(*counter);
         if counter <= self.seen {
             return false;
         }

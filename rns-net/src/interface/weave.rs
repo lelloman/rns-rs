@@ -375,7 +375,10 @@ impl WeaveSession {
             ifac: ctx.ifac.clone(),
             host_identity: Arc::new(identity),
             host_public,
-            host_switch_id: host_public[28..].try_into().unwrap(),
+            host_switch_id: {
+                let [.., a, b, c, d] = host_public;
+                [a, b, c, d]
+            },
             writer: Arc::new(Mutex::new(None)),
             remote_switch_id: Arc::new(Mutex::new(None)),
             peer_interfaces: Arc::new(Mutex::new(HashMap::new())),

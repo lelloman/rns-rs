@@ -91,7 +91,9 @@ impl Driver {
         }
         let mut blocked = std::collections::HashSet::new();
         for _ in 0..self.pending_link_frames.len() {
-            let mut frame = self.pending_link_frames.pop_front().unwrap();
+            let Some(mut frame) = self.pending_link_frames.pop_front() else {
+                break;
+            };
             if blocked.contains(&frame.interface) {
                 self.pending_link_frames.push_back(frame);
                 continue;
@@ -696,7 +698,7 @@ impl Driver {
         if let Some(key) = self.proof_keys.get(destination) {
             return Some(Some(key.clone()));
         }
-        let ed_bytes: [u8; 32] = public_key[32..].try_into().unwrap();
+        let (_, ed_bytes) = rns_crypto::identity::split_key(&public_key);
         let Ok(key) = rns_crypto::ed25519::Ed25519PublicKey::from_bytes(&ed_bytes) else {
             return Some(None);
         };
@@ -967,19 +969,25 @@ impl Driver {
                 return;
             };
             let (completion, _receipt) = crate::link_send::Completion::new(permit);
-            self.tracked_link_send =
-                Some((RawPacket::unpack(&raw).unwrap().packet_hash, completion));
+            // The engine built `raw`, so it parses; were it not to, the send
+            // would go untracked rather than fail.
+            if let Ok(packet) = RawPacket::unpack(&raw) {
+                self.tracked_link_send = Some((packet.packet_hash, completion));
+            }
         }
-        let tracked = self.tracked_link_send.as_ref().is_some_and(|(hash, _)| {
+        let tracked = if self.tracked_link_send.as_ref().is_some_and(|(hash, _)| {
             RawPacket::unpack(&raw).is_ok_and(|packet| packet.packet_hash == *hash)
-        });
-        if tracked {
+        }) {
+            self.tracked_link_send.take()
+        } else {
+            None
+        };
+        if let Some((_, mut completion)) = tracked {
             let data = if let Some(ref state) = entry.ifac {
                 ifac::mask_outbound(&raw, state)
             } else {
                 raw.to_vec()
             };
-            let (_, mut completion) = self.tracked_link_send.take().unwrap();
             completion.retain_ratchet(ratchet_lease.clone());
             self.pending_link_frames.push_back(PendingLinkFrame {
                 interface,
@@ -1134,13 +1142,20 @@ impl Driver {
                 return;
             };
             let (completion, _receipt) = crate::link_send::Completion::new(permit);
-            self.tracked_link_send =
-                Some((RawPacket::unpack(&raw).unwrap().packet_hash, completion));
+            // The engine built `raw`, so it parses; were it not to, the send
+            // would go untracked rather than fail.
+            if let Ok(packet) = RawPacket::unpack(&raw) {
+                self.tracked_link_send = Some((packet.packet_hash, completion));
+            }
         }
-        if self.tracked_link_send.as_ref().is_some_and(|(hash, _)| {
+        let tracked = if self.tracked_link_send.as_ref().is_some_and(|(hash, _)| {
             RawPacket::unpack(&raw).is_ok_and(|packet| packet.packet_hash == *hash)
         }) {
-            let (_, mut completion) = self.tracked_link_send.take().unwrap();
+            self.tracked_link_send.take()
+        } else {
+            None
+        };
+        if let Some((_, mut completion)) = tracked {
             completion.retain_ratchet(ratchet_lease.clone());
             let mut selected = 0;
             for entry in self.interfaces.values() {

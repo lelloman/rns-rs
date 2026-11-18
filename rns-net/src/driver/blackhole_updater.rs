@@ -113,9 +113,7 @@ impl Driver {
             "Attempting blackhole list update from {}...",
             hex16(&source)
         );
-        let sig_pub: [u8; 32] = announced.public_key[32..64]
-            .try_into()
-            .expect("an announced public key is 64 bytes");
+        let (_, sig_pub) = rns_crypto::identity::split_key(&announced.public_key);
         let (link_tx, link_rx) = mpsc::channel();
         self.handle_create_link(dest_hash, sig_pub, link_tx);
         if let Some(updater) = self.blackhole_updater.as_mut() {
@@ -194,7 +192,10 @@ impl Driver {
         let actions = self.link_manager.teardown_link(&link_id);
         self.dispatch_link_actions(actions);
         let list = data.and_then(|data| msgpack::unpack_exact(data).ok());
-        let Some(map) = list.as_ref().and_then(|list| list.as_map()) else {
+        let Some((list, map)) = list
+            .as_ref()
+            .and_then(|list| list.as_map().map(|map| (list, map)))
+        else {
             log::debug!(
                 "Blackhole list update from {} returned no list",
                 hex16(&source)
@@ -212,9 +213,7 @@ impl Driver {
             let spec = if added == 1 { "identity" } else { "identities" };
             log::debug!("Added {added} blackholed {spec} from {}", hex16(&source));
             if let Some(dir) = self.blackhole_dir.as_ref() {
-                if let Err(error) =
-                    crate::blackhole_store::save_source(dir, &source, list.as_ref().unwrap())
-                {
+                if let Err(error) = crate::blackhole_store::save_source(dir, &source, list) {
                     log::error!(
                         "Error while persisting blackhole list from {}: {error}",
                         hex16(&source)

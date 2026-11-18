@@ -546,16 +546,11 @@ impl LoopSource for StreamSource {
             &session.name,
             |_, _| peer.tunnel.note_read(),
         ) {
-            StreamRead::Rearm => SourceStatus::Rearm,
-            StreamRead::Suspend => SourceStatus::Suspend,
-            StreamRead::DriverGone => SourceStatus::Remove,
+            StreamRead::Rearm => return SourceStatus::Rearm,
+            StreamRead::Suspend => return SourceStatus::Suspend,
+            StreamRead::DriverGone => return SourceStatus::Remove,
             StreamRead::Closed => {
                 log::info!("[{}] I2P peer {} disconnected", session.name, peer.id.0);
-                let State::Peer(peer) = &self.state else {
-                    unreachable!()
-                };
-                self.peer_lost(peer);
-                SourceStatus::Remove
             }
             StreamRead::Failed(e) => {
                 log::warn!(
@@ -564,13 +559,12 @@ impl LoopSource for StreamSource {
                     peer.id.0,
                     e
                 );
-                let State::Peer(peer) = &self.state else {
-                    unreachable!()
-                };
-                self.peer_lost(peer);
-                SourceStatus::Remove
             }
         }
+        if let State::Peer(peer) = &self.state {
+            self.peer_lost(peer);
+        }
+        SourceStatus::Remove
     }
 }
 

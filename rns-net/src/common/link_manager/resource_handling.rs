@@ -1130,7 +1130,10 @@ impl LinkManager {
                         match self.queue_folded_assembly(*link_id, generation, assembly) {
                             Ok(()) => Vec::new(),
                             Err(assembly) => {
-                                let link = self.links.get_mut(link_id).unwrap();
+                                let link = self
+                                    .links
+                                    .get_mut(link_id)
+                                    .expect("queueing an assembly keeps its link");
                                 link.incoming_resources[idx]
                                     .complete_assembly(assembly.run(&Bzip2Compressor))
                             }
@@ -1142,21 +1145,22 @@ impl LinkManager {
                 self.process_resource_actions_into(link_id, all_actions.drain(..), rng, out);
                 return;
             }
-            if eligible && self.receive_worker.is_some() {
+            let worker = self.receive_worker.as_mut().filter(|_| eligible);
+            if let Some(worker) = worker {
                 let receiver = &mut link.incoming_resources[idx];
                 let actions = match receiver.prepare_assembly(&|parts, skip| {
                     link.engine.decrypt_chunks(parts, skip).map_err(|_| ())
                 }) {
-                    Ok(assembly) => match self.receive_worker.as_mut().unwrap().submit(
-                        *link_id,
-                        link.resource_generation.clone(),
-                        assembly,
-                    ) {
-                        Ok(()) => Vec::new(),
-                        // Admission/disconnection fallback uses the already-authenticated
-                        // handoff; no additional decryption or unbounded retry.
-                        Err(assembly) => receiver.complete_assembly(assembly.run(&Bzip2Compressor)),
-                    },
+                    Ok(assembly) => {
+                        match worker.submit(*link_id, link.resource_generation.clone(), assembly) {
+                            Ok(()) => Vec::new(),
+                            // Admission/disconnection fallback uses the already-authenticated
+                            // handoff; no additional decryption or unbounded retry.
+                            Err(assembly) => {
+                                receiver.complete_assembly(assembly.run(&Bzip2Compressor))
+                            }
+                        }
+                    }
                     Err(actions) => actions,
                 };
                 all_actions.extend(actions);
@@ -1326,17 +1330,12 @@ impl LinkManager {
                     }
                 }
                 assemble_actions = converted_actions;
-            } else if !split_is_request
-                && !split_is_response
-                && matches!(
-                    link.resource_receive_mode,
-                    ResourceReceiveMode::TemporaryFile { .. }
-                )
-            {
-                let directory = match &link.resource_receive_mode {
-                    ResourceReceiveMode::TemporaryFile { directory, .. } => directory.clone(),
-                    _ => unreachable!(),
-                };
+            } else if let (false, false, ResourceReceiveMode::TemporaryFile { directory, .. }) = (
+                split_is_request,
+                split_is_response,
+                &link.resource_receive_mode,
+            ) {
+                let directory = directory.clone();
                 let mut converted_actions = Vec::new();
                 for action in assemble_actions {
                     match action {

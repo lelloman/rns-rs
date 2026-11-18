@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::os::fd::AsFd;
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -878,7 +878,7 @@ impl ProbeRequest {
                 }
             }
             rns_core::holepunch::ProbeProtocol::Stun => {
-                let txn_id: [u8; 12] = nonce[..12].try_into().expect("12 of 16 bytes");
+                let [txn_id @ .., _, _, _, _] = nonce;
                 Self {
                     bytes: build_stun_binding_request(&txn_id),
                     id: ProbeId::Stun(txn_id),
@@ -982,7 +982,7 @@ pub(crate) fn fuzz_request(data: &[u8]) {
     let mut limiter = ProbeLimiter::new(ProbeRateLimit::default());
     let src: SocketAddr = ([198, 51, 100, 1], 4000).into();
     let _ = limiter.answer(data, &src, Instant::now());
-    let mapped: SocketAddr = "[::ffff:198.51.100.1]:4000".parse().expect("valid");
+    let mapped = SocketAddr::new(Ipv4Addr::new(198, 51, 100, 1).to_ipv6_mapped().into(), 4000);
     let _ = answer_probe(data, &mapped);
 }
 

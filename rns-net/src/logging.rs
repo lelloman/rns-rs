@@ -44,8 +44,7 @@ pub fn numeric_log_filter(log_level: u8) -> LogFilter {
         LOG_WARNING => log::LevelFilter::Warn,
         LOG_NOTICE | LOG_INFO => log::LevelFilter::Info,
         LOG_VERBOSE | LOG_DEBUG | LOG_PATHING => log::LevelFilter::Debug,
-        LOG_EXTREME => log::LevelFilter::Trace,
-        _ => unreachable!("numeric log level was clamped"),
+        _ => log::LevelFilter::Trace,
     };
     let pathing = if log_level >= LOG_PATHING {
         log::LevelFilter::Trace

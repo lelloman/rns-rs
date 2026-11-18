@@ -149,7 +149,9 @@ impl LinkManager {
         else {
             return;
         };
-        let feeder = self.decrypt_feeder.as_mut().unwrap();
+        let Some(feeder) = self.decrypt_feeder.as_mut() else {
+            return;
+        };
         if !feeder.feeds.contains_key(&resource_hash) {
             if receiver.parts_in_order_from(0).next().is_none() {
                 return;

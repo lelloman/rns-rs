@@ -233,14 +233,13 @@ impl LinkManager {
         if pending.cancelled.load(Ordering::Acquire) || !self.receive_is_valid(&pending) {
             return Vec::new();
         }
-        let receiver = self
-            .links
-            .get_mut(&pending.link)
-            .unwrap()
-            .incoming_resources
-            .iter_mut()
-            .find(|r| r.assembly_id() == Some(&pending.assembly))
-            .unwrap();
+        let Some(receiver) = self.links.get_mut(&pending.link).and_then(|link| {
+            link.incoming_resources
+                .iter_mut()
+                .find(|r| r.assembly_id() == Some(&pending.assembly))
+        }) else {
+            return Vec::new();
+        };
         let actions = match ready.result {
             Ok(Some(result)) => receiver.complete_assembly(result),
             Ok(None) | Err(()) => receiver.fail_assembly(&pending.assembly),
