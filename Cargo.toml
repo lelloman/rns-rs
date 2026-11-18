@@ -27,6 +27,8 @@ unimplemented = "warn"
 mem_forget = "warn"
 missing_safety_doc = "warn"
 undocumented_unsafe_blocks = "warn"
+# Panics in production code (clippy.toml lets tests use them).
+panic = "warn"
 
 [workspace.dependencies]
 rns-crypto = { version = "0.3.0", path = "rns-crypto" }
