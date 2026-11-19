@@ -194,6 +194,11 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("link_id", link_id)
                 .field("mode", mode)
                 .finish(),
+            Event::SetLinkDestinationResourceReceiveMode { dest_hash, mode } => f
+                .debug_struct("SetLinkDestinationResourceReceiveMode")
+                .field("dest_hash", dest_hash)
+                .field("mode", mode)
+                .finish(),
             Event::AcceptResource {
                 link_id, accept, ..
             } => f

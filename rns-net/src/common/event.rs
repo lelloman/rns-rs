@@ -397,6 +397,11 @@ pub enum Event<W: Send> {
         link_id: [u8; 16],
         mode: crate::resource::ResourceReceiveMode,
     },
+    /// Select the receive mode links to a destination start with.
+    SetLinkDestinationResourceReceiveMode {
+        dest_hash: [u8; 16],
+        mode: crate::resource::ResourceReceiveMode,
+    },
     /// Accept or reject a pending resource (for AcceptApp strategy).
     AcceptResource {
         link_id: [u8; 16],

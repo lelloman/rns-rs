@@ -233,6 +233,20 @@ impl RnsNode {
             .map_err(|_| SendError)
     }
 
+    /// Select the delivery policy links to the registered link destination
+    /// `dest_hash` start with. Unlike [`RnsNode::set_resource_receive_mode`]
+    /// called once the link is up, it is in force for a Resource the peer
+    /// advertises at once.
+    pub fn set_link_destination_resource_receive_mode(
+        &self,
+        dest_hash: [u8; 16],
+        mode: crate::resource::ResourceReceiveMode,
+    ) -> Result<(), SendError> {
+        self.tx
+            .send(Event::SetLinkDestinationResourceReceiveMode { dest_hash, mode })
+            .map_err(|_| SendError)
+    }
+
     /// Set the resource acceptance strategy for a link.
     ///
     /// 0 = AcceptNone, 1 = AcceptAll, 2 = AcceptApp
