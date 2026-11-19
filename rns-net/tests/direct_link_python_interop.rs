@@ -225,13 +225,17 @@ fn rns_available() -> bool {
         .is_ok_and(|status| status.success())
 }
 
-/// A port free for both TCP and UDP, kept outside 30000-45000.
+/// A port free for both TCP and UDP, in 30000-32767: below the kernel's
+/// ephemeral range (32768-60999 by default), where a socket bound to port
+/// 0 or an outgoing connection could take it between this check and the
+/// node binding it, and above the 10000-29999 the other tests use.
 fn free_port() -> u16 {
     use std::sync::atomic::{AtomicU16, Ordering};
     static NEXT: AtomicU16 = AtomicU16::new(0);
-    let seed = (std::process::id() % 4000) as u16 * 3;
+    let base = 30_000 + (std::process::id() % 27) as u16 * 100;
     loop {
-        let port = 47000 + (seed + NEXT.fetch_add(1, Ordering::Relaxed)) % 13000;
+        let port = base + NEXT.fetch_add(1, Ordering::Relaxed) % 2700;
+        let port = if port > 32_767 { port - 2_700 } else { port };
         if std::net::UdpSocket::bind(("0.0.0.0", port)).is_ok()
             && std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
         {
