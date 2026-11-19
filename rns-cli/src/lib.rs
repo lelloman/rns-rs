@@ -14,7 +14,7 @@ pub mod pylog;
 pub mod readiness;
 pub mod remote;
 pub mod rncp;
-#[path = "bin/rnid.rs"]
+#[path = "bin/rnid/main.rs"]
 pub mod rnid_command;
 #[path = "bin/rnpath.rs"]
 pub mod rnpath_command;
