@@ -43,15 +43,20 @@ pub(crate) fn clear_screen() {
 }
 
 /// Ask what kind of device is connected, and which model of it.
+pub(crate) fn choose_board(detected: bool) -> Board {
+    let (selected_product, c_mod) = choose_product(detected);
+    choose_model(selected_product, c_mod)
+}
+
+/// The first question: what kind of device this is, and upstream's
+/// `c_mod`: whether it is the LilyGO LoRa T3S3, an RNode product whose
+/// models are asked from their own list.
 #[allow(unused_assignments, clippy::all)]
 #[rustfmt::skip]
-pub(crate) fn choose_board(detected: bool) -> Board {
+fn choose_product(detected: bool) -> (Option<u8>, bool) {
     let mut selected_product: Option<u8> = None;
-    let mut selected_model: Option<u8> = None;
-    let mut selected_mcu: Option<u8> = None;
-    let mut selected_platform: Option<u8> = None;
     let mut c_mod = false;
-    let mut fw_filename: Option<String> = None;
+
 
         println!("\n---------------------------------------------------------------------------");
         println!("                               Device Selection");
@@ -329,6 +334,19 @@ pub(crate) fn choose_board(detected: bool) -> Board {
             println!("That device type does not exist, exiting now.");
             graceful_exit(0);
         }
+    (selected_product, c_mod)
+}
+
+/// The questions that follow: the model, board or microcontroller of
+/// `selected_product`, and the firmware for it.
+#[allow(unused_assignments, clippy::all)]
+#[rustfmt::skip]
+fn choose_model(selected_product: Option<u8>, c_mod: bool) -> Board {
+    let mut selected_model: Option<u8> = None;
+    let mut selected_mcu: Option<u8> = None;
+    let mut selected_platform: Option<u8> = None;
+    let mut fw_filename: Option<String> = None;
+
         selected_platform = None;
         selected_model = None;
         selected_mcu = None;
