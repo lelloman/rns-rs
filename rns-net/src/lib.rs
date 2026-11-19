@@ -5,6 +5,7 @@
 //! Local interfaces, persists identity and known destinations.
 
 // Test code is outside the code-quality lints' scope.
+#![warn(missing_docs)]
 #![cfg_attr(test, allow(unsafe_code, clippy::undocumented_unsafe_blocks))]
 // Builds with only some of the built-in interfaces (rns-tun-android uses just
 // TCP, UDP and Auto) leave parts of the shared socket, writer and event-loop
@@ -88,6 +89,7 @@ pub mod discovery;
 /// UDP hole punching for direct links: endpoint probing, punching, and the
 /// point-to-point interface over the punched socket.
 pub mod holepunch;
+/// Hook events for consumers on a Unix socket.
 #[cfg(feature = "hooks")]
 pub mod provider_bridge;
 

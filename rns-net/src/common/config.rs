@@ -274,14 +274,21 @@ pub struct ReticulumSection {
     pub backbone_peer_pool_failure_window: u64,
     /// Cooldown duration for failed discovered pooled Backbone peers, in seconds.
     pub backbone_peer_pool_cooldown: u64,
+    /// Run the provider bridge for hook events (`provider_bridge`).
     #[cfg(feature = "hooks")]
     pub provider_bridge: bool,
+    /// Its socket (`provider_socket_path`); default `provider.sock` in the
+    /// config directory.
     #[cfg(feature = "hooks")]
     pub provider_socket_path: Option<String>,
+    /// Most events it queues (`provider_queue_max_events`).
     #[cfg(feature = "hooks")]
     pub provider_queue_max_events: usize,
+    /// Most bytes it queues (`provider_queue_max_bytes`).
     #[cfg(feature = "hooks")]
     pub provider_queue_max_bytes: usize,
+    /// What a full queue drops (`provider_overflow_policy`): `drop_oldest`,
+    /// else the newest event.
     #[cfg(feature = "hooks")]
     pub provider_overflow_policy: String,
 }
