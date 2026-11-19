@@ -1,8 +1,8 @@
 //! Upstream's `RNS.log` lines and Python's exception texts, for the
 //! messages upstream's utilities print to stdout through them.
 
-#![allow(unsafe_code, reason = "OS calls through libc")]
 
+use crate::sys::home_of;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 pub const LOG_NONE: i32 = -1;
@@ -279,14 +279,9 @@ fn timestamp() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as libc::time_t)
         .unwrap_or(0);
-    // SAFETY: `libc::tm` is a plain C struct of integers plus a nullable `tm_zone` pointer;
-    // all-zero bytes are a valid value.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    // SAFETY: `now` and `tm` are live locals; the reentrant `localtime_r` only reads `now` and
-    // writes into `tm`, using no shared static buffer.
-    if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() {
+    let Some(tm) = crate::sys::localtime(now) else {
         return String::new();
-    }
+    };
     format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
         tm.tm_year + 1900,
@@ -406,41 +401,6 @@ pub fn expanduser(path: &str) -> String {
         "/".into()
     } else {
         joined
-    }
-}
-
-/// The user's home directory from the password database. Uses the
-/// reentrant lookup: other threads may be resolving users too.
-fn home_of(user: &str) -> Option<String> {
-    let name = std::ffi::CString::new(user).ok()?;
-    let mut buf = vec![0 as libc::c_char; 1024];
-    loop {
-        // SAFETY: an all-zero passwd is a valid value for these plain C
-        // fields; getpwnam_r fills it, pointing into `buf`.
-        let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
-        let mut found: *mut libc::passwd = std::ptr::null_mut();
-        // SAFETY: every pointer is valid for the call and `buf.len()` is
-        // the buffer's real size.
-        let rc = unsafe {
-            libc::getpwnam_r(
-                name.as_ptr(),
-                &mut entry,
-                buf.as_mut_ptr(),
-                buf.len(),
-                &mut found,
-            )
-        };
-        if rc == libc::ERANGE && buf.len() < 1 << 20 {
-            buf.resize(buf.len() * 2, 0);
-            continue;
-        }
-        if rc != 0 || found.is_null() || entry.pw_dir.is_null() {
-            return None;
-        }
-        // SAFETY: on success pw_dir points to a NUL-terminated string in
-        // `buf`, which is alive here.
-        let dir = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) };
-        return Some(dir.to_string_lossy().into_owned());
     }
 }
 

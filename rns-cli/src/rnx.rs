@@ -1218,12 +1218,10 @@ fn execute_request(data: &[u8], cancel: &AtomicBool, remote: Option<[u8; 16]>) -
 }
 
 fn terminate_process_group(pid: libc::pid_t, child: &mut std::process::Child) {
-    // SAFETY: `kill` takes no pointers. `pid` is the child spawned with `setsid`, so it leads its
-    // own process group, and it is not reaped yet (the caller just saw `try_wait` return no
-    // status and only `child` reaps it), so `-pid` still names that group.
-    unsafe {
-        libc::kill(-pid, libc::SIGTERM);
-    }
+    // `pid` is the child spawned with `setsid`, so it leads its own process
+    // group, and it is not reaped yet (the caller just saw `try_wait` return
+    // no status and only `child` reaps it), so `-pid` still names that group.
+    crate::sys::kill(-pid, libc::SIGTERM);
     let until = Instant::now() + Duration::from_millis(500);
     while Instant::now() < until {
         if child.try_wait().ok().flatten().is_some() {
@@ -1231,11 +1229,9 @@ fn terminate_process_group(pid: libc::pid_t, child: &mut std::process::Child) {
         }
         thread::sleep(Duration::from_millis(20));
     }
-    // SAFETY: `kill` takes no pointers. The loop above returns as soon as `try_wait` reaps the
-    // child, so it is still unreaped here and `-pid` still names its process group.
-    unsafe {
-        libc::kill(-pid, libc::SIGKILL);
-    }
+    // The loop above returns as soon as `try_wait` reaps the child, so it is
+    // still unreaped here and `-pid` still names its process group.
+    crate::sys::kill(-pid, libc::SIGKILL);
 }
 
 fn read_bounded(mut reader: impl Read, limit: usize) -> (Vec<u8>, u64) {

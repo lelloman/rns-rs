@@ -4,7 +4,6 @@
 //! (progress lines, messages, `RNS.log` lines on stdout), exit codes,
 //! identity location, allowed identities, fetch jail and saved file names.
 
-#![allow(unsafe_code, reason = "OS calls through libc")]
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -376,12 +375,7 @@ fn checked_save_path(save: &str) -> Result<String, (i32, &'static str)> {
     if !Path::new(&sp).is_dir() {
         return Err((3, "Output directory not found"));
     }
-    let writable = std::ffi::CString::new(sp.clone())
-        // SAFETY: `c` is a NUL-terminated CString that outlives the call; `access` only reads the
-        // path.
-        .map(|c| unsafe { libc::access(c.as_ptr(), libc::W_OK) } == 0)
-        .unwrap_or(false);
-    if !writable {
+    if !crate::sys::is_writable(&sp) {
         return Err((4, "Output directory not writable"));
     }
     Ok(sp)

@@ -1,6 +1,5 @@
 //! The listener: accepting links and running commands for them.
 
-#![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
 
 use super::*;
 
@@ -610,18 +609,7 @@ pub(super) fn listen(opts: CliOptions) -> Result<(), RnshError> {
 /// The login shell of the user running rnsh (`pwd.getpwuid(os.getuid())
 /// .pw_shell`).
 pub(super) fn login_shell() -> Option<String> {
-    // SAFETY: getpwuid returns a pointer into static storage, read at once.
-    unsafe {
-        let entry = libc::getpwuid(libc::getuid());
-        if entry.is_null() || (*entry).pw_shell.is_null() {
-            return None;
-        }
-        Some(
-            std::ffi::CStr::from_ptr((*entry).pw_shell)
-                .to_string_lossy()
-                .into_owned(),
-        )
-    }
+    crate::sys::login_shell()
 }
 
 /// Python's `shlex.join`.
