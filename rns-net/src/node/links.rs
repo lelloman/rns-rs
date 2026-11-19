@@ -309,7 +309,6 @@ impl RnsNode {
         response_rx
             .recv()
             .map_err(|_| ChannelSendError::Unavailable)?
-            .map_err(ChannelSendError::from)
     }
 
     /// Propose a direct P2P connection to a peer via NAT hole punching.

@@ -4651,7 +4651,7 @@ fn test_channel_proof_reopens_send_window() {
     let err = init_mgr
         .send_channel_message(&link_id, 42, b"third", &mut rng)
         .expect_err("third send should hit the initial channel window");
-    assert_eq!(err, "Channel is not ready to send");
+    assert_eq!(err, crate::ChannelSendError::NotReady);
 
     let queued_packets = init_mgr
         .links
@@ -5254,7 +5254,7 @@ fn test_send_channel_message_on_no_channel() {
     let err = mgr
         .send_channel_message(&link_id, 1, b"test", &mut rng)
         .expect_err("pending link should reject channel send");
-    assert_eq!(err, "link has no active channel");
+    assert_eq!(err, crate::ChannelSendError::NoChannel);
 }
 
 #[test]

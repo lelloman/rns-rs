@@ -4,7 +4,6 @@
 //! (progress lines, messages, `RNS.log` lines on stdout), exit codes,
 //! identity location, allowed identities, fetch jail and saved file names.
 
-
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;

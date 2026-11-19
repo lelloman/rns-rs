@@ -380,10 +380,6 @@ impl Driver {
         self.accepting_work.store(false, Ordering::Release);
     }
 
-    pub(crate) fn drain_error(&self, op: &str) -> String {
-        format!("cannot {} while node is draining", op)
-    }
-
     pub(crate) fn drain_status(&self) -> DrainStatus {
         let now = Instant::now();
         let active_links = self.link_manager.link_count();

@@ -547,7 +547,7 @@ impl Driver {
                 } => {
                     if self.is_draining() {
                         self.reject_new_work("send channel message");
-                        let _ = response_tx.send(Err(self.drain_error("send channel message")));
+                        let _ = response_tx.send(Err(crate::ChannelSendError::Unavailable));
                         continue;
                     }
                     match self.link_manager.send_channel_message(

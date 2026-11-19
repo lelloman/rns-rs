@@ -413,7 +413,7 @@ pub enum Event<W: Send> {
         link_id: [u8; 16],
         msgtype: u16,
         payload: Vec<u8>,
-        response_tx: mpsc::Sender<Result<(), String>>,
+        response_tx: mpsc::Sender<Result<(), crate::ChannelSendError>>,
     },
     /// Wake the driver after outbound writer capacity changes.
     LinkWriterReady,

@@ -53,7 +53,7 @@ impl RnshTransport for FakeTransport {
                         0.0,
                         rns_core::constants::LINK_MDU,
                     )
-                    .map_err(|error| RnshError::from(ChannelSendError::from(error.to_string())))?;
+                    .map_err(|error| RnshError::from(ChannelSendError::from(error)))?;
             }
         }
         self.sent
@@ -226,17 +226,13 @@ fn listener_process_exit_sends_eof_and_status_before_removal() {
 #[test]
 fn channel_send_error_preserves_backpressure() {
     assert_eq!(
-        ChannelSendError::from(rns_core::channel::ChannelError::NotReady.to_string()),
+        ChannelSendError::from(rns_core::channel::ChannelError::NotReady),
         ChannelSendError::NotReady
     );
     assert_eq!(
-        ChannelSendError::from("unknown link".to_string()),
-        ChannelSendError::Rejected("unknown link".to_string())
+        ChannelSendError::from(rns_core::channel::ChannelError::MessageTooBig),
+        ChannelSendError::MessageTooBig
     );
-    assert!(matches!(
-        ChannelSendError::from(rns_core::channel::ChannelError::MessageTooBig.to_string()),
-        ChannelSendError::Rejected(_)
-    ));
 }
 
 #[test]

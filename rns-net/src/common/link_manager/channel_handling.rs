@@ -8,15 +8,15 @@ impl LinkManager {
         msgtype: u16,
         payload: &[u8],
         rng: &mut dyn Rng,
-    ) -> Result<Vec<LinkManagerAction>, String> {
+    ) -> Result<Vec<LinkManagerAction>, crate::ChannelSendError> {
         let link = match self.links.get_mut(link_id) {
             Some(l) => l,
-            None => return Err("unknown link".to_string()),
+            None => return Err(crate::ChannelSendError::UnknownLink),
         };
 
         let channel = match link.channel {
             Some(ref mut ch) => ch,
-            None => return Err("link has no active channel".to_string()),
+            None => return Err(crate::ChannelSendError::NoChannel),
         };
 
         let link_mdu = link.engine.mdu();
@@ -37,7 +37,7 @@ impl LinkManager {
                         link.channel_send_other_error += 1;
                     }
                 }
-                return Err(e.to_string());
+                return Err(e.into());
             }
         };
 
