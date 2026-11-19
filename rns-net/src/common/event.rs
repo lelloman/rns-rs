@@ -37,6 +37,44 @@ pub type ResponseRequestHandler =
 pub type DeferredRequestHandler =
     dyn Fn([u8; 16], &str, [u8; 16], &[u8], Option<&RequestRemoteIdentity>) + Send;
 
+/// Why loading, reloading, unloading or configuring a hook failed. It
+/// displays as the message the RPC and control API report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HookOpError {
+    /// The node was built without hooks.
+    NotEnabled,
+    /// The node has no hook manager.
+    NoManager,
+    /// No hook point has this name.
+    UnknownPoint(String),
+    /// No hook of this name is attached at this point.
+    NotFound { name: String, point: String },
+    /// The hook type names no backend this node has.
+    Backend(String),
+    /// The hook's module did not compile.
+    Compile(String),
+    /// The hook could not be loaded.
+    Load(String),
+}
+
+impl fmt::Display for HookOpError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HookOpError::NotEnabled => f.write_str("hooks not enabled"),
+            HookOpError::NoManager => f.write_str("hook manager not available"),
+            HookOpError::UnknownPoint(point) => write!(f, "unknown hook point '{point}'"),
+            HookOpError::NotFound { name, point } => {
+                write!(f, "hook '{name}' not found at point '{point}'")
+            }
+            HookOpError::Backend(error) => f.write_str(error),
+            HookOpError::Compile(error) => write!(f, "compile error: {error}"),
+            HookOpError::Load(error) => write!(f, "load error: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for HookOpError {}
+
 /// Why a best-effort link datagram could not be admitted by the node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkDatagramError {
@@ -470,7 +508,7 @@ pub enum Event<W: Send> {
         wasm_bytes: Vec<u8>,
         attach_point: String,
         priority: i32,
-        response_tx: mpsc::Sender<Result<(), String>>,
+        response_tx: mpsc::Sender<Result<(), HookOpError>>,
     },
     /// Load a hook from a server-local filesystem path at runtime.
     LoadHookFile {
@@ -479,7 +517,7 @@ pub enum Event<W: Send> {
         hook_type: String,
         attach_point: String,
         priority: i32,
-        response_tx: mpsc::Sender<Result<(), String>>,
+        response_tx: mpsc::Sender<Result<(), HookOpError>>,
     },
     /// Load a registered built-in hook by ID at runtime.
     LoadBuiltinHook {
@@ -487,20 +525,20 @@ pub enum Event<W: Send> {
         builtin_id: String,
         attach_point: String,
         priority: i32,
-        response_tx: mpsc::Sender<Result<(), String>>,
+        response_tx: mpsc::Sender<Result<(), HookOpError>>,
     },
     /// Unload a hook at runtime.
     UnloadHook {
         name: String,
         attach_point: String,
-        response_tx: mpsc::Sender<Result<(), String>>,
+        response_tx: mpsc::Sender<Result<(), HookOpError>>,
     },
     /// Reload an in-memory WASM hook at runtime (detach + recompile + reattach with same priority).
     ReloadHook {
         name: String,
         attach_point: String,
         wasm_bytes: Vec<u8>,
-        response_tx: mpsc::Sender<Result<(), String>>,
+        response_tx: mpsc::Sender<Result<(), HookOpError>>,
     },
     /// Reload a hook from a server-local filesystem path at runtime.
     ReloadHookFile {
@@ -508,28 +546,28 @@ pub enum Event<W: Send> {
         attach_point: String,
         path: String,
         hook_type: String,
-        response_tx: mpsc::Sender<Result<(), String>>,
+        response_tx: mpsc::Sender<Result<(), HookOpError>>,
     },
     /// Reload a registered built-in hook by ID at runtime.
     ReloadBuiltinHook {
         name: String,
         attach_point: String,
         builtin_id: String,
-        response_tx: mpsc::Sender<Result<(), String>>,
+        response_tx: mpsc::Sender<Result<(), HookOpError>>,
     },
     /// Enable or disable a loaded hook at runtime.
     SetHookEnabled {
         name: String,
         attach_point: String,
         enabled: bool,
-        response_tx: mpsc::Sender<Result<(), String>>,
+        response_tx: mpsc::Sender<Result<(), HookOpError>>,
     },
     /// Update the priority of a loaded hook at runtime.
     SetHookPriority {
         name: String,
         attach_point: String,
         priority: i32,
-        response_tx: mpsc::Sender<Result<(), String>>,
+        response_tx: mpsc::Sender<Result<(), HookOpError>>,
     },
     /// List all loaded hooks.
     ListHooks {

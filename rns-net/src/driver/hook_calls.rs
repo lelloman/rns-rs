@@ -1,6 +1,8 @@
 //! Calling hooks from the driver and forwarding their side effects.
 
 use super::*;
+#[cfg(feature = "hooks")]
+use crate::event::HookOpError;
 
 impl Driver {
     #[cfg(feature = "hooks")]
@@ -49,17 +51,20 @@ impl Driver {
         name: &str,
         attach_point: &str,
         mut update: F,
-    ) -> Result<(), String>
+    ) -> Result<(), HookOpError>
     where
         F: FnMut(&mut rns_hooks::LoadedProgram),
     {
         let point_idx = crate::config::parse_hook_point(attach_point)
-            .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
+            .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
         let program = self.hook_slots[point_idx]
             .programs
             .iter_mut()
             .find(|program| program.name == name)
-            .ok_or_else(|| format!("hook '{}' not found at point '{}'", name, attach_point))?;
+            .ok_or_else(|| HookOpError::NotFound {
+                name: name.to_string(),
+                point: attach_point.to_string(),
+            })?;
         update(program);
         Ok(())
     }

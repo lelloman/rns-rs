@@ -83,7 +83,7 @@ pub(super) fn handle_load_hook(
         with_node(node, |n| {
             match n.load_hook(name, wasm_bytes, attach_point, priority) {
                 Ok(Ok(())) => HttpResponse::ok(json!({"status": "loaded"})),
-                Ok(Err(e)) => HttpResponse::bad_request(&e),
+                Ok(Err(e)) => HttpResponse::bad_request(&e.to_string()),
                 Err(_) => HttpResponse::internal_error("Driver unavailable"),
             }
         })
@@ -96,7 +96,7 @@ pub(super) fn handle_load_hook(
         with_node(node, |n| {
             match n.load_builtin_hook(name, builtin_id, attach_point, priority) {
                 Ok(Ok(())) => HttpResponse::ok(json!({"status": "loaded"})),
-                Ok(Err(e)) => HttpResponse::bad_request(&e),
+                Ok(Err(e)) => HttpResponse::bad_request(&e.to_string()),
                 Err(_) => HttpResponse::internal_error("Driver unavailable"),
             }
         })
@@ -108,7 +108,7 @@ pub(super) fn handle_load_hook(
         with_node(node, |n| {
             match n.load_hook_file(name, path, hook_type, attach_point, priority) {
                 Ok(Ok(())) => HttpResponse::ok(json!({"status": "loaded"})),
-                Ok(Err(e)) => HttpResponse::bad_request(&e),
+                Ok(Err(e)) => HttpResponse::bad_request(&e.to_string()),
                 Err(_) => HttpResponse::internal_error("Driver unavailable"),
             }
         })
@@ -132,7 +132,7 @@ pub(super) fn handle_unload_hook(req: &HttpRequest, node: &NodeHandle) -> HttpRe
 
     with_node(node, |n| match n.unload_hook(name, attach_point) {
         Ok(Ok(())) => HttpResponse::ok(json!({"status": "unloaded"})),
-        Ok(Err(e)) => HttpResponse::bad_request(&e),
+        Ok(Err(e)) => HttpResponse::bad_request(&e.to_string()),
         Err(_) => HttpResponse::internal_error("Driver unavailable"),
     })
 }
@@ -175,7 +175,7 @@ pub(super) fn handle_reload_hook(
         with_node(node, |n| {
             match n.reload_hook(name, attach_point, wasm_bytes) {
                 Ok(Ok(())) => HttpResponse::ok(json!({"status": "reloaded"})),
-                Ok(Err(e)) => HttpResponse::bad_request(&e),
+                Ok(Err(e)) => HttpResponse::bad_request(&e.to_string()),
                 Err(_) => HttpResponse::internal_error("Driver unavailable"),
             }
         })
@@ -188,7 +188,7 @@ pub(super) fn handle_reload_hook(
         with_node(node, |n| {
             match n.reload_builtin_hook(name, attach_point, builtin_id) {
                 Ok(Ok(())) => HttpResponse::ok(json!({"status": "reloaded"})),
-                Ok(Err(e)) => HttpResponse::bad_request(&e),
+                Ok(Err(e)) => HttpResponse::bad_request(&e.to_string()),
                 Err(_) => HttpResponse::internal_error("Driver unavailable"),
             }
         })
@@ -200,7 +200,7 @@ pub(super) fn handle_reload_hook(
         with_node(node, |n| {
             match n.reload_hook_file(name, attach_point, path, hook_type) {
                 Ok(Ok(())) => HttpResponse::ok(json!({"status": "reloaded"})),
-                Ok(Err(e)) => HttpResponse::bad_request(&e),
+                Ok(Err(e)) => HttpResponse::bad_request(&e.to_string()),
                 Err(_) => HttpResponse::internal_error("Driver unavailable"),
             }
         })
@@ -231,7 +231,7 @@ pub(super) fn handle_set_hook_enabled(
             Ok(Ok(())) => HttpResponse::ok(json!({
                 "status": if enabled { "enabled" } else { "disabled" }
             })),
-            Ok(Err(e)) => HttpResponse::bad_request(&e),
+            Ok(Err(e)) => HttpResponse::bad_request(&e.to_string()),
             Err(_) => HttpResponse::internal_error("Driver unavailable"),
         }
     })
@@ -259,7 +259,7 @@ pub(super) fn handle_set_hook_priority(req: &HttpRequest, node: &NodeHandle) -> 
     with_node(node, |n| {
         match n.set_hook_priority(name, attach_point, priority) {
             Ok(Ok(())) => HttpResponse::ok(json!({"status": "priority_updated"})),
-            Ok(Err(e)) => HttpResponse::bad_request(&e),
+            Ok(Err(e)) => HttpResponse::bad_request(&e.to_string()),
             Err(_) => HttpResponse::internal_error("Driver unavailable"),
         }
     })

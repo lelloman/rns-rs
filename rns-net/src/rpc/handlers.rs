@@ -1015,7 +1015,7 @@ pub(super) fn required_string(request: &PickleValue, key: &str) -> io::Result<St
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("missing {}", key)))
 }
 
-pub(super) fn hook_result_to_pickle(result: Result<(), String>) -> PickleValue {
+pub(super) fn hook_result_to_pickle(result: Result<(), crate::event::HookOpError>) -> PickleValue {
     match result {
         Ok(()) => PickleValue::Dict(vec![(
             PickleValue::String("ok".into()),
@@ -1025,7 +1025,7 @@ pub(super) fn hook_result_to_pickle(result: Result<(), String>) -> PickleValue {
             (PickleValue::String("ok".into()), PickleValue::Bool(false)),
             (
                 PickleValue::String("error".into()),
-                PickleValue::String(error),
+                PickleValue::String(error.to_string()),
             ),
         ]),
     }
