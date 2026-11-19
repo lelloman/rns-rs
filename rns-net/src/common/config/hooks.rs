@@ -69,6 +69,7 @@ pub fn parse_hook_point(s: &str) -> Option<usize> {
     }
 }
 
+/// The hook backend a hook's `type` names.
 #[cfg(feature = "hooks")]
 pub fn parse_hook_backend(s: &str) -> Result<rns_hooks::HookBackend, String> {
     s.parse()

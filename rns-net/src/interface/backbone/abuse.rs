@@ -385,6 +385,7 @@ impl BackbonePeerMonitor {
         true
     }
 
+    /// Set a peer's state as a status entry reports it, for tests.
     #[cfg(test)]
     pub fn seed_entry(&mut self, entry: BackbonePeerStateEntry) {
         let mut state = PeerBehaviorState::new();

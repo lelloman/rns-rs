@@ -35,19 +35,30 @@ fn lock_consumer_state<'a>(
     }
 }
 
+/// What a full queue does with one more event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverflowPolicy {
+    /// Drop the new event.
     DropNewest,
+    /// Drop queued events, oldest first, until the new one fits.
     DropOldest,
 }
 
+/// Settings of the provider bridge.
 #[derive(Debug, Clone)]
 pub struct ProviderBridgeConfig {
+    /// Whether the bridge runs.
     pub enabled: bool,
+    /// The Unix socket consumers connect to.
     pub socket_path: PathBuf,
+    /// Most events held for a consumer, or before any connects.
     pub queue_max_events: usize,
+    /// Most bytes of encoded events held for a consumer, or before any
+    /// connects; a larger event is dropped.
     pub queue_max_bytes: usize,
+    /// What a full queue does with one more event.
     pub overflow_policy: OverflowPolicy,
+    /// The node's instance name, carried in every event.
     pub node_instance: String,
 }
 
@@ -64,33 +75,52 @@ impl Default for ProviderBridgeConfig {
     }
 }
 
+/// One message to a consumer, as framed on the socket (postcard).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderEnvelope {
+    /// Format version; 1.
     pub version: u16,
+    /// The bridge's message sequence number, shared by all consumers.
     pub seq: u64,
+    /// What the message carries.
     pub message: ProviderMessage,
 }
 
+/// What a [`ProviderEnvelope`] carries.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ProviderMessage {
+    /// An event a hook emitted.
     Event(HookProviderEventEnvelope),
-    DroppedEvents { count: u64 },
+    /// Events dropped for this consumer since the last message.
+    DroppedEvents {
+        /// How many.
+        count: u64,
+    },
 }
 
+/// An event a hook emitted, with where it came from.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HookProviderEventEnvelope {
+    /// When the bridge took it, in milliseconds since the Unix epoch.
     pub ts_unix_ms: u64,
+    /// The node's instance name.
     pub node_instance: String,
+    /// The hook that emitted it.
     pub hook_name: String,
+    /// The hook point the hook is attached to.
     pub attach_point: String,
+    /// The hook's name for the payload's format.
     pub payload_type: String,
+    /// The event as the hook encoded it.
     pub payload: Vec<u8>,
 }
 
+/// `envelope` as it is framed on the socket.
 pub fn encode_provider_envelope(envelope: &ProviderEnvelope) -> Result<Vec<u8>, postcard::Error> {
     postcard::to_allocvec(envelope)
 }
 
+/// The envelope in `buf`, as [`encode_provider_envelope`] writes it.
 pub fn decode_provider_envelope(buf: &[u8]) -> Result<ProviderEnvelope, postcard::Error> {
     postcard::from_bytes(buf)
 }
@@ -177,6 +207,8 @@ impl ConsumerShared {
     }
 }
 
+/// Hands the events hooks emit to consumers connected to a Unix socket,
+/// queueing them per consumer within the configured limits.
 pub struct ProviderBridge {
     shared: Arc<BridgeShared>,
     io: BridgeIo,
@@ -280,6 +312,8 @@ fn bind(config: ProviderBridgeConfig) -> io::Result<(UnixListener, Arc<BridgeSha
 }
 
 impl ProviderBridge {
+    /// Send an event a hook emitted to every consumer, or hold it until one
+    /// connects.
     pub fn emit_event(
         &self,
         attach_point: &str,
@@ -328,10 +362,12 @@ impl ProviderBridge {
         self.flush_folded();
     }
 
+    /// Most events held per queue.
     pub fn queue_max_events(&self) -> usize {
         lock_bridge_state(&self.shared).queue_max_events
     }
 
+    /// Change the most events held per queue, for every consumer.
     pub fn set_queue_max_events(&self, value: usize) {
         let consumers = {
             let mut state = lock_bridge_state(&self.shared);
@@ -347,10 +383,12 @@ impl ProviderBridge {
         }
     }
 
+    /// Most bytes held per queue.
     pub fn queue_max_bytes(&self) -> usize {
         lock_bridge_state(&self.shared).queue_max_bytes
     }
 
+    /// Change the most bytes held per queue, for every consumer.
     pub fn set_queue_max_bytes(&self, value: usize) {
         let consumers = {
             let mut state = lock_bridge_state(&self.shared);
@@ -366,6 +404,7 @@ impl ProviderBridge {
         }
     }
 
+    /// Counters of the bridge and its consumers.
     pub fn stats(&self) -> ProviderBridgeStats {
         let (
             connected,
@@ -429,6 +468,7 @@ impl ProviderBridge {
         }
     }
 
+    /// Take no more consumers; those connected stay.
     pub fn stop_accepting(&self) {
         let mut state = lock_bridge_state(&self.shared);
         if !state.accepting {
