@@ -21,8 +21,6 @@ pub struct ResourceTransferId(pub u64);
 pub enum ResourceTransferError {
     /// Reading the outgoing source failed or it was longer than declared.
     Source(String),
-    /// Storage failure. Nothing in this crate reports it.
-    Storage(String),
     /// The link or the Resource protocol failed the transfer.
     Protocol(String),
     /// The transfer was cancelled: its link went inactive, every transfer

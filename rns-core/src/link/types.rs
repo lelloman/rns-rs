@@ -129,8 +129,6 @@ pub enum LinkError {
     CryptoError,
     /// No session key has been derived yet.
     NoSessionKey,
-    /// Handshake failed; not produced within this crate.
-    HandshakeFailed,
 }
 
 impl fmt::Display for LinkError {
@@ -142,7 +140,6 @@ impl fmt::Display for LinkError {
             LinkError::UnsupportedMode => write!(f, "Unsupported link mode"),
             LinkError::CryptoError => write!(f, "Cryptographic error"),
             LinkError::NoSessionKey => write!(f, "No session key established"),
-            LinkError::HandshakeFailed => write!(f, "Handshake failed"),
         }
     }
 }

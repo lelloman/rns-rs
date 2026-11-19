@@ -161,8 +161,6 @@ pub enum ResourceError {
     TooLarge,
     /// Receiver gave up after too many retries.
     MaxRetriesExceeded,
-    /// Msgpack encoding or decoding failed; not produced within this crate.
-    MsgpackError,
     /// Operation is not valid in the current transfer state, or local assembly failed.
     InvalidState,
     /// No collision-free part hashmap was found within the retry limit.
@@ -184,7 +182,6 @@ impl fmt::Display for ResourceError {
             ResourceError::Rejected => write!(f, "Resource rejected"),
             ResourceError::TooLarge => write!(f, "Resource too large"),
             ResourceError::MaxRetriesExceeded => write!(f, "Max retries exceeded"),
-            ResourceError::MsgpackError => write!(f, "Msgpack error"),
             ResourceError::InvalidState => write!(f, "Invalid resource state"),
             ResourceError::CollisionDetected => write!(f, "Hashmap collision detected"),
             ResourceError::PartCountMismatch => {
