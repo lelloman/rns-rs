@@ -31,7 +31,9 @@ pub(crate) type Registry = Arc<Mutex<HashMap<[u8; 16], Arc<LocalRatchets>>>>;
 /// leaves the owner blocked until recovery or reopening succeeds. Assign a store
 /// exclusively to one owner; share that owner's Arc for concurrent users.
 pub trait LocalRatchetStore: Send + Sync {
+    /// The last saved snapshot, or `None` when nothing was saved yet.
     fn load(&self) -> io::Result<Option<Vec<u8>>>;
+    /// Replace the stored snapshot with `data`.
     fn save(&self, data: &[u8]) -> io::Result<()>;
 }
 
@@ -58,6 +60,9 @@ pub struct FileRatchetStore {
     _lock: File,
 }
 impl FileRatchetStore {
+    /// Open the store at `path`, creating missing parent directories and
+    /// taking an exclusive lock on `<path>.lock`. Fails with `WouldBlock`
+    /// when another owner holds the lock, and always fails off Unix.
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         let parent = path
@@ -189,6 +194,7 @@ impl std::fmt::Debug for LocalRatchets {
     }
 }
 impl LocalRatchets {
+    /// [`with_store`](Self::with_store) over a [`FileRatchetStore`] at `path`.
     pub fn persistent(
         destination: &crate::Destination,
         identity: Identity,
@@ -200,6 +206,9 @@ impl LocalRatchets {
             Arc::new(FileRatchetStore::open(path)?),
         )
     }
+    /// The ratchet owner of `destination`, an IN SINGLE destination of
+    /// `identity`, which must hold its private key. Loads the history from
+    /// `store`, or starts empty, and saves it back at once.
     pub fn with_store(
         destination: &crate::Destination,
         identity: Identity,
@@ -254,12 +263,15 @@ impl LocalRatchets {
         }
         Ok(owner)
     }
+    /// Hash of the destination these ratchets belong to.
     pub fn destination_hash(&self) -> [u8; 16] {
         self.destination
     }
+    /// Hash of the destination's identity.
     pub fn identity_hash(&self) -> [u8; 16] {
         *self.identity.hash()
     }
+    /// Set the time between rotations, in seconds; zero is rejected.
     pub fn set_interval(&self, seconds: u64) -> io::Result<()> {
         if seconds == 0 {
             return Err(io::Error::new(
@@ -270,6 +282,8 @@ impl LocalRatchets {
         lock_or_recover(&self.state, "local ratchet state").interval = seconds;
         Ok(())
     }
+    /// Set how many ratchet keys are kept, `1..=MAX_RETAINED`, pruning and
+    /// saving the history at once.
     pub fn set_retained(&self, count: usize) -> io::Result<()> {
         if !(1..=MAX_RETAINED).contains(&count) {
             return Err(io::Error::new(
@@ -308,9 +322,13 @@ impl LocalRatchets {
         state.blocked = false;
         Ok(())
     }
+    /// Reject from now on any message not encrypted to a ratchet, instead
+    /// of falling back to the identity key.
     pub fn enforce(&self) {
         lock_or_recover(&self.state, "local ratchet state").enforce = true;
     }
+    /// Decrypt `ciphertext` with the retained ratchets, newest first, then
+    /// with the identity key unless [`enforce`](Self::enforce) was called.
     pub fn decrypt(
         &self,
         ciphertext: &[u8],
@@ -339,11 +357,13 @@ impl LocalRatchets {
             .current_public()
             .ok_or_else(|| invalid("missing ratchet"))
     }
+    /// Public key of the newest ratchet, if any.
     pub fn current_public(&self) -> Option<[u8; 32]> {
         lock_or_recover(&self.state, "local ratchet state")
             .ring
             .current_public()
     }
+    /// Whether the private key of the ratchet with this public key is still kept.
     pub fn retains(&self, public: &[u8; 32]) -> bool {
         lock_or_recover(&self.state, "local ratchet state")
             .ring

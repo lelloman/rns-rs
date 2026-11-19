@@ -71,6 +71,7 @@ enum RpcCodec {
 /// RPC address types.
 #[derive(Debug, Clone)]
 pub enum RpcAddr {
+    /// A TCP server at this host and port.
     Tcp(String, u16),
     /// The RPC server of the local shared instance named `instance_name`.
     /// A client reaches it as upstream's do on Linux, on the abstract socket
@@ -80,7 +81,9 @@ pub enum RpcAddr {
     /// one of the two: the abstract socket (`RpcServer::start_abstract_unix`)
     /// where it can, else TCP.
     Local {
+        /// The shared instance's name.
         instance_name: String,
+        /// The TCP port used where the abstract socket is not available.
         port: u16,
     },
 }

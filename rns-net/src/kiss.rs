@@ -2,20 +2,34 @@
 //!
 //! Matches Python `KISSInterface.py` KISS encoding/decoding.
 
+/// Frame end: delimits KISS frames.
 pub const FEND: u8 = 0xC0;
+/// Frame escape: starts a two-byte escape sequence.
 pub const FESC: u8 = 0xDB;
+/// Follows `FESC` to encode a literal `FEND` byte.
 pub const TFEND: u8 = 0xDC;
+/// Follows `FESC` to encode a literal `FESC` byte.
 pub const TFESC: u8 = 0xDD;
 
+/// Data frame carrying a packet.
 pub const CMD_DATA: u8 = 0x00;
+/// Set TX delay (preamble), in units of 10 ms.
 pub const CMD_TXDELAY: u8 = 0x01;
+/// Set CSMA persistence (0-255).
 pub const CMD_P: u8 = 0x02;
+/// Set CSMA slot time, in units of 10 ms.
 pub const CMD_SLOTTIME: u8 = 0x03;
+/// Set TX tail, in units of 10 ms.
 pub const CMD_TXTAIL: u8 = 0x04;
+/// Set full-duplex mode (standard KISS command; unused here).
 pub const CMD_FULLDUPLEX: u8 = 0x05;
+/// Hardware-specific command (standard KISS command; unused here).
 pub const CMD_SETHARDWARE: u8 = 0x06;
+/// Flow control: the TNC is ready for the next packet.
 pub const CMD_READY: u8 = 0x0F;
+/// Exit KISS mode (standard KISS command; unused here).
 pub const CMD_RETURN: u8 = 0xFF;
+/// Decoder placeholder for "no command byte read yet".
 pub const CMD_UNKNOWN: u8 = 0xFE;
 
 /// Escape data for KISS framing.
@@ -101,6 +115,7 @@ pub struct Decoder {
 }
 
 impl Decoder {
+    /// Create a decoder outside any frame.
     pub fn new() -> Self {
         Decoder {
             in_frame: false,

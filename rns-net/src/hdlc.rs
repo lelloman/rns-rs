@@ -153,7 +153,9 @@ pub struct Decoder {
 /// Complete frames and non-empty frames rejected by configured size bounds.
 #[derive(Debug, Eq, PartialEq)]
 pub struct DecodeBatch<F = Vec<u8>> {
+    /// Decoded frames, in arrival order.
     pub frames: Vec<F>,
+    /// Lengths, in bytes, of non-empty frames dropped for being outside the size bounds.
     pub invalid_frame_lengths: Vec<usize>,
 }
 
@@ -191,6 +193,8 @@ impl DecodedFrame for PacketBytes {
 }
 
 impl Decoder {
+    /// Create a decoder whose frames must be at least `HEADER_MINSIZE`
+    /// bytes; an unfinished frame is discarded past 64 KiB of wire bytes.
     pub fn new() -> Self {
         Self::with_limits(HEADER_MINSIZE, 64 * 1024)
     }
@@ -200,6 +204,9 @@ impl Decoder {
         Self::with_limits(min_frame_size, 64 * 1024)
     }
 
+    /// Create a decoder that drops frames shorter than `min_frame_size`
+    /// bytes and discards an unfinished frame once it spans more than
+    /// `max_buffer_size` wire bytes (at least 2).
     pub fn with_limits(min_frame_size: usize, max_buffer_size: usize) -> Self {
         Decoder {
             frame: Vec::new(),

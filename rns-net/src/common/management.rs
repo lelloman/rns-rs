@@ -154,12 +154,14 @@ impl BuiltinDestination {
         f(&aspects)
     }
 
+    /// The destination hash under the identity with `identity_hash`.
     pub fn dest_hash(self, identity_hash: &[u8; 16]) -> [u8; 16] {
         self.with_aspects(identity_hash, |aspects| {
             destination_hash("rnstransport", aspects, Some(identity_hash))
         })
     }
 
+    /// The name hash of the destination's full name.
     pub fn name_hash(self, identity_hash: &[u8; 16]) -> [u8; 10] {
         self.with_aspects(identity_hash, |aspects| {
             rns_core::destination::name_hash("rnstransport", aspects)
@@ -177,6 +179,7 @@ impl BuiltinDestination {
         })
     }
 
+    /// Short name used in log lines.
     pub fn label(self) -> &'static str {
         match self {
             BuiltinDestination::RemoteManagement => "management destination",

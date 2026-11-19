@@ -28,23 +28,37 @@ use rns_core::stamp::StampCost;
 /// Parsed RNS configuration.
 #[derive(Debug, Clone)]
 pub struct RnsConfig {
+    /// The `[reticulum]` section.
     pub reticulum: ReticulumSection,
+    /// The `[logging]` section.
     pub logging: LoggingSection,
+    /// The `[stamps]` section.
     pub stamps: StampsSection,
+    /// The `[filter]` section.
     pub filter: FilterSection,
+    /// Each `[[subsection]]` of `[interfaces]`, in file order.
     pub interfaces: Vec<ParsedInterface>,
+    /// Each `[[subsection]]` of `[hooks]`, in file order.
     pub hooks: Vec<ParsedHook>,
 }
 
 /// A parsed hook from `[[subsection]]` within `[hooks]`.
 #[derive(Debug, Clone)]
 pub struct ParsedHook {
+    /// The subsection name.
     pub name: String,
+    /// `path`: the hook program file; empty when not given.
     pub path: String,
+    /// `type` (or `backend`): the hook backend; defaults to `native` when the
+    /// `rns-hooks-native` feature is on, else `wasm`.
     pub hook_type: String,
+    /// `builtin` (or `builtin_id`, `id`): the built-in hook to use.
     pub builtin_id: Option<String>,
+    /// `attach_point`: the hook point name, as [`parse_hook_point`] reads it.
     pub attach_point: String,
+    /// `priority`; 0 when missing or not an integer.
     pub priority: i32,
+    /// `enabled`; true when missing or not a boolean.
     pub enabled: bool,
 }
 
@@ -65,25 +79,48 @@ pub enum AutoconnectPolicy {
 /// The `[reticulum]` section.
 #[derive(Debug, Clone)]
 pub struct ReticulumSection {
+    /// `enable_transport`: route traffic for other nodes.
     pub enable_transport: bool,
     /// Inbound packets whose hop count reaches this limit are dropped and
     /// counted as `hop_limiter_hits`: `[filter] hop_limiter`, clamped to
     /// `0..=PATHFINDER_M` (upstream 01aef5bc), so 0 drops every packet.
     pub hop_limiter: u8,
+    /// `static_transport_identity`: use the persistent node identity as the
+    /// transport identity even when transport is off, instead of an
+    /// ephemeral one.
     pub static_transport_identity: bool,
+    /// `local_hops_delta`: write a random hop count of 2 to 7, chosen at
+    /// startup, into packets forwarded from local clients; off keeps their
+    /// hop count.
     pub local_hops_delta: bool,
+    /// `share_instance`: run as, or attach to, a shared instance.
     pub share_instance: bool,
     /// Allow local shared-instance clients to attach, detach, and reload interfaces.
     pub enable_interface_management: bool,
+    /// `instance_name`: names the shared instance's Unix sockets.
     pub instance_name: String,
+    /// `shared_instance_port`: the TCP port of the shared instance.
     pub shared_instance_port: u16,
+    /// `instance_control_port`: the TCP port of the shared instance RPC.
     pub instance_control_port: u16,
+    /// `panic_on_interface_error`: fail startup when an interface fails to
+    /// start, instead of logging it and going on.
     pub panic_on_interface_error: bool,
+    /// `use_implicit_proof`; parsed and kept, not read elsewhere.
     pub use_implicit_proof: bool,
+    /// `network_identity`: path of the network identity file, created when
+    /// missing.
     pub network_identity: Option<String>,
+    /// `respond_to_probes`: answer probes on the probe destination; only
+    /// takes effect with transport enabled.
     pub respond_to_probes: bool,
+    /// `enable_remote_management`: register the remote management
+    /// destination.
     pub enable_remote_management: bool,
+    /// `remote_management_allowed`: hex identity hashes allowed to use remote
+    /// management, as written in the comma-separated list.
     pub remote_management_allowed: Vec<String>,
+    /// `publish_blackhole`: serve this instance's blackhole list to others.
     pub publish_blackhole: bool,
     /// Transport identity hashes whose published blackhole lists this
     /// instance fetches and applies (`blackhole_sources`).
@@ -104,7 +141,10 @@ pub struct ReticulumSection {
     /// The bitrate the shared instance interface reports
     /// (`force_shared_instance_bitrate`), in bits per second.
     pub force_shared_instance_bitrate: Option<u64>,
+    /// `probe_port`: the UDP port to run a probe server on.
     pub probe_port: Option<u16>,
+    /// `probe_addr`: comma-separated `ip:port` addresses of probe servers
+    /// used for endpoint discovery.
     pub probe_addr: Option<String>,
     /// Protocol for endpoint discovery: "rnsp" (default) or "stun".
     pub probe_protocol: Option<String>,
@@ -482,7 +522,10 @@ impl StampsSection {
 /// The `[logging]` section.
 #[derive(Debug, Clone)]
 pub struct LoggingSection {
+    /// `loglevel`, 0 to [`LOG_EXTREME`](crate::logging::LOG_EXTREME) as
+    /// upstream's levels; default 4.
     pub loglevel: u8,
+    /// `logtimestamps`: prefix log lines with a timestamp.
     pub logtimestamps: bool,
 }
 
@@ -498,27 +541,43 @@ impl Default for LoggingSection {
 /// A parsed interface from `[[subsection]]` within `[interfaces]`.
 #[derive(Debug, Clone)]
 pub struct ParsedInterface {
+    /// The subsection name.
     pub name: String,
+    /// `type`, such as `TCPClientInterface`; empty when missing.
     pub interface_type: String,
+    /// True when `interface_enabled` or `enabled` is true.
     pub enabled: bool,
+    /// `interface_mode` (or `mode`); `full` when missing.
     pub mode: String,
+    /// The remaining keys, unparsed.
     pub params: HashMap<String, String>,
+    /// The nested `[[[subinterface]]]` sections.
     pub subinterfaces: Vec<ParsedSubinterface>,
 }
 
 /// A `[[[subinterface]]]` nested under an interface section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedSubinterface {
+    /// The subsection name.
     pub name: String,
+    /// Its keys, unparsed.
     pub params: HashMap<String, String>,
 }
 
 /// Configuration parse error.
 #[derive(Debug, Clone)]
 pub enum ConfigError {
+    /// The config file could not be read.
     Io(String),
+    /// The file is not valid ConfigObj.
     Parse(String),
-    InvalidValue { key: String, value: String },
+    /// A key has a value of the wrong form.
+    InvalidValue {
+        /// The key.
+        key: String,
+        /// The value as written.
+        value: String,
+    },
 }
 
 impl fmt::Display for ConfigError {

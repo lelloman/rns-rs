@@ -13,12 +13,16 @@ pub const IFAC_SALT: [u8; 32] = [
     0x3e, 0x73, 0x33, 0x91, 0xb2, 0xa0, 0xf5, 0x3f, 0x41, 0x6d, 0x9f, 0x90, 0x7e, 0x55, 0xcf, 0xf8,
 ];
 
+/// Smallest access code length, in bytes; smaller configured sizes are raised to it.
 pub const IFAC_MIN_SIZE: usize = 1;
 
 /// Pre-computed IFAC state for an interface.
 pub struct IfacState {
+    /// Length of the access code carried in each packet, in bytes.
     pub size: usize,
+    /// The 64-byte key derived from the network name and passphrase.
     pub key: [u8; 64],
+    /// The identity made from `key`, which signs outgoing packets.
     pub identity: Identity,
     /// The configured `network_name`, as upstream reports it.
     pub netname: Option<String>,

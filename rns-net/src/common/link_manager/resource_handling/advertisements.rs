@@ -389,6 +389,8 @@ impl LinkManager {
         actions
     }
 
+    /// Set how the link delivers incoming Resources. Unknown links are
+    /// ignored.
     pub fn set_resource_receive_mode(&mut self, link_id: &LinkId, mode: ResourceReceiveMode) {
         if let Some(link) = self.links.get_mut(link_id) {
             link.resource_receive_mode = mode;

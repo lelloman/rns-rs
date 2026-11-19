@@ -28,16 +28,26 @@ pub use crate::common::event::{
 /// Concrete Event type using boxed sync Writer.
 pub type Event = crate::common::event::Event<Box<dyn crate::interface::Writer>>;
 
+/// Default capacity, in events, of the control queue and of the inbound data queue.
 pub const DEFAULT_EVENT_QUEUE_CAPACITY: usize = 1024;
+/// Default capacity, in frames, of the inbound announce queue.
 pub const DEFAULT_ANNOUNCE_QUEUE_CAPACITY: usize = 128;
+/// Default capacity, in frames, of the inbound path request queue.
 pub const DEFAULT_PATH_REQUEST_QUEUE_CAPACITY: usize = 128;
+/// Default capacity, in frames, of the inbound ingress-limited queue.
 pub const DEFAULT_INGRESS_LIMITED_QUEUE_CAPACITY: usize = 8;
 
+/// Capacities, in frames, of the per-class queues for received frames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InboundQueueCapacities {
+    /// Frames that are neither announces nor path requests.
     pub data: usize,
+    /// Announces.
     pub announce: usize,
+    /// Path requests.
     pub path_request: usize,
+    /// Announces and path requests from an interface whose ingress burst
+    /// limiting for that kind is active.
     pub ingress_limited: usize,
 }
 
@@ -747,6 +757,9 @@ impl EventSender {
         result
     }
 
+    /// Enqueue `event`, waiting while its queue is full; a received
+    /// announce or path request finding its queue full is dropped instead.
+    /// Fails only when the receiver is gone.
     #[allow(clippy::result_large_err)]
     pub fn send(&self, event: Event) -> Result<(), std::sync::mpsc::SendError<Event>> {
         self.enqueue(event, true, true)
@@ -758,6 +771,8 @@ impl EventSender {
             })
     }
 
+    /// Enqueue `event` without waiting; fails with `Full` when its queue is
+    /// full.
     #[allow(clippy::result_large_err)]
     pub fn try_send(&self, event: Event) -> Result<(), std::sync::mpsc::TrySendError<Event>> {
         self.enqueue(event, false, false)
@@ -1117,6 +1132,7 @@ impl EventReceiver {
         }
     }
 
+    /// Blocking receive. While waiting it serves loop sources.
     pub fn recv(&self) -> Result<Event, std::sync::mpsc::RecvError> {
         self.recv_classified().map(|received| received.event)
     }
@@ -1137,6 +1153,7 @@ impl EventReceiver {
         }
     }
 
+    /// Take the next event if one is queued, without waiting.
     pub fn try_recv(&self) -> Result<Event, std::sync::mpsc::TryRecvError> {
         if let Some(event) = self.prefetched.borrow_mut().pop_front() {
             return Ok(event.event);
@@ -1154,6 +1171,7 @@ impl EventReceiver {
         }
     }
 
+    /// Receive, waiting at most `timeout` and serving loop sources meanwhile.
     pub fn recv_timeout(
         &self,
         timeout: Duration,
@@ -1181,6 +1199,7 @@ impl EventReceiver {
     }
 }
 
+/// An event queue with the default capacities.
 pub fn channel() -> (EventSender, EventReceiver) {
     channel_with_queue_capacities(
         DEFAULT_EVENT_QUEUE_CAPACITY,
@@ -1188,6 +1207,8 @@ pub fn channel() -> (EventSender, EventReceiver) {
     )
 }
 
+/// An event queue whose control and data queues hold `capacity` events;
+/// the other inbound queues hold at most their default capacity.
 pub fn channel_with_capacity(capacity: usize) -> (EventSender, EventReceiver) {
     let capacity = capacity.max(1);
     channel_with_queue_capacities(

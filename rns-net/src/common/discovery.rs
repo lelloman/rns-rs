@@ -18,30 +18,51 @@ use super::time;
 // Constants (matching Python Discovery.py)
 // ============================================================================
 
-/// Discovery field IDs for msgpack encoding
+/// Discovery field key: the advertised interface name. The keys below
+/// index the msgpack map of a discovery announce, as upstream's.
 pub const NAME: u8 = 0xFF;
+/// Discovery field key: the announcing node's transport identity hash.
 pub const TRANSPORT_ID: u8 = 0xFE;
+/// Discovery field key: the announcing implementation's name.
 pub const TRANSPORT_IMPL: u8 = 0xFD;
+/// Discovery field key: the announcing implementation's version.
 pub const TRANSPORT_VERS: u8 = 0xFC;
 /// Announce stamp cost required on the announced interface (9b464382).
 pub const DST_COST: u8 = 0xFB;
 /// Path request stamp cost required on the announced interface (9b464382).
 pub const PR_COST: u8 = 0xFA;
+/// Discovery field key: the interface type, such as `BackboneInterface`.
 pub const INTERFACE_TYPE: u8 = 0x00;
+/// Discovery field key: whether the announcing node has transport enabled.
 pub const TRANSPORT: u8 = 0x01;
+/// Discovery field key: the IP address or hostname the interface is
+/// reachable on.
 pub const REACHABLE_ON: u8 = 0x02;
+/// Discovery field key: latitude, decimal degrees.
 pub const LATITUDE: u8 = 0x03;
+/// Discovery field key: longitude, decimal degrees.
 pub const LONGITUDE: u8 = 0x04;
+/// Discovery field key: height, meters.
 pub const HEIGHT: u8 = 0x05;
+/// Discovery field key: the port to connect to.
 pub const PORT: u8 = 0x06;
+/// Discovery field key: the IFAC network name.
 pub const IFAC_NETNAME: u8 = 0x07;
+/// Discovery field key: the IFAC passphrase.
 pub const IFAC_NETKEY: u8 = 0x08;
+/// Discovery field key: radio frequency, Hz.
 pub const FREQUENCY: u8 = 0x09;
+/// Discovery field key: radio bandwidth, Hz.
 pub const BANDWIDTH: u8 = 0x0A;
+/// Discovery field key: LoRa spreading factor.
 pub const SPREADINGFACTOR: u8 = 0x0B;
+/// Discovery field key: LoRa coding rate.
 pub const CODINGRATE: u8 = 0x0C;
+/// Discovery field key: modulation name.
 pub const MODULATION: u8 = 0x0D;
+/// Discovery field key: radio channel.
 pub const CHANNEL: u8 = 0x0E;
+/// Discovery field key: the operator's 16-byte LXMF address.
 pub const OP_ADDR: u8 = 0xF0;
 
 /// Flag of an announce whose payload is encrypted to the network identity.
@@ -139,10 +160,15 @@ pub struct DiscoveryConfig {
 /// `discovery_modulation` of a KISS or Weave interface.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DiscoveryRadio {
+    /// Frequency, Hz.
     pub frequency: Option<u64>,
+    /// Bandwidth, Hz.
     pub bandwidth: Option<u64>,
+    /// LoRa spreading factor; RNode only.
     pub spreading_factor: Option<u64>,
+    /// LoRa coding rate; RNode only.
     pub coding_rate: Option<u64>,
+    /// Modulation name; KISS and Weave only.
     pub modulation: Option<String>,
 }
 
@@ -153,8 +179,11 @@ pub struct DiscoveryRadio {
 /// Status of a discovered interface
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiscoveredStatus {
+    /// Heard within [`THRESHOLD_UNKNOWN`].
     Available,
+    /// Last heard more than [`THRESHOLD_UNKNOWN`] ago.
     Unknown,
+    /// Last heard more than [`THRESHOLD_STALE`] ago.
     Stale,
 }
 
@@ -183,8 +212,9 @@ impl DiscoveredStatus {
 pub struct DiscoveredInterface {
     /// Interface type (e.g., "BackboneInterface", "TCPServerInterface", "RNodeInterface")
     pub interface_type: String,
-    /// Implementation and version advertised by the announcing stack.
+    /// Implementation name advertised by the announcing stack.
     pub impl_name: Option<String>,
+    /// Implementation version advertised by the announcing stack.
     pub impl_version: Option<String>,
     /// Whether the announcing node has transport enabled
     pub transport: bool,
@@ -210,37 +240,54 @@ pub struct DiscoveredInterface {
     pub hops: u8,
 
     // Optional location info
+    /// Latitude, decimal degrees.
     pub latitude: Option<f64>,
+    /// Longitude, decimal degrees.
     pub longitude: Option<f64>,
+    /// Height, meters.
     pub height: Option<f64>,
     /// Optional 16-byte LXMF destination hash advertised by the operator.
     pub operator_lxmf_address: Option<[u8; 16]>,
 
     // Connection info
+    /// IP address or hostname the interface is reachable on.
     pub reachable_on: Option<String>,
+    /// Port to connect to.
     pub port: Option<u16>,
 
     // RNode/RF specific
+    /// Radio frequency, Hz.
     pub frequency: Option<u32>,
+    /// Radio bandwidth, Hz.
     pub bandwidth: Option<u32>,
+    /// LoRa spreading factor.
     pub spreading_factor: Option<u8>,
+    /// LoRa coding rate.
     pub coding_rate: Option<u8>,
+    /// Modulation name.
     pub modulation: Option<String>,
+    /// Radio channel.
     pub channel: Option<u8>,
 
     // IFAC info
+    /// IFAC network name, when published.
     pub ifac_netname: Option<String>,
+    /// IFAC passphrase, when published.
     pub ifac_netkey: Option<String>,
 
     // Auto-generated config entry
+    /// A config file section that connects to this interface, generated
+    /// from the announce.
     pub config_entry: Option<String>,
 
     /// Hash for storage key (SHA256 of transport_id + name)
     pub discovery_hash: [u8; 32],
 
-    /// Announce and path request stamp costs the interface requires, when
-    /// announced (upstream 9b464382 `dst_cost` / `pr_cost`, quantized).
+    /// Announce stamp cost the interface requires, when announced
+    /// (upstream 9b464382 `dst_cost`, quantized).
     pub dst_cost: Option<StampCost>,
+    /// Path request stamp cost the interface requires, when announced
+    /// (upstream 9b464382 `pr_cost`, quantized).
     pub pr_cost: Option<StampCost>,
 }
 
@@ -281,6 +328,8 @@ impl Default for DiscoveryStampCache {
 }
 
 impl DiscoveryStampCache {
+    /// A cache holding up to `capacity` valid and `capacity` invalid
+    /// payloads; 0 caches nothing.
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             capacity,
@@ -332,19 +381,23 @@ impl DiscoveryStampCache {
         self.invalid_entries.insert(payload_hash);
     }
 
+    /// Number of invalid payloads held.
     pub fn invalid_len(&self) -> usize {
         self.invalid_order.len()
     }
 
+    /// Number of valid payloads held.
     pub fn valid_len(&self) -> usize {
         self.valid_order.len()
     }
 
+    /// Whether `app_data`'s payload is cached as having an invalid stamp.
     pub fn contains_invalid_app_data(&self, app_data: &[u8]) -> bool {
         Self::payload_hash(app_data)
             .is_some_and(|payload_hash| self.contains_invalid_hash(&payload_hash))
     }
 
+    /// Whether `app_data`'s payload is cached as having a valid stamp.
     pub fn contains_valid_app_data(&self, app_data: &[u8]) -> bool {
         Self::payload_hash(app_data)
             .is_some_and(|payload_hash| self.valid_entries.contains_key(&payload_hash))

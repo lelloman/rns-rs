@@ -8,39 +8,71 @@ use crate::kiss;
 
 // ── RNode KISS command bytes ────────────────────────────────────────────
 
+/// Set or report the radio frequency (4 bytes, big-endian, Hz).
 pub const CMD_FREQUENCY: u8 = 0x01;
+/// Set or report the radio bandwidth (4 bytes, big-endian, Hz).
 pub const CMD_BANDWIDTH: u8 = 0x02;
+/// Set or report the TX power (1 byte, dBm).
 pub const CMD_TXPOWER: u8 = 0x03;
+/// Set or report the LoRa spreading factor.
 pub const CMD_SF: u8 = 0x04;
+/// Set or report the LoRa coding rate.
 pub const CMD_CR: u8 = 0x05;
+/// Set or report the radio state (`RADIO_STATE_OFF` / `RADIO_STATE_ON`).
 pub const CMD_RADIO_STATE: u8 = 0x06;
+/// Radio lock state report, as upstream's `CMD_RADIO_LOCK`.
 pub const CMD_RADIO_LOCK: u8 = 0x07;
+/// Device detection; the request carries `DETECT_REQ`, the reply `DETECT_RESP`.
 pub const CMD_DETECT: u8 = 0x08;
+/// Tell the device the host is leaving (sent with value `0xFF`).
 pub const CMD_LEAVE: u8 = 0x0A;
+/// Set or report the short-term airtime limit (percent * 100, 2 bytes big-endian).
 pub const CMD_ST_ALOCK: u8 = 0x0B;
+/// Set or report the long-term airtime limit (percent * 100, 2 bytes big-endian).
 pub const CMD_LT_ALOCK: u8 = 0x0C;
+/// Flow control: the device is ready for the next packet.
 pub const CMD_READY: u8 = 0x0F;
+/// Select the subinterface that following commands apply to.
 pub const CMD_SEL_INT: u8 = 0x1F;
+/// RSSI of the last received packet (raw byte, RSSI plus 157).
 pub const CMD_STAT_RSSI: u8 = 0x23;
+/// SNR of the last received packet (signed, in 0.25 dB steps).
 pub const CMD_STAT_SNR: u8 = 0x24;
+/// Channel airtime, load and noise statistics.
 pub const CMD_STAT_CHTM: u8 = 0x25;
+/// Radio PHY timing parameters.
 pub const CMD_STAT_PHYPRM: u8 = 0x26;
+/// Battery state and charge percent.
 pub const CMD_STAT_BAT: u8 = 0x27;
+/// CSMA contention window parameters.
 pub const CMD_STAT_CSMA: u8 = 0x28;
+/// Device temperature.
 pub const CMD_STAT_TEMP: u8 = 0x29;
+/// Random byte from the device, as upstream's `CMD_RANDOM`.
 pub const CMD_RANDOM: u8 = 0x40;
+/// Device platform byte.
 pub const CMD_PLATFORM: u8 = 0x48;
+/// Device MCU byte.
 pub const CMD_MCU: u8 = 0x49;
+/// Firmware version (major, minor).
 pub const CMD_FW_VERSION: u8 = 0x50;
+/// Detailed firmware version string (upstream's `CMD_ROM_READ`, same byte).
 pub const CMD_FW_DETAIL: u8 = 0x51;
+/// Reset the device, as upstream's `CMD_RESET`.
 pub const CMD_RESET: u8 = 0x55;
+/// Subinterface list query; each reply carries an index and a type byte.
 pub const CMD_INTERFACES: u8 = 0x71;
+/// Error report from the device (1-byte error code).
 pub const CMD_ERROR: u8 = 0x90;
 
+/// Value sent with `CMD_DETECT` to probe for an RNode.
 pub const DETECT_REQ: u8 = 0x73;
+/// Value an RNode answers `CMD_DETECT` with.
 pub const DETECT_RESP: u8 = 0x46;
 
+/// `CMD_RADIO_STATE` value: radio off.
 pub const RADIO_STATE_OFF: u8 = 0x00;
+/// `CMD_RADIO_STATE` value: radio on.
 pub const RADIO_STATE_ON: u8 = 0x01;
 
 // Subinterface data command bytes (from RNodeMultiInterface.py)
@@ -84,17 +116,32 @@ fn data_cmd_to_index(cmd: u8) -> Option<usize> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum RNodeEvent {
     /// A data frame was received on the given subinterface.
-    DataFrame { index: usize, data: Vec<u8> },
+    DataFrame {
+        /// Subinterface index.
+        index: usize,
+        /// Unescaped frame payload.
+        data: Vec<u8>,
+    },
     /// Device detection response.
     Detected(bool),
     /// Firmware version reported.
-    FirmwareVersion { major: u8, minor: u8 },
+    FirmwareVersion {
+        /// Major version.
+        major: u8,
+        /// Minor version.
+        minor: u8,
+    },
     /// Platform byte reported.
     Platform(u8),
     /// MCU byte reported.
     Mcu(u8),
     /// Interface type for a given index.
-    InterfaceType { index: u8, type_byte: u8 },
+    InterfaceType {
+        /// Subinterface index.
+        index: u8,
+        /// Raw radio type byte reported by the device.
+        type_byte: u8,
+    },
     /// Reported frequency (Hz).
     Frequency(u32),
     /// Reported bandwidth (Hz).
@@ -115,33 +162,54 @@ pub enum RNodeEvent {
     /// hundredths of a percent, RSSI values plus 157 (interference 0xFF:
     /// none).
     ChannelStats {
+        /// Short-term airtime, percent * 100.
         airtime_short: u16,
+        /// Long-term airtime, percent * 100.
         airtime_long: u16,
+        /// Short-term channel load, percent * 100.
         channel_load_short: u16,
+        /// Long-term channel load, percent * 100.
         channel_load_long: u16,
+        /// Current RSSI, dBm plus 157.
         current_rssi: u8,
+        /// Noise floor, dBm plus 157.
         noise_floor: u8,
+        /// Interference level, dBm plus 157; 0xFF means none.
         interference: u8,
     },
     /// Radio timing (`CMD_STAT_PHYPRM`): symbol time in µs, symbol rate,
     /// preamble in symbols and ms, CSMA slot and DIFS in ms.
     PhyStats {
+        /// Symbol time in microseconds.
         symbol_time_us: u16,
+        /// Symbol rate in baud.
         symbol_rate: u16,
+        /// Preamble length in symbols.
         preamble_symbols: u16,
+        /// Preamble length in milliseconds.
         preamble_ms: u16,
+        /// CSMA slot time in milliseconds.
         csma_slot_ms: u16,
+        /// DIFS in milliseconds.
         difs_ms: u16,
     },
     /// CSMA contention window (`CMD_STAT_CSMA`): band and bounds in slots.
     CsmaStats {
+        /// Contention window band.
         band: u8,
+        /// Lower bound of the window, in slots.
         window_min: u8,
+        /// Upper bound of the window, in slots.
         window_max: u8,
     },
     /// Battery (`CMD_STAT_BAT`): state (0 unknown, 1 discharging,
     /// 2 charging, 3 charged) and percent.
-    Battery { state: u8, percent: u8 },
+    Battery {
+        /// 0 unknown, 1 discharging, 2 charging, 3 charged.
+        state: u8,
+        /// Charge in percent.
+        percent: u8,
+    },
     /// Device temperature (`CMD_STAT_TEMP`), °C plus 120.
     Temperature(u8),
     /// Reported short-term airtime lock (percent * 100).
@@ -174,6 +242,7 @@ pub struct RNodeDecoder {
 }
 
 impl RNodeDecoder {
+    /// Create a decoder outside any frame, with subinterface 0 selected.
     pub fn new() -> Self {
         RNodeDecoder {
             in_frame: false,

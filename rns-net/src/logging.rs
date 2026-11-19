@@ -10,14 +10,23 @@ pub const NOTICE_TARGET: &str = "rns::notice";
 /// Log target for `info!` records that upstream would log at `LOG_INFO`.
 pub const INFO_TARGET: &str = "rns::info";
 
+/// Reticulum log level `LOG_CRITICAL` (critical), as upstream's `RNS.LOG_CRITICAL`.
 pub const LOG_CRITICAL: u8 = 0;
+/// Reticulum log level `LOG_ERROR` (error), as upstream's `RNS.LOG_ERROR`.
 pub const LOG_ERROR: u8 = 1;
+/// Reticulum log level `LOG_WARNING` (warning), as upstream's `RNS.LOG_WARNING`.
 pub const LOG_WARNING: u8 = 2;
+/// Reticulum log level `LOG_NOTICE` (notice), as upstream's `RNS.LOG_NOTICE`.
 pub const LOG_NOTICE: u8 = 3;
+/// Reticulum log level `LOG_INFO` (info), as upstream's `RNS.LOG_INFO`.
 pub const LOG_INFO: u8 = 4;
+/// Reticulum log level `LOG_VERBOSE` (verbose), as upstream's `RNS.LOG_VERBOSE`.
 pub const LOG_VERBOSE: u8 = 5;
+/// Reticulum log level `LOG_DEBUG` (debug), as upstream's `RNS.LOG_DEBUG`.
 pub const LOG_DEBUG: u8 = 6;
+/// Reticulum log level `LOG_PATHING` (pathing), as upstream's `RNS.LOG_PATHING`.
 pub const LOG_PATHING: u8 = 7;
+/// Reticulum log level `LOG_EXTREME` (extreme), as upstream's `RNS.LOG_EXTREME`.
 pub const LOG_EXTREME: u8 = 8;
 
 /// Runtime level for authenticated link path rebalancing events.
