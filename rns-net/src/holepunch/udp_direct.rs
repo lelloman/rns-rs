@@ -131,8 +131,11 @@ pub(crate) fn carries_link(frame: &[u8], link_id: &[u8; 16]) -> bool {
 
 /// What a direct interface needs to know about its upgrade.
 pub struct DirectPathParams {
+    /// Link the path carries; only frames of this link pass.
     pub link_id: [u8; 16],
+    /// Hole punching session, carried in keepalives.
     pub session_id: [u8; 16],
+    /// Key that authenticates keepalives.
     pub keepalive_key: [u8; 32],
     /// Set to make the path silently drop everything in both directions,
     /// as a network that stopped carrying it would (for tests).

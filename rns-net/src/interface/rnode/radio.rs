@@ -50,6 +50,7 @@ pub fn estimate_lora_bitrate_bps(sub: &RNodeSubConfig) -> u64 {
     (symbols_per_second * bits_per_symbol).round().max(1.0) as u64
 }
 
+/// LoRa airtime parameters of a subinterface, for airtime estimates.
 pub fn lora_airtime_profile(sub: &RNodeSubConfig) -> AirtimeProfile {
     AirtimeProfile::Lora {
         bandwidth: sub.bandwidth,

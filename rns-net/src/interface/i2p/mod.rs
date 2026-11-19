@@ -40,7 +40,9 @@ const RECONNECT_WAIT: Duration = Duration::from_secs(15);
 /// Configuration for the I2P interface.
 #[derive(Debug, Clone)]
 pub struct I2pConfig {
+    /// Interface name.
     pub name: String,
+    /// ID of the interface; peers get dynamic IDs of their own.
     pub interface_id: InterfaceId,
     /// SAM bridge host (default "127.0.0.1").
     pub sam_host: String,
@@ -52,8 +54,11 @@ pub struct I2pConfig {
     pub connectable: bool,
     /// Directory for key persistence (typically `{config_dir}/storage`).
     pub storage_dir: PathBuf,
+    /// Ingress control of the peers; set from the interface's config at start.
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
+    /// Socket mark for connections to the SAM bridge; set from the start context.
     pub underlay_mark: Option<u32>,
+    /// Live settings the interface reads, which can be changed while it runs.
     pub runtime: Arc<Mutex<I2pRuntime>>,
     /// The state of this interface's own endpoint, which interface
     /// statistics report.
@@ -66,6 +71,7 @@ pub struct I2pConfig {
 /// connections; one that is not connectable stays offline.
 #[derive(Debug, Clone, Default)]
 pub struct I2pEndpoint {
+    /// Whether the session accepts connections.
     pub online: bool,
     /// `{base32}.b32.i2p`.
     pub b32: Option<String>,
@@ -116,12 +122,16 @@ impl I2pEndpoint {
     }
 }
 
+/// Live runtime settings of an I2P interface.
 #[derive(Debug, Clone)]
 pub struct I2pRuntime {
+    /// Wait before an outbound peer retries after a failed lookup, a failed
+    /// connection or a disconnect; 15 seconds at start.
     pub reconnect_wait: Duration,
 }
 
 impl I2pRuntime {
+    /// The settings an interface starts with.
     pub fn from_config(_config: &I2pConfig) -> Self {
         Self {
             reconnect_wait: RECONNECT_WAIT,
@@ -129,10 +139,15 @@ impl I2pRuntime {
     }
 }
 
+/// Handle the driver keeps to read and change an I2P interface's runtime
+/// settings.
 #[derive(Debug, Clone)]
 pub struct I2pRuntimeConfigHandle {
+    /// Interface name.
     pub interface_name: String,
+    /// Live settings.
     pub runtime: Arc<Mutex<I2pRuntime>>,
+    /// Settings at start, restored on reset.
     pub startup: I2pRuntime,
 }
 

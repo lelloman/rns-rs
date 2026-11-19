@@ -26,11 +26,17 @@ const HW_MTU: usize = 262_144;
 /// Configuration for a TCP server interface.
 #[derive(Debug, Clone)]
 pub struct TcpServerConfig {
+    /// Interface name from the config section.
     pub name: String,
+    /// Address to listen on (`listen_ip`, default `0.0.0.0`).
     pub listen_ip: String,
+    /// TCP port to listen on (`listen_port`, default 4242).
     pub listen_port: u16,
+    /// Interface ID of the server interface.
     pub interface_id: InterfaceId,
+    /// Cap on simultaneous client connections (`max_connections`); `None` is unlimited.
     pub max_connections: Option<usize>,
+    /// Ingress control given to each accepted client; set from the start context.
     pub ingress_control: IngressControlConfig,
     /// Bitrate of accepted clients; it also selects their hardware MTU tier.
     pub bitrate: Option<u64>,
@@ -40,15 +46,19 @@ pub struct TcpServerConfig {
     /// long instead of at the end of the driver's pass (`flush_after_us`;
     /// see [`super::DEFAULT_FLUSH_AFTER`]).
     pub flush_after: Option<Duration>,
+    /// Settings shared with the running interface, adjustable at runtime.
     pub runtime: Arc<Mutex<TcpServerRuntime>>,
 }
 
+/// TCP server settings that can be changed while it runs.
 #[derive(Debug, Clone)]
 pub struct TcpServerRuntime {
+    /// Cap on simultaneous client connections; `None` is unlimited.
     pub max_connections: Option<usize>,
 }
 
 impl TcpServerRuntime {
+    /// Runtime settings taken from `config`.
     pub fn from_config(config: &TcpServerConfig) -> Self {
         Self {
             max_connections: config.max_connections,
@@ -56,10 +66,14 @@ impl TcpServerRuntime {
     }
 }
 
+/// Driver-side handle to a running TCP server's runtime settings.
 #[derive(Debug, Clone)]
 pub struct TcpServerRuntimeConfigHandle {
+    /// Name of the TCP server interface.
     pub interface_name: String,
+    /// Live settings shared with the interface.
     pub runtime: Arc<Mutex<TcpServerRuntime>>,
+    /// Settings at startup, reported as the defaults.
     pub startup: TcpServerRuntime,
 }
 

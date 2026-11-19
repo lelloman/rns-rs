@@ -50,6 +50,7 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 /// Host callback used where every Reticulum underlay socket must be explicitly
 /// excluded from an application VPN, notably Android `VpnService.protect()`.
 pub trait SocketProtector: Send + Sync {
+    /// Exclude the socket `fd` from the VPN before it is used.
     fn protect(&self, fd: std::os::unix::io::RawFd) -> io::Result<()>;
 }
 
@@ -68,6 +69,10 @@ pub struct SocketProtectorGuard {
     protector: Arc<dyn SocketProtector>,
 }
 
+/// Install `protector` for every underlay socket the process opens from now on.
+///
+/// Fails with [`io::ErrorKind::AlreadyExists`] while another guard is alive.
+/// Dropping the returned guard uninstalls the protector.
 pub fn install_socket_protector(
     protector: Arc<dyn SocketProtector>,
 ) -> io::Result<SocketProtectorGuard> {
@@ -221,6 +226,7 @@ pub fn validate_underlay_mark(mark: Option<u32>) -> io::Result<()> {
 ///
 /// Each implementation wraps a socket + framing.
 pub trait Writer: Send {
+    /// Write one frame to the interface.
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()>;
 
     /// Write one frame without silently dropping it. WouldBlock means the
@@ -267,6 +273,7 @@ pub trait Writer: Send {
     /// input, so frames from one pass leave in as few writes as possible.
     fn flush_pending(&mut self) {}
 
+    /// Write several frames in order, stopping at the first error.
     fn send_frames(&mut self, frames: &[crate::interface::FrameBytes]) -> io::Result<()> {
         for frame in frames {
             self.send_frame(frame)?;
@@ -321,6 +328,7 @@ pub trait Writer: Send {
     #[doc(hidden)]
     fn tick(&mut self) {}
 
+    /// Release the interface as it is torn down.
     fn shutdown(&mut self) {}
 }
 
@@ -350,6 +358,7 @@ impl std::hash::Hasher for InterfaceIdHasher {
 pub type InterfaceMap<V> =
     HashMap<InterfaceId, V, std::hash::BuildHasherDefault<InterfaceIdHasher>>;
 
+/// Default number of frames an async writer queue holds.
 pub const DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY: usize = 256;
 
 /// Longest time a producer waits for a busy async writer to free queue space
@@ -561,6 +570,7 @@ pub(crate) fn tcp_hardware_mtu(bitrate: Option<u64>, fixed_mtu: Option<u32>) -> 
 
 pub(crate) use crate::sync::lock_or_recover;
 
+/// Stop handle shared between the driver and an interface's background threads.
 #[derive(Clone, Default)]
 pub struct ListenerControl {
     stop: Arc<AtomicBool>,
@@ -573,6 +583,7 @@ pub struct ListenerControl {
 }
 
 impl ListenerControl {
+    /// Create a control with no stop requested.
     pub fn new() -> Self {
         Self {
             stop: Arc::new(AtomicBool::new(false)),
@@ -605,6 +616,7 @@ impl ListenerControl {
         }
     }
 
+    /// Ask the interface's threads to stop and wake a waiting listener.
     pub fn request_stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(running) = &self.running {
@@ -622,6 +634,7 @@ impl ListenerControl {
         // listener's own check before it first waits.
     }
 
+    /// Whether a stop has been requested.
     pub fn should_stop(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
     }
@@ -671,6 +684,7 @@ impl Writer for UnavailableWriter {
     }
 }
 
+/// Shared counters of an interface writer wrapped by [`wrap_async_writer`].
 #[derive(Clone, Default)]
 pub struct AsyncWriterMetrics {
     queued_frames: Arc<AtomicUsize>,
@@ -694,10 +708,12 @@ impl AsyncWriterMetrics {
         condvar.notify_all();
     }
 
+    /// Frames waiting in the async queue.
     pub fn queued_frames(&self) -> usize {
         self.queued_frames.load(Ordering::Relaxed)
     }
 
+    /// False once the writer worker has stopped or failed to start.
     pub fn worker_alive(&self) -> bool {
         self.worker_alive.load(Ordering::Relaxed)
     }
@@ -710,6 +726,8 @@ impl AsyncWriterMetrics {
             .unwrap_or(0)
     }
 
+    /// Frames dropped by egress control: over the byte limit, out of byte
+    /// budget, or sent while the peer was stalled.
     pub fn tx_drops(&self) -> u64 {
         self.egress_control
             .as_ref()
@@ -717,6 +735,7 @@ impl AsyncWriterMetrics {
             .unwrap_or(0)
     }
 
+    /// Encoded bytes of the frames counted by [`Self::tx_drops`].
     pub fn tx_dropped_bytes(&self) -> u64 {
         self.egress_control
             .as_ref()
@@ -724,6 +743,7 @@ impl AsyncWriterMetrics {
             .unwrap_or(0)
     }
 
+    /// Whether egress control currently marks the peer as stalled.
     pub fn tx_stalled(&self) -> bool {
         self.egress_control
             .as_ref()
@@ -875,7 +895,9 @@ enum Admission {
 /// Frame bytes queued for a writer: owned, or shared with the driver's
 /// forwarding buffer so queueing a forwarded frame does not copy it.
 pub enum FrameBytes {
+    /// Bytes owned by the queue.
     Owned(Vec<u8>),
+    /// Bytes shared with the driver.
     Shared(rns_core::transport::types::PacketBytes),
 }
 
@@ -1148,6 +1170,11 @@ impl AsyncWriter {
     }
 }
 
+/// Wrap `writer` so frames are written off the driver thread.
+///
+/// Writers that send inline are returned unchanged, and writers that expose a
+/// loop socket are run by the driver's loop writer; any other writer gets a
+/// worker thread fed by a queue of `queue_capacity` frames.
 pub fn wrap_async_writer(
     writer: Box<dyn Writer>,
     interface_id: InterfaceId,
@@ -1358,12 +1385,17 @@ pub use crate::common::interface_stats::{InterfaceStats, TrafficRates, ANNOUNCE_
 
 /// Everything the driver tracks per interface.
 pub struct InterfaceEntry {
+    /// Interface ID.
     pub id: InterfaceId,
+    /// Transport-level description of the interface.
     pub info: InterfaceInfo,
+    /// Writer frames are sent through.
     pub writer: Box<dyn Writer>,
+    /// Counters of the async writer wrapping `writer`, when it has one.
     pub async_writer_metrics: Option<AsyncWriterMetrics>,
     /// Administrative enable/disable state.
     pub enabled: bool,
+    /// Whether the interface is currently up.
     pub online: bool,
     /// True for dynamically spawned interfaces (e.g. TCP server clients).
     /// These are fully removed on InterfaceDown rather than just marked offline.
@@ -1386,47 +1418,70 @@ pub struct InterfaceEntry {
 pub enum StartResult {
     /// One writer, registered immediately (TcpClient, Udp, Serial, etc.)
     Simple {
+        /// Interface ID.
         id: InterfaceId,
+        /// Transport-level description of the interface.
         info: InterfaceInfo,
+        /// Writer for the interface.
         writer: Box<dyn Writer>,
+        /// Interface type name, e.g. "TCPClientInterface".
         interface_type_name: String,
+        /// Stop handle for the interface's threads, if it has any.
         control: Option<ListenerControl>,
     },
     /// Spawns a listener; dynamic interfaces arrive via Event::InterfaceUp (TcpServer, Auto, I2P, etc.)
-    Listener { control: Option<ListenerControl> },
+    Listener {
+        /// Stop handle for the listener's threads, if it has any.
+        control: Option<ListenerControl>,
+    },
     /// Multiple subinterfaces from one config (RNode).
     Multi {
+        /// Subinterfaces to register.
         subinterfaces: Vec<SubInterface>,
+        /// Stop handle shared by the subinterfaces' threads, if any.
         control: Option<ListenerControl>,
     },
 }
 
 /// A single subinterface returned from a multi-interface factory.
 pub struct SubInterface {
+    /// Interface ID.
     pub id: InterfaceId,
+    /// Transport-level description of the subinterface.
     pub info: InterfaceInfo,
+    /// Writer for the subinterface.
     pub writer: Box<dyn Writer>,
+    /// Interface type name, e.g. "RNodeMultiInterface".
     pub interface_type_name: String,
 }
 
 /// Context passed to [`InterfaceFactory::start()`].
 pub struct StartContext {
+    /// Sender for events to the driver.
     pub tx: EventSender,
+    /// Counter that dynamically spawned interfaces take their IDs from.
     pub next_dynamic_id: Arc<AtomicU64>,
+    /// Interface mode, one of the `constants::MODE_*` values.
     pub mode: u8,
+    /// Signed interface preference used by path selection.
     pub gravity: i64,
     /// The interface's own `hop_limiter` (upstream bb63dd44). TCP server,
     /// Backbone, I2P and Weave peers inherit it.
     pub hop_limiter: Option<u8>,
+    /// Upstream `recursive_prs` option of the interface.
     pub recursive_prs: bool,
+    /// Upstream `announces_from_internal` option of the interface.
     pub announces_from_internal: bool,
+    /// Upstream `announces_to_internal` option of the interface.
     pub announces_to_internal: Option<bool>,
+    /// Ingress control settings of the interface.
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
     /// Per-interface stamp costs, inherited by spawned interfaces.
     pub stamp_costs: rns_core::transport::types::InterfaceStampCosts,
     /// Per-interface announce rate and cap options, inherited by spawned
     /// interfaces.
     pub announce_limits: crate::node::InterfaceAnnounceLimits,
+    /// IFAC state, if access codes are enabled.
     pub ifac: Option<IfacState>,
     /// Linux `SO_MARK` value applied to IP underlay sockets before connect.
     pub underlay_mark: Option<u32>,
@@ -1454,34 +1509,52 @@ pub(crate) fn test_start_context(tx: EventSender) -> StartContext {
 
 /// Opaque interface config data. Each factory downcasts to its concrete type.
 pub trait InterfaceConfigData: Send + Any {
+    /// Borrow as [`Any`] for downcasting.
     fn as_any(&self) -> &dyn Any;
+    /// Convert into a boxed [`Any`] for downcasting.
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
 /// ConfigObj section passed to factories that need nested `[[[sections]]]`.
 pub struct ConfigSection<'a> {
+    /// Key-value parameters of the section.
     pub params: &'a HashMap<String, String>,
+    /// Nested subsections.
     pub children: &'a [crate::config::ParsedSubinterface],
 }
 
+/// Settings a listener copies from its own interface to each peer interface
+/// it spawns.
 #[derive(Debug, Clone)]
 pub struct DynamicInterfaceTemplate {
+    /// ID of the spawning interface.
     pub parent_id: InterfaceId,
+    /// Interface type name given to spawned interfaces.
     pub interface_type: String,
+    /// IFAC state, if access codes are enabled.
     pub ifac: Option<IfacState>,
+    /// Interface mode, one of the `constants::MODE_*` values.
     pub mode: u8,
+    /// Signed interface preference used by path selection.
     pub gravity: i64,
     /// The parent's `hop_limiter`, for the peer types that inherit it
     /// upstream (bb63dd44); `None` for the others.
     pub hop_limiter: Option<u8>,
+    /// Upstream `recursive_prs` option of the parent.
     pub recursive_prs: bool,
+    /// Upstream `announces_from_internal` option of the parent.
     pub announces_from_internal: bool,
+    /// Upstream `announces_to_internal` option of the parent.
     pub announces_to_internal: Option<bool>,
+    /// Per-interface stamp costs of the parent.
     pub stamp_costs: rns_core::transport::types::InterfaceStampCosts,
+    /// Announce rate and cap options of the parent.
     pub announce_limits: crate::node::InterfaceAnnounceLimits,
 }
 
 impl DynamicInterfaceTemplate {
+    /// Build the registration for a spawned interface, applying the
+    /// template's settings to `info`.
     pub fn registration(
         &self,
         mut info: InterfaceInfo,

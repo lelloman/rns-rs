@@ -21,12 +21,19 @@ const HW_MTU: usize = 262_144;
 /// Configuration for a TCP client interface.
 #[derive(Debug, Clone)]
 pub struct TcpClientConfig {
+    /// Interface name from the config section.
     pub name: String,
+    /// Host to connect to (`target_host`, default `127.0.0.1`).
     pub target_host: String,
+    /// TCP port to connect to (`target_port`, default 4242).
     pub target_port: u16,
+    /// Interface ID assigned by the node.
     pub interface_id: InterfaceId,
+    /// Delay before each reconnection attempt (default 5 s).
     pub reconnect_wait: Duration,
+    /// Reconnection attempts before the interface is reported down; `None` retries forever.
     pub max_reconnect_tries: Option<u32>,
+    /// Timeout for each connection attempt (default 5 s).
     pub connect_timeout: Duration,
     /// Linux network interface to bind the socket to (e.g. "usb0").
     pub device: Option<String>,
@@ -38,19 +45,27 @@ pub struct TcpClientConfig {
     /// at the end of the driver's pass (`flush_after_us`; see
     /// [`super::DEFAULT_FLUSH_AFTER`]).
     pub flush_after: Option<Duration>,
+    /// Settings shared with the running interface, adjustable at runtime.
     pub runtime: Arc<Mutex<TcpClientRuntime>>,
 }
 
+/// TCP client settings that can be changed while it runs.
 #[derive(Debug, Clone)]
 pub struct TcpClientRuntime {
+    /// Copy of the configured target host; connections use [`TcpClientConfig::target_host`].
     pub target_host: String,
+    /// Copy of the configured target port; connections use [`TcpClientConfig::target_port`].
     pub target_port: u16,
+    /// Delay before each reconnection attempt.
     pub reconnect_wait: Duration,
+    /// Reconnection attempts before the interface is reported down; `None` retries forever.
     pub max_reconnect_tries: Option<u32>,
+    /// Timeout for each connection attempt.
     pub connect_timeout: Duration,
 }
 
 impl TcpClientRuntime {
+    /// Runtime settings taken from `config`.
     pub fn from_config(config: &TcpClientConfig) -> Self {
         Self {
             target_host: config.target_host.clone(),
@@ -62,10 +77,14 @@ impl TcpClientRuntime {
     }
 }
 
+/// Driver-side handle to a running TCP client's runtime settings.
 #[derive(Debug, Clone)]
 pub struct TcpClientRuntimeConfigHandle {
+    /// Name of the TCP client interface.
     pub interface_name: String,
+    /// Live settings shared with the interface.
     pub runtime: Arc<Mutex<TcpClientRuntime>>,
+    /// Settings at startup, reported as the defaults.
     pub startup: TcpClientRuntime,
 }
 

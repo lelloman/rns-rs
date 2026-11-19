@@ -12,6 +12,7 @@ const HEADER_LEN: usize = 16;
 const CONTROL_UI: u8 = 0x03;
 const PID_NO_LAYER_3: u8 = 0xF0;
 
+/// Check an AX.25 callsign (3-6 ASCII characters) and SSID (0-15); the callsign is uppercased.
 pub fn validate_address(callsign: &str, ssid: u8) -> Result<Ax25Address, String> {
     if !(3..=6).contains(&callsign.len()) || !callsign.is_ascii() {
         return Err("AX.25 callsign must be 3-6 ASCII characters".into());
@@ -36,6 +37,7 @@ fn encode_address(address: &Ax25Address, last: bool) -> [u8; 7] {
     encoded
 }
 
+/// Build an AX.25 UI frame from `source` to `APZRNS-0` carrying `payload`, no layer 3 protocol.
 pub fn encode_ui_frame(source: &Ax25Address, payload: &[u8]) -> Vec<u8> {
     let destination = Ax25Address {
         callsign: "APZRNS".into(),
@@ -50,6 +52,7 @@ pub fn encode_ui_frame(source: &Ax25Address, payload: &[u8]) -> Vec<u8> {
     frame
 }
 
+/// Payload of an AX.25 UI frame addressed to `APZRNS-0`, or `None` if the frame is not one.
 pub fn decode_ui_frame(frame: &[u8]) -> Option<&[u8]> {
     if frame.len() < HEADER_LEN
         || frame[14] != CONTROL_UI
@@ -66,6 +69,7 @@ pub fn decode_ui_frame(frame: &[u8]) -> Option<&[u8]> {
     Some(&frame[HEADER_LEN..])
 }
 
+/// Factory for `AX25KISSInterface`.
 pub struct Ax25KissFactory;
 
 impl InterfaceFactory for Ax25KissFactory {

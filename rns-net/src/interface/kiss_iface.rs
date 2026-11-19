@@ -25,27 +25,46 @@ mod folded;
 /// Configuration for a KISS interface.
 #[derive(Debug, Clone)]
 pub struct KissIfaceConfig {
+    /// Interface name from the config section.
     pub name: String,
+    /// Serial device path (`port`).
     pub port: String,
+    /// Serial baud rate (`speed`).
     pub speed: u32,
+    /// Serial data bits (`databits`).
     pub data_bits: u8,
+    /// Serial parity (`parity`).
     pub parity: Parity,
+    /// Serial stop bits (`stopbits`).
     pub stop_bits: u8,
-    pub preamble: u16,                // ms, default 350
-    pub txtail: u16,                  // ms, default 20
-    pub persistence: u8,              // 0-255, default 64
-    pub slottime: u16,                // ms, default 20
-    pub flow_control: bool,           // default false
-    pub beacon_interval: Option<u32>, // seconds
-    pub beacon_data: Option<Vec<u8>>, // padded to 15 bytes
+    /// TNC TX delay in milliseconds (`preamble`, default 350); sent to the TNC in 10 ms units.
+    pub preamble: u16,
+    /// TNC TX tail in milliseconds (`txtail`, default 20); sent to the TNC in 10 ms units.
+    pub txtail: u16,
+    /// CSMA persistence, 0-255 (`persistence`, default 64).
+    pub persistence: u8,
+    /// CSMA slot time in milliseconds (`slottime`, default 20); sent to the TNC in 10 ms units.
+    pub slottime: u16,
+    /// Wait for the TNC's ready signal before sending the next frame (`flow_control`, default off).
+    pub flow_control: bool,
+    /// Seconds after the first transmission before the beacon is sent (`id_interval`).
+    pub beacon_interval: Option<u32>,
+    /// Beacon payload (`id_callsign`), zero-padded to at least 15 bytes when sent.
+    pub beacon_data: Option<Vec<u8>>,
+    /// Interface ID assigned by the node.
     pub interface_id: InterfaceId,
+    /// AX.25 source address; when set, frames are wrapped in AX.25 UI frames.
     pub ax25_source: Option<Ax25Address>,
+    /// Interface type name reported for this interface.
     pub interface_type_name: String,
 }
 
+/// AX.25 station address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ax25Address {
+    /// Callsign, 3-6 ASCII characters.
     pub callsign: String,
+    /// Secondary station identifier, 0-15.
     pub ssid: u8,
 }
 

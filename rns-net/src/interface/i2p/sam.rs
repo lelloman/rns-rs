@@ -173,6 +173,7 @@ impl Destination {
 /// A generated keypair (destination + private key material).
 #[derive(Clone, Debug)]
 pub struct KeyPair {
+    /// The public destination.
     pub destination: Destination,
     /// Raw binary private key bytes.
     pub private_key: Vec<u8>,

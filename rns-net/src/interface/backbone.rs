@@ -82,23 +82,46 @@ const DP_IC_PENALTY: f64 = 1.5;
 /// Configuration for a backbone interface.
 #[derive(Debug, Clone)]
 pub struct BackboneConfig {
+    /// Interface name.
     pub name: String,
+    /// Local address the listener binds to (`listen_on`, `listen_ip` or `device`); default
+    /// `0.0.0.0`.
     pub listen_ip: String,
+    /// TCP port the listener binds to (`listen_port` or `port`); default 4242.
     pub listen_port: u16,
+    /// ID of the listener interface; accepted peers get dynamic IDs of their own.
     pub interface_id: InterfaceId,
+    /// Mode of accepted peers, one of `constants::MODE_*`; set from the interface's config at
+    /// start.
     pub mode: u8,
+    /// Gravity of accepted peers; set from the interface's config at start.
     pub gravity: i64,
+    /// `recursive_prs` of accepted peers; set from the interface's config at start.
     pub recursive_prs: bool,
+    /// `announces_from_internal` of accepted peers; set from the interface's config at start.
     pub announces_from_internal: bool,
+    /// `announces_to_internal` of accepted peers; set from the interface's config at start.
     pub announces_to_internal: Option<bool>,
+    /// Startup limit on concurrent clients (`client_limit`, or `max_connections` which takes
+    /// precedence); `None` for no limit.
     pub max_connections: Option<usize>,
+    /// Startup idle timeout (`idle_timeout`, seconds): a client that sends nothing this long after
+    /// connecting is disconnected.
     pub idle_timeout: Option<Duration>,
+    /// Startup write stall timeout (`write_stall_timeout`, seconds); `None` uses the default egress
+    /// dead time.
     pub write_stall_timeout: Option<Duration>,
+    /// Startup abuse handling settings.
     pub abuse: BackboneAbuseConfig,
+    /// Blocking of addresses whose connections keep closing quickly.
     pub fast_flap: BackboneFastFlapConfig,
+    /// Fast-flap history; by default the table shared by every listener in the process.
     pub fast_flap_state: Arc<Mutex<BackboneFastFlapMonitor>>,
+    /// Ingress control of accepted peers; set from the interface's config at start.
     pub ingress_control: IngressControlConfig,
+    /// Live settings the listener reads, which can be changed while it runs.
     pub runtime: Arc<Mutex<BackboneServerRuntime>>,
+    /// Per-address peer state, shared with the driver.
     pub peer_state: Arc<Mutex<BackbonePeerMonitor>>,
 }
 

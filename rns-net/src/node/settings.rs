@@ -55,9 +55,16 @@ pub struct DiscoverySettings {
 
 /// Top-level node configuration.
 pub struct NodeConfig {
+    /// Act as a transport node (`enable_transport`).
     pub transport_enabled: bool,
+    /// Use the node identity as transport identity even without transport
+    /// enabled (`static_transport_identity`); otherwise a non-transport node
+    /// gets an ephemeral one.
     pub static_transport_identity: bool,
+    /// Pick a random non-zero hop delta, 2 to 7, that masks this node's
+    /// locally originated zero-hop packets (`local_hops_delta`).
     pub local_hops_delta: bool,
+    /// Node identity; a new one is generated when `None`.
     pub identity: Option<Identity>,
     /// The configured `network_identity`, kept apart from the transport
     /// identity as upstream's `Transport.network_identity`. It signs this
@@ -261,29 +268,43 @@ impl Default for NodeConfig {
 
 /// IFAC configuration for an interface.
 pub struct IfacConfig {
+    /// Network name (`networkname` / `network_name`).
     pub netname: Option<String>,
+    /// Passphrase (`passphrase` / `pass_phrase`).
     pub netkey: Option<String>,
+    /// IFAC size in bytes (`ifac_size` is given in bits).
     pub size: usize,
 }
 
 /// Interface configuration, parsed via an [`InterfaceFactory`] from the registry.
 pub struct InterfaceConfig {
+    /// Interface name, from its config section.
     pub name: String,
+    /// Interface type name, e.g. "TCPClientInterface".
     pub type_name: String,
+    /// Type-specific settings parsed by the interface's factory.
     pub config_data: Box<dyn crate::interface::InterfaceConfigData>,
+    /// Interface mode, one of the `constants::MODE_*` values.
     pub mode: u8,
+    /// Signed interface preference used by path selection.
     pub gravity: i64,
     /// The interface's own `hop_limiter` (upstream bb63dd44).
     pub hop_limiter: Option<u8>,
+    /// Upstream `recursive_prs` option.
     pub recursive_prs: bool,
+    /// Upstream `announces_from_internal` option.
     pub announces_from_internal: bool,
+    /// Upstream `announces_to_internal` option.
     pub announces_to_internal: Option<bool>,
+    /// Ingress control settings of the interface.
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
     /// Per-interface `destination_cost` and `pr_cost` (upstream 9b464382).
     pub stamp_costs: rns_core::transport::types::InterfaceStampCosts,
     /// Per-interface announce rate controls and announce cap.
     pub announce_limits: InterfaceAnnounceLimits,
+    /// IFAC settings, when a network name or passphrase is set.
     pub ifac: Option<IfacConfig>,
+    /// Interface discovery settings, when the interface is discoverable.
     pub discovery: Option<crate::discovery::DiscoveryConfig>,
 }
 

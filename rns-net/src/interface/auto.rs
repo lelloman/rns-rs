@@ -137,14 +137,23 @@ const ANDROID_IGNORE_IFS: &[&str] = &[
 /// Configuration for an AutoInterface.
 #[derive(Debug, Clone)]
 pub struct AutoConfig {
+    /// Interface name from the config section.
     pub name: String,
+    /// Group identifier (`group_id`); only peers with the same group discover each other.
     pub group_id: Vec<u8>,
+    /// IPv6 multicast scope digit for discovery (`discovery_scope`), one of the `SCOPE_*` values.
     pub discovery_scope: String,
+    /// UDP port for multicast discovery (`discovery_port`).
     pub discovery_port: u16,
+    /// UDP port for unicast data between peers (`data_port`).
     pub data_port: u16,
+    /// Multicast address type digit (`multicast_address_type`), one of the `MULTICAST_*_ADDRESS_TYPE` values.
     pub multicast_address_type: String,
+    /// Host network interfaces to adopt (`devices`); empty adopts all that are not ignored.
     pub allowed_interfaces: Vec<String>,
+    /// Host network interfaces never to adopt (`ignored_devices`).
     pub ignored_interfaces: Vec<String>,
+    /// Bitrate reported for each peer interface, in bits per second (`configured_bitrate`).
     pub configured_bitrate: u64,
     /// Maximum number of active peers per adopted network interface
     /// (`max_peers`, default [`DEFAULT_MAX_PEERS`]). Discovery tokens from
@@ -152,7 +161,9 @@ pub struct AutoConfig {
     pub max_peers: usize,
     /// Base interface ID. Per-peer IDs will be assigned dynamically.
     pub interface_id: InterfaceId,
+    /// Ingress control applied to each peer interface; set from the start context.
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
+    /// Timing settings shared with the running interface, adjustable at runtime.
     pub runtime: Arc<Mutex<AutoRuntime>>,
 }
 

@@ -30,12 +30,19 @@ fn frame_decoder(ifac_size: usize) -> hdlc::Decoder {
 /// Configuration for a Serial interface.
 #[derive(Debug, Clone)]
 pub struct SerialIfaceConfig {
+    /// Interface name from the config section.
     pub name: String,
+    /// Serial device path (`port`).
     pub port: String,
+    /// Baud rate (`speed`); also reported as the interface bitrate.
     pub speed: u32,
+    /// Data bits (`databits`).
     pub data_bits: u8,
+    /// Parity (`parity`).
     pub parity: Parity,
+    /// Stop bits (`stopbits`).
     pub stop_bits: u8,
+    /// Interface ID assigned by the node.
     pub interface_id: InterfaceId,
 }
 

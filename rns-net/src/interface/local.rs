@@ -54,8 +54,11 @@ const PHY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 /// Configuration for a Local server (shared instance).
 #[derive(Debug, Clone)]
 pub struct LocalServerConfig {
+    /// Shared instance name; names the abstract Unix socket.
     pub instance_name: String,
+    /// Localhost TCP port served when the Unix socket is not used.
     pub port: u16,
+    /// Interface ID of the server interface.
     pub interface_id: InterfaceId,
     /// Serve on the abstract Unix socket `\0rns/<instance_name>` on Linux;
     /// `false` for upstream's `shared_instance_type = tcp`.
@@ -76,10 +79,15 @@ impl Default for LocalServerConfig {
 /// Configuration for a Local client (connecting to shared instance).
 #[derive(Debug, Clone)]
 pub struct LocalClientConfig {
+    /// Interface name.
     pub name: String,
+    /// Shared instance name; names the abstract Unix socket.
     pub instance_name: String,
+    /// Localhost TCP port of the shared instance.
     pub port: u16,
+    /// Interface ID of the client interface.
     pub interface_id: InterfaceId,
+    /// Delay between reconnection attempts after the connection drops.
     pub reconnect_wait: Duration,
     /// Try the abstract Unix socket first on Linux; `false` for upstream's
     /// `shared_instance_type = tcp`.
