@@ -1420,7 +1420,6 @@ dependencies = [
  "hmac",
  "libc",
  "sha2",
- "subtle",
  "x25519-dalek",
  "zeroize",
 ]

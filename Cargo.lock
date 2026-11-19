@@ -2612,7 +2612,6 @@ dependencies = [
  "libc",
  "serde_json",
  "sha2 0.11.1",
- "subtle",
  "x25519-dalek",
  "zeroize",
 ]
