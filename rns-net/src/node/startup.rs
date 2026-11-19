@@ -692,131 +692,8 @@ impl RnsNode {
         for iface_config in config.interfaces {
             driver.set_interface_announce_limits(&iface_config.name, iface_config.announce_limits);
             let managed_id = initial_managed_ids.get(&iface_config.name).copied();
-            #[cfg(feature = "iface-backbone")]
-            if iface_config.type_name == "BackboneInterface" {
-                if let Some(mode) = iface_config
-                    .config_data
-                    .as_any()
-                    .downcast_ref::<BackboneMode>()
-                {
-                    if let Some(handle) = runtime_handle_from_mode(mode) {
-                        driver.register_backbone_runtime(handle);
-                    }
-                    if let Some(handle) = peer_state_handle_from_mode(mode) {
-                        driver.register_backbone_peer_state(handle);
-                    }
-                    if let Some(handle) = client_runtime_handle_from_mode(mode) {
-                        driver.register_backbone_client_runtime(handle);
-                    }
-                    if let Some(handle) = backbone_discovery_runtime_from_interface(
-                        &iface_config.name,
-                        mode,
-                        iface_config.discovery.as_ref(),
-                        config.transport_enabled,
-                        iface_config.ifac.as_ref(),
-                    ) {
-                        driver.register_backbone_discovery_runtime(handle);
-                    }
-                }
-            }
-            #[cfg(feature = "iface-tcp")]
-            if iface_config.type_name == "TCPClientInterface" {
-                if let Some(tcp_config) = iface_config
-                    .config_data
-                    .as_any()
-                    .downcast_ref::<TcpClientConfig>()
-                {
-                    driver.register_tcp_client_runtime(tcp_client_runtime_handle_from_config(
-                        tcp_config,
-                    ));
-                }
-            }
-            #[cfg(feature = "iface-tcp")]
-            if iface_config.type_name == "TCPServerInterface" {
-                if let Some(tcp_config) = iface_config
-                    .config_data
-                    .as_any()
-                    .downcast_ref::<TcpServerConfig>()
-                {
-                    driver.register_tcp_server_runtime(tcp_runtime_handle_from_config(tcp_config));
-                    driver.register_tcp_server_discovery_runtime(
-                        tcp_server_discovery_runtime_from_interface(
-                            &iface_config.name,
-                            tcp_config,
-                            iface_config.discovery.as_ref(),
-                            config.transport_enabled,
-                            iface_config.ifac.as_ref(),
-                        ),
-                    );
-                }
-            }
-            #[cfg(feature = "iface-udp")]
-            if iface_config.type_name == "UDPInterface" {
-                if let Some(udp_config) = iface_config
-                    .config_data
-                    .as_any()
-                    .downcast_ref::<UdpConfig>()
-                {
-                    driver.register_udp_runtime(udp_runtime_handle_from_config(udp_config));
-                }
-            }
-            #[cfg(feature = "iface-auto")]
-            if iface_config.type_name == "AutoInterface" {
-                if let Some(auto_config) = iface_config
-                    .config_data
-                    .as_any()
-                    .downcast_ref::<AutoConfig>()
-                {
-                    driver.register_auto_runtime(auto_runtime_handle_from_config(auto_config));
-                }
-            }
-            #[cfg(feature = "iface-i2p")]
-            if iface_config.type_name == "I2PInterface" {
-                if let Some(i2p_config) = iface_config
-                    .config_data
-                    .as_any()
-                    .downcast_ref::<I2pConfig>()
-                {
-                    driver.register_i2p_runtime(i2p_runtime_handle_from_config(i2p_config));
-                }
-            }
-            #[cfg(feature = "iface-pipe")]
-            if iface_config.type_name == "PipeInterface" {
-                if let Some(pipe_config) = iface_config
-                    .config_data
-                    .as_any()
-                    .downcast_ref::<PipeConfig>()
-                {
-                    driver.register_pipe_runtime(pipe_runtime_handle_from_config(pipe_config));
-                }
-            }
-            #[cfg(feature = "iface-rnode")]
-            if iface_config.type_name == "RNodeInterface" {
-                if let Some(rnode_config) = iface_config
-                    .config_data
-                    .as_any()
-                    .downcast_ref::<RNodeConfig>()
-                {
-                    driver.register_rnode_runtime(rnode_runtime_handle_from_config(rnode_config));
-                }
-            }
-            // An auto-connect must not duplicate a configured client.
-            #[cfg(feature = "iface-tcp")]
-            if let Some(tcp) = iface_config
-                .config_data
-                .as_any()
-                .downcast_ref::<crate::interface::tcp::TcpClientConfig>()
-            {
-                configured_client_targets.push((tcp.target_host.clone(), tcp.target_port));
-            }
-            #[cfg(feature = "iface-backbone")]
-            if let Some(BackboneMode::Client(client, _)) = iface_config
-                .config_data
-                .as_any()
-                .downcast_ref::<BackboneMode>()
-            {
-                configured_client_targets.push((client.target_host.clone(), client.target_port));
-            }
+            register_interface_runtime(&mut driver, &iface_config, config.transport_enabled);
+            configured_client_targets.extend(configured_client_target(&iface_config));
 
             let factory = match registry.get(&iface_config.type_name) {
                 Some(f) => f,
@@ -1157,38 +1034,16 @@ impl RnsNode {
                 })?;
         }
 
-        // Start LocalServer for shared instance clients if share_instance is enabled
         #[cfg(feature = "iface-local")]
         if config.share_instance {
-            let local_server_config = LocalServerConfig {
-                instance_name: config.instance_name.clone(),
-                port: config.shared_instance_port,
-                // Keys the listener on the driver loop when interface I/O is
-                // folded; clients get ids of their own.
-                interface_id: rns_core::transport::types::InterfaceId(
-                    next_dynamic_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                ),
-                use_af_unix: config.shared_instance.use_af_unix,
-            };
-            let listener_id = local_server_config.interface_id;
-            match crate::interface::local::start_shared_instance_server(
-                local_server_config,
+            start_local_server(
+                &mut driver,
+                &config.instance_name,
+                config.shared_instance_port,
+                config.shared_instance.use_af_unix,
                 tx.clone(),
                 next_dynamic_id.clone(),
-            ) {
-                Ok((control, endpoint)) => {
-                    driver.register_listener_control(control);
-                    driver.register_shared_instance_listener(listener_id, endpoint);
-                    log::debug!(
-                        "Local shared instance server started (instance={}, port={})",
-                        config.instance_name,
-                        config.shared_instance_port
-                    );
-                }
-                Err(e) => {
-                    log::error!("Failed to start local shared instance server: {}", e);
-                }
-            }
+            );
         }
 
         // Start the RPC servers if share_instance is enabled: on threads, or
@@ -2145,4 +2000,183 @@ fn spawn_transport_state_persister(
         None
     };
     Ok(threads)
+}
+
+/// Register the runtime settings of a configured interface with the driver,
+/// for the interface types that have them.
+fn register_interface_runtime(
+    driver: &mut Driver,
+    iface_config: &InterfaceConfig,
+    transport_enabled: bool,
+) {
+    #[cfg(feature = "iface-backbone")]
+    if iface_config.type_name == "BackboneInterface" {
+        if let Some(mode) = iface_config
+            .config_data
+            .as_any()
+            .downcast_ref::<BackboneMode>()
+        {
+            if let Some(handle) = runtime_handle_from_mode(mode) {
+                driver.register_backbone_runtime(handle);
+            }
+            if let Some(handle) = peer_state_handle_from_mode(mode) {
+                driver.register_backbone_peer_state(handle);
+            }
+            if let Some(handle) = client_runtime_handle_from_mode(mode) {
+                driver.register_backbone_client_runtime(handle);
+            }
+            if let Some(handle) = backbone_discovery_runtime_from_interface(
+                &iface_config.name,
+                mode,
+                iface_config.discovery.as_ref(),
+                transport_enabled,
+                iface_config.ifac.as_ref(),
+            ) {
+                driver.register_backbone_discovery_runtime(handle);
+            }
+        }
+    }
+    #[cfg(feature = "iface-tcp")]
+    if iface_config.type_name == "TCPClientInterface" {
+        if let Some(tcp_config) = iface_config
+            .config_data
+            .as_any()
+            .downcast_ref::<TcpClientConfig>()
+        {
+            driver.register_tcp_client_runtime(tcp_client_runtime_handle_from_config(tcp_config));
+        }
+    }
+    #[cfg(feature = "iface-tcp")]
+    if iface_config.type_name == "TCPServerInterface" {
+        if let Some(tcp_config) = iface_config
+            .config_data
+            .as_any()
+            .downcast_ref::<TcpServerConfig>()
+        {
+            driver.register_tcp_server_runtime(tcp_runtime_handle_from_config(tcp_config));
+            driver.register_tcp_server_discovery_runtime(
+                tcp_server_discovery_runtime_from_interface(
+                    &iface_config.name,
+                    tcp_config,
+                    iface_config.discovery.as_ref(),
+                    transport_enabled,
+                    iface_config.ifac.as_ref(),
+                ),
+            );
+        }
+    }
+    #[cfg(feature = "iface-udp")]
+    if iface_config.type_name == "UDPInterface" {
+        if let Some(udp_config) = iface_config
+            .config_data
+            .as_any()
+            .downcast_ref::<UdpConfig>()
+        {
+            driver.register_udp_runtime(udp_runtime_handle_from_config(udp_config));
+        }
+    }
+    #[cfg(feature = "iface-auto")]
+    if iface_config.type_name == "AutoInterface" {
+        if let Some(auto_config) = iface_config
+            .config_data
+            .as_any()
+            .downcast_ref::<AutoConfig>()
+        {
+            driver.register_auto_runtime(auto_runtime_handle_from_config(auto_config));
+        }
+    }
+    #[cfg(feature = "iface-i2p")]
+    if iface_config.type_name == "I2PInterface" {
+        if let Some(i2p_config) = iface_config
+            .config_data
+            .as_any()
+            .downcast_ref::<I2pConfig>()
+        {
+            driver.register_i2p_runtime(i2p_runtime_handle_from_config(i2p_config));
+        }
+    }
+    #[cfg(feature = "iface-pipe")]
+    if iface_config.type_name == "PipeInterface" {
+        if let Some(pipe_config) = iface_config
+            .config_data
+            .as_any()
+            .downcast_ref::<PipeConfig>()
+        {
+            driver.register_pipe_runtime(pipe_runtime_handle_from_config(pipe_config));
+        }
+    }
+    #[cfg(feature = "iface-rnode")]
+    if iface_config.type_name == "RNodeInterface" {
+        if let Some(rnode_config) = iface_config
+            .config_data
+            .as_any()
+            .downcast_ref::<RNodeConfig>()
+        {
+            driver.register_rnode_runtime(rnode_runtime_handle_from_config(rnode_config));
+        }
+    }
+}
+
+/// The host and port a configured TCP or Backbone client connects to, which
+/// an auto-connect must not duplicate.
+fn configured_client_target(iface_config: &InterfaceConfig) -> Option<(String, u16)> {
+    #[cfg(feature = "iface-tcp")]
+    if let Some(tcp) = iface_config
+        .config_data
+        .as_any()
+        .downcast_ref::<crate::interface::tcp::TcpClientConfig>()
+    {
+        return Some((tcp.target_host.clone(), tcp.target_port));
+    }
+    #[cfg(feature = "iface-backbone")]
+    if let Some(BackboneMode::Client(client, _)) = iface_config
+        .config_data
+        .as_any()
+        .downcast_ref::<BackboneMode>()
+    {
+        return Some((client.target_host.clone(), client.target_port));
+    }
+    None
+}
+
+/// The shared instance's local server, which clients of this instance
+/// connect to. Failing to start it is logged; the node runs on without it.
+#[cfg(feature = "iface-local")]
+fn start_local_server(
+    driver: &mut Driver,
+    instance_name: &str,
+    port: u16,
+    use_af_unix: bool,
+    tx: EventSender,
+    next_dynamic_id: Arc<AtomicU64>,
+) {
+    let local_server_config = LocalServerConfig {
+        instance_name: instance_name.to_string(),
+        port,
+        // Keys the listener on the driver loop when interface I/O is
+        // folded; clients get ids of their own.
+        interface_id: rns_core::transport::types::InterfaceId(
+            next_dynamic_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ),
+        use_af_unix,
+    };
+    let listener_id = local_server_config.interface_id;
+    match crate::interface::local::start_shared_instance_server(
+        local_server_config,
+        tx,
+        next_dynamic_id,
+    ) {
+        Ok((control, endpoint)) => {
+            driver.register_listener_control(control);
+            driver.register_shared_instance_listener(listener_id, endpoint);
+            log::debug!(
+                "Local shared instance server started (instance={}, port={})",
+                instance_name,
+                port
+            );
+        }
+        Err(e) => {
+            log::error!("Failed to start local shared instance server: {}", e);
+        }
+    }
 }
