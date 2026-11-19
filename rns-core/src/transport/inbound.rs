@@ -7,10 +7,18 @@ use crate::constants;
 use crate::link::handshake::compute_link_id;
 use crate::packet::RawPacket;
 
+/// How a forwarded packet's hop byte is written.
+///
+/// The byte is `local_hops_delta` for a packet from a local client when
+/// `local_hops_delta` is non-zero and `skip_local_hops_delta` is unset, and the
+/// packet's hop count otherwise.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LocalHopRewrite {
+    /// Hop byte for packets from local clients; 0 keeps the packet's hop count.
     pub local_hops_delta: u8,
+    /// Whether the packet came from a local client interface.
     pub from_local_client: bool,
+    /// Keep the packet's hop count even for a local client packet.
     pub skip_local_hops_delta: bool,
 }
 
@@ -275,6 +283,10 @@ fn link_table_outbound_interface<B: AsRef<[u8]>>(
     Some(outbound_interface)
 }
 
+/// Route link traffic through a link table entry (upstream `Transport.inbound`):
+/// the interface on the other side of the link and the frame with its hop byte
+/// rewritten, or `None` when the receiving interface or hop count does not
+/// match the entry.
 pub fn route_via_link_table<B: AsRef<[u8]>>(
     packet: &RawPacket<B>,
     link_entry: &LinkEntry,

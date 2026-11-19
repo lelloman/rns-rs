@@ -6,38 +6,59 @@ use crate::packet::RawPacket;
 
 use super::types::InterfaceId;
 
+/// What a full [`AnnounceVerifyQueue`] does with a new announce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverflowPolicy {
+    /// Reject the new announce.
     DropNewest,
+    /// Evict the entry queued longest ago.
     DropOldest,
+    /// Evict the entry with the most hops (the oldest among ties), unless the new announce has as many hops or more.
     DropWorst,
 }
 
+/// Identifies one announce copy awaiting verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AnnounceVerifyKey {
+    /// Announced destination.
     pub destination_hash: [u8; 16],
+    /// Random blob of the announce.
     pub random_blob: [u8; 10],
+    /// Node the announce was received from.
     pub received_from: [u8; 16],
 }
 
+/// An announce queued for signature verification.
 #[derive(Debug, Clone)]
 pub struct PendingAnnounce {
+    /// Frame bytes as received, before the hop count rewrite.
     pub original_raw: Vec<u8>,
+    /// Parsed packet, with the hop count after this hop.
     pub packet: RawPacket<PacketBytes>,
+    /// Interface the announce arrived on.
     pub interface: InterfaceId,
+    /// Transport id of the sender for a HEADER_2 announce, else the destination hash.
     pub received_from: [u8; 16],
+    /// When the announce was queued, in seconds.
     pub queued_at: f64,
+    /// Hop count of the queued copy; a copy with fewer hops replaces it.
     pub best_hops: u8,
+    /// Emission time read from the random blob, in seconds.
     pub emission_ts: u64,
+    /// Random blob of the announce.
     pub random_blob: [u8; 10],
 }
 
+/// State of a queued announce.
 #[derive(Debug, Clone)]
 pub enum QueueEntry {
+    /// Waiting to be taken for verification.
     Pending(PendingAnnounce),
+    /// Taken by [`AnnounceVerifyQueue::take_pending`] and being verified.
     InFlight(PendingAnnounce),
 }
 
+/// Bounded queue of announces awaiting signature verification, one per [`AnnounceVerifyKey`].
 #[derive(Debug, Clone)]
 pub struct AnnounceVerifyQueue {
     /// Each entry with the arrival sequence number of its announce.
@@ -51,10 +72,13 @@ pub struct AnnounceVerifyQueue {
 }
 
 impl AnnounceVerifyQueue {
+    /// Queue of at most `max_entries` announces, 256 KiB, entries stale after 30 seconds, evicting with [`OverflowPolicy::DropWorst`].
     pub fn new(max_entries: usize) -> Self {
         Self::with_limits(max_entries, 256 * 1024, 30.0, OverflowPolicy::DropWorst)
     }
 
+    /// Queue with explicit limits: entry count, bytes, staleness in seconds and overflow policy.
+    /// Each limit is raised to at least 1 (0.001 seconds for staleness).
     pub fn with_limits(
         max_entries: usize,
         max_bytes: usize,
@@ -72,6 +96,11 @@ impl AnnounceVerifyQueue {
         }
     }
 
+    /// Queue an announce. Returns whether it was queued.
+    ///
+    /// A second copy under the same key replaces the first only with fewer hops.
+    /// A full queue evicts according to its [`OverflowPolicy`] or rejects the
+    /// announce.
     pub fn enqueue(&mut self, key: AnnounceVerifyKey, entry: PendingAnnounce) -> bool {
         if let Some((_, existing)) = self.pending.get_mut(&key) {
             return match existing {
@@ -174,6 +203,7 @@ impl AnnounceVerifyQueue {
         drained
     }
 
+    /// Remove a verified announce and return it.
     pub fn complete_success(&mut self, key: &AnnounceVerifyKey) -> Option<PendingAnnounce> {
         match self.remove_entry(key) {
             Some(QueueEntry::InFlight(entry)) => Some(entry),
@@ -182,10 +212,12 @@ impl AnnounceVerifyQueue {
         }
     }
 
+    /// Remove an announce that failed verification. Returns whether it was queued.
     pub fn complete_failure(&mut self, key: &AnnounceVerifyKey) -> bool {
         self.remove_entry(key).is_some()
     }
 
+    /// Interface the announce under `key` arrived on.
     pub fn pending_interface(&self, key: &AnnounceVerifyKey) -> Option<InterfaceId> {
         self.pending
             .get(key)
@@ -199,23 +231,28 @@ impl AnnounceVerifyQueue {
             .map(|(_, entry)| pending_of(entry).original_raw.len())
     }
 
+    /// Identity hash of the public key in the announce under `key`.
     pub fn pending_identity_hash(&self, key: &AnnounceVerifyKey) -> Option<[u8; 16]> {
         let packet = &pending_of(&self.pending.get(key)?.1).packet;
         Some(crate::hash::truncated_hash(packet.data().get(..64)?))
     }
 
+    /// Number of queued announces, pending or in flight.
     pub fn len(&self) -> usize {
         self.pending.len()
     }
 
+    /// Whether no announce is queued.
     pub fn is_empty(&self) -> bool {
         self.pending.is_empty()
     }
 
+    /// Bytes counted against the byte limit: raw frame, packet data and transport id of each entry.
     pub fn queued_bytes(&self) -> usize {
         self.queued_bytes
     }
 
+    /// Remove every entry.
     pub fn clear(&mut self) {
         self.pending.clear();
         self.queued_bytes = 0;

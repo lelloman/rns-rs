@@ -18,24 +18,29 @@ impl TransportEngine {
         super::path_requests::medium_path_timeout(&self.interfaces)
     }
 
+    /// Primary path of each destination in the path table.
     pub fn path_table_entries(&self) -> impl Iterator<Item = (&[u8; 16], &PathEntry)> {
         self.path_table
             .iter()
             .filter_map(|(k, ps)| ps.primary().map(|e| (k, e)))
     }
 
+    /// All paths of each destination in the path table.
     pub fn path_table_sets(&self) -> impl Iterator<Item = (&[u8; 16], &PathSet)> {
         self.path_table.iter()
     }
 
+    /// Number of registered interfaces.
     pub fn interface_count(&self) -> usize {
         self.interfaces.len()
     }
 
+    /// Number of link table entries.
     pub fn link_table_count(&self) -> usize {
         self.link_table.len()
     }
 
+    /// Number of validated link table entries.
     pub fn active_link_count(&self) -> usize {
         self.link_table
             .values()
@@ -43,6 +48,8 @@ impl TransportEngine {
             .count()
     }
 
+    /// Whether `packet` is link traffic for a link table entry not yet validated by
+    /// a proof. Announces, link requests and link request proofs are not.
     pub fn is_unvalidated_link_packet<B: AsRef<[u8]>>(
         &self,
         packet: &crate::packet::RawPacket<B>,
@@ -74,22 +81,27 @@ impl TransportEngine {
             && hops > 1
     }
 
+    /// Number of destinations in the path table.
     pub fn path_table_count(&self) -> usize {
         self.path_table.len()
     }
 
+    /// Number of announces waiting for retransmission.
     pub fn announce_table_count(&self) -> usize {
         self.announce_table.len()
     }
 
+    /// Number of reverse table entries.
     pub fn reverse_table_count(&self) -> usize {
         self.reverse_table.len()
     }
 
+    /// Number of announce table entries held aside (upstream `Transport.held_announces`).
     pub fn held_announces_count(&self) -> usize {
         self.held_announces.len()
     }
 
+    /// Number of packet hashes retained for duplicate suppression.
     pub fn packet_hashlist_len(&self) -> usize {
         self.packet_hashlist.len()
     }
@@ -111,22 +123,27 @@ impl TransportEngine {
         self.packet_hashlist.remove(packet_hash)
     }
 
+    /// Number of entries in the announce signature cache.
     pub fn announce_sig_cache_len(&self) -> usize {
         self.announce_sig_cache.len()
     }
 
+    /// Number of destinations in the announce rate table.
     pub fn rate_limiter_count(&self) -> usize {
         self.rate_limiter.len()
     }
 
+    /// Number of blackholed identities.
     pub fn blackholed_count(&self) -> usize {
         self.blackholed_identities.len()
     }
 
+    /// Number of tunnels in the tunnel table.
     pub fn tunnel_count(&self) -> usize {
         self.tunnel_table.len()
     }
 
+    /// Number of discovery path request tags remembered.
     pub fn discovery_pr_tags_count(&self) -> usize {
         self.discovery_pr_tags.len()
     }
@@ -136,38 +153,47 @@ impl TransportEngine {
         self.discovery_pr_tag_set.contains(unique_tag)
     }
 
+    /// Number of discovery path requests waiting for a path.
     pub fn discovery_path_requests_count(&self) -> usize {
         self.discovery_path_requests.len()
     }
 
+    /// Number of interface announce queues.
     pub fn announce_queue_count(&self) -> usize {
         self.announce_queues.queue_count()
     }
 
+    /// Number of interface announce queues holding announces.
     pub fn nonempty_announce_queue_count(&self) -> usize {
         self.announce_queues.nonempty_queue_count()
     }
 
+    /// Number of announces waiting in interface announce queues.
     pub fn queued_announce_count(&self) -> usize {
         self.announce_queues.total_queued_announces()
     }
 
+    /// Bytes of the announces waiting in interface announce queues.
     pub fn queued_announce_bytes(&self) -> usize {
         self.announce_queues.total_queued_bytes()
     }
 
+    /// Number of announces dropped because the limit on announce queues was reached.
     pub fn announce_queue_interface_cap_drop_count(&self) -> u64 {
         self.announce_queues.interface_cap_drop_count()
     }
 
+    /// Number of registered local destinations.
     pub fn local_destinations_count(&self) -> usize {
         self.local_destinations.len()
     }
 
+    /// The announce rate limiter.
     pub fn rate_limiter(&self) -> &AnnounceRateLimiter {
         &self.rate_limiter
     }
 
+    /// Info of a registered interface.
     pub fn interface_info(&self, id: &InterfaceId) -> Option<&InterfaceInfo> {
         self.interfaces.get(id)
     }
@@ -180,6 +206,8 @@ impl TransportEngine {
             .map(|info| info.id)
     }
 
+    /// Point the primary path to `dest_hash` straight at the destination over
+    /// `interface`: one hop, expiring in an hour. Adds the path when there is none.
     pub fn redirect_path(&mut self, dest_hash: &[u8; 16], interface: InterfaceId, now: f64) {
         if let Some(entry) = self
             .path_table
@@ -213,14 +241,17 @@ impl TransportEngine {
         }
     }
 
+    /// Add `entry` to the path table as a path to `dest_hash`.
     pub fn inject_path(&mut self, dest_hash: [u8; 16], entry: PathEntry) {
         self.upsert_path_destination(dest_hash, entry.clone(), entry.timestamp);
     }
 
+    /// Remove every path to `dest_hash`. Returns whether there were any.
     pub fn drop_path(&mut self, dest_hash: &[u8; 16]) -> bool {
         self.path_table.remove(dest_hash).is_some()
     }
 
+    /// Remove every path whose next hop is `transport_hash`. Returns how many were removed.
     pub fn drop_all_via(&mut self, transport_hash: &[u8; 16]) -> usize {
         let mut removed = 0usize;
         for ps in self.path_table.values_mut() {
@@ -232,6 +263,7 @@ impl TransportEngine {
         removed
     }
 
+    /// Remove every path learnt on `interface`. Returns how many were removed.
     pub fn drop_paths_for_interface(&mut self, interface: InterfaceId) -> usize {
         let mut removed = 0usize;
         let mut cleared_destinations = Vec::new();
@@ -250,6 +282,7 @@ impl TransportEngine {
         removed
     }
 
+    /// Remove every reverse table entry on `interface`. Returns how many were removed.
     pub fn drop_reverse_for_interface(&mut self, interface: InterfaceId) -> usize {
         let before = self.reverse_table.len();
         self.reverse_table.retain(|_, entry| {
@@ -258,6 +291,7 @@ impl TransportEngine {
         before - self.reverse_table.len()
     }
 
+    /// Remove every link table entry on `interface`. Returns how many were removed.
     pub fn drop_links_for_interface(&mut self, interface: InterfaceId) -> usize {
         let before = self.link_table.len();
         self.link_table.retain(|_, entry| {
@@ -266,6 +300,8 @@ impl TransportEngine {
         before - self.link_table.len()
     }
 
+    /// Clear the announce table, held announces, interface announce queues and
+    /// ingress control state.
     pub fn drop_announce_queues(&mut self) {
         self.announce_table.clear();
         self.held_announces.clear();
@@ -273,23 +309,29 @@ impl TransportEngine {
         self.ingress_control.clear();
     }
 
+    /// [`Self::drop_announce_queues`], and clear the reverse table too.
     pub fn void_queues(&mut self) {
         self.drop_announce_queues();
         self.reverse_table.clear();
     }
 
+    /// Hash of this node's transport identity, if set.
     pub fn identity_hash(&self) -> Option<&[u8; 16]> {
         self.config.identity_hash.as_ref()
     }
 
+    /// Whether this node forwards traffic as a transport node.
     pub fn transport_enabled(&self) -> bool {
         self.config.transport_enabled
     }
 
+    /// The engine configuration.
     pub fn config(&self) -> &TransportConfig {
         &self.config
     }
 
+    /// Replace the packet hash list with an empty one retaining up to
+    /// `max_entries` hashes, keeping its hashing seed.
     pub fn set_packet_hashlist_max_entries(&mut self, max_entries: usize) {
         self.config.packet_hashlist_max_entries = max_entries;
         let seed = self.packet_hashlist.hashing_seed();
@@ -300,6 +342,7 @@ impl TransportEngine {
         }
     }
 
+    /// Primary path of each destination, skipping those over `max_hops` hops.
     pub fn get_path_table(&self, max_hops: Option<u8>) -> Vec<PathTableRow> {
         let mut result = Vec::new();
         for (dest_hash, ps) in self.path_table.iter() {
@@ -358,6 +401,7 @@ impl TransportEngine {
             .collect()
     }
 
+    /// Every announce rate table entry.
     pub fn get_rate_table(&self) -> Vec<RateTableRow> {
         self.rate_limiter
             .entries()
@@ -373,20 +417,25 @@ impl TransportEngine {
             .collect()
     }
 
+    /// Every blackholed identity as (identity hash, created, expires, reason).
     pub fn get_blackholed(&self) -> Vec<([u8; 16], f64, f64, Option<alloc::string::String>)> {
         self.blackholed_entries()
             .map(|(hash, entry)| (*hash, entry.created, entry.expires, entry.reason.clone()))
             .collect()
     }
 
+    /// Destinations in the path table.
     pub fn active_destination_hashes(&self) -> alloc::collections::BTreeSet<[u8; 16]> {
         self.path_table.keys().copied().collect()
     }
 
+    /// Number of destinations evicted because the path table was full.
     pub fn path_destination_cap_evict_count(&self) -> usize {
         self.path_destination_cap_evict_count
     }
 
+    /// Hashes of the announce packets behind every path and tunnel path, sorted
+    /// and without duplicates.
     pub fn active_packet_hashes(&self) -> Vec<[u8; 32]> {
         let mut hashes: Vec<[u8; 32]> = self
             .path_table
@@ -404,6 +453,8 @@ impl TransportEngine {
         hashes
     }
 
+    /// Remove stale announce rate table entries; see
+    /// [`AnnounceRateLimiter::cull_stale`]. Returns how many were removed.
     pub fn cull_rate_limiter(
         &mut self,
         active: &alloc::collections::BTreeSet<[u8; 16]>,
@@ -413,12 +464,15 @@ impl TransportEngine {
         self.rate_limiter.cull_stale(active, now, ttl_secs)
     }
 
+    /// Update the incoming announce frequency of an interface, in announces per second.
     pub fn update_interface_freq(&mut self, id: InterfaceId, ia_freq: f64) {
         if let Some(info) = self.interfaces.get_mut(&id) {
             info.ia_freq = ia_freq;
         }
     }
 
+    /// Update the announce and path request frequencies and sample counts of an
+    /// interface, as measured by the driver.
     pub fn update_interface_freqs(
         &mut self,
         id: InterfaceId,
@@ -480,6 +534,7 @@ impl TransportEngine {
             })
     }
 
+    /// Number of announces ingress control holds for `interface`.
     pub fn held_announce_count(&self, interface: &InterfaceId) -> usize {
         self.ingress_control.held_count(interface)
     }
@@ -537,18 +592,22 @@ impl TransportEngine {
         self.hop_limiter = hop_limiter;
     }
 
+    /// Whether an announce burst is active on `interface`.
     pub fn burst_active(&self, interface: &InterfaceId) -> bool {
         self.ingress_control.burst_active(interface)
     }
 
+    /// When the announce burst on `interface` started, in seconds; 0 when none ever did.
     pub fn burst_activated(&self, interface: &InterfaceId) -> f64 {
         self.ingress_control.burst_activated(interface)
     }
 
+    /// Whether a path request burst is active on `interface`.
     pub fn pr_burst_active(&self, interface: &InterfaceId) -> bool {
         self.ingress_control.pr_burst_active(interface)
     }
 
+    /// When the path request burst on `interface` started, in seconds; 0 when none ever did.
     pub fn pr_burst_activated(&self, interface: &InterfaceId) -> f64 {
         self.ingress_control.pr_burst_activated(interface)
     }

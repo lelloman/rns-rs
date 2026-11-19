@@ -9,6 +9,7 @@ pub struct AnnounceRateLimiter {
 }
 
 impl AnnounceRateLimiter {
+    /// Empty rate table.
     pub fn new() -> Self {
         AnnounceRateLimiter {
             table: BTreeMap::new(),

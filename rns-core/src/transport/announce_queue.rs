@@ -50,6 +50,7 @@ pub struct InterfaceAnnounceQueue {
 }
 
 impl InterfaceAnnounceQueue {
+    /// Empty queue that allows an announce right away.
     pub fn new() -> Self {
         InterfaceAnnounceQueue {
             entries: Vec::new(),
@@ -158,6 +159,8 @@ pub struct AnnounceQueues {
 }
 
 impl AnnounceQueues {
+    /// Empty set of queues, holding queues for at most `max_interfaces` interfaces;
+    /// announces for further interfaces are dropped.
     pub fn new(max_interfaces: usize) -> Self {
         AnnounceQueues {
             queues: BTreeMap::new(),

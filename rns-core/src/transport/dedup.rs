@@ -34,6 +34,7 @@ pub struct PacketHashlist {
 }
 
 impl PacketHashlist {
+    /// Table retaining up to `max_size` hashes, allocated eagerly.
     pub fn new(max_size: usize) -> Self {
         Self::with_allocation(max_size, PacketHashlistAllocation::Eager)
     }
@@ -126,6 +127,7 @@ impl PacketHashlist {
         self.queue.len()
     }
 
+    /// Whether no hash is retained.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -199,6 +201,7 @@ pub struct AnnounceSignatureCache {
 }
 
 impl AnnounceSignatureCache {
+    /// Cache of up to `max_entries` keys, each kept for `ttl_secs` seconds; 0 entries disables it.
     pub fn new(max_entries: usize, ttl_secs: f64) -> Self {
         Self {
             entries: BTreeMap::new(),
@@ -250,10 +253,12 @@ impl AnnounceSignatureCache {
         before - self.entries.len()
     }
 
+    /// Number of cached keys.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// Whether no key is cached.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

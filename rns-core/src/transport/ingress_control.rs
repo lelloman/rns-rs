@@ -59,6 +59,7 @@ pub struct IngressControl {
 }
 
 impl IngressControl {
+    /// Ingress control with no interface state yet.
     pub fn new() -> Self {
         IngressControl {
             states: BTreeMap::new(),

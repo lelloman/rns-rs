@@ -1,7 +1,7 @@
 use super::tables::{PathEntry, PathSet};
 use crate::constants;
 
-/// Extract emission timestamp from bytes [5:10] of a random_blob (big-endian u64).
+/// Extract emission timestamp from bytes `[5:10]` of a random_blob (big-endian u64).
 pub fn timebase_from_random_blob(blob: &[u8; 10]) -> u64 {
     let mut bytes = [0u8; 8];
     bytes[3..8].copy_from_slice(&blob[5..10]);
@@ -89,9 +89,12 @@ pub fn extract_random_blob(packet_data: &[u8]) -> Option<[u8; 10]> {
     Some(blob)
 }
 
+/// Verdict of [`should_update_path`] on an announce.
 #[derive(Debug, PartialEq, Eq)]
 pub enum PathDecision {
+    /// Store the announced path.
     Add,
+    /// Keep the existing path.
     Reject,
 }
 

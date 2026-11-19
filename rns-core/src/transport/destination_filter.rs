@@ -160,6 +160,12 @@ impl DestinationTypeFilter {
         self.blocked.contains(destination_type)
     }
 
+    /// Whether an announce of this type passes the filter (upstream `Transport.inbound`).
+    ///
+    /// A blocked type never passes. With `required_only`, a type passes when
+    /// allowed, wanted by a local application, or when `own_local_announce` is set,
+    /// which the inbound path does for a zero-hop announce from a local client
+    /// interface.
     pub fn allows(&self, destination_type: &DestinationType, own_local_announce: bool) -> bool {
         if self.blocked.contains(destination_type) {
             return false;

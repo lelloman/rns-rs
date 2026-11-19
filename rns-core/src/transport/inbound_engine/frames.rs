@@ -34,6 +34,8 @@ impl TransportEngine {
         self.handle_inbound_with_announce_queue(frame, rng, None)
     }
 
+    /// [`Self::handle_inbound`], queueing announces that need a signature check
+    /// in `announce_queue` when one is given instead of verifying them inline.
     pub fn handle_inbound_with_announce_queue(
         &mut self,
         frame: InboundFrame<'_>,
@@ -281,6 +283,8 @@ impl TransportEngine {
             .then_some((hops, from_local_client))
     }
 
+    /// Whether the packet filter accepts `decoded` as received on `iface`, with
+    /// its hop count after this hop.
     pub fn accepts_decoded_packet(&self, decoded: &DecodedPacket, iface: InterfaceId) -> bool {
         self.filtered_inbound_hops(&decoded.packet, iface).is_some()
     }

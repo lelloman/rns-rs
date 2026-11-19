@@ -6,8 +6,10 @@ use alloc::vec::Vec;
 use super::RxMetadata;
 use crate::constants;
 
+/// Default for [`TransportConfig::max_path_destinations`].
 pub const DEFAULT_MAX_PATH_DESTINATIONS: usize = 8192;
 
+/// Shared, immutable packet bytes, cheap to clone into several actions.
 pub type PacketBytes = Arc<[u8]>;
 
 /// Opaque identifier for a network interface.
@@ -18,17 +20,25 @@ pub struct InterfaceId(pub u64);
 /// accurately represented by payload bits divided by a raw bit rate.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AirtimeProfile {
+    /// LoRa radio airtime, from the standard LoRa time-on-air formula.
     Lora {
+        /// Channel bandwidth in Hz.
         bandwidth: u32,
+        /// Spreading factor; 0 makes the airtime zero.
         spreading_factor: u8,
+        /// Coding rate denominator, as in 4/5..4/8 (5..=8).
         coding_rate: u8,
+        /// Number of preamble symbols.
         preamble_symbols: u16,
+        /// Whether packets carry an explicit header.
         explicit_header: bool,
+        /// Whether packets carry a payload CRC.
         crc: bool,
     },
 }
 
 impl AirtimeProfile {
+    /// Time on air for a payload of `payload_len` bytes, in seconds.
     pub fn transmit_time_secs(&self, payload_len: usize) -> f64 {
         match *self {
             AirtimeProfile::Lora {
@@ -85,21 +95,34 @@ fn lora_airtime_secs(
 /// Per-interface ingress-control configuration.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IngressControlConfig {
+    /// Hold announces and gate path requests during ingress bursts (upstream `ingress_control`).
     pub enabled: bool,
+    /// Gate outgoing path requests by their frequency (upstream `egress_control`).
     pub egress_enabled: bool,
+    /// Maximum announces held per interface during a burst.
     pub max_held_announces: usize,
+    /// Announce burst threshold while the interface is younger than `new_time`, in announces per second.
     pub burst_freq_new: f64,
+    /// Announce burst threshold once the interface is older than `new_time`, in announces per second.
     pub burst_freq: f64,
+    /// Path request burst threshold while the interface is younger than `new_time`, in requests per second.
     pub pr_burst_freq_new: f64,
+    /// Path request burst threshold once the interface is older than `new_time`, in requests per second.
     pub pr_burst_freq: f64,
+    /// Outgoing path request frequency above which egress control limits, in requests per second.
     pub egress_pr_freq: f64,
+    /// Age below which the interface counts as new, in seconds.
     pub new_time: f64,
+    /// Minimum time a burst stays active after it starts or was last sustained, in seconds.
     pub burst_hold: f64,
+    /// Delay after a burst starts before held announces may be released, in seconds.
     pub burst_penalty: f64,
+    /// Delay between releasing two held announces, in seconds.
     pub held_release_interval: f64,
 }
 
 impl IngressControlConfig {
+    /// Default configuration with ingress control on.
     pub fn enabled() -> Self {
         Self {
             enabled: true,
@@ -107,6 +130,7 @@ impl IngressControlConfig {
         }
     }
 
+    /// Default configuration with ingress control off.
     pub fn disabled() -> Self {
         Self {
             enabled: false,
@@ -141,7 +165,9 @@ impl Default for IngressControlConfig {
 /// `Interface.destination_cost` and `pr_cost` properties do.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct InterfaceStampCosts {
+    /// Announce stamp cost override for this interface (upstream `destination_cost`).
     pub destination_cost: Option<crate::stamp::StampCost>,
+    /// Path request stamp cost override for this interface (upstream `pr_cost`).
     pub pr_cost: Option<crate::stamp::StampCost>,
 }
 
@@ -161,21 +187,33 @@ impl InterfaceStampCosts {
 /// Metadata about a network interface.
 #[derive(Debug, Clone)]
 pub struct InterfaceInfo {
+    /// Identifier the transport uses for this interface.
     pub id: InterfaceId,
+    /// Human-readable interface name.
     pub name: String,
+    /// Interface mode, one of the `constants::MODE_*` values.
     pub mode: u8,
     /// Signed interface preference used by path selection.
     pub gravity: i64,
+    /// Discover paths for unknown destinations on path requests from this interface, whatever its mode (upstream `recursive_prs`).
     pub recursive_prs: bool,
+    /// Rebroadcast here announces whose path was learnt on an internal-mode interface (upstream `announces_from_internal`).
     pub announces_from_internal: bool,
     /// Allow announces received here to propagate to internal-mode interfaces.
     pub announces_to_internal: Option<bool>,
+    /// Whether the interface can send; only such interfaces get broadcasts and path requests.
     pub out_capable: bool,
+    /// Whether the interface can receive.
     pub in_capable: bool,
+    /// Interface bit rate in bits per second, if known.
     pub bitrate: Option<u64>,
+    /// Airtime model used instead of `bitrate` for announce bandwidth accounting.
     pub airtime_profile: Option<AirtimeProfile>,
+    /// Minimum time between announces from one destination, in seconds; `None` disables announce rate limiting.
     pub announce_rate_target: Option<f64>,
+    /// Number of rate violations tolerated before a destination is blocked.
     pub announce_rate_grace: u32,
+    /// Extra block time added to `announce_rate_target` once a destination is blocked, in seconds.
     pub announce_rate_penalty: f64,
     /// Announce bandwidth cap (fraction of bitrate). Default 0.02 (2%).
     pub announce_cap: f64,
@@ -222,12 +260,19 @@ pub struct InterfaceInfo {
 /// A received and validated announce, see [`TransportAction::AnnounceReceived`].
 #[derive(Debug, Clone)]
 pub struct ReceivedAnnounce {
+    /// Hash of the announced destination.
     pub destination_hash: [u8; 16],
+    /// Hash of the announcing identity.
     pub identity_hash: [u8; 16],
+    /// Public key of the announcing identity (X25519 then Ed25519, 32 bytes each).
     pub public_key: [u8; 64],
+    /// Name hash of the destination's full name.
     pub name_hash: [u8; 10],
+    /// Random hash of the announce (5 random bytes and a 5-byte timestamp).
     pub random_hash: [u8; 10],
+    /// Ratchet public key, when the announce carries one.
     pub ratchet: Option<[u8; 32]>,
+    /// Application data, when the announce carries any.
     pub app_data: Option<Vec<u8>>,
     /// Detached destination stamp, when present on the announce.
     pub stamp: Option<[u8; crate::constants::STAMP_LENGTH]>,
@@ -235,8 +280,11 @@ pub struct ReceivedAnnounce {
     pub stamp_value: crate::stamp::StampValue,
     /// Announced link request stamp cost, if present.
     pub lr_cost: Option<crate::stamp::StampCost>,
+    /// Hop count after counting the hop to this node.
     pub hops: u8,
+    /// Interface the announce arrived on.
     pub receiving_interface: InterfaceId,
+    /// Receive metadata of the frame.
     pub rx: RxMetadata,
 }
 
@@ -245,16 +293,21 @@ pub struct ReceivedAnnounce {
 pub enum TransportAction {
     /// Send raw bytes on a specific interface.
     SendOnInterface {
+        /// Interface to send on.
         interface: InterfaceId,
+        /// Packet bytes.
         raw: PacketBytes,
     },
     /// Broadcast raw bytes on all OUT-capable interfaces, optionally excluding one.
     BroadcastOnAllInterfaces {
+        /// Packet bytes.
         raw: PacketBytes,
+        /// Interface to skip.
         exclude: Option<InterfaceId>,
     },
     /// Deliver a packet to a local destination.
     DeliverLocal {
+        /// Destination the packet is addressed to.
         destination_hash: [u8; 16],
         /// The packet as received, with its hop count as on the wire,
         /// except for a link request proof or an LRRTT packet: their hop
@@ -266,6 +319,7 @@ pub enum TransportAction {
         /// whose hash nothing on its delivery path reads (see
         /// [`RawPacket::is_unhashed_link_resource`](crate::packet::RawPacket::is_unhashed_link_resource)).
         packet_hash: [u8; 32],
+        /// Interface the packet arrived on.
         receiving_interface: InterfaceId,
     },
     /// An announce was received and validated. Boxed: it is by far the
@@ -273,59 +327,89 @@ pub enum TransportAction {
     AnnounceReceived(Box<ReceivedAnnounce>),
     /// A path was updated in the path table.
     PathUpdated {
+        /// Destination whose path changed.
         destination_hash: [u8; 16],
+        /// Hop count of the new path.
         hops: u8,
+        /// Transport identity hash of the next hop, or the announced destination for a direct neighbour.
         next_hop: [u8; 16],
+        /// Interface the path goes through.
         interface: InterfaceId,
     },
     /// Forward raw bytes to all local client interfaces (excluding one).
     ForwardToLocalClients {
+        /// Packet bytes.
         raw: PacketBytes,
+        /// Interface to skip.
         exclude: Option<InterfaceId>,
     },
     /// Forward a PLAIN/GROUP broadcast between local and external interfaces.
     ForwardPlainBroadcast {
+        /// Packet bytes.
         raw: PacketBytes,
+        /// Send to local client interfaces when true, to the other interfaces when false.
         to_local: bool,
+        /// Interface to skip.
         exclude: Option<InterfaceId>,
     },
     /// Cache an announce packet to disk.
     CacheAnnounce {
+        /// Hash of the announce packet.
         packet_hash: [u8; 32],
+        /// Announce packet bytes.
         raw: PacketBytes,
     },
     /// Tunnel synthesis: send synthesis data on an interface.
     TunnelSynthesize {
+        /// Interface to send on.
         interface: InterfaceId,
+        /// Synthesis payload.
         data: Vec<u8>,
+        /// Destination hash of `rnstransport.tunnel.synthesize`.
         dest_hash: [u8; 16],
     },
     /// A tunnel was established or reattached.
     TunnelEstablished {
+        /// Tunnel identifier.
         tunnel_id: [u8; 32],
+        /// Interface now attached to the tunnel.
         interface: InterfaceId,
     },
     /// An announce is being retransmitted (for hook notification).
     AnnounceRetransmit {
+        /// Announced destination.
         destination_hash: [u8; 16],
+        /// Hop count of the announce.
         hops: u8,
+        /// Interface the announce goes out on, or `None` for all.
         interface: Option<InterfaceId>,
     },
     /// A link request was received and is being forwarded (transport relay).
     LinkRequestReceived {
+        /// Identifier of the link.
         link_id: [u8; 16],
+        /// Destination the link request is addressed to.
         destination_hash: [u8; 16],
+        /// Interface the link request arrived on.
         receiving_interface: InterfaceId,
     },
     /// A link was established via LRPROOF validation (transport relay).
     LinkEstablished {
+        /// Identifier of the link.
         link_id: [u8; 16],
+        /// Interface the proof is forwarded on, toward the link initiator.
         interface: InterfaceId,
     },
     /// A link entry expired and was removed from the link table.
-    LinkClosed { link_id: [u8; 16] },
+    LinkClosed {
+        /// Identifier of the link.
+        link_id: [u8; 16],
+    },
     /// A malformed or cryptographically invalid packet was rejected.
-    ProtocolViolation { interface: InterfaceId },
+    ProtocolViolation {
+        /// Interface the packet arrived on.
+        interface: InterfaceId,
+    },
     /// A path request arrived for a destination registered on this node.
     ///
     /// Python `Transport.path_request()` answers it with
@@ -335,8 +419,11 @@ pub enum TransportAction {
     /// only on `interface`. Path requests without a tag are dropped earlier,
     /// so `tag` always holds 1..=16 bytes.
     AnnounceLocalPathResponse {
+        /// Local destination the request asks for.
         destination_hash: [u8; 16],
+        /// Request tag to echo in the path response.
         tag: Vec<u8>,
+        /// Interface the request arrived on.
         interface: InterfaceId,
     },
     /// A path request must be stamped by this node before it is sent on
@@ -350,8 +437,11 @@ pub enum TransportAction {
     /// per egress interface, matching upstream's one queue entry per
     /// `destination_hash + interface` key. `tag` holds 1..=16 bytes.
     StampPathRequest {
+        /// Destination the request asks for.
         destination_hash: [u8; 16],
+        /// Request tag.
         tag: Vec<u8>,
+        /// Interface the stamped request goes out on.
         interface: InterfaceId,
     },
     /// Send a path request to rediscover `destination_hash`, taken from the
@@ -362,7 +452,9 @@ pub enum TransportAction {
     /// out on every interface except `skip_interface`, stamped once when
     /// path request stamping is on (upstream acb38a8a).
     RediscoverPath {
+        /// Destination to rediscover.
         destination_hash: [u8; 16],
+        /// Interface to leave out, if any.
         skip_interface: Option<InterfaceId>,
     },
 }
@@ -409,7 +501,7 @@ impl Default for StampRequirements {
     }
 }
 
-/// Configuration for TransportEngine.
+/// Startup allocation policy for the packet hash list.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PacketHashlistAllocation {
     /// Touch every payload slot during construction: the full table's
@@ -421,9 +513,12 @@ pub enum PacketHashlistAllocation {
     Lazy,
 }
 
+/// Configuration for [`TransportEngine`](super::TransportEngine).
 #[derive(Debug, Clone)]
 pub struct TransportConfig {
+    /// Act as a transport node: forward packets and rebroadcast announces for others.
     pub transport_enabled: bool,
+    /// Hash of this node's transport identity, used as its transport id.
     pub identity_hash: Option<[u8; 16]>,
     /// Non-zero hop byte used to mask local zero-hop origination.
     pub local_hops_delta: u8,
