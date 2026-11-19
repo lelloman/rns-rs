@@ -26,7 +26,7 @@ ed25519-aws-lc = ["dep:aws-lc-sys", "std"]
 ed25519-batch = ["ed25519-dalek/batch"]
 
 [dependencies]
-esp-idf-sys = { version = "0.37", optional = true }
+esp-idf-sys = { version = "0.38", optional = true }
 # `fast` / `precomputed-tables` keep the basepoint tables, so signing and
 # public-key derivation are fixed-base multiplications instead of a full
 # variable-base scalar multiplication per operation.

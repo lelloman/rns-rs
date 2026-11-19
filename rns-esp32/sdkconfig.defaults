@@ -25,12 +25,15 @@ CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 # Disable task watchdog — crypto operations are slow
 CONFIG_ESP_TASK_WDT=n
 
-# BLE via NimBLE — peripheral role only (NUS GATT server for BLE serial bridge)
+# BLE via NimBLE — a peripheral (NUS GATT server for the BLE serial bridge)
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_CONTROLLER_ENABLED=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
-CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+# ESP-IDF 5.5 builds NimBLE's GATT client only with the central role, and
+# the device starts the MTU exchange itself (ble_gattc_exchange_mtu).
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_GATT_CLIENT=y
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
