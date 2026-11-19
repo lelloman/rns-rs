@@ -114,7 +114,7 @@ pub use interface::auto::{AutoConfig, AutoFactory};
 #[cfg(feature = "iface-ax25-kiss")]
 pub use interface::ax25_kiss::{
     decode_ui_frame as decode_ax25_ui_frame, encode_ui_frame as encode_ax25_ui_frame,
-    validate_address as validate_ax25_address, Ax25KissFactory,
+    validate_address as validate_ax25_address, Ax25AddressError, Ax25KissFactory,
 };
 #[cfg(feature = "iface-backbone")]
 pub use interface::backbone::{
