@@ -94,7 +94,7 @@ pub use driver::BackbonePeerPoolSettings;
 pub use driver::{AnnounceRateDefaults, Callbacks};
 pub use event::{
     BackbonePeerHookEvent, BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus,
-    BackbonePeerStateEntry, BlackholeInfo, DestinationStampInfo, Event, HookInfo,
+    BackbonePeerStateEntry, BlackholeInfo, DestinationStampInfo, Event, HookInfo, HookOpError,
     InterfaceStatsResponse, LinkDatagramError, LinkInfoEntry, LocalDestinationEntry,
     NextHopResponse, PacketSignal, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
     ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,

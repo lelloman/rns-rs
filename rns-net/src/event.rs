@@ -16,7 +16,7 @@ pub use crate::common::event::{
     BackbonePeerPoolStatus, BackbonePeerStateEntry, BlackholeInfo, DestinationStampInfo,
     DirectCandidateKind, DirectLinkCounters, DirectLinkEntry, DirectLinkStatus, DirectLossCause,
     DirectPathStatus, DirectReupgradeConfig, DrainStatus, DynamicInterfaceRegistration,
-    HolePunchPolicy, HookInfo, I2pEndpointStat, InterfaceManagementOperation,
+    HolePunchPolicy, HookInfo, HookOpError, I2pEndpointStat, InterfaceManagementOperation,
     InterfaceStatsResponse, InterfaceTelemetry, KnownDestinationEntry, LifecycleState,
     LinkDatagramError, LinkDistributionEntry, LinkInfoEntry, LocalDestinationEntry,
     NextHopResponse, PacketSignal, PathTableEntry, ProbeRateLimit, ProbeServerReport,

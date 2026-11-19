@@ -1,6 +1,7 @@
 //! Loading and managing hooks.
 
 use super::*;
+use crate::event::HookOpError;
 
 impl RnsNode {
     /// Load an in-memory WASM hook at runtime.
@@ -10,7 +11,7 @@ impl RnsNode {
         wasm_bytes: Vec<u8>,
         attach_point: String,
         priority: i32,
-    ) -> Result<Result<(), String>, SendError> {
+    ) -> Result<Result<(), HookOpError>, SendError> {
         let (response_tx, response_rx) = std::sync::mpsc::channel();
         self.tx
             .send(Event::LoadHook {
@@ -32,7 +33,7 @@ impl RnsNode {
         hook_type: String,
         attach_point: String,
         priority: i32,
-    ) -> Result<Result<(), String>, SendError> {
+    ) -> Result<Result<(), HookOpError>, SendError> {
         let (response_tx, response_rx) = std::sync::mpsc::channel();
         self.tx
             .send(Event::LoadHookFile {
@@ -54,7 +55,7 @@ impl RnsNode {
         builtin_id: String,
         attach_point: String,
         priority: i32,
-    ) -> Result<Result<(), String>, SendError> {
+    ) -> Result<Result<(), HookOpError>, SendError> {
         let (response_tx, response_rx) = std::sync::mpsc::channel();
         self.tx
             .send(Event::LoadBuiltinHook {
@@ -73,7 +74,7 @@ impl RnsNode {
         &self,
         name: String,
         attach_point: String,
-    ) -> Result<Result<(), String>, SendError> {
+    ) -> Result<Result<(), HookOpError>, SendError> {
         let (response_tx, response_rx) = std::sync::mpsc::channel();
         self.tx
             .send(Event::UnloadHook {
@@ -91,7 +92,7 @@ impl RnsNode {
         name: String,
         attach_point: String,
         wasm_bytes: Vec<u8>,
-    ) -> Result<Result<(), String>, SendError> {
+    ) -> Result<Result<(), HookOpError>, SendError> {
         let (response_tx, response_rx) = std::sync::mpsc::channel();
         self.tx
             .send(Event::ReloadHook {
@@ -111,7 +112,7 @@ impl RnsNode {
         attach_point: String,
         path: String,
         hook_type: String,
-    ) -> Result<Result<(), String>, SendError> {
+    ) -> Result<Result<(), HookOpError>, SendError> {
         let (response_tx, response_rx) = std::sync::mpsc::channel();
         self.tx
             .send(Event::ReloadHookFile {
@@ -131,7 +132,7 @@ impl RnsNode {
         name: String,
         attach_point: String,
         builtin_id: String,
-    ) -> Result<Result<(), String>, SendError> {
+    ) -> Result<Result<(), HookOpError>, SendError> {
         let (response_tx, response_rx) = std::sync::mpsc::channel();
         self.tx
             .send(Event::ReloadBuiltinHook {
@@ -150,7 +151,7 @@ impl RnsNode {
         name: String,
         attach_point: String,
         enabled: bool,
-    ) -> Result<Result<(), String>, SendError> {
+    ) -> Result<Result<(), HookOpError>, SendError> {
         let (response_tx, response_rx) = std::sync::mpsc::channel();
         self.tx
             .send(Event::SetHookEnabled {
@@ -169,7 +170,7 @@ impl RnsNode {
         name: String,
         attach_point: String,
         priority: i32,
-    ) -> Result<Result<(), String>, SendError> {
+    ) -> Result<Result<(), HookOpError>, SendError> {
         let (response_tx, response_rx) = std::sync::mpsc::channel();
         self.tx
             .send(Event::SetHookPriority {

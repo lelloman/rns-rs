@@ -3,6 +3,7 @@
 //! compact engine's RPC service can apply them inline (see `rpc_service`).
 
 use super::*;
+use crate::event::HookOpError;
 
 impl Driver {
     /// Apply a hook management event. Other events are ignored.
@@ -17,16 +18,13 @@ impl Driver {
             } => {
                 #[cfg(feature = "hooks")]
                 {
-                    let result = (|| -> Result<(), String> {
+                    let result = (|| -> Result<(), HookOpError> {
                         let point_idx = crate::config::parse_hook_point(&attach_point)
-                            .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
-                        let mgr = self
-                            .hook_manager
-                            .as_ref()
-                            .ok_or_else(|| "hook manager not available".to_string())?;
+                            .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
+                        let mgr = self.hook_manager.as_ref().ok_or(HookOpError::NoManager)?;
                         let program = mgr
                             .compile(name.clone(), &wasm_bytes, priority)
-                            .map_err(|e| format!("compile error: {}", e))?;
+                            .map_err(|e| HookOpError::Compile(e.to_string()))?;
                         self.hook_slots[point_idx].attach(program);
                         log::info!(
                             "Loaded hook '{}' at point {} (priority {})",
@@ -41,7 +39,7 @@ impl Driver {
                 #[cfg(not(feature = "hooks"))]
                 {
                     let _ = (name, wasm_bytes, attach_point, priority);
-                    let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    let _ = response_tx.send(Err(HookOpError::NotEnabled));
                 }
             }
             Event::LoadHookFile {
@@ -54,14 +52,12 @@ impl Driver {
             } => {
                 #[cfg(feature = "hooks")]
                 {
-                    let result = (|| -> Result<(), String> {
+                    let result = (|| -> Result<(), HookOpError> {
                         let point_idx = crate::config::parse_hook_point(&attach_point)
-                            .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
-                        let backend = crate::config::parse_hook_backend(&hook_type)?;
-                        let mgr = self
-                            .hook_manager
-                            .as_ref()
-                            .ok_or_else(|| "hook manager not available".to_string())?;
+                            .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
+                        let backend = crate::config::parse_hook_backend(&hook_type)
+                            .map_err(HookOpError::Backend)?;
+                        let mgr = self.hook_manager.as_ref().ok_or(HookOpError::NoManager)?;
                         let program = mgr
                             .load_file_backend(
                                 name.clone(),
@@ -69,7 +65,7 @@ impl Driver {
                                 priority,
                                 backend,
                             )
-                            .map_err(|e| format!("load error: {}", e))?;
+                            .map_err(|e| HookOpError::Load(e.to_string()))?;
                         self.hook_slots[point_idx].attach(program);
                         log::info!(
                             "Loaded {} hook '{}' at point {} (priority {})",
@@ -85,7 +81,7 @@ impl Driver {
                 #[cfg(not(feature = "hooks"))]
                 {
                     let _ = (name, path, hook_type, attach_point, priority);
-                    let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    let _ = response_tx.send(Err(HookOpError::NotEnabled));
                 }
             }
             Event::LoadBuiltinHook {
@@ -97,16 +93,13 @@ impl Driver {
             } => {
                 #[cfg(feature = "hooks")]
                 {
-                    let result = (|| -> Result<(), String> {
+                    let result = (|| -> Result<(), HookOpError> {
                         let point_idx = crate::config::parse_hook_point(&attach_point)
-                            .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
-                        let mgr = self
-                            .hook_manager
-                            .as_ref()
-                            .ok_or_else(|| "hook manager not available".to_string())?;
+                            .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
+                        let mgr = self.hook_manager.as_ref().ok_or(HookOpError::NoManager)?;
                         let program = mgr
                             .load_builtin(name.clone(), builtin_id.as_str(), priority)
-                            .map_err(|e| format!("load error: {}", e))?;
+                            .map_err(|e| HookOpError::Load(e.to_string()))?;
                         self.hook_slots[point_idx].attach(program);
                         log::info!(
                             "Loaded built-in hook '{}' ({}) at point {} (priority {})",
@@ -122,7 +115,7 @@ impl Driver {
                 #[cfg(not(feature = "hooks"))]
                 {
                     let _ = (name, builtin_id, attach_point, priority);
-                    let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    let _ = response_tx.send(Err(HookOpError::NotEnabled));
                 }
             }
             Event::UnloadHook {
@@ -132,18 +125,18 @@ impl Driver {
             } => {
                 #[cfg(feature = "hooks")]
                 {
-                    let result = (|| -> Result<(), String> {
+                    let result = (|| -> Result<(), HookOpError> {
                         let point_idx = crate::config::parse_hook_point(&attach_point)
-                            .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
+                            .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
                         match self.hook_slots[point_idx].detach(&name) {
                             Some(_) => {
                                 log::info!("Unloaded hook '{}' from point {}", name, attach_point);
                                 Ok(())
                             }
-                            None => Err(format!(
-                                "hook '{}' not found at point '{}'",
-                                name, attach_point
-                            )),
+                            None => Err(HookOpError::NotFound {
+                                name: name.to_string(),
+                                point: attach_point.to_string(),
+                            }),
                         }
                     })();
                     let _ = response_tx.send(result);
@@ -151,7 +144,7 @@ impl Driver {
                 #[cfg(not(feature = "hooks"))]
                 {
                     let _ = (name, attach_point);
-                    let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    let _ = response_tx.send(Err(HookOpError::NotEnabled));
                 }
             }
             Event::ReloadHook {
@@ -162,18 +155,21 @@ impl Driver {
             } => {
                 #[cfg(feature = "hooks")]
                 {
-                    let result = (|| -> Result<(), String> {
+                    let result = (|| -> Result<(), HookOpError> {
                         let point_idx = crate::config::parse_hook_point(&attach_point)
-                            .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
+                            .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
                         let old = self.hook_slots[point_idx].detach(&name).ok_or_else(|| {
-                            format!("hook '{}' not found at point '{}'", name, attach_point)
+                            HookOpError::NotFound {
+                                name: name.to_string(),
+                                point: attach_point.to_string(),
+                            }
                         })?;
                         let priority = old.priority;
                         let mgr = match self.hook_manager.as_ref() {
                             Some(m) => m,
                             None => {
                                 self.hook_slots[point_idx].attach(old);
-                                return Err("hook manager not available".to_string());
+                                return Err(HookOpError::NoManager);
                             }
                         };
                         match mgr.compile(name.clone(), &wasm_bytes, priority) {
@@ -189,7 +185,7 @@ impl Driver {
                             }
                             Err(e) => {
                                 self.hook_slots[point_idx].attach(old);
-                                Err(format!("compile error: {}", e))
+                                Err(HookOpError::Compile(e.to_string()))
                             }
                         }
                     })();
@@ -198,7 +194,7 @@ impl Driver {
                 #[cfg(not(feature = "hooks"))]
                 {
                     let _ = (name, attach_point, wasm_bytes);
-                    let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    let _ = response_tx.send(Err(HookOpError::NotEnabled));
                 }
             }
             Event::ReloadHookFile {
@@ -210,25 +206,28 @@ impl Driver {
             } => {
                 #[cfg(feature = "hooks")]
                 {
-                    let result = (|| -> Result<(), String> {
+                    let result = (|| -> Result<(), HookOpError> {
                         let point_idx = crate::config::parse_hook_point(&attach_point)
-                            .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
+                            .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
                         let old = self.hook_slots[point_idx].detach(&name).ok_or_else(|| {
-                            format!("hook '{}' not found at point '{}'", name, attach_point)
+                            HookOpError::NotFound {
+                                name: name.to_string(),
+                                point: attach_point.to_string(),
+                            }
                         })?;
                         let priority = old.priority;
                         let backend = match crate::config::parse_hook_backend(&hook_type) {
                             Ok(backend) => backend,
                             Err(e) => {
                                 self.hook_slots[point_idx].attach(old);
-                                return Err(e);
+                                return Err(HookOpError::Backend(e));
                             }
                         };
                         let mgr = match self.hook_manager.as_ref() {
                             Some(m) => m,
                             None => {
                                 self.hook_slots[point_idx].attach(old);
-                                return Err("hook manager not available".to_string());
+                                return Err(HookOpError::NoManager);
                             }
                         };
                         match mgr.load_file_backend(
@@ -250,7 +249,7 @@ impl Driver {
                             }
                             Err(e) => {
                                 self.hook_slots[point_idx].attach(old);
-                                Err(format!("load error: {}", e))
+                                Err(HookOpError::Load(e.to_string()))
                             }
                         }
                     })();
@@ -259,7 +258,7 @@ impl Driver {
                 #[cfg(not(feature = "hooks"))]
                 {
                     let _ = (name, attach_point, path, hook_type);
-                    let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    let _ = response_tx.send(Err(HookOpError::NotEnabled));
                 }
             }
             Event::ReloadBuiltinHook {
@@ -270,18 +269,21 @@ impl Driver {
             } => {
                 #[cfg(feature = "hooks")]
                 {
-                    let result = (|| -> Result<(), String> {
+                    let result = (|| -> Result<(), HookOpError> {
                         let point_idx = crate::config::parse_hook_point(&attach_point)
-                            .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
+                            .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
                         let old = self.hook_slots[point_idx].detach(&name).ok_or_else(|| {
-                            format!("hook '{}' not found at point '{}'", name, attach_point)
+                            HookOpError::NotFound {
+                                name: name.to_string(),
+                                point: attach_point.to_string(),
+                            }
                         })?;
                         let priority = old.priority;
                         let mgr = match self.hook_manager.as_ref() {
                             Some(m) => m,
                             None => {
                                 self.hook_slots[point_idx].attach(old);
-                                return Err("hook manager not available".to_string());
+                                return Err(HookOpError::NoManager);
                             }
                         };
                         match mgr.load_builtin(name.clone(), builtin_id.as_str(), priority) {
@@ -298,7 +300,7 @@ impl Driver {
                             }
                             Err(e) => {
                                 self.hook_slots[point_idx].attach(old);
-                                Err(format!("load error: {}", e))
+                                Err(HookOpError::Load(e.to_string()))
                             }
                         }
                     })();
@@ -307,7 +309,7 @@ impl Driver {
                 #[cfg(not(feature = "hooks"))]
                 {
                     let _ = (name, attach_point, builtin_id);
-                    let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    let _ = response_tx.send(Err(HookOpError::NotEnabled));
                 }
             }
             Event::SetHookEnabled {
@@ -334,7 +336,7 @@ impl Driver {
                 #[cfg(not(feature = "hooks"))]
                 {
                     let _ = (name, attach_point, enabled);
-                    let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    let _ = response_tx.send(Err(HookOpError::NotEnabled));
                 }
             }
             Event::SetHookPriority {
@@ -371,7 +373,7 @@ impl Driver {
                 #[cfg(not(feature = "hooks"))]
                 {
                     let _ = (name, attach_point, priority);
-                    let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    let _ = response_tx.send(Err(HookOpError::NotEnabled));
                 }
             }
             Event::ListHooks { response_tx } => {
