@@ -25,7 +25,7 @@
 pub use polling::{Event, Events, PollMode, Poller};
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub use self::epoll::{Event, Events, PollMode, Poller};
+pub(crate) use self::epoll::{Event, Events, PollMode, Poller};
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod epoll {
@@ -45,7 +45,7 @@ mod epoll {
 
     /// How a registration reports readiness.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum PollMode {
+    pub(crate) enum PollMode {
         /// Reported once, then disarmed until modified.
         Oneshot,
         /// Reported on every wait while ready.
@@ -54,14 +54,14 @@ mod epoll {
 
     /// Interest in, or readiness of, one registered descriptor.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub struct Event {
+    pub(crate) struct Event {
         pub key: usize,
         pub readable: bool,
         pub writable: bool,
     }
 
     impl Event {
-        pub fn readable(key: usize) -> Self {
+        pub(crate) fn readable(key: usize) -> Self {
             Self {
                 key,
                 readable: true,
@@ -69,7 +69,7 @@ mod epoll {
             }
         }
 
-        pub fn writable(key: usize) -> Self {
+        pub(crate) fn writable(key: usize) -> Self {
             Self {
                 key,
                 readable: false,
@@ -77,7 +77,7 @@ mod epoll {
             }
         }
 
-        pub fn none(key: usize) -> Self {
+        pub(crate) fn none(key: usize) -> Self {
             Self {
                 key,
                 readable: false,
@@ -101,18 +101,18 @@ mod epoll {
     }
 
     /// Events reported by one wait.
-    pub struct Events {
+    pub(crate) struct Events {
         list: Vec<libc::epoll_event>,
     }
 
     impl Events {
-        pub fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self {
                 list: Vec::with_capacity(DEFAULT_CAPACITY),
             }
         }
 
-        pub fn iter(&self) -> impl Iterator<Item = Event> + '_ {
+        pub(crate) fn iter(&self) -> impl Iterator<Item = Event> + '_ {
             self.list.iter().map(|ev| {
                 let (bits, data) = (ev.events, ev.u64);
                 Event {
@@ -123,7 +123,7 @@ mod epoll {
             })
         }
 
-        pub fn clear(&mut self) {
+        pub(crate) fn clear(&mut self) {
             self.list.clear();
         }
     }
@@ -134,7 +134,7 @@ mod epoll {
         }
     }
 
-    pub struct Poller {
+    pub(crate) struct Poller {
         epoll: OwnedFd,
         notify_fd: OwnedFd,
         /// Set by `notify` before it writes the eventfd, so a burst of
@@ -153,7 +153,7 @@ mod epoll {
     }
 
     impl Poller {
-        pub fn new() -> io::Result<Self> {
+        pub(crate) fn new() -> io::Result<Self> {
             // SAFETY: plain syscalls; each returned descriptor is owned once.
             let epoll =
                 unsafe { OwnedFd::from_raw_fd(check(libc::epoll_create1(libc::EPOLL_CLOEXEC))?) };
@@ -187,7 +187,7 @@ mod epoll {
             Ok(poller)
         }
 
-        pub fn supports_level(&self) -> bool {
+        pub(crate) fn supports_level(&self) -> bool {
             true
         }
 
@@ -215,7 +215,7 @@ mod epoll {
         /// # Safety
         ///
         /// `fd` must be open, and must be deleted before it is closed.
-        pub unsafe fn add(&self, fd: RawFd, interest: Event) -> io::Result<()> {
+        pub(crate) unsafe fn add(&self, fd: RawFd, interest: Event) -> io::Result<()> {
             self.ctl(libc::EPOLL_CTL_ADD, fd, interest, PollMode::Oneshot)
         }
 
@@ -224,7 +224,7 @@ mod epoll {
         /// # Safety
         ///
         /// `fd` must be open, and must be deleted before it is closed.
-        pub unsafe fn add_with_mode(
+        pub(crate) unsafe fn add_with_mode(
             &self,
             fd: RawFd,
             interest: Event,
@@ -233,7 +233,7 @@ mod epoll {
             self.ctl(libc::EPOLL_CTL_ADD, fd, interest, mode)
         }
 
-        pub fn modify(&self, fd: BorrowedFd<'_>, interest: Event) -> io::Result<()> {
+        pub(crate) fn modify(&self, fd: BorrowedFd<'_>, interest: Event) -> io::Result<()> {
             self.ctl(
                 libc::EPOLL_CTL_MOD,
                 fd.as_raw_fd(),
@@ -242,7 +242,7 @@ mod epoll {
             )
         }
 
-        pub fn modify_with_mode(
+        pub(crate) fn modify_with_mode(
             &self,
             fd: BorrowedFd<'_>,
             interest: Event,
@@ -251,7 +251,7 @@ mod epoll {
             self.ctl(libc::EPOLL_CTL_MOD, fd.as_raw_fd(), interest, mode)
         }
 
-        pub fn delete(&self, fd: BorrowedFd<'_>) -> io::Result<()> {
+        pub(crate) fn delete(&self, fd: BorrowedFd<'_>) -> io::Result<()> {
             // SAFETY: `fd` is open; the event argument is ignored for DEL.
             check(unsafe {
                 libc::epoll_ctl(
@@ -267,7 +267,11 @@ mod epoll {
         /// Wait for readiness or a notification, at most `timeout`. New
         /// events are appended to `events`, as `polling` does (callers clear
         /// it); returns its length.
-        pub fn wait(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
+        pub(crate) fn wait(
+            &self,
+            events: &mut Events,
+            timeout: Option<Duration>,
+        ) -> io::Result<usize> {
             let Ok(_waiting) = self.waiting.try_lock() else {
                 return Ok(0);
             };
@@ -326,7 +330,7 @@ mod epoll {
         }
 
         /// Wake the current or the next `wait`.
-        pub fn notify(&self) -> io::Result<()> {
+        pub(crate) fn notify(&self) -> io::Result<()> {
             if self
                 .notified
                 .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)

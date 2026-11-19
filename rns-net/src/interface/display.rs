@@ -20,33 +20,33 @@ fn host(ip: &str) -> String {
 
 /// The default `{type}[{name}]` of most upstream interface classes
 /// (`KISSInterface[name]`, `RNodeInterface[name]`, ...).
-pub fn typed(interface_type: &str, name: &str) -> String {
+pub(crate) fn typed(interface_type: &str, name: &str) -> String {
     format!("{interface_type}[{name}]")
 }
 
 /// The `interface.name` of an upstream interface class that never sets
 /// one (`AutoInterfacePeer`, `WeaveInterfacePeer`): `str(None)`.
-pub const UNNAMED: &str = "None";
+pub(crate) const UNNAMED: &str = "None";
 
 /// The name upstream gives a client a TCP or Backbone listener accepted:
 /// `Client on {listener}`, the same for every client of the listener.
-pub fn spawned_client_name(listener_name: &str) -> String {
+pub(crate) fn spawned_client_name(listener_name: &str) -> String {
     format!("Client on {listener_name}")
 }
 
 /// `TCPClientInterface`: `TCPInterface[{name}/{target_ip}:{target_port}]`.
-pub fn tcp_client(name: &str, target_host: &str, target_port: u16) -> String {
+pub(crate) fn tcp_client(name: &str, target_host: &str, target_port: u16) -> String {
     format!("TCPInterface[{name}/{}:{target_port}]", host(target_host))
 }
 
 /// `TCPServerInterface`: `TCPServerInterface[{name}/{bind_ip}:{bind_port}]`.
-pub fn tcp_server(name: &str, bind_ip: &str, bind_port: u16) -> String {
+pub(crate) fn tcp_server(name: &str, bind_ip: &str, bind_port: u16) -> String {
     format!("TCPServerInterface[{name}/{}:{bind_port}]", host(bind_ip))
 }
 
 /// A client a TCP server accepted: upstream spawns a `TCPClientInterface`
 /// named `Client on {listener}` that targets the peer.
-pub fn tcp_server_client(listener_name: &str, peer_ip: IpAddr, peer_port: u16) -> String {
+pub(crate) fn tcp_server_client(listener_name: &str, peer_ip: IpAddr, peer_port: u16) -> String {
     tcp_client(
         &spawned_client_name(listener_name),
         &peer_ip.to_string(),
@@ -55,7 +55,7 @@ pub fn tcp_server_client(listener_name: &str, peer_ip: IpAddr, peer_port: u16) -
 }
 
 /// `UDPInterface`: `UDPInterface[{name}/{bind_ip}:{bind_port}]`.
-pub fn udp(name: &str, bind_ip: Option<&str>, bind_port: Option<u16>) -> String {
+pub(crate) fn udp(name: &str, bind_ip: Option<&str>, bind_port: Option<u16>) -> String {
     let bind_ip = bind_ip.unwrap_or("None");
     let bind_port = bind_port.map_or_else(|| "None".to_string(), |port| port.to_string());
     format!("UDPInterface[{name}/{bind_ip}:{bind_port}]")
@@ -63,13 +63,17 @@ pub fn udp(name: &str, bind_ip: Option<&str>, bind_port: Option<u16>) -> String 
 
 /// A `BackboneInterface` listener or client: the listener shows its bind
 /// address, a client its target.
-pub fn backbone(name: &str, ip: &str, port: u16) -> String {
+pub(crate) fn backbone(name: &str, ip: &str, port: u16) -> String {
     format!("BackboneInterface[{name}/{}:{port}]", host(ip))
 }
 
 /// A client a `BackboneInterface` listener accepted: upstream names it
 /// `Client on {listener}`, targeting the peer.
-pub fn backbone_server_client(listener_name: &str, peer_ip: IpAddr, peer_port: u16) -> String {
+pub(crate) fn backbone_server_client(
+    listener_name: &str,
+    peer_ip: IpAddr,
+    peer_port: u16,
+) -> String {
     backbone(
         &spawned_client_name(listener_name),
         &peer_ip.to_string(),
@@ -80,20 +84,20 @@ pub fn backbone_server_client(listener_name: &str, peer_ip: IpAddr, peer_port: u
 /// The shared instance listener, upstream's `LocalServerInterface`:
 /// `Shared Instance[rns/{instance}]` on the abstract Unix socket, else
 /// `Shared Instance[{port}]`.
-pub fn shared_instance(endpoint: &LocalEndpoint) -> String {
+pub(crate) fn shared_instance(endpoint: &LocalEndpoint) -> String {
     format!("Shared Instance[{}]", endpoint.label())
 }
 
 /// A local client interface, on either end of a shared instance
 /// connection: `LocalInterface[rns/{instance}]` on the abstract Unix
 /// socket, else `LocalInterface[{port}]`.
-pub fn local_client(endpoint: &LocalEndpoint) -> String {
+pub(crate) fn local_client(endpoint: &LocalEndpoint) -> String {
     format!("LocalInterface[{}]", endpoint.label())
 }
 
 /// Where a shared instance is served, as its display names show it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LocalEndpoint {
+pub(crate) enum LocalEndpoint {
     /// The abstract Unix socket `\0rns/{instance}`.
     Unix(String),
     /// A TCP port on localhost.
@@ -103,7 +107,7 @@ pub enum LocalEndpoint {
 impl LocalEndpoint {
     /// Where a client connects: the abstract Unix socket of `instance`
     /// when it uses one (Linux only), else TCP `port`.
-    pub fn for_client(use_af_unix: bool, instance: &str, port: u16) -> Self {
+    pub(crate) fn for_client(use_af_unix: bool, instance: &str, port: u16) -> Self {
         if use_af_unix && cfg!(target_os = "linux") {
             LocalEndpoint::Unix(instance.to_string())
         } else {
@@ -120,14 +124,14 @@ impl LocalEndpoint {
 }
 
 /// An `AutoInterface` peer: `AutoInterfacePeer[{ifname}/{addr}]`.
-pub fn auto_peer(ifname: &str, addr: &str) -> String {
+pub(crate) fn auto_peer(ifname: &str, addr: &str) -> String {
     format!("AutoInterfacePeer[{ifname}/{addr}]")
 }
 
 /// The `interface.name` of an `I2PInterface` peer: `{name} to {peer}` when
 /// this node connected out, `Connected peer on {name}` when it accepted the
 /// connection. Its display name is `I2PInterfacePeer[{that name}]`.
-pub fn i2p_peer_name(interface_name: &str, peer: &str, outbound: bool) -> String {
+pub(crate) fn i2p_peer_name(interface_name: &str, peer: &str, outbound: bool) -> String {
     if outbound {
         format!("{interface_name} to {peer}")
     } else {
@@ -137,7 +141,7 @@ pub fn i2p_peer_name(interface_name: &str, peer: &str, outbound: bool) -> String
 
 /// A `WeaveInterface` peer: `WeaveInterfacePeer[{RNS.hexrep(endpoint)}]`,
 /// colon-delimited.
-pub fn weave_peer(endpoint: &[u8]) -> String {
+pub(crate) fn weave_peer(endpoint: &[u8]) -> String {
     let hexrep = endpoint
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -147,7 +151,7 @@ pub fn weave_peer(endpoint: &[u8]) -> String {
 }
 
 /// A subinterface of an `RNodeMultiInterface`: `{parent name}[{sub name}]`.
-pub fn rnode_multi_sub(parent_name: &str, sub_name: &str) -> String {
+pub(crate) fn rnode_multi_sub(parent_name: &str, sub_name: &str) -> String {
     format!("{parent_name}[{sub_name}]")
 }
 

@@ -162,7 +162,7 @@ pub(super) const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::fro
 pub(super) const JOB_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Shared between an interface's connections.
-pub type SharedLinkState = Arc<Mutex<LinkState>>;
+pub(super) type SharedLinkState = Arc<Mutex<LinkState>>;
 
 /// Whether looking for the device failed outright, so that upstream's
 /// connection job no longer looks for it between attempts.
@@ -377,7 +377,7 @@ mod bluez {
     /// Find and connect the device `target` names, for the interface
     /// upstream calls `iface`, looking for it for up to `budget`. Returns
     /// the notification descriptor to read and the session to write.
-    pub fn open(
+    pub(crate) fn open(
         target: &Target,
         iface: &str,
         state: &SharedLinkState,

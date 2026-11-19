@@ -1,11 +1,11 @@
 use std::process::Command;
 
-pub fn emit_git_rerun_inputs() {
+pub(crate) fn emit_git_rerun_inputs() {
     println!("cargo:rerun-if-changed=../.git/HEAD");
     println!("cargo:rerun-if-changed=../.git/refs");
 }
 
-pub fn emit_full_version() {
+pub(crate) fn emit_full_version() {
     let pkg_version = env!("CARGO_PKG_VERSION");
     let parts: Vec<&str> = pkg_version.split('.').collect();
     let major = parts.first().unwrap_or(&"0");

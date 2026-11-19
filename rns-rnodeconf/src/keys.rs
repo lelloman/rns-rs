@@ -13,16 +13,16 @@ use rsa::traits::PublicKeyParts;
 /// upstream's EEPROM signing key size.
 const SIGNING_KEY_BITS: usize = 1024;
 
-pub fn signing_key_path(firmware_dir: &Path) -> PathBuf {
+pub(crate) fn signing_key_path(firmware_dir: &Path) -> PathBuf {
     firmware_dir.join("signing.key")
 }
 
-pub fn device_key_path(firmware_dir: &Path) -> PathBuf {
+pub(crate) fn device_key_path(firmware_dir: &Path) -> PathBuf {
     firmware_dir.join("device.key")
 }
 
 /// A new EEPROM signing key, as PKCS#8 DER.
-pub fn generate_signing_key() -> Result<Vec<u8>, String> {
+pub(crate) fn generate_signing_key() -> Result<Vec<u8>, String> {
     let mut rng = getrandom::SysRng;
     let key = rsa::PrivateKey::new(&mut rng, SIGNING_KEY_BITS).map_err(|e| e.to_string())?;
     let der = key.to_pkcs8_der().map_err(|e| e.to_string())?;
@@ -30,7 +30,7 @@ pub fn generate_signing_key() -> Result<Vec<u8>, String> {
 }
 
 /// The DER SubjectPublicKeyInfo of a PKCS#8 signing key.
-pub fn signing_public_key(private_der: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn signing_public_key(private_der: &[u8]) -> Result<Vec<u8>, String> {
     let key = rsa::PrivateKey::from_pkcs8_der(private_der).map_err(|e| e.to_string())?;
     let public = key
         .to_public_key()
@@ -42,7 +42,7 @@ pub fn signing_public_key(private_der: &[u8]) -> Result<Vec<u8>, String> {
 /// Sign an EEPROM checksum as upstream does: RSA-PSS with SHA-256,
 /// MGF1(SHA-256) and the maximum salt length (`PSS.MAX_LENGTH`), which is
 /// what upstream's verifier requires.
-pub fn sign_checksum(private_der: &[u8], checksum: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn sign_checksum(private_der: &[u8], checksum: &[u8]) -> Result<Vec<u8>, String> {
     let key = rsa::PrivateKey::from_pkcs8_der(private_der).map_err(|e| e.to_string())?;
     let mod_bits = key.to_public_key().n().bit_width() as usize;
     let em_len = (mod_bits - 1).div_ceil(8);

@@ -28,7 +28,7 @@ const WARMUP: u64 = 3;
 
 type Op = Box<dyn FnMut()>;
 
-pub struct Case {
+pub(crate) struct Case {
     pub name: &'static str,
     /// Iterations a baseline records; a check re-runs the baseline's count.
     pub iterations: u64,
@@ -36,7 +36,7 @@ pub struct Case {
     build: fn() -> Result<Op>,
 }
 
-pub const CASES: &[Case] = &[
+pub(crate) const CASES: &[Case] = &[
     Case {
         name: "packet_pack",
         iterations: 2000,
@@ -140,13 +140,13 @@ pub const CASES: &[Case] = &[
 #[allow(unsafe_code, reason = "unmangled so callgrind can find it by name")]
 #[no_mangle]
 #[inline(never)]
-pub fn rns_bench_hotpath_measured(op: &mut dyn FnMut(), iterations: u64) {
+pub(crate) fn rns_bench_hotpath_measured(op: &mut dyn FnMut(), iterations: u64) {
     for _ in 0..iterations {
         op();
     }
 }
 
-pub fn list() -> Result<()> {
+pub(crate) fn list() -> Result<()> {
     let cases: Vec<_> = CASES
         .iter()
         .map(|c| serde_json::json!({"name":c.name,"iterations":c.iterations,"about":c.about}))
@@ -155,7 +155,7 @@ pub fn list() -> Result<()> {
     Ok(())
 }
 
-pub fn run(name: &str, iterations: Option<u64>) -> Result<()> {
+pub(crate) fn run(name: &str, iterations: Option<u64>) -> Result<()> {
     ensure!(
         !cfg!(debug_assertions),
         "hot-path measurement requires a release build"
@@ -753,7 +753,7 @@ fn channel_envelope_roundtrip() -> Result<Op> {
     }))
 }
 
-pub fn main(args: &[String]) -> Result<()> {
+pub(crate) fn main(args: &[String]) -> Result<()> {
     match args {
         [cmd] if cmd == "list" => list(),
         [cmd, name] if cmd == "run" => run(name, None),

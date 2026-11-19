@@ -24,10 +24,10 @@ const FALLBACK_FIRMWARE_VERSION_URL: &str =
 const FIRMWARE_UPDATE_URL: &str = "https://github.com/markqvist/RNode_Firmware/releases/download/";
 
 /// The firmware package name upstream uses for one extracted from a device.
-pub const EXTRACTED: &str = "extracted_rnode_firmware.zip";
+pub(crate) const EXTRACTED: &str = "extracted_rnode_firmware.zip";
 
 /// The firmware selection and download settings for one run.
-pub struct Firmware {
+pub(crate) struct Firmware {
     pub config_dir: PathBuf,
     pub selected_version: Option<String>,
     pub selected_hash: Option<String>,
@@ -36,16 +36,16 @@ pub struct Firmware {
 }
 
 impl Firmware {
-    pub fn update_dir(&self) -> PathBuf {
+    pub(crate) fn update_dir(&self) -> PathBuf {
         self.config_dir.join("update")
     }
 
-    pub fn extracted_dir(&self) -> PathBuf {
+    pub(crate) fn extracted_dir(&self) -> PathBuf {
         self.config_dir.join("extracted")
     }
 
     /// `UPD_DIR/<version>/`, as upstream builds it: a string path.
-    pub fn version_dir(&self) -> String {
+    pub(crate) fn version_dir(&self) -> String {
         format!(
             "{}/{}",
             self.update_dir().display(),
@@ -55,7 +55,7 @@ impl Firmware {
 
     /// upstream `ensure_firmware_file`: make sure `fw_filename` for the
     /// selected (or latest) version is cached and intact, exiting otherwise.
-    pub fn ensure(&mut self, fw_filename: &str) {
+    pub(crate) fn ensure(&mut self, fw_filename: &str) {
         if fw_filename == EXTRACTED {
             self.ensure_extracted(fw_filename);
             return;
@@ -280,7 +280,7 @@ impl Firmware {
     }
 
     /// upstream's firmware package decompression into the version directory.
-    pub fn decompress(&self, fw_filename: &str) -> Result<(), String> {
+    pub(crate) fn decompress(&self, fw_filename: &str) -> Result<(), String> {
         let dir = self.version_dir();
         let file =
             std::fs::File::open(format!("{dir}/{fw_filename}")).map_err(|e| e.to_string())?;
@@ -292,7 +292,7 @@ impl Firmware {
 /// upstream `get_partition_hash`: the firmware hash a device should report
 /// once `partition_file` is installed. ESP32 and AVR images end with the
 /// SHA-256 of what precedes it; NRF52 images are hashed whole.
-pub fn partition_hash(platform: u8, partition_file: &str) -> Option<Vec<u8>> {
+pub(crate) fn partition_hash(platform: u8, partition_file: &str) -> Option<Vec<u8>> {
     let read = || -> Result<Option<Vec<u8>>, String> {
         let data =
             std::fs::read(partition_file).map_err(|e| python_io_error(&e, partition_file))?;
@@ -329,13 +329,13 @@ fn python_io_error(e: &std::io::Error, path: &str) -> String {
 /// What `get_flasher_call` is asked to flash with: upstream passes either a
 /// platform code or, from the command line, `--platform` as given.
 #[derive(Clone, Debug, PartialEq)]
-pub enum FlashPlatform {
+pub(crate) enum FlashPlatform {
     Rom(u8),
     Named(String),
 }
 
 /// Where flashing runs and how fast.
-pub struct FlashTarget<'a> {
+pub(crate) struct FlashTarget<'a> {
     pub port: &'a str,
     pub baud_flash: &'a str,
 }
@@ -343,7 +343,7 @@ pub struct FlashTarget<'a> {
 /// upstream `get_flasher_call`: the flasher command line for `fw_filename`,
 /// or `None` when no flasher matches. Exits when a needed flasher is not
 /// installed, as upstream does.
-pub fn flasher_call(
+pub(crate) fn flasher_call(
     firmware: &Firmware,
     platform: &FlashPlatform,
     fw_filename: &str,
@@ -633,7 +633,7 @@ fn esp32_flasher_call(
 /// configuration directory, else an installed `esptool.py` or `esptool`.
 /// Upstream carries the recovery esptool inside its own source; it is
 /// GPL-2.0 licensed, so it is not bundled here.
-pub fn extraction_esptool(config_dir: &Path) -> Option<Vec<String>> {
+pub(crate) fn extraction_esptool(config_dir: &Path) -> Option<Vec<String>> {
     let recovery = config_dir.join("recovery_esptool.py");
     if recovery.is_file() {
         return Some(vec![python(), recovery.display().to_string()]);
@@ -653,7 +653,7 @@ fn python() -> String {
 
 /// Python's `shutil.which`: a path is checked as given, a bare name is
 /// looked up on `PATH`; either must be an executable file.
-pub fn which(name: &str) -> Option<PathBuf> {
+pub(crate) fn which(name: &str) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
     let executable = |path: &Path| {
         std::fs::metadata(path)
@@ -670,7 +670,7 @@ pub fn which(name: &str) -> Option<PathBuf> {
 }
 
 /// upstream `urlretrieve`: fetch `url` into `path`.
-pub fn download(url: &str, path: &Path) -> Result<(), String> {
+pub(crate) fn download(url: &str, path: &Path) -> Result<(), String> {
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let agent = ureq::Agent::config_builder()
         .tls_config(

@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-pub struct PortInfo {
+pub(crate) struct PortInfo {
     pub device: String,
     pub product: Option<String>,
     pub serial_number: Option<String>,
@@ -15,7 +15,7 @@ const PATTERNS: &[&str] = &[
     "ttyS", "ttyUSB", "ttyXRUSB", "ttyACM", "ttyAMA", "rfcomm", "ttyAP",
 ];
 
-pub fn comports() -> Vec<PortInfo> {
+pub(crate) fn comports() -> Vec<PortInfo> {
     let names: Vec<String> = std::fs::read_dir("/dev")
         .map(|entries| {
             entries
@@ -70,6 +70,6 @@ fn sysfs_info(name: &str) -> Option<PortInfo> {
 }
 
 /// Python's `str()` of an optional string.
-pub fn py_str(value: &Option<String>) -> &str {
+pub(crate) fn py_str(value: &Option<String>) -> &str {
     value.as_deref().unwrap_or("None")
 }

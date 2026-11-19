@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
-pub struct Snapshot {
+pub(crate) struct Snapshot {
     pub allocation_calls: u64,
     pub reallocation_calls: u64,
     pub allocated_bytes: u64,
@@ -12,7 +12,7 @@ pub struct Snapshot {
     pub peak_live_bytes: u64,
 }
 
-pub struct Counters {
+pub(crate) struct Counters {
     allocations: AtomicU64,
     reallocations: AtomicU64,
     allocated: AtomicU64,
@@ -21,7 +21,7 @@ pub struct Counters {
     peak: AtomicU64,
 }
 impl Counters {
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             allocations: AtomicU64::new(0),
             reallocations: AtomicU64::new(0),
@@ -55,10 +55,10 @@ impl Counters {
             self.live.fetch_sub(old - new, Relaxed);
         }
     }
-    pub fn reset_peak(&self) {
+    pub(crate) fn reset_peak(&self) {
         self.peak.store(self.live.load(Relaxed), Relaxed);
     }
-    pub fn snapshot(&self) -> Snapshot {
+    pub(crate) fn snapshot(&self) -> Snapshot {
         Snapshot {
             allocation_calls: self.allocations.load(Relaxed),
             reallocation_calls: self.reallocations.load(Relaxed),
@@ -71,14 +71,14 @@ impl Counters {
 }
 
 #[cfg(feature = "allocation-profiler")]
-pub static COUNTERS: Counters = Counters::new();
+pub(crate) static COUNTERS: Counters = Counters::new();
 
 #[cfg(feature = "allocation-profiler")]
 #[allow(unsafe_code, reason = "a counting global allocator wrapping System")]
 mod allocator {
     use super::COUNTERS;
     use std::alloc::{GlobalAlloc, Layout, System};
-    pub struct Tracked;
+    pub(super) struct Tracked;
     // SAFETY: requests are forwarded unchanged to System, using its original
     // pointer and layout. Accounting uses only atomics and never allocates.
     unsafe impl GlobalAlloc for Tracked {

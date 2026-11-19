@@ -13,13 +13,13 @@ use std::{
 };
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct Counters {
+pub(crate) struct Counters {
     pub forwarded_bytes: u64,
     pub chunks: u64,
     pub max_pacing_lateness_ns: u64,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct Snapshot {
+pub(crate) struct Snapshot {
     pub sender_to_receiver: Counters,
     pub receiver_to_sender: Counters,
 }
@@ -37,14 +37,14 @@ fn serialization_time(bytes: usize, rate_bps: u64) -> Duration {
     Duration::from_nanos((bytes as u64 * 8_000_000_000).div_ceil(rate_bps))
 }
 
-pub struct Relay {
+pub(crate) struct Relay {
     port: u16,
     stop: Arc<AtomicBool>,
     state: Arc<Mutex<State>>,
     worker: Option<JoinHandle<()>>,
 }
 impl Relay {
-    pub fn start(receiver_port: u16, rate_bps: u64) -> Result<Self> {
+    pub(crate) fn start(receiver_port: u16, rate_bps: u64) -> Result<Self> {
         ensure!(
             (64_000..=1_000_000_000).contains(&rate_bps),
             "rate must be 64000..1000000000 bit/s per direction"
@@ -118,10 +118,10 @@ impl Relay {
             worker: Some(worker),
         })
     }
-    pub fn port(&self) -> u16 {
+    pub(crate) fn port(&self) -> u16 {
         self.port
     }
-    pub fn snapshot(&self) -> Result<Snapshot> {
+    pub(crate) fn snapshot(&self) -> Result<Snapshot> {
         let state = self.state.lock().unwrap();
         ensure!(
             state.error.is_none(),
@@ -137,7 +137,7 @@ impl Relay {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Calibration {
+pub(crate) struct Calibration {
     pub rate_bps_per_direction: u64,
     pub bytes_per_direction: usize,
     pub sender_to_receiver_seconds: f64,
@@ -148,7 +148,7 @@ pub struct Calibration {
 
 /// A separate raw-stream check, excluding protocol work and endpoint CPU metrics.
 /// This diagnoses a pacer that cannot approach its requested cap on this host.
-pub fn calibrate(rate_bps: u64) -> Result<Calibration> {
+pub(crate) fn calibrate(rate_bps: u64) -> Result<Calibration> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
     let relay = Relay::start(listener.local_addr()?.port(), rate_bps)?;

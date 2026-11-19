@@ -14,7 +14,7 @@ impl Callbacks for RelayCallbacks {
     fn on_local_delivery(&mut self, _: DestHash, _: Vec<u8>, _: PacketHash) {}
 }
 
-pub fn run(port: u16) -> Result<()> {
+pub(crate) fn run(port: u16) -> Result<()> {
     let node = RnsNode::start(
         NodeConfig {
             transport_enabled: true,

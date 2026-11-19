@@ -15,7 +15,7 @@ use crate::kiss::{self, *};
 
 /// What the device has reported so far.
 #[derive(Debug, Default, Clone)]
-pub struct Reported {
+pub(crate) struct Reported {
     pub detected: Option<bool>,
     pub major_version: Option<u8>,
     pub minor_version: Option<u8>,
@@ -39,7 +39,7 @@ pub struct Reported {
 
 impl Reported {
     /// upstream `updateVersion`: `major.minor`, the minor part two digits.
-    pub fn version(&self) -> Option<String> {
+    pub(crate) fn version(&self) -> Option<String> {
         Some(format!(
             "{}.{:02}",
             self.major_version?, self.minor_version?
@@ -47,7 +47,7 @@ impl Reported {
     }
 }
 
-pub struct RNode {
+pub(crate) struct RNode {
     writer: std::fs::File,
     pub state: Arc<Mutex<Reported>>,
     stop: Arc<AtomicBool>,
@@ -55,7 +55,7 @@ pub struct RNode {
 
 impl RNode {
     /// Start reading `reader` in the background.
-    pub fn new(reader: std::fs::File, writer: std::fs::File) -> Self {
+    pub(crate) fn new(reader: std::fs::File, writer: std::fs::File) -> Self {
         let state = Arc::new(Mutex::new(Reported::default()));
         let shared = Arc::clone(&state);
         let stop = Arc::new(AtomicBool::new(false));
@@ -71,7 +71,7 @@ impl RNode {
         }
     }
 
-    pub fn reported(&self) -> Reported {
+    pub(crate) fn reported(&self) -> Reported {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
@@ -79,7 +79,7 @@ impl RNode {
         f(&mut self.state.lock().unwrap_or_else(|e| e.into_inner()));
     }
 
-    pub fn write(&mut self, bytes: &[u8], what: &str) -> std::io::Result<()> {
+    pub(crate) fn write(&mut self, bytes: &[u8], what: &str) -> std::io::Result<()> {
         self.writer
             .write_all(bytes)
             .and_then(|_| self.writer.flush())
@@ -89,7 +89,7 @@ impl RNode {
     }
 
     /// upstream `detect`.
-    pub fn detect(&mut self) -> std::io::Result<()> {
+    pub(crate) fn detect(&mut self) -> std::io::Result<()> {
         let command = [
             FEND,
             CMD_DETECT,
@@ -121,7 +121,7 @@ impl RNode {
     }
 
     /// upstream `leave`, which waits a second after.
-    pub fn leave(&mut self) -> std::io::Result<()> {
+    pub(crate) fn leave(&mut self) -> std::io::Result<()> {
         self.write(
             &[FEND, CMD_LEAVE, 0xFF, FEND],
             "sending host left command to device",
@@ -132,7 +132,7 @@ impl RNode {
 
     /// upstream `device_probe`: wait for the board to boot, ask it to
     /// identify itself, and wait for its answer.
-    pub fn device_probe(&mut self) -> std::io::Result<()> {
+    pub(crate) fn device_probe(&mut self) -> std::io::Result<()> {
         thread::sleep(Duration::from_millis(2500));
         self.detect()?;
         thread::sleep(Duration::from_millis(750));
@@ -146,7 +146,7 @@ impl RNode {
     }
 
     /// upstream `download_eeprom`, without parsing.
-    pub fn download_eeprom(&mut self) -> std::io::Result<Option<Vec<u8>>> {
+    pub(crate) fn download_eeprom(&mut self) -> std::io::Result<Option<Vec<u8>>> {
         self.update(|r| r.eeprom = None);
         self.write(&[FEND, CMD_ROM_READ, 0x00, FEND], "downloading EEPROM")?;
         thread::sleep(Duration::from_millis(600));
@@ -154,7 +154,7 @@ impl RNode {
     }
 
     /// upstream `download_cfg_sector`.
-    pub fn download_cfg_sector(&mut self) -> std::io::Result<Option<Vec<u8>>> {
+    pub(crate) fn download_cfg_sector(&mut self) -> std::io::Result<Option<Vec<u8>>> {
         self.update(|r| r.cfg_sector = None);
         self.write(
             &[FEND, CMD_CFG_READ, 0x00, FEND],
@@ -169,7 +169,7 @@ impl RNode {
     }
 
     /// upstream `initRadio`.
-    pub fn init_radio(&mut self, radio: &RadioConfig) -> std::io::Result<()> {
+    pub(crate) fn init_radio(&mut self, radio: &RadioConfig) -> std::io::Result<()> {
         self.u32_command(CMD_FREQUENCY, radio.frequency, "configuring frequency")?;
         self.u32_command(CMD_BANDWIDTH, radio.bandwidth, "configuring bandwidth")?;
         self.write(
@@ -188,7 +188,7 @@ impl RNode {
     }
 
     /// upstream `setNormalMode`.
-    pub fn set_normal_mode(&mut self) -> std::io::Result<()> {
+    pub(crate) fn set_normal_mode(&mut self) -> std::io::Result<()> {
         self.write(
             &[FEND, CMD_CONF_DELETE, 0x00, FEND],
             "configuring device mode",
@@ -196,7 +196,7 @@ impl RNode {
     }
 
     /// upstream `setTNCMode`, which restarts an ESP32 board.
-    pub fn set_tnc_mode(&mut self, platform: u8) -> std::io::Result<()> {
+    pub(crate) fn set_tnc_mode(&mut self, platform: u8) -> std::io::Result<()> {
         self.write(
             &[FEND, CMD_CONF_SAVE, 0x00, FEND],
             "configuring device mode",
@@ -208,7 +208,7 @@ impl RNode {
     }
 
     /// upstream `wipe_eeprom`, which waits for the device to finish.
-    pub fn wipe_eeprom(&mut self, board: Option<u8>) -> std::io::Result<()> {
+    pub(crate) fn wipe_eeprom(&mut self, board: Option<u8>) -> std::io::Result<()> {
         self.write(&[FEND, CMD_ROM_WIPE, 0xf8, FEND], "wiping EEPROM")?;
         thread::sleep(Duration::from_secs(13));
         // The RAK4631's emulated EEPROM needs longer.
@@ -219,12 +219,12 @@ impl RNode {
     }
 
     /// upstream `write_eeprom`: one byte at `addr`.
-    pub fn write_eeprom(&mut self, addr: u8, byte: u8) -> std::io::Result<()> {
+    pub(crate) fn write_eeprom(&mut self, addr: u8, byte: u8) -> std::io::Result<()> {
         self.write(&kiss::frame(CMD_ROM_WRITE, &[addr, byte]), "writing EEPROM")
     }
 
     /// upstream `store_signature`: the device signature.
-    pub fn store_signature(&mut self, signature: &[u8]) -> std::io::Result<()> {
+    pub(crate) fn store_signature(&mut self, signature: &[u8]) -> std::io::Result<()> {
         self.write(
             &kiss::frame(CMD_DEV_SIG, signature),
             "sending signature to device",
@@ -232,7 +232,7 @@ impl RNode {
     }
 
     /// upstream `set_firmware_hash`.
-    pub fn set_firmware_hash(&mut self, hash: &[u8]) -> std::io::Result<()> {
+    pub(crate) fn set_firmware_hash(&mut self, hash: &[u8]) -> std::io::Result<()> {
         self.write(
             &kiss::frame(CMD_FW_HASH, hash),
             "sending firmware hash to device",
@@ -242,7 +242,7 @@ impl RNode {
     /// upstream `disconnect`: leave, then close the port. The reader stops
     /// before the port can be opened again, so it cannot take the next
     /// connection's replies.
-    pub fn disconnect(mut self) -> std::io::Result<()> {
+    pub(crate) fn disconnect(mut self) -> std::io::Result<()> {
         let left = self.leave();
         self.stop.store(true, Ordering::SeqCst);
         thread::sleep(READ_POLL * 2);
@@ -250,7 +250,7 @@ impl RNode {
     }
 
     /// upstream `indicate_firmware_update`.
-    pub fn indicate_firmware_update(&mut self) -> std::io::Result<()> {
+    pub(crate) fn indicate_firmware_update(&mut self) -> std::io::Result<()> {
         self.write(
             &[FEND, CMD_FW_UPD, 0x01, FEND],
             "sending firmware update command to device",
@@ -260,12 +260,12 @@ impl RNode {
     /// A one-command setting. Upstream sends the display, NeoPixel and
     /// WiFi mode values unescaped, which breaks the frame for 0xC0 and
     /// 0xDB; these are escaped.
-    pub fn send(&mut self, command: u8, payload: &[u8], what: &str) -> std::io::Result<()> {
+    pub(crate) fn send(&mut self, command: u8, payload: &[u8], what: &str) -> std::io::Result<()> {
         self.write(&kiss::frame(command, payload), what)
     }
 
     /// upstream `hard_reset`.
-    pub fn hard_reset(&mut self) -> std::io::Result<()> {
+    pub(crate) fn hard_reset(&mut self) -> std::io::Result<()> {
         self.write(&[FEND, CMD_RESET, 0xf8, FEND], "restarting device")?;
         thread::sleep(Duration::from_secs(2));
         Ok(())
@@ -274,7 +274,7 @@ impl RNode {
 
 /// The TNC radio parameters (`--freq`, `--bw`, `--txp`, `--sf`, `--cr`).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RadioConfig {
+pub(crate) struct RadioConfig {
     pub frequency: u32,
     pub bandwidth: u32,
     pub txpower: u8,

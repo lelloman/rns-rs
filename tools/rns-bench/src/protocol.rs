@@ -4,11 +4,11 @@ use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Write};
 
-pub const MAX_CONTROL_BYTES: usize = 16384;
+pub(crate) const MAX_CONTROL_BYTES: usize = 16384;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Command {
+pub(crate) enum Command {
     Announce,
     Connect {
         destination: [u8; 16],
@@ -24,7 +24,7 @@ pub enum Command {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum Message {
+pub(crate) enum Message {
     Ready {
         version: u32,
         destination: [u8; 16],
@@ -59,14 +59,14 @@ pub enum Message {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Metrics {
+pub(crate) struct Metrics {
     pub user_cpu_seconds: f64,
     pub system_cpu_seconds: f64,
     pub lifetime_peak_rss_bytes: Option<u64>,
     pub current_rss_bytes: Option<u64>,
 }
 
-pub fn metrics() -> Result<Metrics> {
+pub(crate) fn metrics() -> Result<Metrics> {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
     // getrusage initializes the structure on success; RUSAGE_SELF includes threads.
     ensure!(
@@ -103,14 +103,14 @@ pub fn metrics() -> Result<Metrics> {
     })
 }
 
-pub fn write_json<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<()> {
+pub(crate) fn write_json<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<()> {
     serde_json::to_writer(&mut *writer, value)?;
     writer.write_all(b"\n")?;
     writer.flush()?;
     Ok(())
 }
 
-pub fn read_line(reader: &mut impl BufRead) -> Result<Option<String>> {
+pub(crate) fn read_line(reader: &mut impl BufRead) -> Result<Option<String>> {
     let mut bytes = Vec::new();
     loop {
         let available = reader.fill_buf()?;
