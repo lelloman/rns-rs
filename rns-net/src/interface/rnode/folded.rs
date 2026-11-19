@@ -17,15 +17,13 @@ use std::time::{Duration, Instant};
 
 use rns_core::transport::types::InterfaceId;
 
-use super::setup::{self, RadioReports};
+use super::setup;
 use super::transport::Transport;
 use super::DeviceWriter;
 use super::{
-    clear_pending_rx_metadata, first_ble_open, open_until_configured, phy_telemetry,
-    process_flow_queue, radio_telemetry, reopen_connection, reset_flow_states, signal_interface_up,
-    update_pending_rx_metadata, update_radio_stats, wait_while_running, RNodeConfig, SubFlowState,
+    first_ble_open, open_until_configured, reopen_connection, reset_flow_states,
+    signal_interface_up, wait_while_running, RNodeConfig, RNodeReceiver, SubFlowState,
 };
-use crate::common::interface_stats::RadioStats;
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::interface::lock_or_recover;
 use crate::interface::stream_read::{set_nonblocking, STREAM_READ_BUDGET};
@@ -143,12 +141,7 @@ impl RNodeLink {
             crate::interface::loop_writer::read_key(self.config.base_interface_id),
             Box::new(RNodeSource {
                 reader,
-                decoder: rnode_kiss::RNodeDecoder::new(),
-                last_rssi: None,
-                last_snr: None,
-                radio: RadioStats::default(),
-                reports: RadioReports::new(&self.config),
-                name: setup::display_name(&self.config),
+                receiver: RNodeReceiver::new(&self.config),
                 keepalive_at: Instant::now() + KEEPALIVE_INTERVAL,
                 link: Arc::clone(self),
             }),
@@ -243,17 +236,7 @@ impl RNodeLink {
 /// The RNode connection, read on the driver thread.
 struct RNodeSource {
     reader: Transport,
-    decoder: rnode_kiss::RNodeDecoder,
-    /// The modem's report for the frame that follows it (see the reader
-    /// thread's `reader_loop`).
-    last_rssi: Option<i16>,
-    last_snr: Option<f32>,
-    /// What the device reports about its channel and itself.
-    radio: RadioStats,
-    /// What a single RNode reports about its radio, logged as upstream.
-    reports: RadioReports,
-    /// The interface as upstream writes it.
-    name: String,
+    receiver: RNodeReceiver,
     keepalive_at: Instant,
     link: Arc<RNodeLink>,
 }
@@ -290,59 +273,13 @@ impl RNodeSource {
             let n = n as usize;
             read += n;
             let mut events = Vec::new();
-            for event in self.decoder.feed(&cx.buf[..n]) {
-                if config.multi {
-                    super::log_multi_radio_report(&event, &config.name);
-                } else {
-                    self.reports.apply(&event, &self.name);
-                }
-                if update_radio_stats(&event, &mut self.radio, crate::time::now()) {
-                    events.extend(radio_telemetry(config, &self.radio));
-                    continue;
-                }
-                let phy_stat = matches!(
-                    &event,
-                    rnode_kiss::RNodeEvent::StatRssi(_) | rnode_kiss::RNodeEvent::StatSnr(_)
-                );
-                if update_pending_rx_metadata(&event, &mut self.last_rssi, &mut self.last_snr) {
-                    if phy_stat {
-                        events.extend(phy_telemetry(config, self.last_rssi, self.last_snr, None));
-                    }
-                    continue;
-                }
-                match event {
-                    rnode_kiss::RNodeEvent::DataFrame { index, data } => {
-                        let Some(position) = config
-                            .subinterfaces
-                            .iter()
-                            .position(|sub| usize::from(sub.vport) == index)
-                        else {
-                            continue;
-                        };
-                        events.push(Event::Frame {
-                            interface_id: InterfaceId(config.base_interface_id.0 + position as u64),
-                            data: data.into(),
-                            rssi: self.last_rssi,
-                            snr: self.last_snr,
-                        });
-                        clear_pending_rx_metadata(&mut self.last_rssi, &mut self.last_snr);
-                    }
-                    rnode_kiss::RNodeEvent::Ready => {
-                        // Flow control: unlock all subinterfaces that have it.
-                        for (fs, sub) in link.flow_states.iter().zip(&config.subinterfaces) {
-                            if sub.flow_control {
-                                process_flow_queue(fs, &link.writer, sub.vport, config.multi);
-                            }
-                        }
-                    }
-                    rnode_kiss::RNodeEvent::Error(code) if config.multi => {
-                        log::error!("[{}] RNode error: 0x{:02X}", config.name, code);
-                    }
-                    _ => {
-                        // Status updates logged but not acted on
-                    }
-                }
-            }
+            self.receiver.feed(
+                &cx.buf[..n],
+                config,
+                &link.flow_states,
+                &link.writer,
+                &mut events,
+            );
             match link.tx.push_from_loop(events) {
                 Ok(true) => {}
                 Ok(false) => return Read::Suspend,

@@ -101,12 +101,6 @@ pub(super) fn radio_telemetry<'a>(
     })
 }
 
-pub(super) fn publish_radio_telemetry(tx: &EventSender, config: &RNodeConfig, radio: &RadioStats) {
-    for event in radio_telemetry(config, radio) {
-        let _ = tx.send(event);
-    }
-}
-
 /// Python RNodeInterface's signal-quality mapping, clamped to 0..100 and
 /// rounded to one decimal place.
 pub(super) fn signal_quality(spreading_factor: u8, snr: f32) -> f64 {
@@ -119,17 +113,6 @@ pub(super) fn signal_quality(spreading_factor: u8, snr: f32) -> f64 {
     }
     let quality = (((f64::from(snr) - q_snr_min) / span) * 100.0).clamp(0.0, 100.0);
     (quality * 10.0).round() / 10.0
-}
-
-pub(super) fn publish_phy_telemetry(
-    tx: &EventSender,
-    config: &RNodeConfig,
-    rssi: Option<i16>,
-    snr: Option<f32>,
-) {
-    for event in phy_telemetry(config, rssi, snr, None) {
-        let _ = tx.send(event);
-    }
 }
 
 /// One telemetry event per subinterface.

@@ -49,17 +49,11 @@ pub(super) fn reader_loop_connected(
 ) {
     const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(200);
     const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(2);
-    // RNode is the PHY-stat-capable interface: retain each modem report until
-    // the matching frame is enqueued, attach it to that frame, then clear it
-    // so later frames cannot inherit stale RSSI or SNR.
-    let mut last_rssi: Option<i16> = None;
-    let mut last_snr: Option<f32> = None;
-    // What the device reports about its channel and itself.
-    let mut radio = RadioStats::default();
-    let name = setup::display_name(&config);
     while running.load(Ordering::Relaxed) {
-        let mut decoder = rnode_kiss::RNodeDecoder::new();
-        let mut reports = setup::RadioReports::new(&config);
+        // A fresh receiver for each connection: no report of the last one
+        // can be attached to a frame of this one.
+        let mut receiver = RNodeReceiver::new(&config);
+        let mut events = Vec::new();
         let mut buf = [0u8; 4096];
         let disconnected = loop {
             if !running.load(Ordering::Relaxed) {
@@ -87,71 +81,10 @@ pub(super) fn reader_loop_connected(
                     break true;
                 }
                 Ok(n) => {
-                    for event in decoder.feed(&buf[..n]) {
-                        if config.multi {
-                            log_multi_radio_report(&event, &config.name);
-                        } else {
-                            reports.apply(&event, &name);
-                        }
-                        if update_radio_stats(&event, &mut radio, crate::time::now()) {
-                            publish_radio_telemetry(&tx, &config, &radio);
-                            continue;
-                        }
-                        let phy_stat = matches!(
-                            &event,
-                            rnode_kiss::RNodeEvent::StatRssi(_)
-                                | rnode_kiss::RNodeEvent::StatSnr(_)
-                        );
-                        if update_pending_rx_metadata(&event, &mut last_rssi, &mut last_snr) {
-                            if phy_stat {
-                                publish_phy_telemetry(&tx, &config, last_rssi, last_snr);
-                            }
-                            continue;
-                        }
-                        match event {
-                            rnode_kiss::RNodeEvent::DataFrame { index, data } => {
-                                let Some(position) = config
-                                    .subinterfaces
-                                    .iter()
-                                    .position(|sub| usize::from(sub.vport) == index)
-                                else {
-                                    continue;
-                                };
-                                let sub_id =
-                                    InterfaceId(config.base_interface_id.0 + position as u64);
-                                if tx
-                                    .send(Event::Frame {
-                                        interface_id: sub_id,
-                                        data: data.into(),
-                                        rssi: last_rssi,
-                                        snr: last_snr,
-                                    })
-                                    .is_err()
-                                {
-                                    return;
-                                }
-                                last_rssi = None;
-                                last_snr = None;
-                            }
-                            rnode_kiss::RNodeEvent::Ready => {
-                                // Flow control: unlock all subinterfaces that have flow_control
-                                for (i, fs) in flow_states.iter().enumerate() {
-                                    if config.subinterfaces[i].flow_control {
-                                        process_flow_queue(
-                                            fs,
-                                            &writer,
-                                            config.subinterfaces[i].vport,
-                                            config.multi,
-                                        );
-                                    }
-                                }
-                            }
-                            rnode_kiss::RNodeEvent::Error(code) if config.multi => {
-                                log::error!("[{}] RNode error: 0x{:02X}", config.name, code);
-                            }
-                            _ => {
-                                // Status updates logged but not acted on
-                            }
+                    receiver.feed(&buf[..n], &config, &flow_states, &writer, &mut events);
+                    for event in events.drain(..) {
+                        if tx.send(event).is_err() {
+                            return;
                         }
                     }
                 }
@@ -169,9 +102,6 @@ pub(super) fn reader_loop_connected(
                 }
             }
         };
-
-        clear_pending_rx_metadata(&mut last_rssi, &mut last_snr);
-        radio = RadioStats::default();
 
         if !running.load(Ordering::Relaxed) || !disconnected || config.pre_opened_fd.is_some() {
             return;
