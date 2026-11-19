@@ -417,7 +417,7 @@ impl Driver {
             if let Some(handle) = runtime_handle_from_mode(mode) {
                 self.register_backbone_runtime(handle);
             }
-            if let Some(handle) = peer_state_handle_from_mode(mode) {
+            if let Some(handle) = peer_state_handle_from_mode(mode, config) {
                 self.register_backbone_peer_state(handle);
             }
             if let Some(handle) = client_runtime_handle_from_mode(mode) {
