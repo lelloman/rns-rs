@@ -15,7 +15,7 @@ use rns_core::transport::types::InterfaceId;
 
 use crate::event::{Event, EventSender};
 use crate::interface::{
-    lock_or_recover, poll_readable, wait_while_active, ListenerControl, UnavailableWriter, Writer,
+    lock_or_recover, poll_readable, ListenerControl, UnavailableWriter, Writer,
 };
 use crate::kiss;
 use crate::serial::{Parity, SerialConfig, SerialPort};
@@ -529,46 +529,22 @@ fn reopen_port(
     config: &KissIfaceConfig,
     control: &ListenerControl,
 ) -> Option<(std::fs::File, std::fs::File)> {
-    loop {
-        if !wait_while_active(control, Duration::from_secs(5)) {
-            return None;
-        }
-        log::info!(
-            "[{}] attempting to reconnect KISS port {}...",
-            config.name,
-            config.port
-        );
-
-        let serial_config = SerialConfig {
-            path: config.port.clone(),
-            baud: config.speed,
-            data_bits: config.data_bits,
-            parity: config.parity,
-            stop_bits: config.stop_bits,
-        };
-
-        match SerialPort::open(&serial_config) {
-            Ok(port) => match (port.reader(), port.writer()) {
-                (Ok(reader), Ok(mut cfg_writer)) => {
-                    // 2-second init delay
-                    if !wait_while_active(control, Duration::from_secs(2)) {
-                        return None;
-                    }
-                    if let Err(e) = configure_tnc(&mut cfg_writer, config) {
-                        log::warn!("[{}] TNC config failed: {}", config.name, e);
-                        continue;
-                    }
-                    return Some((reader, cfg_writer));
-                }
-                _ => {
-                    log::warn!("[{}] failed to get handles from serial port", config.name);
-                }
-            },
-            Err(e) => {
-                log::warn!("[{}] KISS reconnect failed: {}", config.name, e);
-            }
-        }
-    }
+    let serial_config = SerialConfig {
+        path: config.port.clone(),
+        baud: config.speed,
+        data_bits: config.data_bits,
+        parity: config.parity,
+        stop_bits: config.stop_bits,
+    };
+    // A 2-second init delay before the TNC is configured.
+    super::serial_iface::reopen_serial_port(
+        &config.name,
+        "KISS",
+        &serial_config,
+        control,
+        Duration::from_secs(2),
+        |writer| configure_tnc(writer, config),
+    )
 }
 
 // --- Factory implementation ---

@@ -368,52 +368,71 @@ fn reconnect(
     tx: &EventSender,
     control: &ListenerControl,
 ) -> Option<std::fs::File> {
+    let serial_config = SerialConfig {
+        path: config.port.clone(),
+        baud: config.speed,
+        data_bits: config.data_bits,
+        parity: config.parity,
+        stop_bits: config.stop_bits,
+    };
+    let (reader, writer_file) = reopen_serial_port(
+        &config.name,
+        "serial",
+        &serial_config,
+        control,
+        Duration::ZERO,
+        |_| Ok(()),
+    )?;
+    log::info!("[{}] serial port reconnected", config.name);
+    let new_writer: Box<dyn Writer> = Box::new(SerialWriter { file: writer_file });
+    let _ = tx.send(Event::InterfaceUp(
+        config.interface_id,
+        Some(new_writer),
+        None,
+    ));
+    if !wait_while_active(control, Duration::from_millis(500)) {
+        return None;
+    }
+    Some(reader)
+}
+
+/// Reopen a serial port the reader thread lost, for the Serial and KISS
+/// interfaces (`kind` names it in the log): every 5 seconds, open it,
+/// wait `settle`, then `prepare` its writer, until that works or the
+/// interface stops. Returns the reader and the writer.
+pub(crate) fn reopen_serial_port(
+    name: &str,
+    kind: &str,
+    serial_config: &SerialConfig,
+    control: &ListenerControl,
+    settle: Duration,
+    mut prepare: impl FnMut(&mut std::fs::File) -> io::Result<()>,
+) -> Option<(std::fs::File, std::fs::File)> {
     loop {
         if !wait_while_active(control, Duration::from_secs(5)) {
             return None;
         }
         log::info!(
-            "[{}] attempting to reconnect serial port {}...",
-            config.name,
-            config.port
+            "[{}] attempting to reconnect {} port {}...",
+            name,
+            kind,
+            serial_config.path
         );
-
-        let serial_config = SerialConfig {
-            path: config.port.clone(),
-            baud: config.speed,
-            data_bits: config.data_bits,
-            parity: config.parity,
-            stop_bits: config.stop_bits,
-        };
-
-        match SerialPort::open(&serial_config) {
+        match SerialPort::open(serial_config) {
             Ok(port) => match (port.reader(), port.writer()) {
-                (Ok(reader), Ok(writer_file)) => {
-                    if control.should_stop() {
+                (Ok(reader), Ok(mut writer)) => {
+                    if !wait_while_active(control, settle) {
                         return None;
                     }
-                    log::info!("[{}] serial port reconnected", config.name);
-                    let new_writer: Box<dyn Writer> = Box::new(SerialWriter { file: writer_file });
-                    let _ = tx.send(Event::InterfaceUp(
-                        config.interface_id,
-                        Some(new_writer),
-                        None,
-                    ));
-                    if !wait_while_active(control, Duration::from_millis(500)) {
-                        return None;
+                    if let Err(e) = prepare(&mut writer) {
+                        log::warn!("[{}] {} port setup failed: {}", name, kind, e);
+                        continue;
                     }
-                    return Some(reader);
+                    return Some((reader, writer));
                 }
-                _ => {
-                    log::warn!(
-                        "[{}] failed to get reader/writer from serial port",
-                        config.name
-                    );
-                }
+                _ => log::warn!("[{}] failed to get handles from {} port", name, kind),
             },
-            Err(e) => {
-                log::warn!("[{}] serial reconnect failed: {}", config.name, e);
-            }
+            Err(e) => log::warn!("[{}] {} reconnect failed: {}", name, kind, e),
         }
     }
 }
