@@ -125,9 +125,11 @@ pub struct RNodeConfig {
     pub subinterfaces: Vec<RNodeSubConfig>,
     /// Whether this is an `RNodeMultiInterface`, addressing radios by virtual port.
     pub multi: bool,
-    /// Station identification interval (`id_interval`); parsed and kept, not acted on.
+    /// Station identification interval (`id_interval`), in seconds: the
+    /// callsign is sent this long after the first frame since the last one.
     pub id_interval: Option<u32>,
-    /// Station identification callsign (`id_callsign`); parsed and kept, not acted on.
+    /// Station identification callsign (`id_callsign`), at most 32 bytes;
+    /// identification needs both it and `id_interval`.
     pub id_callsign: Option<Vec<u8>>,
     /// The interface's own id. An `RNodeMultiInterface` is listed under it
     /// while its subinterfaces take the ids after it, from

@@ -60,6 +60,7 @@ pub(super) fn reader_loop_connected(
                 return;
             }
             if !reader_ready(&reader, Duration::from_millis(200)) {
+                identify_station(&config, &flow_states, &writer);
                 continue;
             }
             // Once stopped, nothing more is read here: a BLE connection
