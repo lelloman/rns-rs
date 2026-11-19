@@ -6,7 +6,6 @@
 //! (`upstream_parsers.rs`), and of argparse's error reporting: the usage
 //! line, `<prog>: error: <message>` and exit status 2.
 
-#![allow(unsafe_code, reason = "OS calls through libc")]
 
 use crate::args::{Args, Seen};
 
@@ -79,16 +78,7 @@ pub fn terminal_columns() -> usize {
     {
         return columns as usize;
     }
-    // SAFETY: `winsize` is a plain C struct of integers, for which all-zero bytes are a valid
-    // value.
-    let mut size: libc::winsize = unsafe { std::mem::zeroed() };
-    // SAFETY: TIOCGWINSZ fills a winsize; on failure it is left zeroed.
-    let ok = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut size) } == 0;
-    if ok && size.ws_col > 0 {
-        size.ws_col as usize
-    } else {
-        80
-    }
+    crate::sys::stdout_columns().unwrap_or(80)
 }
 
 /// argparse's `SUPPRESS`: an action left out of usage and help.

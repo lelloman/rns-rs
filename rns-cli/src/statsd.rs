@@ -1023,31 +1023,9 @@ impl ProcessMonitor {
 
 #[cfg(target_os = "linux")]
 fn provider_process_pid(stream: &UnixStream) -> Option<u32> {
-    use std::os::fd::AsRawFd;
-
     // rnsd owns the provider listener, including when rns-server self-spawns
     // through /proc/self/exe and the process comm is "exe" rather than "rnsd".
-    let mut credentials = libc::ucred {
-        pid: 0,
-        uid: 0,
-        gid: 0,
-    };
-    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    // SAFETY: the stream owns a valid socket descriptor, and credentials and
-    // length point to writable storage of the size passed to getsockopt.
-    let result = unsafe {
-        libc::getsockopt(
-            stream.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            (&mut credentials as *mut libc::ucred).cast(),
-            &mut length,
-        )
-    };
-    if result != 0 || length as usize != std::mem::size_of::<libc::ucred>() {
-        return None;
-    }
-    u32::try_from(credentials.pid).ok().filter(|pid| *pid != 0)
+    crate::sys::peer_pid(stream)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -1070,10 +1048,8 @@ fn read_proc_sample(pid: u32) -> Option<ProcessSample> {
     let num_threads: u32 = fields[17].parse().ok()?;
     let rss_pages: u64 = fields[21].parse().ok()?;
 
-    // SAFETY: `sysconf` takes no pointers and only queries a system constant.
-    let clk_tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as u64;
-    // SAFETY: `sysconf` takes no pointers and only queries a system constant.
-    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+    let clk_tck = crate::sys::sysconf(libc::_SC_CLK_TCK) as u64;
+    let page_size = crate::sys::sysconf(libc::_SC_PAGESIZE) as u64;
 
     let fds = fs::read_dir(format!("/proc/{}/fd", pid))
         .map(|d| d.count() as u32)

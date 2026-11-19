@@ -31,4 +31,5 @@ pub mod sentineld;
 #[cfg(feature = "sidecars")]
 pub mod statsd;
 pub mod stdout;
+pub(crate) mod sys;
 pub mod upstream_parsers;
