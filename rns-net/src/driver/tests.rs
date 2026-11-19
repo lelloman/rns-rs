@@ -1855,8 +1855,6 @@ fn register_test_tcp_server_discovery(driver: &mut Driver, name: &str, discovera
 #[cfg(feature = "iface-tcp")]
 fn register_test_tcp_client(driver: &mut Driver, name: &str) {
     let startup = crate::interface::tcp::TcpClientRuntime {
-        target_host: "127.0.0.1".into(),
-        target_port: 4242,
         reconnect_wait: Duration::from_secs(5),
         max_reconnect_tries: Some(3),
         connect_timeout: Duration::from_secs(5),

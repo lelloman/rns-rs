@@ -52,10 +52,6 @@ pub struct TcpClientConfig {
 /// TCP client settings that can be changed while it runs.
 #[derive(Debug, Clone)]
 pub struct TcpClientRuntime {
-    /// Copy of the configured target host; connections use [`TcpClientConfig::target_host`].
-    pub target_host: String,
-    /// Copy of the configured target port; connections use [`TcpClientConfig::target_port`].
-    pub target_port: u16,
     /// Delay before each reconnection attempt.
     pub reconnect_wait: Duration,
     /// Reconnection attempts before the interface is reported down; `None` retries forever.
@@ -68,8 +64,6 @@ impl TcpClientRuntime {
     /// Runtime settings taken from `config`.
     pub fn from_config(config: &TcpClientConfig) -> Self {
         Self {
-            target_host: config.target_host.clone(),
-            target_port: config.target_port,
             reconnect_wait: config.reconnect_wait,
             max_reconnect_tries: config.max_reconnect_tries,
             connect_timeout: config.connect_timeout,
@@ -103,8 +97,6 @@ impl Default for TcpClientConfig {
             fixed_mtu: None,
             flush_after: super::DEFAULT_FLUSH_AFTER,
             runtime: Arc::new(Mutex::new(TcpClientRuntime {
-                target_host: "127.0.0.1".into(),
-                target_port: 4242,
                 reconnect_wait: Duration::from_secs(5),
                 max_reconnect_tries: None,
                 connect_timeout: Duration::from_secs(5),
@@ -691,8 +683,6 @@ mod tests {
             max_reconnect_tries: Some(2),
             connect_timeout: Duration::from_secs(2),
             runtime: Arc::new(Mutex::new(TcpClientRuntime {
-                target_host: "127.0.0.1".into(),
-                target_port: port,
                 reconnect_wait: Duration::from_millis(100),
                 max_reconnect_tries: Some(2),
                 connect_timeout: Duration::from_secs(2),
@@ -966,8 +956,6 @@ mod tests {
             fixed_mtu: None,
             flush_after: None,
             runtime: Arc::new(Mutex::new(TcpClientRuntime {
-                target_host: "192.0.2.1".into(),
-                target_port: 12345,
                 reconnect_wait: Duration::from_millis(100),
                 max_reconnect_tries: Some(0),
                 connect_timeout: Duration::from_millis(500),
