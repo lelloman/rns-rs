@@ -1192,6 +1192,20 @@ pub fn resolve_config_dir(explicit: Option<&Path>) -> PathBuf {
     }
 }
 
+/// Load the identity at `path`, or create one there, and the directories
+/// leading to it, when there is none.
+pub fn load_or_create_identity_file(path: &Path) -> io::Result<Identity> {
+    if path.exists() {
+        return load_identity(path);
+    }
+    if let Some(parent) = path.parent().filter(|path| !path.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+    let identity = Identity::new(&mut OsRng);
+    save_identity(&identity, path)?;
+    Ok(identity)
+}
+
 /// Load or create an identity at the standard location.
 pub fn load_or_create_identity(identities_dir: &Path) -> io::Result<Identity> {
     let id_path = identities_dir.join("identity");

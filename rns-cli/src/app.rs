@@ -1,13 +1,11 @@
 //! Shared support for native Reticulum application utilities.
 
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rns_core::msgpack::{self, Value};
 use rns_crypto::identity::Identity;
-use rns_crypto::OsRng;
 
 pub fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
@@ -37,18 +35,7 @@ pub fn app_config(app: &str, explicit: Option<&str>) -> PathBuf {
         .unwrap_or_else(|| home_dir().join(".config").join(app))
 }
 
-pub fn load_or_create_identity(path: &Path) -> io::Result<Identity> {
-    if let Some(parent) = path.parent().filter(|path| !path.as_os_str().is_empty()) {
-        fs::create_dir_all(parent)?;
-    }
-    if path.exists() {
-        rns_net::storage::load_identity(path)
-    } else {
-        let identity = Identity::new(&mut OsRng);
-        rns_net::storage::save_identity(&identity, path)?;
-        Ok(identity)
-    }
-}
+pub use rns_net::storage::load_or_create_identity_file as load_or_create_identity;
 
 pub fn parse_hash_16(value: &str) -> Option<[u8; 16]> {
     if value.len() != 32 {

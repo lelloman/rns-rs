@@ -3,7 +3,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use rns_crypto::identity::Identity;
-use rns_crypto::OsRng;
 use rns_net::storage;
 
 use crate::{Error, Result};
@@ -37,16 +36,7 @@ pub fn ensure_dir(path: &Path) -> Result<()> {
 }
 
 pub fn load_or_create_identity(path: &Path) -> Result<Identity> {
-    if path.exists() {
-        return storage::load_identity(path).map_err(Error::from);
-    }
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let identity = Identity::new(&mut OsRng);
-    storage::save_identity(&identity, path)?;
-    Ok(identity)
+    storage::load_or_create_identity_file(path).map_err(Error::from)
 }
 
 pub use rns_core::display::hex;
