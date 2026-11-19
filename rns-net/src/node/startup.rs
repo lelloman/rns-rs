@@ -431,17 +431,19 @@ impl RnsNode {
             None
         };
         let identity = config.identity.unwrap_or_else(|| Identity::new(&mut OsRng));
+        // The node signs and decrypts with its identity: one without a
+        // private key cannot run a node.
+        let private_key = identity.get_private_key().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the node identity has no private key",
+            )
+        })?;
         let rpc_auth_key = config
             .shared_instance
             .rpc_key
             .or(queue_config.rpc_auth_key)
-            .unwrap_or_else(|| {
-                crate::rpc::derive_auth_key(
-                    &identity
-                        .get_private_key()
-                        .expect("node identity has private key"),
-                )
-            });
+            .unwrap_or_else(|| crate::rpc::derive_auth_key(&private_key));
         let has_discoverable_interface = config
             .interfaces
             .iter()
@@ -457,11 +459,7 @@ impl RnsNode {
             );
         }
         let transport_identity = if config.transport_enabled || static_transport_identity {
-            Identity::from_private_key(
-                &identity
-                    .get_private_key()
-                    .expect("node identity must expose a private key"),
-            )
+            Identity::from_private_key(&private_key)
         } else {
             let identity = create_identity();
             log::info!(
@@ -503,10 +501,10 @@ impl RnsNode {
             announce_queue_max_interfaces: queue_config.announce_max_interfaces,
         };
 
-        let (tx, rx) = event::channel_with_queue_capacities(
+        let (tx, rx) = event::try_channel_with_queue_capacities(
             config.driver_event_queue_capacity,
             queue_config.inbound_capacities,
-        );
+        )?;
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
         let stamper = Arc::new(crate::stamper::Stamper::new(tx.clone(), None));

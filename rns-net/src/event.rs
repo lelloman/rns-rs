@@ -1217,11 +1217,27 @@ pub fn channel_with_capacity(capacity: usize) -> (EventSender, EventReceiver) {
     )
 }
 
+/// [`try_channel_with_queue_capacities`], panicking when the OS cannot
+/// create the poller (out of file descriptors): for tests and the public
+/// helpers above.
+///
+/// # Panics
+/// When the event poller cannot be created.
 pub(crate) fn channel_with_queue_capacities(
     control_capacity: usize,
     inbound_capacities: InboundQueueCapacities,
 ) -> (EventSender, EventReceiver) {
-    let poller = Arc::new(crate::poll::Poller::new().expect("create the driver event poller"));
+    #[allow(clippy::expect_used)]
+    try_channel_with_queue_capacities(control_capacity, inbound_capacities)
+        .expect("create the driver event poller")
+}
+
+/// An event queue with these capacities, or the error creating its poller.
+pub(crate) fn try_channel_with_queue_capacities(
+    control_capacity: usize,
+    inbound_capacities: InboundQueueCapacities,
+) -> std::io::Result<(EventSender, EventReceiver)> {
+    let poller = Arc::new(crate::poll::Poller::new()?);
     let source_mode = if poller.supports_level() {
         crate::poll::PollMode::Level
     } else {
@@ -1250,7 +1266,7 @@ pub(crate) fn channel_with_queue_capacities(
             None,
         ),
     });
-    (
+    Ok((
         EventSender {
             shared: Arc::clone(&shared),
         },
@@ -1258,7 +1274,7 @@ pub(crate) fn channel_with_queue_capacities(
             shared,
             prefetched: Default::default(),
         },
-    )
+    ))
 }
 
 #[cfg(test)]
