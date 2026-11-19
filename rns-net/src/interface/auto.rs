@@ -38,7 +38,6 @@ use workers::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::net::{Ipv6Addr, SocketAddrV6, UdpSocket};
-use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;

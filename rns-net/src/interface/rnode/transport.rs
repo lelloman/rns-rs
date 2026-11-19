@@ -1,5 +1,6 @@
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::os::fd::AsFd;
 use std::os::unix::io::AsRawFd;
 
 use crate::serial::SerialConfig;
@@ -48,7 +49,7 @@ impl Transport {
                 socket2::Type::STREAM,
                 Some(socket2::Protocol::TCP),
             )?;
-            crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+            crate::interface::apply_underlay_mark(socket.as_fd(), underlay_mark)?;
             socket.connect(&address.into())?;
             let stream: TcpStream = socket.into();
             let reader = stream.try_clone()?;

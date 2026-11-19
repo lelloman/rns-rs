@@ -2,6 +2,7 @@
 //! them out.
 
 use super::*;
+use std::os::fd::AsFd;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct PeerKey {
@@ -304,9 +305,7 @@ pub(super) fn add_peer(context: AddPeerContext<'_>) -> Option<Event> {
             return None;
         }
     };
-    if let Err(error) =
-        crate::interface::apply_underlay_mark(send_socket.as_raw_fd(), underlay_mark)
-    {
+    if let Err(error) = crate::interface::apply_underlay_mark(send_socket.as_fd(), underlay_mark) {
         log::error!("[{}] failed to mark peer socket: {}", name, error);
         return None;
     }

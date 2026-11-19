@@ -1,6 +1,7 @@
 //! The discovery, unicast and data sockets.
 
 use super::*;
+use std::os::fd::AsFd;
 
 pub(super) fn create_multicast_recv_socket(
     mcast_ip: &Ipv6Addr,
@@ -13,7 +14,7 @@ pub(super) fn create_multicast_recv_socket(
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
     )?;
-    crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+    crate::interface::apply_underlay_mark(socket.as_fd(), underlay_mark)?;
 
     socket.set_reuse_address(true)?;
     #[cfg(not(target_os = "windows"))]
@@ -47,7 +48,7 @@ pub(super) fn create_unicast_recv_socket(
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
     )?;
-    crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+    crate::interface::apply_underlay_mark(socket.as_fd(), underlay_mark)?;
 
     socket.set_reuse_address(true)?;
     #[cfg(not(target_os = "windows"))]
@@ -77,7 +78,7 @@ pub(super) fn create_data_recv_socket(
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
     )?;
-    crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+    crate::interface::apply_underlay_mark(socket.as_fd(), underlay_mark)?;
 
     socket.set_reuse_address(true)?;
     #[cfg(not(target_os = "windows"))]
@@ -90,16 +91,4 @@ pub(super) fn create_data_recv_socket(
     let std_socket: UdpSocket = socket.into();
     std_socket.set_read_timeout(Some(Duration::from_secs(2)))?;
     Ok(std_socket)
-}
-
-/// Get the raw file descriptor from a UdpSocket (for setsockopt).
-#[cfg(unix)]
-pub(super) fn socket_fd(socket: &UdpSocket) -> i32 {
-    use std::os::unix::io::AsRawFd;
-    socket.as_raw_fd()
-}
-
-#[cfg(not(unix))]
-pub(super) fn socket_fd(_socket: &UdpSocket) -> i32 {
-    0
 }

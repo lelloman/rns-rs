@@ -7,11 +7,10 @@
 //! interfaces, culling silent peers, and multicasting the discovery token.
 //! Peers' writers are called by the driver directly (see `UdpWriter`).
 
-#![allow(unsafe_code, reason = "OS calls through libc")]
-
 use std::collections::HashMap;
 use std::io;
 use std::net::{SocketAddrV6, UdpSocket};
+use std::os::fd::AsFd;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixDatagram;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -91,7 +90,7 @@ impl DiscoverySender {
             Some(socket) => socket,
             None => {
                 let socket = UdpSocket::bind("[::]:0")?;
-                crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+                crate::interface::apply_underlay_mark(socket.as_fd(), underlay_mark)?;
                 socket.set_multicast_if_v6_compat(if_index)?;
                 socket.set_nonblocking(true)?;
                 socket
@@ -122,21 +121,7 @@ trait MulticastIf {
 
 impl MulticastIf for UdpSocket {
     fn set_multicast_if_v6_compat(&self, if_index: u32) -> io::Result<()> {
-        let if_bytes = if_index.to_ne_bytes();
-        // SAFETY: a valid socket and a 4-byte option value.
-        let result = unsafe {
-            libc::setsockopt(
-                self.as_raw_fd(),
-                libc::IPPROTO_IPV6,
-                libc::IPV6_MULTICAST_IF,
-                if_bytes.as_ptr().cast(),
-                if_bytes.len() as libc::socklen_t,
-            )
-        };
-        if result < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
+        socket2::SockRef::from(self).set_multicast_if_v6(if_index)
     }
 }
 

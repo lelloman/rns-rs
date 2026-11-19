@@ -7,6 +7,7 @@
 )]
 
 use super::*;
+use std::os::fd::AsFd;
 
 /// Concurrent clients a Backbone listener accepts unless configured
 /// otherwise (upstream `BackboneInterface.CLIENT_LIMIT`, rgit `3c4b271f`).
@@ -203,7 +204,7 @@ pub(super) fn start_with_template(
 ) -> io::Result<()> {
     let addr = format!("{}:{}", config.listen_ip, config.listen_port);
     let listener = TcpListener::bind(&addr)?;
-    crate::interface::apply_underlay_mark(listener.as_raw_fd(), underlay_mark)?;
+    crate::interface::apply_underlay_mark(listener.as_fd(), underlay_mark)?;
     listener.set_nonblocking(true)?;
 
     log::info!(
@@ -439,7 +440,7 @@ impl Server {
     ) -> bool {
         let name = &self.name;
         if let Err(error) =
-            crate::interface::apply_underlay_mark(stream.as_raw_fd(), self.underlay_mark)
+            crate::interface::apply_underlay_mark(stream.as_fd(), self.underlay_mark)
         {
             log::error!(
                 "[{}] failed to mark accepted underlay socket: {}",

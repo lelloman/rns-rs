@@ -2,8 +2,6 @@
 //!
 //! Matches Python `TCPClientInterface` from `TCPInterface.py`.
 
-#![allow(unsafe_code, reason = "OS calls through libc")]
-
 use std::io::{self, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::os::unix::io::AsRawFd;
@@ -133,91 +131,19 @@ impl Writer for TcpWriter {
 /// timeout options. Shared by outbound client sockets and sockets accepted
 /// by the TCP server.
 pub(crate) fn set_socket_options(stream: &TcpStream) -> io::Result<()> {
-    let fd = stream.as_raw_fd();
-    // SAFETY: `fd` belongs to `stream`, borrowed (and so open) for the whole
-    // function; each option value points to a live `c_int` local and the length
-    // passed is `size_of::<c_int>()`.
-    unsafe {
-        // TCP_NODELAY = 1
-        let val: libc::c_int = 1;
-        if libc::setsockopt(
-            fd,
-            libc::IPPROTO_TCP,
-            libc::TCP_NODELAY,
-            &val as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        ) != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-
-        // SO_KEEPALIVE = 1
-        if libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_KEEPALIVE,
-            &val as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        ) != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-
-        // Linux-specific keepalive tuning and user timeout
-        #[cfg(target_os = "linux")]
-        {
-            // TCP_KEEPIDLE = 5
-            let idle: libc::c_int = 5;
-            if libc::setsockopt(
-                fd,
-                libc::IPPROTO_TCP,
-                libc::TCP_KEEPIDLE,
-                &idle as *const _ as *const libc::c_void,
-                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            ) != 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-
-            // TCP_KEEPINTVL = 2
-            let intvl: libc::c_int = 2;
-            if libc::setsockopt(
-                fd,
-                libc::IPPROTO_TCP,
-                libc::TCP_KEEPINTVL,
-                &intvl as *const _ as *const libc::c_void,
-                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            ) != 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-
-            // TCP_KEEPCNT = 12
-            let cnt: libc::c_int = 12;
-            if libc::setsockopt(
-                fd,
-                libc::IPPROTO_TCP,
-                libc::TCP_KEEPCNT,
-                &cnt as *const _ as *const libc::c_void,
-                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            ) != 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-
-            // TCP_USER_TIMEOUT = 24000 ms
-            let timeout: libc::c_int = 24_000;
-            if libc::setsockopt(
-                fd,
-                libc::IPPROTO_TCP,
-                libc::TCP_USER_TIMEOUT,
-                &timeout as *const _ as *const libc::c_void,
-                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            ) != 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-        }
+    let socket = socket2::SockRef::from(stream);
+    socket.set_tcp_nodelay(true)?;
+    socket.set_keepalive(true)?;
+    // Linux-specific keepalive tuning and user timeout
+    #[cfg(target_os = "linux")]
+    {
+        socket.set_tcp_keepalive(
+            &socket2::TcpKeepalive::new()
+                .with_time(Duration::from_secs(5))
+                .with_interval(Duration::from_secs(2))
+                .with_retries(12),
+        )?;
+        socket.set_tcp_user_timeout(Some(Duration::from_millis(24_000)))?;
     }
     Ok(())
 }

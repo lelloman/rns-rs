@@ -5,6 +5,7 @@
 
 use std::io::{self};
 use std::net::{SocketAddr, UdpSocket};
+use std::os::fd::AsFd;
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -163,7 +164,7 @@ fn start_with_mark(
     }
     let inline = crate::engine::FOLD_IO;
     let send_socket = UdpSocket::bind("0.0.0.0:0")?;
-    super::apply_underlay_mark(send_socket.as_raw_fd(), underlay_mark)?;
+    super::apply_underlay_mark(send_socket.as_fd(), underlay_mark)?;
     send_socket.set_broadcast(true)?;
     send_socket.set_nonblocking(inline)?;
     let writer: Option<Box<dyn Writer>> = Some(Box::new(UdpWriter {
@@ -176,7 +177,7 @@ fn start_with_mark(
     if let (Some(ref bind_ip), Some(bind_port)) = (&config.listen_ip, config.listen_port) {
         let bind_addr = format!("{}:{}", bind_ip, bind_port);
         let recv_socket = UdpSocket::bind(&bind_addr)?;
-        super::apply_underlay_mark(recv_socket.as_raw_fd(), underlay_mark)?;
+        super::apply_underlay_mark(recv_socket.as_fd(), underlay_mark)?;
         log::info!("[{}] UDP listening on {}", config.name, bind_addr);
 
         // Signal interface is up
