@@ -721,6 +721,13 @@ impl<B: AsRef<[u8]>> RawPacket<B> {
 }
 
 impl<'a> RawPacket<&'a [u8]> {
+    /// A view of `raw`'s fields, as [`RawPacket::unpack`] reads them, with
+    /// `packet_hash` zeroed: neither copies the packet nor hashes it, for
+    /// classifying traffic. Nothing is authenticated.
+    pub fn view_unhashed(raw: &'a [u8]) -> Result<Self, PacketError> {
+        Self::parse::<false>(raw)
+    }
+
     /// [`RawPacket::unpack_prehashed`] as a view of `raw`, without copying it.
     pub fn view_prehashed(raw: &'a [u8], packet_hash: [u8; 32]) -> Result<Self, PacketError> {
         let mut packet = Self::parse::<false>(raw)?;
