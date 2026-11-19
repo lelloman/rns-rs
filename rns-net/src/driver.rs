@@ -614,9 +614,7 @@ pub(crate) struct WorkSignal {
 
 impl WorkSignal {
     fn lock(&self) -> std::sync::MutexGuard<'_, (bool, bool)> {
-        self.state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::sync::lock_or_recover(&self.state, "driver state")
     }
 
     /// There is work.

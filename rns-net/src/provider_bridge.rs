@@ -242,7 +242,7 @@ impl ProviderBridge {
 }
 
 fn lock_folded(io: &Mutex<folded::FoldedIo>) -> std::sync::MutexGuard<'_, folded::FoldedIo> {
-    io.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    crate::sync::lock_or_recover(io, "provider bridge io")
 }
 
 /// Bind the bridge's socket and set up its state.

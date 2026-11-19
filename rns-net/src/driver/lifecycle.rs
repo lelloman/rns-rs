@@ -354,10 +354,11 @@ impl Driver {
         }
 
         self.engine.void_queues();
-        self.announce_verify_queue
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear();
+        crate::sync::lock_or_recover(
+            &self.announce_verify_queue,
+            "lifecycle announce verify queue",
+        )
+        .clear();
         self.sent_packets.clear();
         self.sent_packet_keys.clear();
         self.completed_proofs.clear();

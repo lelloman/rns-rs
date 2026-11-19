@@ -39,11 +39,11 @@ impl Driver {
     pub(super) fn check_folded_announce(&mut self) {
         if self.folded.announces.is_empty() && self.folded.announces_queued {
             self.folded.announces_queued = false;
-            let taken = self
-                .announce_verify_queue
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .take_pending(time::now());
+            let taken = crate::sync::lock_or_recover(
+                &self.announce_verify_queue,
+                "folded announce verify queue",
+            )
+            .take_pending(time::now());
             self.folded.announces.extend(taken);
         }
         let Some((key, pending)) = self.folded.announces.pop_front() else {

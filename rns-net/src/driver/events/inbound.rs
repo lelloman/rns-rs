@@ -452,10 +452,10 @@ impl Driver {
 
         let mut actions = self.transport_actions.take();
         if self.async_announce_verification {
-            let mut announce_queue = self
-                .announce_verify_queue
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut announce_queue = crate::sync::lock_or_recover(
+                &self.announce_verify_queue,
+                "inbound announce verify queue",
+            );
             let queued = announce_queue.len();
             self.engine.handle_decoded_inbound_into(
                 inbound_frame,
@@ -548,10 +548,10 @@ impl Driver {
         &mut self,
         key: rns_core::transport::announce_verify_queue::AnnounceVerifyKey,
     ) {
-        let mut announce_queue = self
-            .announce_verify_queue
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut announce_queue = crate::sync::lock_or_recover(
+            &self.announce_verify_queue,
+            "inbound announce verify queue",
+        );
         let interface = announce_queue.pending_interface(&key);
         let size = announce_queue.pending_size(&key).unwrap_or(0);
         let blackholed = announce_queue
@@ -579,10 +579,10 @@ impl Driver {
         sig_cache_key: [u8; 32],
     ) {
         let pending = {
-            let mut announce_queue = self
-                .announce_verify_queue
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut announce_queue = crate::sync::lock_or_recover(
+                &self.announce_verify_queue,
+                "inbound announce verify queue",
+            );
             announce_queue.complete_success(&key)
         };
         if let Some(pending) = pending {

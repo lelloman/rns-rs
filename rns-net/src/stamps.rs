@@ -133,23 +133,17 @@ impl LinkRequestCosts {
     /// `Destination.set_link_cost`: store the clamped cost and return it.
     pub fn set(&self, destination_hash: [u8; 16], cost: f64) -> StampCost {
         let cost = rns_core::stamp::clamp_link_cost(cost);
-        self.inner
-            .costs
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+        crate::sync::lock_or_recover(&self.inner.costs, "destination stamps costs")
             .insert(destination_hash, cost);
         cost
     }
 
     /// `Destination.get_link_cost`: the announced and required cost.
     pub fn get(&self, destination_hash: &[u8; 16]) -> StampCost {
-        let configured = self
-            .inner
-            .costs
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .get(destination_hash)
-            .copied();
+        let configured =
+            crate::sync::lock_or_recover(&self.inner.costs, "destination stamps costs")
+                .get(destination_hash)
+                .copied();
         rns_core::stamp::announced_link_cost(configured, self.default_cost())
     }
 
@@ -173,10 +167,7 @@ impl LinkRequestCosts {
 
     /// Forget the configured cost, reverting to the default.
     pub fn remove(&self, destination_hash: &[u8; 16]) {
-        self.inner
-            .costs
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+        crate::sync::lock_or_recover(&self.inner.costs, "destination stamps costs")
             .remove(destination_hash);
     }
 
@@ -352,9 +343,7 @@ where
             let found = grind(&stop);
             stop.store(true, Ordering::Relaxed);
             if let Some(found) = found {
-                let mut slot = result
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut slot = crate::sync::lock_or_recover(&result, "destination stamps result");
                 if slot.is_none() {
                     *slot = Some(found);
                 }

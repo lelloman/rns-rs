@@ -79,9 +79,7 @@ impl KnownDestinationsStore {
     }
 
     fn lock(&self) -> MutexGuard<'_, Connection> {
-        self.conn
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::sync::lock_or_recover(&self.conn, "storage sqlite conn")
     }
 
     pub fn load_all(&self) -> io::Result<Vec<([u8; 16], KnownDestination)>> {
@@ -218,10 +216,7 @@ impl KnownDestinationsStore {
         tx.commit().map_err(sql_error)?;
         drop(conn);
 
-        let mut rejected = self
-            .rejected
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut rejected = crate::sync::lock_or_recover(&self.rejected, "storage sqlite rejected");
         let previous = std::mem::take(&mut *rejected);
         for (destination_hash, error) in &rejects {
             if !previous.contains(destination_hash) {

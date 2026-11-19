@@ -121,9 +121,7 @@ impl SqliteAnnounceCache {
     }
 
     fn lock(&self) -> MutexGuard<'_, Connection> {
-        self.conn
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::sync::lock_or_recover(&self.conn, "announce cache conn")
     }
 
     fn store(

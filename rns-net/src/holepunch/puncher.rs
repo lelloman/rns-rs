@@ -178,10 +178,7 @@ impl PunchHandle {
     pub fn join(self) -> Option<PunchResult> {
         match self.outcome {
             Outcome::Thread(mut thread) => thread.take().and_then(|h| h.join().ok().flatten()),
-            Outcome::Loop(slot) => slot
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .take(),
+            Outcome::Loop(slot) => crate::sync::lock_or_recover(&slot, "puncher slot").take(),
         }
     }
 }
@@ -567,10 +564,7 @@ impl PunchSource {
         let Some(socket) = self.socket.take() else {
             return crate::event::SourceStatus::Remove;
         };
-        *self
-            .slot
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PunchResult {
+        *crate::sync::lock_or_recover(&self.slot, "puncher slot") = Some(PunchResult {
             socket,
             peer_addr,
             learned: self.punch.learned.clone(),
