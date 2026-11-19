@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-rns-core = { path = "../rns-core" }
+rns-core = { path = "../rns-core", features = ["fuzzing"] }
 rns-crypto = { path = "../rns-crypto" }
 rns-net = { path = "../rns-net" }
 
