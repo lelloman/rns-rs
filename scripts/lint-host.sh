@@ -23,6 +23,8 @@ lint -p rns-hooks --features wasm,native
 # The BLE RNode transport is not a default feature (it links libdbus).
 lint -p rns-net -p rns-cli -p rns-ctl \
   --features rns-net/iface-rnode-ble,rns-cli/iface-rnode-ble,rns-ctl/iface-rnode-ble
+# rns-net's features together (its tests have code behind several).
+lint -p rns-net --all-features
 # The bench's counting allocator is behind a feature (scripts/hotpath).
 production_targets=--bins lint -p rns-bench --features allocation-profiler
 # The hooks' guest code exists only on wasm32, where rns-cli's build script
