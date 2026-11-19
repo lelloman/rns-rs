@@ -29,7 +29,9 @@ assert RNS.__version__ == "1.6.1", RNS.__version__
 assert sys.version_info[:2] in ((3, 10), (3, 11), (3, 12)), sys.version
 
 ROOT = Path(__file__).resolve().parent.parent
-TOOLS = ["rnsd", "rnstatus", "rnpath", "rnprobe", "rnid", "rncp", "rnx", "rnir", "rnpkg"]
+TOOLS = ["rnsd", "rnstatus", "rnpath", "rnprobe", "rnid", "rncp", "rnx", "rnir", "rnpkg", "rnsh"]
+# Where a tool's main() lives, when not in RNS.Utilities.<tool>.
+MODULES = {"rnsh": "RNS.Utilities.rnsh.rnsh"}
 WIDTHS = [12, 30, 50, 80, 100, 160]
 ERROR_WIDTH = 80
 
@@ -45,7 +47,7 @@ def capture(tool):
 
     argparse.ArgumentParser.parse_args = intercept
     sys.argv = [tool]
-    module = importlib.import_module("RNS.Utilities." + tool)
+    module = importlib.import_module(MODULES.get(tool, "RNS.Utilities." + tool))
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         try:
             module.main()
@@ -71,12 +73,16 @@ TYPES = {None: "Str", str: "Str", float: "Float", int: "Int"}
 
 
 def rust_parser(tool, parser):
-    assert parser.usage is None and parser.epilog is None
+    assert parser.usage is None
+    raw = parser.formatter_class is argparse.RawDescriptionHelpFormatter
+    assert raw or parser.formatter_class is argparse.HelpFormatter, parser.formatter_class
     assert not parser._mutually_exclusive_groups
     assert [g.title for g in parser._action_groups] == ["positional arguments", "options"]
     lines = [f"pub const {tool.upper()}: Parser = Parser {{",
              f'    name: "{tool}",',
              f"    description: {rust_str(parser.description)},",
+             f"    epilog: {rust_str(parser.epilog)},",
+             f"    raw_description: {'true' if raw else 'false'},",
              "    actions: &["]
     for a in parser._actions:
         assert a.choices is None and "%" not in (a.help or ""), (tool, a.dest)

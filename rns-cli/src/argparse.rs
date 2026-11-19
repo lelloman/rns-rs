@@ -53,6 +53,11 @@ pub struct Action {
 pub struct Parser {
     pub name: &'static str,
     pub description: Option<&'static str>,
+    /// Text after the options.
+    pub epilog: Option<&'static str>,
+    /// `RawDescriptionHelpFormatter`: the description and epilog are
+    /// printed as written, not refilled.
+    pub raw_description: bool,
     pub actions: &'static [Action],
 }
 
@@ -257,6 +262,16 @@ impl<'a> Formatter<'a> {
         format!("{}\n\n", lines.join("\n"))
     }
 
+    /// The description or epilog: refilled as [`Formatter::text`], or
+    /// as written under `RawDescriptionHelpFormatter`.
+    fn description_text(&self, parser: &Parser, text: &str) -> String {
+        if parser.raw_description {
+            format!("{text}\n\n")
+        } else {
+            self.text(text, 0)
+        }
+    }
+
     fn action(&self, action: &Action, indent: i64, max_length: i64) -> String {
         let help_position = (max_length + 2).min(self.max_help_position);
         let help_width = (self.width - help_position).max(11);
@@ -301,7 +316,7 @@ impl<'a> Formatter<'a> {
             .unwrap_or(0);
         let mut out = self.usage(parser);
         if let Some(description) = parser.description {
-            out.push_str(&self.text(description, 0));
+            out.push_str(&self.description_text(parser, description));
         }
         for (heading, positional) in [("positional arguments", true), ("options", false)] {
             let items: String = parser
@@ -314,6 +329,9 @@ impl<'a> Formatter<'a> {
             if !items.is_empty() {
                 out.push_str(&format!("\n{heading}:\n{items}\n"));
             }
+        }
+        if let Some(epilog) = parser.epilog {
+            out.push_str(&self.description_text(parser, epilog));
         }
         finish(out)
     }
@@ -728,6 +746,7 @@ mod tests {
             "rnx" => &crate::rnx::OPTIONS,
             "rnir" => &crate::placeholder::RNIR_OPTIONS,
             "rnpkg" => &crate::placeholder::OPTIONS,
+            "rnsh" => &crate::rnsh::OPTIONS,
             other => panic!("no option table for {other}"),
         }
     }
@@ -742,7 +761,7 @@ mod tests {
         let mut failures = Vec::new();
         let mut checked = 0;
         for tool in [
-            "rnsd", "rnstatus", "rnpath", "rnprobe", "rnid", "rncp", "rnx", "rnir", "rnpkg",
+            "rnsd", "rnstatus", "rnpath", "rnprobe", "rnid", "rncp", "rnx", "rnir", "rnpkg", "rnsh",
         ] {
             let parser = crate::upstream_parsers::by_name(tool).unwrap();
             let fixture = rns_net::pickle::decode(

@@ -39,7 +39,6 @@ use rns_net::destination::Destination;
 use rns_net::{Callbacks, ChannelSendError, RnsNode, SendError};
 
 use crate::args::{Args, Opt, OptionSpec};
-use crate::format::prettyb256rep;
 use crate::pyfmt::prettyhexrep;
 
 const APP_NAME: &str = "rnsh";
@@ -110,20 +109,33 @@ impl std::fmt::Display for RnshError {
     }
 }
 
+/// The status upstream's `main()` exits with when the program raised
+/// `SystemExit`, whatever its code (argparse's help, version and errors,
+/// and `exit(0)` after printing the identity): it swallows the exception
+/// and returns its initial status.
+const SWALLOWED_EXIT: i32 = 1;
+
 pub fn main() -> i32 {
-    match CliOptions::parse(std::env::args().skip(1).collect()) {
+    let columns = crate::argparse::terminal_columns();
+    match CliOptions::parse(std::env::args().skip(1).collect(), columns) {
         Ok(opts) => {
-            if opts.help {
-                print_usage();
-                return 0;
-            }
             if opts.version {
                 println!("rnsh {} (protocol {})", VERSION, PROTOCOL_VERSION);
-                return 0;
+                return SWALLOWED_EXIT;
+            }
+            // Upstream sets up its configuration directory before anything
+            // else, even when it then only prints its help.
+            if resolve_rnsh_config_dir(opts.rnsh_config.as_deref(), &home_dir()).is_err() {
+                crate::pylog::log(
+                    "Could not get or create rnsh configuration directory, aborting",
+                    crate::pylog::LOG_CRITICAL,
+                );
+                return 1;
             }
             if opts.print_identity {
                 return match print_identity(&opts) {
-                    Ok(()) => 0,
+                    // Upstream ends it with exit(0), which main() swallows.
+                    Ok(()) => SWALLOWED_EXIT,
                     Err(err) => {
                         eprintln!("{err}");
                         1
@@ -141,7 +153,9 @@ pub fn main() -> i32 {
                 }
                 result
             } else {
-                print_usage();
+                println!();
+                crate::argparse::print_help("rnsh", "rnsh");
+                println!();
                 Ok(1)
             };
             match result {
@@ -152,10 +166,10 @@ pub fn main() -> i32 {
                 }
             }
         }
-        Err(err) => {
-            eprintln!("{err}");
-            print_usage();
-            1
+        Err(exit) => {
+            print!("{}", exit.stdout);
+            eprint!("{}", exit.stderr);
+            SWALLOWED_EXIT
         }
     }
 }
@@ -168,9 +182,7 @@ struct CliOptions {
     verbose: u8,
     quiet: u8,
     print_identity: bool,
-    base256: bool,
     version: bool,
-    help: bool,
     listen: bool,
     service: Option<String>,
     announce_period: Option<u64>,
@@ -185,8 +197,8 @@ struct CliOptions {
     command: Vec<String>,
 }
 
-/// upstream rnsh's options, and the Rust-only `-Z`/`--base256`.
-const OPTIONS: OptionSpec = OptionSpec {
+/// upstream rnsh's options.
+pub(crate) const OPTIONS: OptionSpec = OptionSpec {
     options: &[
         Opt::value("c", "config"),
         Opt::value("", "rnsconfig"),
@@ -204,26 +216,23 @@ const OPTIONS: OptionSpec = OptionSpec {
         Opt::flag("N", "no-id"),
         Opt::flag("m", "mirror"),
         Opt::value("w", "timeout"),
-        Opt::flag("Z", "base256").rust_only(),
     ],
 };
 
 impl CliOptions {
-    fn parse(argv: Vec<String>) -> Result<Self, String> {
+    /// The options upstream's parser takes from `argv`, or what it prints
+    /// and the status it exits with when it does not let rnsh run.
+    fn parse(argv: Vec<String>, columns: usize) -> Result<Self, crate::argparse::Exit> {
         // As upstream, everything after the first `--` is the command.
         let (rnsh_argv, command) = match argv.iter().position(|arg| arg == "--") {
             Some(idx) => (argv[..idx].to_vec(), argv[idx + 1..].to_vec()),
             None => (argv, Vec::new()),
         };
         let args = Args::parse_spec_from(rnsh_argv, &OPTIONS);
-        if let Some(option) = args.unknown.first() {
-            return Err(format!("unknown option {option}"));
-        }
-        if let Some(option) = args.missing.first() {
-            return Err(format!("{option} requires a value"));
-        }
-        if let Some(extra) = args.positional.get(1) {
-            return Err(format!("unexpected positional argument: {extra}"));
+        if let Some(parser) = crate::upstream_parsers::by_name("rnsh") {
+            if let Some(exit) = crate::argparse::check(&args, parser, "rnsh", columns) {
+                return Err(exit);
+            }
         }
         let value = |key: &str| args.get(key).map(str::to_string);
         let mut opts = CliOptions {
@@ -233,17 +242,14 @@ impl CliOptions {
             verbose: args.verbosity,
             quiet: args.quiet,
             print_identity: args.has("p"),
-            base256: args.has("Z"),
             version: args.has("version"),
-            help: args.has("help"),
             listen: args.has("l"),
             service: value("service"),
+            // Both checked by the parser above. A negative period announces
+            // once, as 0 does.
             announce_period: value("announce")
-                .map(|b| {
-                    b.parse()
-                        .map_err(|_| "--announce requires an integer period".to_string())
-                })
-                .transpose()?,
+                .and_then(|b| crate::argparse::python_int(&b))
+                .map(|b| b.max(0) as u64),
             allowed: args
                 .get_all("allowed")
                 .into_iter()
@@ -254,12 +260,7 @@ impl CliOptions {
             no_remote_command: args.has("C"),
             no_id: args.has("N"),
             mirror_exit: args.has("m"),
-            timeout: value("timeout")
-                .map(|w| {
-                    w.parse()
-                        .map_err(|_| "--timeout requires a numeric value".to_string())
-                })
-                .transpose()?,
+            timeout: value("timeout").and_then(|w| crate::argparse::python_float(&w)),
             destination: args.positional.first().cloned(),
             command,
         };
@@ -268,12 +269,6 @@ impl CliOptions {
         }
         Ok(opts)
     }
-}
-
-fn print_usage() {
-    eprintln!(
-        "Usage:\n  rnsh -l [options] [-- command...]\n  rnsh [options] <destination> [-- command...]\n\nOptions:\n  -c, --config PATH        rnsh application config directory\n      --rnsconfig PATH     Reticulum config directory\n  -i, --identity PATH      Identity file to use\n  -p, --print-identity     Print identity and destination info\n  -Z, --base256            Also print compact base256 display for hashes\n  -l, --listen             Listen for remote shell links\n  -s, --service NAME       Listener identity service name\n  -b, --announce PERIOD    Announce on startup and every PERIOD seconds (0 = once)\n  -a, --allowed HASH       Allow initiator identity hash (repeatable)\n  -n, --no-auth            Allow any initiator identity\n  -A, --remote-command-as-args\n  -C, --no-remote-command\n  -N, --no-id              Do not identify to the listener\n  -m, --mirror             Return remote command exit code\n  -w, --timeout SECONDS    Path/link/protocol timeout"
-    );
 }
 
 fn home_dir() -> PathBuf {

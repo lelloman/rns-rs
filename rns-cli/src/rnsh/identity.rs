@@ -101,15 +101,9 @@ pub(super) fn print_identity(opts: &CliOptions) -> Result<(), RnshError> {
         &home,
     )?;
     println!("Identity     : {}", prettyhexrep(identity.hash()));
-    if opts.base256 {
-        println!("Identity b256: {}", prettyb256rep(identity.hash()));
-    }
     if opts.listen {
         let dest = Destination::single_in(APP_NAME, &[], IdentityHash(*identity.hash()));
         println!("Listening on : {}", prettyhexrep(&dest.hash.0));
-        if opts.base256 {
-            println!("Listen b256  : {}", prettyb256rep(&dest.hash.0));
-        }
     }
     Ok(())
 }
