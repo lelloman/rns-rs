@@ -12,13 +12,33 @@ const HEADER_LEN: usize = 16;
 const CONTROL_UI: u8 = 0x03;
 const PID_NO_LAYER_3: u8 = 0xF0;
 
+/// Why an AX.25 address is invalid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ax25AddressError {
+    /// The callsign is not 3-6 ASCII characters.
+    Callsign,
+    /// The SSID is above 15.
+    Ssid,
+}
+
+impl std::fmt::Display for Ax25AddressError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Callsign => "AX.25 callsign must be 3-6 ASCII characters",
+            Self::Ssid => "AX.25 SSID must be in 0..15",
+        })
+    }
+}
+
+impl std::error::Error for Ax25AddressError {}
+
 /// Check an AX.25 callsign (3-6 ASCII characters) and SSID (0-15); the callsign is uppercased.
-pub fn validate_address(callsign: &str, ssid: u8) -> Result<Ax25Address, String> {
+pub fn validate_address(callsign: &str, ssid: u8) -> Result<Ax25Address, Ax25AddressError> {
     if !(3..=6).contains(&callsign.len()) || !callsign.is_ascii() {
-        return Err("AX.25 callsign must be 3-6 ASCII characters".into());
+        return Err(Ax25AddressError::Callsign);
     }
     if ssid > 15 {
-        return Err("AX.25 SSID must be in 0..15".into());
+        return Err(Ax25AddressError::Ssid);
     }
     Ok(Ax25Address {
         callsign: callsign.to_ascii_uppercase(),
@@ -103,7 +123,7 @@ impl InterfaceFactory for Ax25KissFactory {
             .transpose()
             .map_err(|_| "invalid AX.25 SSID".to_string())?
             .unwrap_or(0);
-        config.ax25_source = Some(validate_address(callsign, ssid)?);
+        config.ax25_source = Some(validate_address(callsign, ssid).map_err(|e| e.to_string())?);
         config.interface_type_name = self.type_name().into();
         Ok(Box::new(config))
     }
