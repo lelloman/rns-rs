@@ -26,7 +26,7 @@ pub struct PipeConfig {
     pub name: String,
     /// Command line of the subprocess (`command`).
     pub command: String,
-    /// Wait before respawning the subprocess (`respawn_delay`, in milliseconds; default 5 s).
+    /// Wait before respawning the subprocess (`respawn_delay`, in seconds; default 5).
     pub respawn_delay: Duration,
     /// Interface ID assigned by the node.
     pub interface_id: InterfaceId,
@@ -400,12 +400,13 @@ impl InterfaceFactory for PipeFactory {
             .clone();
 
         let respawn_delay = match params.get("respawn_delay") {
-            Some(v) => {
-                let ms: u64 = v
-                    .parse()
-                    .map_err(|_| format!("invalid respawn_delay: {}", v))?;
-                Duration::from_millis(ms)
-            }
+            // Seconds, as upstream's `c.as_float("respawn_delay")`.
+            Some(v) => v
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .and_then(|secs| Duration::try_from_secs_f64(secs).ok())
+                .ok_or_else(|| format!("invalid respawn_delay: {}", v))?,
             None => Duration::from_secs(5),
         };
 
@@ -661,6 +662,31 @@ mod tests {
             Event::Frame { data, .. } => assert_eq!(data, payload.into()),
             other => panic!("expected Frame, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn respawn_delay_is_in_seconds_as_upstream() {
+        let parse = |value: &str| {
+            let params: HashMap<String, String> = [
+                ("command".to_string(), "cat".to_string()),
+                ("respawn_delay".to_string(), value.to_string()),
+            ]
+            .into_iter()
+            .collect();
+            PipeFactory
+                .parse_config("pipe", InterfaceId(1), &params)
+                .map(|config| {
+                    config
+                        .into_any()
+                        .downcast::<PipeConfig>()
+                        .unwrap()
+                        .respawn_delay
+                })
+        };
+        assert_eq!(parse("5"), Ok(Duration::from_secs(5)));
+        assert_eq!(parse("2.5"), Ok(Duration::from_millis(2500)));
+        assert!(parse("-1").is_err());
+        assert!(parse("soon").is_err());
     }
 
     #[test]
