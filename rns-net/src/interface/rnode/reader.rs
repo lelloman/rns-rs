@@ -11,13 +11,31 @@ pub(super) fn reader_loop(
     flow_states: Vec<Arc<Mutex<SubFlowState>>>,
     running: Arc<AtomicBool>,
 ) {
+    let Some(reader) = bring_up(reader, &config, &tx, &writer, &flow_states, &running) else {
+        return;
+    };
+    reader_loop_connected(reader, writer, config, tx, flow_states, running);
+}
+
+/// Bring the device up for the first time, for either I/O engine: open
+/// it (a BLE device is opened here), detect and configure it, and, as
+/// upstream, keep reopening it until it is configured. Reports the
+/// interface up. `None` once the interface stops.
+pub(super) fn bring_up(
+    reader: Option<Transport>,
+    config: &RNodeConfig,
+    tx: &EventSender,
+    writer: &Arc<Mutex<DeviceWriter>>,
+    flow_states: &[Arc<Mutex<SubFlowState>>],
+    running: &Arc<AtomicBool>,
+) -> Option<Transport> {
     let reader = reader.or_else(|| {
-        setup::is_ble(&config)
-            .then(|| first_ble_open(&config, &writer))
+        setup::is_ble(config)
+            .then(|| first_ble_open(config, writer))
             .flatten()
     });
     let configured = reader.and_then(|mut reader| {
-        match setup::setup_device(&mut reader, &writer, &config, &running) {
+        match setup::setup_device(&mut reader, writer, config, running) {
             Ok(()) => Some(reader),
             Err(e) => {
                 log::debug!("[{}] initial RNode setup failed: {}", config.name, e);
@@ -28,13 +46,55 @@ pub(super) fn reader_loop(
     let (reader, reopened) = match configured {
         Some(reader) => (reader, false),
         // As upstream, keep trying to bring the device up.
-        None => match open_until_configured(&config, &writer, &flow_states, &running) {
-            Some(reader) => (reader, true),
-            None => return,
-        },
+        None => (
+            open_until_configured(config, writer, flow_states, running)?,
+            true,
+        ),
     };
-    signal_interface_up(&tx, &config, &writer, &flow_states, reopened);
-    reader_loop_connected(reader, writer, config, tx, flow_states, running);
+    signal_interface_up(tx, config, writer, flow_states, reopened);
+    Some(reader)
+}
+
+/// Reopen a lost connection and configure the device again, for either
+/// I/O engine, until it works or the interface stops: a BLE device is
+/// waited for as upstream does, a serial or TCP one is retried with a
+/// backoff from 200 ms to 2 s. Reports the interface up again.
+pub(super) fn reconnect_until_configured(
+    config: &RNodeConfig,
+    tx: &EventSender,
+    writer: &Arc<Mutex<DeviceWriter>>,
+    flow_states: &[Arc<Mutex<SubFlowState>>],
+    running: &Arc<AtomicBool>,
+) -> Option<Transport> {
+    const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(200);
+    const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(2);
+    if setup::is_ble(config) {
+        // As upstream: wait, then try again, until the device is back.
+        let reader = open_until_configured(config, writer, flow_states, running)?;
+        signal_interface_up(tx, config, writer, flow_states, true);
+        return Some(reader);
+    }
+    let mut backoff = RECONNECT_INITIAL_DELAY;
+    while running.load(Ordering::Relaxed) {
+        match reopen_connection(config, writer) {
+            Ok(mut reader) => {
+                reset_flow_states(flow_states);
+                match setup::setup_device(&mut reader, writer, config, running) {
+                    Ok(()) => {
+                        signal_interface_up(tx, config, writer, flow_states, true);
+                        return Some(reader);
+                    }
+                    Err(e) => log::warn!("[{}] reconnect configure failed: {}", config.name, e),
+                }
+            }
+            Err(e) => log::warn!("[{}] reconnect open failed: {}", config.name, e),
+        }
+        if !wait_while_running(running, backoff) {
+            return None;
+        }
+        backoff = std::cmp::min(backoff.saturating_mul(2), RECONNECT_MAX_DELAY);
+    }
+    None
 }
 
 /// Read a configured device until the interface stops, reconnecting when
@@ -47,8 +107,6 @@ pub(super) fn reader_loop_connected(
     flow_states: Vec<Arc<Mutex<SubFlowState>>>,
     running: Arc<AtomicBool>,
 ) {
-    const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(200);
-    const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(2);
     while running.load(Ordering::Relaxed) {
         // A fresh receiver for each connection: no report of the last one
         // can be attached to a frame of this one.
@@ -108,43 +166,9 @@ pub(super) fn reader_loop_connected(
             return;
         }
 
-        if setup::is_ble(&config) {
-            // As upstream: wait, then try again, until the device is back.
-            match open_until_configured(&config, &writer, &flow_states, &running) {
-                Some(new_reader) => {
-                    reader = new_reader;
-                    signal_interface_up(&tx, &config, &writer, &flow_states, true);
-                    continue;
-                }
-                None => return,
-            }
-        }
-
-        let mut backoff = RECONNECT_INITIAL_DELAY;
-        while running.load(Ordering::Relaxed) {
-            match reopen_connection(&config, &writer) {
-                Ok(new_reader) => {
-                    reset_flow_states(&flow_states);
-                    reader = new_reader;
-                    if let Err(e) = setup::setup_device(&mut reader, &writer, &config, &running) {
-                        log::warn!("[{}] reconnect configure failed: {}", config.name, e);
-                        if !wait_while_running(&running, backoff) {
-                            return;
-                        }
-                        backoff = std::cmp::min(backoff.saturating_mul(2), RECONNECT_MAX_DELAY);
-                        continue;
-                    }
-                    signal_interface_up(&tx, &config, &writer, &flow_states, true);
-                    break;
-                }
-                Err(e) => {
-                    log::warn!("[{}] reconnect open failed: {}", config.name, e);
-                    if !wait_while_running(&running, backoff) {
-                        return;
-                    }
-                    backoff = std::cmp::min(backoff.saturating_mul(2), RECONNECT_MAX_DELAY);
-                }
-            }
+        match reconnect_until_configured(&config, &tx, &writer, &flow_states, &running) {
+            Some(new_reader) => reader = new_reader,
+            None => return,
         }
     }
 }
