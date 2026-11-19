@@ -287,14 +287,31 @@ where
     }
 }
 
+/// A TCP port free now, in 30000-32767: below the kernel's ephemeral range
+/// (32768-60999 by default), where a socket bound to port 0 or an outgoing
+/// connection could take it before the interface binds it.
+fn free_port() -> u16 {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    let base = 30_000 + (std::process::id() % 27) as u16 * 100;
+    loop {
+        let port = base + NEXT.fetch_add(1, Ordering::Relaxed) % 2700;
+        let port = if port > 32_767 { port - 2_700 } else { port };
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
+}
+
 struct PythonRns {
     child: Child,
     events: Receiver<serde_json::Value>,
 }
 
 impl PythonRns {
+    /// A Python instance serving TCP on a port of [`free_port`].
     fn spawn() -> Self {
-        Self::spawn_with_env(None)
+        Self::spawn_with_env(Some(("INTEROP_LISTEN_PORT", free_port().to_string())))
     }
 
     /// A Python instance that dials a Rust TCP server on `port`.
@@ -550,10 +567,14 @@ import socket
 import sys
 import tempfile
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.bind(('127.0.0.1', 0))
-port = sock.getsockname()[1]
-sock.close()
+listen_port = os.environ.get("INTEROP_LISTEN_PORT")
+if listen_port:
+    port = int(listen_port)
+else:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(('127.0.0.1', 0))
+    port = sock.getsockname()[1]
+    sock.close()
 
 config_dir = tempfile.mkdtemp()
 config_path = os.path.join(config_dir, "config")
@@ -1340,10 +1361,7 @@ fn rust_server_receives_tunnel_synthesis_from_python_client() {
         return;
     }
 
-    let port = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.local_addr().unwrap().port()
-    };
+    let port = free_port();
     let (rust_tx, _rust_rx) = mpsc::channel();
     let node = start_rust_node_on(
         tcp_server_interface(port),
