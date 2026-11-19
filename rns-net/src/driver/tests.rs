@@ -3385,10 +3385,7 @@ fn send_channel_message_returns_error_while_draining() {
     driver.run();
 
     let response = resp_rx.recv().unwrap();
-    assert_eq!(
-        response,
-        Err("cannot send channel message while node is draining".into())
-    );
+    assert_eq!(response, Err(crate::ChannelSendError::Unavailable));
 }
 
 #[test]

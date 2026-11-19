@@ -89,20 +89,31 @@ impl std::fmt::Display for SendError {
 
 impl std::error::Error for SendError {}
 
-/// A channel send can be temporarily blocked without the link having failed.
+/// Why a channel message was not sent. Only [`ChannelSendError::NotReady`]
+/// is temporary: the channel's window is full, and the same message can be
+/// sent again once it has room.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChannelSendError {
+    /// The channel's send window is full.
     NotReady,
-    Rejected(String),
+    /// The message does not fit in one packet of the link.
+    MessageTooBig,
+    /// The message could not be packed into an envelope.
+    InvalidEnvelope,
+    /// No link with that id.
+    UnknownLink,
+    /// The link has no channel open.
+    NoChannel,
+    /// The driver is stopped or draining.
     Unavailable,
 }
 
-impl From<String> for ChannelSendError {
-    fn from(error: String) -> Self {
-        if error == rns_core::channel::ChannelError::NotReady.to_string() {
-            Self::NotReady
-        } else {
-            Self::Rejected(error)
+impl From<rns_core::channel::ChannelError> for ChannelSendError {
+    fn from(error: rns_core::channel::ChannelError) -> Self {
+        match error {
+            rns_core::channel::ChannelError::NotReady => Self::NotReady,
+            rns_core::channel::ChannelError::MessageTooBig => Self::MessageTooBig,
+            rns_core::channel::ChannelError::InvalidEnvelope => Self::InvalidEnvelope,
         }
     }
 }
@@ -111,7 +122,10 @@ impl std::fmt::Display for ChannelSendError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotReady => write!(f, "channel is not ready to send"),
-            Self::Rejected(error) => write!(f, "{error}"),
+            Self::MessageTooBig => write!(f, "Message too big for packet"),
+            Self::InvalidEnvelope => write!(f, "Invalid envelope data"),
+            Self::UnknownLink => write!(f, "unknown link"),
+            Self::NoChannel => write!(f, "link has no active channel"),
             Self::Unavailable => write!(f, "driver is stopped or draining"),
         }
     }

@@ -1,7 +1,6 @@
 //! Upstream's `RNS.log` lines and Python's exception texts, for the
 //! messages upstream's utilities print to stdout through them.
 
-
 use crate::sys::home_of;
 use std::sync::atomic::{AtomicI32, Ordering};
 

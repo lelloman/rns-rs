@@ -1,6 +1,5 @@
 //! The listener: accepting links and running commands for them.
 
-
 use super::*;
 
 #[derive(Clone)]
