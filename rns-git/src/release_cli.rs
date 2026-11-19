@@ -9,7 +9,7 @@ use rns_core::msgpack::{self, Value};
 use rns_crypto::identity::Identity;
 use rns_crypto::sha256::sha256;
 
-use crate::client::{decode_status, SyncClient};
+use crate::client::{decode_status, ManagementRequests, SyncClient};
 use crate::config::ClientConfig;
 use crate::logging;
 use crate::protocol;
@@ -74,7 +74,14 @@ where
     } else {
         let origin_path = repository.clone();
         let client = SyncClient::connect(config, dest_hash)?;
-        let mut transport = NetReleaseTransport { client, repository };
+        let mut transport = NetReleaseTransport {
+            requests: ManagementRequests::new(
+                client,
+                protocol::PATH_RELEASE,
+                RELEASE_TIMEOUT_MEDIUM,
+            )
+            .for_repository(repository, "release"),
+        };
         run_release_command_with_defaults(
             &mut transport,
             &options.command,
@@ -104,23 +111,16 @@ trait ReleaseTransport {
 }
 
 struct NetReleaseTransport {
-    client: SyncClient,
-    repository: String,
+    requests: ManagementRequests,
 }
 
 impl ReleaseTransport for NetReleaseTransport {
     fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
-        self.request_with_timeout(data, RELEASE_TIMEOUT_MEDIUM)
+        self.requests.request(data)
     }
 
     fn request_with_timeout(&mut self, data: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
-        let response = self.client.request_with_timeout(
-            protocol::PATH_RELEASE,
-            request_with_repository(data, &self.repository)?,
-            timeout,
-        )?;
-        let bytes = protocol::response_bin(&response.data)?;
-        decode_status(bytes)
+        self.requests.request_with_timeout(data, timeout)
     }
 
     fn request_resource_with_timeout(
@@ -128,17 +128,12 @@ impl ReleaseTransport for NetReleaseTransport {
         data: Vec<u8>,
         timeout: Duration,
     ) -> Result<Vec<u8>> {
-        let response = self.client.request_with_timeout(
-            protocol::PATH_RELEASE,
-            request_with_repository(data, &self.repository)?,
-            timeout,
-        )?;
+        let response = self.requests.request_response(data, timeout)?;
         if let Some(metadata) = response.metadata {
             crate::client::ensure_metadata_ok(&metadata)?;
             return Ok(response.data);
         }
-        let bytes = protocol::response_bin(&response.data)?;
-        decode_status(bytes)
+        decode_status(protocol::response_bin(&response.data)?)
     }
 }
 
@@ -1234,20 +1229,6 @@ fn request(operation: &str, fields: &[(&str, Value)]) -> Vec<u8> {
             .map(|(key, value)| (Value::Str((*key).into()), value.clone())),
     );
     msgpack::pack(&Value::Map(map))
-}
-
-fn request_with_repository(data: Vec<u8>, repository: &str) -> Result<Vec<u8>> {
-    let mut value =
-        msgpack::unpack_exact(&data).map_err(|e| Error::msg(format!("invalid request: {e}")))?;
-    if let Value::Map(entries) = &mut value {
-        for (key, val) in entries {
-            if matches!(key, Value::UInt(v) if *v == protocol::IDX_REPOSITORY) {
-                *val = Value::Str(repository.to_string());
-                return Ok(msgpack::pack(&value));
-            }
-        }
-    }
-    Err(Error::msg("release request missing repository field"))
 }
 
 fn usage() -> &'static str {

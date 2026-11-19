@@ -508,6 +508,80 @@ fn is_not_identified_status(bytes: &[u8]) -> bool {
     )
 }
 
+/// Requests to one of a repository server's management paths (work,
+/// permissions, releases), answered with a status byte and a body.
+pub(crate) struct ManagementRequests {
+    client: SyncClient,
+    path: &'static str,
+    /// The repository a request is about, written into its
+    /// `IDX_REPOSITORY` field, and what the requests are for, in the error
+    /// when that field is missing.
+    repository: Option<(String, &'static str)>,
+    timeout: Duration,
+}
+
+impl ManagementRequests {
+    /// Requests to `path` that wait `timeout` unless told otherwise.
+    pub(crate) fn new(client: SyncClient, path: &'static str, timeout: Duration) -> Self {
+        Self {
+            client,
+            path,
+            repository: None,
+            timeout,
+        }
+    }
+
+    /// The same, for `repository`; `what` names the requests in errors.
+    pub(crate) fn for_repository(mut self, repository: String, what: &'static str) -> Self {
+        self.repository = Some((repository, what));
+        self
+    }
+
+    pub(crate) fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
+        self.request_with_timeout(data, self.timeout)
+    }
+
+    /// The body of the reply to `data`, or the error its status reports.
+    pub(crate) fn request_with_timeout(
+        &mut self,
+        data: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<Vec<u8>> {
+        let response = self.request_response(data, timeout)?;
+        decode_status(protocol::response_bin(&response.data)?)
+    }
+
+    /// The reply to `data` as it came.
+    pub(crate) fn request_response(
+        &mut self,
+        data: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<Response> {
+        let data = match &self.repository {
+            Some((repository, what)) => request_with_repository(data, repository, what)?,
+            None => data,
+        };
+        self.client.request_with_timeout(self.path, data, timeout)
+    }
+}
+
+/// `data`, a request map, with its repository field set to `repository`.
+fn request_with_repository(data: Vec<u8>, repository: &str, what: &str) -> Result<Vec<u8>> {
+    let mut value =
+        msgpack::unpack_exact(&data).map_err(|e| Error::msg(format!("invalid request: {e}")))?;
+    if let msgpack::Value::Map(entries) = &mut value {
+        for (key, val) in entries {
+            if matches!(key, msgpack::Value::UInt(v) if *v == protocol::IDX_REPOSITORY) {
+                *val = msgpack::Value::Str(repository.to_string());
+                return Ok(msgpack::pack(&value));
+            }
+        }
+    }
+    Err(Error::msg(format!(
+        "{what} request missing repository field"
+    )))
+}
+
 pub(crate) fn decode_status(bytes: Vec<u8>) -> Result<Vec<u8>> {
     let Some((&code, body)) = bytes.split_first() else {
         return Err(Error::msg("empty response"));
