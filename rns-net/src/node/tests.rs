@@ -2226,7 +2226,7 @@ enable_transport = False
     type = PipeInterface
     enabled = yes
     command = cat
-    respawn_delay = 5000
+    respawn_delay = 2.5
     interface_mode = full
 "#;
     fs::write(dir.join("config"), config).unwrap();
