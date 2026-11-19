@@ -100,13 +100,13 @@ mod socket_protector_tests {
 
     #[test]
     fn underlay_helper_invokes_installed_protector_without_mark() {
-        use std::os::fd::AsRawFd;
+        use std::os::fd::AsFd;
         let _lock = TEST_LOCK.lock().unwrap();
         let calls = Arc::new(AtomicUsize::new(0));
         let _guard =
             install_socket_protector(Arc::new(CountingProtector(Arc::clone(&calls)))).unwrap();
         let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-        apply_underlay_mark(socket.as_raw_fd(), None).unwrap();
+        apply_underlay_mark(socket.as_fd(), None).unwrap();
         assert!(calls.load(Ordering::Relaxed) >= 1);
     }
 }
@@ -140,8 +140,7 @@ fn protect_underlay_socket(fd: std::os::unix::io::RawFd) -> io::Result<()> {
 ///
 /// Requires `CAP_NET_RAW` or root on Linux.
 #[cfg(target_os = "linux")]
-#[allow(unsafe_code, reason = "setsockopt(SO_BINDTODEVICE)")]
-pub fn bind_to_device(fd: std::os::unix::io::RawFd, device: &str) -> io::Result<()> {
+pub fn bind_to_device(fd: std::os::fd::BorrowedFd<'_>, device: &str) -> io::Result<()> {
     let dev_bytes = device.as_bytes();
     if dev_bytes.len() >= libc::IFNAMSIZ {
         return Err(io::Error::new(
@@ -149,22 +148,7 @@ pub fn bind_to_device(fd: std::os::unix::io::RawFd, device: &str) -> io::Result<
             format!("device name too long: {}", device),
         ));
     }
-    // SAFETY: the option value is `dev_bytes`, borrowed from `device` for the call,
-    // with its exact length (below IFNAMSIZ, checked above; the kernel copies it
-    // and NUL-terminates). A stale `fd` only makes the call fail with EBADF.
-    let ret = unsafe {
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_BINDTODEVICE,
-            dev_bytes.as_ptr() as *const libc::c_void,
-            dev_bytes.len() as libc::socklen_t,
-        )
-    };
-    if ret != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
+    socket2::SockRef::from(&fd).bind_device(Some(dev_bytes))
 }
 
 /// Apply a Linux firewall mark to an IP underlay socket.
@@ -174,32 +158,19 @@ pub fn bind_to_device(fd: std::os::unix::io::RawFd, device: &str) -> io::Result<
 /// is fail-closed: callers must not silently create an unmarked socket when the
 /// operation is not permitted.
 #[cfg(target_os = "linux")]
-#[allow(unsafe_code, reason = "setsockopt(SO_MARK)")]
-pub fn apply_underlay_mark(fd: std::os::unix::io::RawFd, mark: Option<u32>) -> io::Result<()> {
-    protect_underlay_socket(fd)?;
+pub fn apply_underlay_mark(fd: std::os::fd::BorrowedFd<'_>, mark: Option<u32>) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    protect_underlay_socket(fd.as_raw_fd())?;
     let Some(mark) = mark else {
         return Ok(());
     };
-    // SAFETY: the option value points to `mark`, a live u32 local, and the length
-    // passed is `size_of::<u32>()`. A stale `fd` only makes the call fail.
-    let ret = unsafe {
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_MARK,
-            &mark as *const _ as *const libc::c_void,
-            std::mem::size_of::<u32>() as libc::socklen_t,
-        )
-    };
-    if ret != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
+    socket2::SockRef::from(&fd).set_mark(mark)
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn apply_underlay_mark(fd: std::os::unix::io::RawFd, mark: Option<u32>) -> io::Result<()> {
-    protect_underlay_socket(fd)?;
+pub fn apply_underlay_mark(fd: std::os::fd::BorrowedFd<'_>, mark: Option<u32>) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    protect_underlay_socket(fd.as_raw_fd())?;
     if mark.is_some() {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -217,16 +188,16 @@ pub fn connect_tcp_with_options(
     underlay_mark: Option<u32>,
     timeout: Duration,
 ) -> io::Result<std::net::TcpStream> {
-    use std::os::unix::io::AsRawFd;
+    use std::os::fd::AsFd;
 
     let socket = socket2::Socket::new(
         socket2::Domain::for_address(*addr),
         socket2::Type::STREAM,
         Some(socket2::Protocol::TCP),
     )?;
-    apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+    apply_underlay_mark(socket.as_fd(), underlay_mark)?;
     if let Some(device) = device {
-        bind_to_device(socket.as_raw_fd(), device)?;
+        bind_to_device(socket.as_fd(), device)?;
     }
     socket.connect_timeout(&(*addr).into(), timeout)?;
     Ok(socket.into())
@@ -242,8 +213,8 @@ pub fn validate_underlay_mark(mark: Option<u32>) -> io::Result<()> {
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
     )?;
-    use std::os::unix::io::AsRawFd;
-    apply_underlay_mark(socket.as_raw_fd(), mark)
+    use std::os::fd::AsFd;
+    apply_underlay_mark(socket.as_fd(), mark)
 }
 
 /// Writable end of an interface. Held by the driver.

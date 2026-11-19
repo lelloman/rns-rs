@@ -45,7 +45,7 @@ pub fn start_probe_server_with_mark(
     limit: ProbeRateLimit,
 ) -> io::Result<ProbeServerHandle> {
     let socket = bind_server_socket(listen_addr)?;
-    crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+    crate::interface::apply_underlay_mark(socket.as_fd(), underlay_mark)?;
     socket.set_nonblocking(true)?;
     let local_addr = socket.local_addr()?;
     let (socket, wake) = crate::listen::Listener::new(socket)?;
@@ -332,7 +332,7 @@ impl FoldedProbeServer {
         poller: Arc<Poller>,
     ) -> io::Result<Self> {
         let socket = bind_server_socket(listen_addr)?;
-        crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+        crate::interface::apply_underlay_mark(socket.as_fd(), underlay_mark)?;
         socket.set_nonblocking(true)?;
         // SAFETY: the socket is kept, open, until `Drop` removes the
         // registration.
@@ -519,13 +519,13 @@ pub fn probe_endpoint_with_mark(
             let sock = UdpSocket::bind(bind_addr)?;
             #[cfg(target_os = "linux")]
             if let Some(dev) = device {
-                use std::os::unix::io::AsRawFd;
-                crate::interface::bind_to_device(sock.as_raw_fd(), dev)?;
+                use std::os::fd::AsFd;
+                crate::interface::bind_to_device(sock.as_fd(), dev)?;
             }
             sock
         }
     };
-    crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+    crate::interface::apply_underlay_mark(socket.as_fd(), underlay_mark)?;
     socket.set_read_timeout(Some(timeout))?;
 
     let observed = ask_and_wait(
@@ -618,13 +618,13 @@ pub fn stun_probe_endpoint_with_mark(
             let sock = UdpSocket::bind(bind_addr)?;
             #[cfg(target_os = "linux")]
             if let Some(dev) = device {
-                use std::os::unix::io::AsRawFd;
-                crate::interface::bind_to_device(sock.as_raw_fd(), dev)?;
+                use std::os::fd::AsFd;
+                crate::interface::bind_to_device(sock.as_fd(), dev)?;
             }
             sock
         }
     };
-    crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+    crate::interface::apply_underlay_mark(socket.as_fd(), underlay_mark)?;
     socket.set_read_timeout(Some(timeout))?;
 
     let observed = ask_and_wait(
@@ -929,11 +929,11 @@ pub(crate) fn open_probe_socket(
     let socket = UdpSocket::bind(bind_addr)?;
     #[cfg(target_os = "linux")]
     if let Some(dev) = device {
-        crate::interface::bind_to_device(socket.as_raw_fd(), dev)?;
+        crate::interface::bind_to_device(socket.as_fd(), dev)?;
     }
     #[cfg(not(target_os = "linux"))]
     let _ = device;
-    crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)?;
+    crate::interface::apply_underlay_mark(socket.as_fd(), underlay_mark)?;
     Ok(socket)
 }
 

@@ -6,6 +6,7 @@
 
 use std::io::{self, Write};
 use std::net::{TcpListener, TcpStream};
+use std::os::fd::AsFd;
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -155,7 +156,7 @@ fn serve_listener(
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
     underlay_mark: Option<u32>,
 ) -> io::Result<ListenerControl> {
-    super::apply_underlay_mark(listener.as_raw_fd(), underlay_mark)?;
+    super::apply_underlay_mark(listener.as_fd(), underlay_mark)?;
     listener.set_nonblocking(true)?;
 
     log::debug!(
@@ -283,7 +284,7 @@ enum Admitted {
 impl ListenerSource {
     fn admit(&self, stream: TcpStream) -> Admitted {
         let name = &self.name;
-        if let Err(error) = super::apply_underlay_mark(stream.as_raw_fd(), self.underlay_mark) {
+        if let Err(error) = super::apply_underlay_mark(stream.as_fd(), self.underlay_mark) {
             log::error!(
                 "[{}] failed to mark accepted underlay socket: {}",
                 name,

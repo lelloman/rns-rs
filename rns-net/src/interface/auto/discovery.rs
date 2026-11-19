@@ -1,6 +1,7 @@
 //! Discovery: announcing ourselves and hearing peers.
 
 use super::*;
+use std::os::fd::AsFd;
 
 /// Discovery sender: periodically sends discovery token via multicast.
 pub(super) struct DiscoverySenderContext {
@@ -15,7 +16,6 @@ pub(super) struct DiscoverySenderContext {
     pub(super) underlay_mark: Option<u32>,
 }
 
-#[allow(unsafe_code, reason = "setsockopt(IP_MULTICAST_IF)")]
 pub(super) fn discovery_sender_loop(context: DiscoverySenderContext) {
     let DiscoverySenderContext {
         group_id,
@@ -33,26 +33,13 @@ pub(super) fn discovery_sender_loop(context: DiscoverySenderContext) {
     while running.load(Ordering::Relaxed) {
         // Create a fresh socket for each send (matches Python)
         if let Ok(socket) = UdpSocket::bind("[::]:0") {
-            if let Err(error) =
-                crate::interface::apply_underlay_mark(socket.as_raw_fd(), underlay_mark)
+            if let Err(error) = crate::interface::apply_underlay_mark(socket.as_fd(), underlay_mark)
             {
                 log::error!("[{}] failed to mark discovery socket: {}", name, error);
                 return;
             }
             // Set multicast interface
-            let if_bytes = if_index.to_ne_bytes();
-            // SAFETY: the fd belongs to `socket`, which is open for this whole
-            // iteration; the option value is `if_bytes`, a live 4-byte local, and
-            // the length passed is 4.
-            unsafe {
-                libc::setsockopt(
-                    socket_fd(&socket),
-                    libc::IPPROTO_IPV6,
-                    libc::IPV6_MULTICAST_IF,
-                    if_bytes.as_ptr() as *const libc::c_void,
-                    4,
-                );
-            }
+            let _ = socket2::SockRef::from(&socket).set_multicast_if_v6(if_index);
 
             let target = SocketAddrV6::new(mcast_ip, discovery_port, 0, 0);
             if let Err(e) = socket.send_to(&token, target) {
