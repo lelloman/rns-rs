@@ -192,30 +192,4 @@ pub(crate) fn accept_error_step(error: &io::Error) -> AcceptStep {
     }
 }
 
-/// Make `fd` non-blocking, for the driver loop to read or write it. This
-/// changes the open file, which every duplicate of the descriptor shares.
-pub(crate) fn set_nonblocking(fd: std::os::fd::RawFd) -> io::Result<()> {
-    // SAFETY: fcntl on a descriptor the caller keeps open.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    if flags & libc::O_NONBLOCK == 0
-        // SAFETY: as above.
-        && unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-/// Whether `fd` is a socket.
-pub(crate) fn is_socket(fd: std::os::fd::RawFd) -> bool {
-    // SAFETY: fstat writes into a zeroed stat the call owns.
-    unsafe {
-        let mut stat: libc::stat = std::mem::zeroed();
-        // 32-bit Android stores `st_mode` wider than `mode_t`; the type bits fit either way.
-        libc::fstat(fd, &mut stat) == 0
-            && (stat.st_mode as libc::mode_t) & libc::S_IFMT == libc::S_IFSOCK
-    }
-}
+pub(crate) use crate::sys::{is_socket, set_nonblocking};

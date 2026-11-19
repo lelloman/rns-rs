@@ -1,8 +1,6 @@
 //! The node's background threads: announce verification and transport
 //! state persistence.
 
-#![allow(unsafe_code, reason = "OS calls through libc")]
-
 use super::*;
 
 /// The thread that verifies announces, unless the compact engine verifies
@@ -23,11 +21,7 @@ pub(super) fn spawn_announce_verifier(
                 .spawn(move || {
                     #[cfg(target_family = "unix")]
                     {
-                        // SAFETY: `nice` takes a plain integer and only lowers scheduling
-                        // priority (per thread on Linux); no memory is involved.
-                        unsafe {
-                            libc::nice(5);
-                        }
+                        crate::sys::nice(5);
                     }
 
                     while !verify_shutdown_thread.stopped() {
@@ -89,11 +83,7 @@ pub(super) fn spawn_transport_state_persister(
             .name("rns-persist".into())
             .spawn(move || {
                 #[cfg(target_family = "unix")]
-                // SAFETY: `nice` takes a plain integer and only lowers scheduling
-                // priority (per thread on Linux); no memory is involved.
-                unsafe {
-                    libc::nice(5);
-                }
+                crate::sys::nice(5);
 
                 loop {
                     match stop_rx.recv_timeout(Duration::from_secs(12 * 60 * 60)) {

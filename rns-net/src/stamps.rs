@@ -4,8 +4,6 @@
 //! proof-of-work stamps over `destination_hash || public_key || name_hash`,
 //! persisted per destination under `storage/stamps/<hash>.dstamp`.
 
-#![allow(unsafe_code, reason = "OS calls through libc")]
-
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -295,13 +293,7 @@ fn renice_search_thread() {
     #[cfg(target_os = "linux")]
     {
         let niceness = WORKER_NICENESS.load(std::sync::atomic::Ordering::Relaxed);
-        // SAFETY: gettid and setpriority take no pointers. A thread may only
-        // raise its own niceness, so a lower value than the current one
-        // fails harmlessly.
-        unsafe {
-            let tid = libc::syscall(libc::SYS_gettid) as libc::id_t;
-            let _ = libc::setpriority(libc::PRIO_PROCESS, tid, niceness);
-        }
+        crate::sys::set_thread_niceness(niceness);
     }
 }
 

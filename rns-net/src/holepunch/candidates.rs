@@ -9,9 +9,7 @@
 //! the candidate is on a network one of this node's interfaces is on, so a
 //! peer cannot point a punch at an arbitrary private address.
 
-#![allow(unsafe_code, reason = "OS calls through libc")]
-
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 
 use rns_core::holepunch::types::MAX_HOST_CANDIDATES;
 
@@ -45,70 +43,24 @@ impl LocalNetwork {
 /// The addresses of this node's interfaces that are up, other than
 /// loopback, with their prefix lengths.
 pub(crate) fn local_networks() -> Vec<LocalNetwork> {
-    let mut networks = Vec::new();
-    // SAFETY: getifaddrs fills a list that is only read until freeifaddrs.
-    unsafe {
-        let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
-        if libc::getifaddrs(&mut ifaddrs) != 0 {
-            return networks;
-        }
-        let mut current = ifaddrs;
-        while !current.is_null() {
-            let ifa = &*current;
-            current = ifa.ifa_next;
-            let flags = ifa.ifa_flags;
-            if ifa.ifa_addr.is_null()
-                || ifa.ifa_netmask.is_null()
-                || flags & libc::IFF_UP as libc::c_uint == 0
-                || flags & libc::IFF_LOOPBACK as libc::c_uint != 0
-            {
-                continue;
-            }
-            let Some(addr) = sockaddr_ip(ifa.ifa_addr) else {
-                continue;
-            };
-            let Some(mask) = sockaddr_ip(ifa.ifa_netmask) else {
-                continue;
-            };
+    crate::sys::interface_addresses()
+        .into_iter()
+        .filter(|ifa| {
+            ifa.flags & libc::IFF_UP as u32 != 0 && ifa.flags & libc::IFF_LOOPBACK as u32 == 0
+        })
+        .filter_map(|ifa| {
+            let (addr, mask) = (ifa.addr?, ifa.netmask?);
             let prefix = match mask {
                 IpAddr::V4(m) => u32::from(m).count_ones() as u8,
                 IpAddr::V6(m) => u128::from(m).count_ones() as u8,
             };
-            let interface = std::ffi::CStr::from_ptr(ifa.ifa_name)
-                .to_string_lossy()
-                .into_owned();
-            networks.push(LocalNetwork {
-                interface,
+            Some(LocalNetwork {
+                interface: ifa.name.to_string_lossy().into_owned(),
                 addr,
                 prefix,
-            });
-        }
-        libc::freeifaddrs(ifaddrs);
-    }
-    networks
-}
-
-/// The IP address in `sa`, if it is IPv4 or IPv6.
-///
-/// # Safety
-/// `sa` must point to a valid `sockaddr` of the family it claims.
-unsafe fn sockaddr_ip(sa: *const libc::sockaddr) -> Option<IpAddr> {
-    // SAFETY: `sa` points to a valid sockaddr (the caller's contract).
-    match i32::from(unsafe { (*sa).sa_family }) {
-        libc::AF_INET => {
-            // SAFETY: the family says this is a sockaddr_in.
-            let sin = unsafe { &*(sa as *const libc::sockaddr_in) };
-            Some(IpAddr::V4(Ipv4Addr::from(u32::from_be(
-                sin.sin_addr.s_addr,
-            ))))
-        }
-        libc::AF_INET6 => {
-            // SAFETY: the family says this is a sockaddr_in6.
-            let sin6 = unsafe { &*(sa as *const libc::sockaddr_in6) };
-            Some(IpAddr::V6(Ipv6Addr::from(sin6.sin6_addr.s6_addr)))
-        }
-        _ => None,
-    }
+            })
+        })
+        .collect()
 }
 
 /// Whether `ip` is a LAN address: IPv4 private (10/8, 172.16/12,
