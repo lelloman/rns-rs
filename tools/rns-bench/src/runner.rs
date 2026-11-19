@@ -38,7 +38,7 @@ fn output(root: &Path, cmd: &str, args: &[&str]) -> Result<Vec<u8>> {
     Ok(result.stdout)
 }
 
-pub fn environment(root: &Path) -> Result<serde_json::Value> {
+pub(crate) fn environment(root: &Path) -> Result<serde_json::Value> {
     let source = if let Ok(path) = std::env::var("RNS_BENCH_SOURCE_RECORD") {
         let value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
         ensure!(
@@ -497,7 +497,7 @@ fn execute(
     Ok(())
 }
 
-pub fn run_with_relay(
+pub(crate) fn run_with_relay(
     root: &Path,
     s: Scenario,
     p: Profile,
@@ -644,7 +644,7 @@ pub fn run_with_relay(
     Ok(())
 }
 
-pub fn report(dir: &Path) -> Result<()> {
+pub(crate) fn report(dir: &Path) -> Result<()> {
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(dir.join("manifest.json"))?)?;
     ensure!(

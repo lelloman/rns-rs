@@ -87,7 +87,7 @@ impl Callbacks for Callback {
     }
 }
 
-pub fn run(role: &str, port: u16, c: Case) -> Result<()> {
+pub(crate) fn run(role: &str, port: u16, c: Case) -> Result<()> {
     ensure!(
         matches!(role, "sender" | "receiver" | "receiver-relay"),
         "invalid participant role"

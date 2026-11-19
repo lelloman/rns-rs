@@ -332,7 +332,12 @@ pub(crate) fn cycle_observed(
 
 /// A bounded, correctness-checked workload for an external process profiler.
 /// Whole-process sampling includes warmup, key setup, metrics and teardown.
-pub fn cpu_workload(family: &str, compression: bool, sdu: usize, seconds: u64) -> Result<()> {
+pub(crate) fn cpu_workload(
+    family: &str,
+    compression: bool,
+    sdu: usize,
+    seconds: u64,
+) -> Result<()> {
     ensure!(
         !cfg!(debug_assertions) && !cfg!(feature = "allocation-profiler"),
         "CPU sampling requires an optimized, non-allocation-instrumented build"
@@ -374,7 +379,12 @@ pub fn cpu_workload(family: &str, compression: bool, sdu: usize, seconds: u64) -
 }
 
 /// Fixed work for external malloc tracing, including native codec allocations.
-pub fn native_workload(family: &str, compression: bool, sdu: usize, cycles: usize) -> Result<()> {
+pub(crate) fn native_workload(
+    family: &str,
+    compression: bool,
+    sdu: usize,
+    cycles: usize,
+) -> Result<()> {
     ensure!(
         !cfg!(debug_assertions) && !cfg!(feature = "allocation-profiler"),
         "native allocation tracing requires an optimized, uninstrumented build"
@@ -403,7 +413,7 @@ pub fn native_workload(family: &str, compression: bool, sdu: usize, cycles: usiz
     Ok(())
 }
 
-pub fn run(root: &Path, output: Option<PathBuf>) -> Result<()> {
+pub(crate) fn run(root: &Path, output: Option<PathBuf>) -> Result<()> {
     ensure!(!cfg!(debug_assertions), "profiling requires release build");
     let dir = output.unwrap_or_else(|| {
         root.join("target/bench-results").join(format!(
@@ -465,7 +475,7 @@ pub fn run(root: &Path, output: Option<PathBuf>) -> Result<()> {
     report(&dir)
 }
 
-pub fn report(dir: &Path) -> Result<()> {
+pub(crate) fn report(dir: &Path) -> Result<()> {
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.join("manifest.json"))?)?;
     ensure!(

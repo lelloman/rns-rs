@@ -49,7 +49,7 @@ pub(crate) struct AdvertisementFields<'a> {
 
 impl AdvertisementFields<'_> {
     /// [`ResourceAdvertisement::pack`].
-    pub fn pack(&self, segment: usize) -> Vec<u8> {
+    pub(crate) fn pack(&self, segment: usize) -> Vec<u8> {
         let hashmap_start = segment * RESOURCE_HASHMAP_MAX_LEN * RESOURCE_MAPHASH_LEN;
         let max_end = (segment + 1) * RESOURCE_HASHMAP_MAX_LEN * RESOURCE_MAPHASH_LEN;
         let hashmap_end = core::cmp::min(max_end, self.hashmap.len());
@@ -98,7 +98,7 @@ impl AdvertisementFields<'_> {
     }
 
     /// [`ResourceAdvertisement::pack_for_mdu`].
-    pub fn pack_for_mdu(&self, segment: usize, mdu: usize) -> Vec<u8> {
+    pub(crate) fn pack_for_mdu(&self, segment: usize, mdu: usize) -> Vec<u8> {
         let packed = self.pack(segment);
         if packed.len() <= mdu {
             return packed;

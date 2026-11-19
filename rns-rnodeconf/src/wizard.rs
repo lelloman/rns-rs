@@ -14,7 +14,7 @@ use std::process::exit;
 use crate::{graceful_exit, print_donation_block, py_int, rom, wait_for_enter};
 
 /// The board the wizard settled on.
-pub struct Board {
+pub(crate) struct Board {
     pub product: Option<u8>,
     pub model: Option<u8>,
     pub mcu: Option<u8>,
@@ -35,7 +35,7 @@ fn flush() {
 }
 
 /// upstream's `clear()`: `os.system('clear')`.
-pub fn clear_screen() {
+pub(crate) fn clear_screen() {
     flush();
     let _ = std::process::Command::new("sh")
         .args(["-c", "clear"])
@@ -45,7 +45,7 @@ pub fn clear_screen() {
 /// Ask what kind of device is connected, and which model of it.
 #[allow(unused_assignments, clippy::all)]
 #[rustfmt::skip]
-pub fn choose_board(detected: bool) -> Board {
+pub(crate) fn choose_board(detected: bool) -> Board {
     let mut selected_product: Option<u8> = None;
     let mut selected_model: Option<u8> = None;
     let mut selected_mcu: Option<u8> = None;
@@ -867,7 +867,7 @@ pub fn choose_board(detected: bool) -> Board {
 /// confirm, and fetch the firmware. Returns the port, the board and the
 /// firmware package; flashing, key generation and bootstrapping follow
 /// in the main flow, as upstream's wizard hands them on.
-pub fn run(
+pub(crate) fn run(
     port: Option<&str>,
     use_extracted: bool,
     firmware: &mut crate::firmware::Firmware,
@@ -977,7 +977,7 @@ pub fn run(
 }
 
 /// What upstream prints once an autoinstall has bootstrapped the device.
-pub fn print_completion() {
+pub(crate) fn print_completion() {
     println!();
     println!("RNode Firmware autoinstallation complete!");
     println!();

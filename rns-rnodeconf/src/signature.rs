@@ -10,7 +10,7 @@ use num_bigint::BigUint;
 use rns_crypto::sha256::sha256;
 
 /// Vendor keys upstream trusts (`known_keys`), as DER SubjectPublicKeyInfo.
-pub const KNOWN_KEYS: [(&str, &str); 2] = [
+pub(crate) const KNOWN_KEYS: [(&str, &str); 2] = [
     (
         "unsigned.io",
         "30819f300d06092a864886f70d010101050003818d0030818902818100bf831ebd99f43b477caf1a094bec829389da40653e8f1f83fc14bf1b98a3e1cc70e759c213a43f71e5a47eb56a9ca487f241335b3e6ff7cdde0ee0a1c75c698574aeba0485726b6a9dfc046b4188e3520271ee8555a8f405cf21f81f2575771d0b0887adea5dd53c1f594f72c66b5f14904ffc2e72206a6698a490d51ba1105b0203010001",
@@ -23,7 +23,7 @@ pub const KNOWN_KEYS: [(&str, &str); 2] = [
 
 /// An RSA public key.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PublicKey {
+pub(crate) struct PublicKey {
     pub n: BigUint,
     pub e: BigUint,
 }
@@ -85,7 +85,7 @@ fn rsa_key_integers(der: &[u8], skip_version: bool) -> Option<PublicKey> {
 }
 
 /// Parse a DER SubjectPublicKeyInfo holding an RSA key.
-pub fn parse_public_key(der: &[u8]) -> Option<PublicKey> {
+pub(crate) fn parse_public_key(der: &[u8]) -> Option<PublicKey> {
     let (tag, body, _) = der_element(der)?;
     if tag != SEQUENCE {
         return None;
@@ -103,7 +103,7 @@ pub fn parse_public_key(der: &[u8]) -> Option<PublicKey> {
 
 /// The public half of a DER RSA private key, in PKCS#8 or PKCS#1 form, as
 /// upstream's local `signing.key` holds it.
-pub fn public_key_of_private(der: &[u8]) -> Option<PublicKey> {
+pub(crate) fn public_key_of_private(der: &[u8]) -> Option<PublicKey> {
     if let Some(key) = rsa_key_integers(der, true) {
         // PKCS#1: SEQUENCE { version, n, e, ... }; a PKCS#8 wrapper has an
         // AlgorithmIdentifier sequence where n would be, which is not an
@@ -128,7 +128,7 @@ pub fn public_key_of_private(der: &[u8]) -> Option<PublicKey> {
 
 /// Encode a public key as DER SubjectPublicKeyInfo, the form upstream
 /// compares and stores keys in.
-pub fn encode_public_key(key: &PublicKey) -> Vec<u8> {
+pub(crate) fn encode_public_key(key: &PublicKey) -> Vec<u8> {
     fn length(len: usize) -> Vec<u8> {
         if len < 0x80 {
             vec![len as u8]
@@ -186,7 +186,7 @@ fn mgf1(seed: &[u8], len: usize) -> Vec<u8> {
 /// Verify an RSA-PSS signature over `message` with SHA-256, MGF1(SHA-256)
 /// and the maximum salt length, as `cryptography` does with
 /// `PSS.MAX_LENGTH` (RFC 8017, RSASSA-PSS-VERIFY).
-pub fn verify_pss(key: &PublicKey, message: &[u8], signature: &[u8]) -> bool {
+pub(crate) fn verify_pss(key: &PublicKey, message: &[u8], signature: &[u8]) -> bool {
     const H_LEN: usize = 32;
     let k = key.n.to_bytes_be().len();
     if signature.len() != k {
@@ -239,7 +239,7 @@ pub fn verify_pss(key: &PublicKey, message: &[u8], signature: &[u8]) -> bool {
     sha256(&m_prime) == h
 }
 
-pub fn unhex(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn unhex(text: &str) -> Option<Vec<u8>> {
     let text = text.trim();
     if !text.len().is_multiple_of(2) {
         return None;

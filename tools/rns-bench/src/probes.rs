@@ -3,13 +3,13 @@ use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
-pub fn packet(id: u64) -> Vec<u8> {
+pub(crate) fn packet(id: u64) -> Vec<u8> {
     let mut data = vec![0x6d; 64];
     data[..8].copy_from_slice(b"RNSPROBE");
     data[8..16].copy_from_slice(&id.to_le_bytes());
     data
 }
-pub fn decode(data: &[u8]) -> Result<u64> {
+pub(crate) fn decode(data: &[u8]) -> Result<u64> {
     ensure!(
         data.len() == 64 && &data[..8] == b"RNSPROBE",
         "invalid probe frame"
@@ -20,7 +20,7 @@ pub fn decode(data: &[u8]) -> Result<u64> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Summary {
+pub(crate) struct Summary {
     pub rtt_ns: Vec<u64>,
     pub scheduled_latency_ns: Vec<u64>,
     pub send_lateness_ns: Vec<u64>,
@@ -28,7 +28,7 @@ pub struct Summary {
     pub bulk_finished_ns: Option<u64>,
 }
 
-pub struct Train {
+pub(crate) struct Train {
     pub round: u64,
     pub started: Instant,
     pub config: ProbeConfig,
@@ -43,7 +43,7 @@ fn ns(d: Duration) -> u64 {
     d.as_nanos().try_into().expect("duration fits u64")
 }
 impl Train {
-    pub fn new(round: u64, config: ProbeConfig) -> Self {
+    pub(crate) fn new(round: u64, config: ProbeConfig) -> Self {
         let n = config.count;
         Self {
             round,
@@ -63,18 +63,18 @@ impl Train {
             bulk_started: false,
         }
     }
-    pub fn next_due(&self) -> Option<Instant> {
+    pub(crate) fn next_due(&self) -> Option<Instant> {
         (self.issued < self.config.count).then(|| {
             self.started + Duration::from_micros(self.issued as u64 * self.config.interval_us)
         })
     }
-    pub fn bulk_due(&self) -> Instant {
+    pub(crate) fn bulk_due(&self) -> Instant {
         self.started + Duration::from_micros(self.config.bulk_start_us)
     }
-    pub fn next_id(&self) -> u64 {
+    pub(crate) fn next_id(&self) -> u64 {
         self.round * self.config.count as u64 + self.issued as u64
     }
-    pub fn submitted(&mut self, when: Instant) -> Result<()> {
+    pub(crate) fn submitted(&mut self, when: Instant) -> Result<()> {
         ensure!(
             self.issued < self.config.count,
             "too many probe submissions"
@@ -86,7 +86,7 @@ impl Train {
         self.issued += 1;
         Ok(())
     }
-    pub fn receive(&mut self, id: u64, when: Instant) -> Result<()> {
+    pub(crate) fn receive(&mut self, id: u64, when: Instant) -> Result<()> {
         let i = id
             .checked_sub(self.round * self.config.count as u64)
             .ok_or_else(|| anyhow::anyhow!("stale probe"))? as usize;
@@ -101,18 +101,18 @@ impl Train {
         self.received += 1;
         Ok(())
     }
-    pub fn start_bulk(&mut self, at: Instant) {
+    pub(crate) fn start_bulk(&mut self, at: Instant) {
         self.bulk_started = true;
         self.summary.bulk_started_ns = Some(ns(at - self.started));
     }
-    pub fn end_bulk(&mut self, at: Instant, elapsed: u64) {
+    pub(crate) fn end_bulk(&mut self, at: Instant, elapsed: u64) {
         self.summary.bulk_finished_ns = Some(ns(at - self.started));
         self.resource_elapsed_ns = Some(elapsed);
     }
-    pub fn complete(&self, background: bool) -> bool {
+    pub(crate) fn complete(&self, background: bool) -> bool {
         self.received == self.config.count && (!background || self.resource_elapsed_ns.is_some())
     }
-    pub fn summary(self) -> Summary {
+    pub(crate) fn summary(self) -> Summary {
         self.summary
     }
 }

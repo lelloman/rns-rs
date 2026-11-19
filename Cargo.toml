@@ -19,6 +19,8 @@ authors = ["rns-rs contributors"]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "warn"
 unused_lifetimes = "warn"
+# A `pub` item nothing outside its crate can reach says pub(crate).
+unreachable_pub = "warn"
 
 [workspace.lints.clippy]
 dbg_macro = "warn"

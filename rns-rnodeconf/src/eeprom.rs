@@ -9,7 +9,7 @@ use crate::signature::{self, PublicKey};
 
 /// What the EEPROM says about the device.
 #[derive(Debug, Clone, Default)]
-pub struct DeviceInfo {
+pub(crate) struct DeviceInfo {
     pub provisioned: bool,
     pub product: u8,
     pub model: u8,
@@ -33,7 +33,7 @@ pub struct DeviceInfo {
 
 /// The startup radio configuration stored for TNC mode.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TncConfig {
+pub(crate) struct TncConfig {
     pub sf: u8,
     pub cr: u8,
     pub txpower: u8,
@@ -48,7 +48,7 @@ fn be32(eeprom: &[u8], at: usize) -> u32 {
 /// The keys a signature is checked against: upstream's vendor keys, the
 /// public half of a local `firmware/signing.key`, and every
 /// `trusted_keys/*.pubkey`, the local ones as vendor `LOCAL`.
-pub fn known_keys(config_dir: &Path, log: &mut dyn FnMut(&str)) -> Vec<(String, PublicKey)> {
+pub(crate) fn known_keys(config_dir: &Path, log: &mut dyn FnMut(&str)) -> Vec<(String, PublicKey)> {
     let mut keys: Vec<(String, Vec<u8>)> = signature::KNOWN_KEYS
         .iter()
         .filter_map(|(vendor, hex)| Some((vendor.to_string(), signature::unhex(hex)?)))
@@ -90,7 +90,7 @@ pub fn known_keys(config_dir: &Path, log: &mut dyn FnMut(&str)) -> Vec<(String, 
 
 /// Parse an EEPROM image. An image too short for the fields upstream reads
 /// is an error, with the message upstream's parser fails with.
-pub fn parse(eeprom: &[u8], keys: &[(String, PublicKey)]) -> Result<DeviceInfo, String> {
+pub(crate) fn parse(eeprom: &[u8], keys: &[(String, PublicKey)]) -> Result<DeviceInfo, String> {
     parse_fields(eeprom, keys).ok_or_else(|| "index out of range".to_string())
 }
 

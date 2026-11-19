@@ -425,15 +425,15 @@ pub(crate) struct InboundQueueSnapshot {
 }
 
 impl InboundQueueSnapshot {
-    pub fn total_height(self) -> usize {
+    pub(crate) fn total_height(self) -> usize {
         self.heights.iter().sum()
     }
 
-    pub fn total_capacity(self) -> usize {
+    pub(crate) fn total_capacity(self) -> usize {
         self.capacities.iter().sum()
     }
 
-    pub fn total_dropped(self) -> usize {
+    pub(crate) fn total_dropped(self) -> usize {
         self.dropped.iter().sum()
     }
 }

@@ -3,128 +3,128 @@
 //! `ROM` class and its `products`, `platforms`, `mcus` and `models` define
 //! them.
 
-pub const PLATFORM_AVR: u8 = 0x90;
-pub const PLATFORM_ESP32: u8 = 0x80;
-pub const PLATFORM_NRF52: u8 = 0x70;
-pub const MCU_1284P: u8 = 0x91;
-pub const MCU_2560: u8 = 0x92;
-pub const MCU_ESP32: u8 = 0x81;
-pub const MCU_NRF52: u8 = 0x71;
-pub const PRODUCT_RNODE: u8 = 0x03;
-pub const MODEL_A1: u8 = 0xA1;
-pub const MODEL_A6: u8 = 0xA6;
-pub const MODEL_A4: u8 = 0xA4;
-pub const MODEL_A9: u8 = 0xA9;
-pub const MODEL_A3: u8 = 0xA3;
-pub const MODEL_A8: u8 = 0xA8;
-pub const MODEL_A2: u8 = 0xA2;
-pub const MODEL_A7: u8 = 0xA7;
-pub const MODEL_A5: u8 = 0xA5;
-pub const MODEL_AA: u8 = 0xAA;
-pub const MODEL_AC: u8 = 0xAC;
-pub const PRODUCT_T32_10: u8 = 0xB2;
-pub const MODEL_BA: u8 = 0xBA;
-pub const MODEL_BB: u8 = 0xBB;
-pub const PRODUCT_T32_20: u8 = 0xB0;
-pub const MODEL_B3: u8 = 0xB3;
-pub const MODEL_B8: u8 = 0xB8;
-pub const PRODUCT_T32_21: u8 = 0xB1;
-pub const MODEL_B4: u8 = 0xB4;
-pub const MODEL_B9: u8 = 0xB9;
+pub(crate) const PLATFORM_AVR: u8 = 0x90;
+pub(crate) const PLATFORM_ESP32: u8 = 0x80;
+pub(crate) const PLATFORM_NRF52: u8 = 0x70;
+pub(crate) const MCU_1284P: u8 = 0x91;
+pub(crate) const MCU_2560: u8 = 0x92;
+pub(crate) const MCU_ESP32: u8 = 0x81;
+pub(crate) const MCU_NRF52: u8 = 0x71;
+pub(crate) const PRODUCT_RNODE: u8 = 0x03;
+pub(crate) const MODEL_A1: u8 = 0xA1;
+pub(crate) const MODEL_A6: u8 = 0xA6;
+pub(crate) const MODEL_A4: u8 = 0xA4;
+pub(crate) const MODEL_A9: u8 = 0xA9;
+pub(crate) const MODEL_A3: u8 = 0xA3;
+pub(crate) const MODEL_A8: u8 = 0xA8;
+pub(crate) const MODEL_A2: u8 = 0xA2;
+pub(crate) const MODEL_A7: u8 = 0xA7;
+pub(crate) const MODEL_A5: u8 = 0xA5;
+pub(crate) const MODEL_AA: u8 = 0xAA;
+pub(crate) const MODEL_AC: u8 = 0xAC;
+pub(crate) const PRODUCT_T32_10: u8 = 0xB2;
+pub(crate) const MODEL_BA: u8 = 0xBA;
+pub(crate) const MODEL_BB: u8 = 0xBB;
+pub(crate) const PRODUCT_T32_20: u8 = 0xB0;
+pub(crate) const MODEL_B3: u8 = 0xB3;
+pub(crate) const MODEL_B8: u8 = 0xB8;
+pub(crate) const PRODUCT_T32_21: u8 = 0xB1;
+pub(crate) const MODEL_B4: u8 = 0xB4;
+pub(crate) const MODEL_B9: u8 = 0xB9;
 /// The TCXO model codes are only used here to select the correct firmware,
-pub const MODEL_B4_TCXO: u8 = 0x04;
+pub(crate) const MODEL_B4_TCXO: u8 = 0x04;
 /// actual model codes in firmware is still 0xB4 and 0xB9.
-pub const MODEL_B9_TCXO: u8 = 0x09;
-pub const PRODUCT_H32_V2: u8 = 0xC0;
-pub const MODEL_C4: u8 = 0xC4;
-pub const MODEL_C9: u8 = 0xC9;
-pub const PRODUCT_H32_V3: u8 = 0xC1;
-pub const MODEL_C5: u8 = 0xC5;
-pub const MODEL_CA: u8 = 0xCA;
-pub const PRODUCT_H32_V4: u8 = 0xC3;
+pub(crate) const MODEL_B9_TCXO: u8 = 0x09;
+pub(crate) const PRODUCT_H32_V2: u8 = 0xC0;
+pub(crate) const MODEL_C4: u8 = 0xC4;
+pub(crate) const MODEL_C9: u8 = 0xC9;
+pub(crate) const PRODUCT_H32_V3: u8 = 0xC1;
+pub(crate) const MODEL_C5: u8 = 0xC5;
+pub(crate) const MODEL_CA: u8 = 0xCA;
+pub(crate) const PRODUCT_H32_V4: u8 = 0xC3;
 /// 868/915/923 MHz with PA
-pub const MODEL_C8: u8 = 0xC8;
-pub const PRODUCT_TBEAM: u8 = 0xE0;
-pub const MODEL_E4: u8 = 0xE4;
-pub const MODEL_E9: u8 = 0xE9;
-pub const MODEL_E3: u8 = 0xE3;
-pub const MODEL_E8: u8 = 0xE8;
-pub const PRODUCT_TBEAM_S_V1: u8 = 0xEA;
-pub const MODEL_DB: u8 = 0xDB;
-pub const MODEL_DC: u8 = 0xDC;
-pub const PRODUCT_TDECK: u8 = 0xD0;
-pub const MODEL_D4: u8 = 0xD4;
-pub const MODEL_D9: u8 = 0xD9;
-pub const PRODUCT_RAK4631: u8 = 0x10;
-pub const MODEL_11: u8 = 0x11;
-pub const MODEL_12: u8 = 0x12;
-pub const MODEL_13: u8 = 0x13;
-pub const MODEL_14: u8 = 0x14;
-pub const PRODUCT_OPENCOM_XL: u8 = 0x20;
-pub const MODEL_21: u8 = 0x21;
-pub const PRODUCT_TECHO: u8 = 0x15;
-pub const MODEL_16: u8 = 0x16;
-pub const MODEL_17: u8 = 0x17;
-pub const PRODUCT_HELTEC_T114: u8 = 0xC2;
-pub const BOARD_HELTEC_T114: u8 = 0x3C;
+pub(crate) const MODEL_C8: u8 = 0xC8;
+pub(crate) const PRODUCT_TBEAM: u8 = 0xE0;
+pub(crate) const MODEL_E4: u8 = 0xE4;
+pub(crate) const MODEL_E9: u8 = 0xE9;
+pub(crate) const MODEL_E3: u8 = 0xE3;
+pub(crate) const MODEL_E8: u8 = 0xE8;
+pub(crate) const PRODUCT_TBEAM_S_V1: u8 = 0xEA;
+pub(crate) const MODEL_DB: u8 = 0xDB;
+pub(crate) const MODEL_DC: u8 = 0xDC;
+pub(crate) const PRODUCT_TDECK: u8 = 0xD0;
+pub(crate) const MODEL_D4: u8 = 0xD4;
+pub(crate) const MODEL_D9: u8 = 0xD9;
+pub(crate) const PRODUCT_RAK4631: u8 = 0x10;
+pub(crate) const MODEL_11: u8 = 0x11;
+pub(crate) const MODEL_12: u8 = 0x12;
+pub(crate) const MODEL_13: u8 = 0x13;
+pub(crate) const MODEL_14: u8 = 0x14;
+pub(crate) const PRODUCT_OPENCOM_XL: u8 = 0x20;
+pub(crate) const MODEL_21: u8 = 0x21;
+pub(crate) const PRODUCT_TECHO: u8 = 0x15;
+pub(crate) const MODEL_16: u8 = 0x16;
+pub(crate) const MODEL_17: u8 = 0x17;
+pub(crate) const PRODUCT_HELTEC_T114: u8 = 0xC2;
+pub(crate) const BOARD_HELTEC_T114: u8 = 0x3C;
 /// Heltec Mesh Node T114, 470-510 MHz (HT-n5262-LF)
-pub const MODEL_C6: u8 = 0xC6;
+pub(crate) const MODEL_C6: u8 = 0xC6;
 /// Heltec Mesh Node T114, 863-928 MHz (HT-n5262-HF)
-pub const MODEL_C7: u8 = 0xC7;
-pub const PRODUCT_XIAO_S3: u8 = 0xEB;
-pub const BOARD_XIAO_S3: u8 = 0x3E;
+pub(crate) const MODEL_C7: u8 = 0xC7;
+pub(crate) const PRODUCT_XIAO_S3: u8 = 0xEB;
+pub(crate) const BOARD_XIAO_S3: u8 = 0x3E;
 /// Xiao ESP32S3 with Wio-SX1262 module, 433 MHz
-pub const MODEL_DE: u8 = 0xDE;
+pub(crate) const MODEL_DE: u8 = 0xDE;
 /// Xiao ESP32S3 with Wio-SX1262 module, 868 MHz
-pub const MODEL_DD: u8 = 0xDD;
-pub const PRODUCT_HMBRW: u8 = 0xF0;
-pub const MODEL_FF: u8 = 0xFF;
-pub const MODEL_FE: u8 = 0xFE;
-pub const ADDR_PRODUCT: u8 = 0x00;
-pub const ADDR_MODEL: u8 = 0x01;
-pub const ADDR_HW_REV: u8 = 0x02;
-pub const ADDR_SERIAL: u8 = 0x03;
-pub const ADDR_MADE: u8 = 0x07;
-pub const ADDR_CHKSUM: u8 = 0x0B;
-pub const ADDR_SIGNATURE: u8 = 0x1B;
-pub const ADDR_INFO_LOCK: u8 = 0x9B;
-pub const ADDR_CONF_SF: u8 = 0x9C;
-pub const ADDR_CONF_CR: u8 = 0x9D;
-pub const ADDR_CONF_TXP: u8 = 0x9E;
-pub const ADDR_CONF_BW: u8 = 0x9F;
-pub const ADDR_CONF_FREQ: u8 = 0xA3;
-pub const ADDR_CONF_OK: u8 = 0xA7;
-pub const ADDR_CONF_BT: u8 = 0xB0;
-pub const ADDR_CONF_DSET: u8 = 0xB1;
-pub const ADDR_CONF_DINT: u8 = 0xB2;
-pub const ADDR_CONF_DADR: u8 = 0xB3;
-pub const ADDR_CONF_DBLK: u8 = 0xB4;
-pub const ADDR_CONF_DROT: u8 = 0xB8;
-pub const ADDR_CONF_PSET: u8 = 0xB5;
-pub const ADDR_CONF_PINT: u8 = 0xB6;
-pub const ADDR_CONF_BSET: u8 = 0xB7;
-pub const ADDR_CONF_DIA: u8 = 0xB9;
-pub const ADDR_CONF_WIFI: u8 = 0xBA;
-pub const ADDR_CONF_WCHN: u8 = 0xBB;
-pub const ADDR_CONF_SSID: u8 = 0x00;
-pub const ADDR_CONF_PSK: u8 = 0x21;
-pub const ADDR_CONF_IP: u8 = 0x42;
-pub const ADDR_CONF_NM: u8 = 0x46;
-pub const INFO_LOCK_BYTE: u8 = 0x73;
-pub const CONF_OK_BYTE: u8 = 0x73;
-pub const BOARD_RNODE: u8 = 0x31;
-pub const BOARD_HMBRW: u8 = 0x32;
-pub const BOARD_TBEAM: u8 = 0x33;
-pub const BOARD_TDECK: u8 = 0x3B;
-pub const BOARD_HUZZAH32: u8 = 0x34;
-pub const BOARD_GENERIC_ESP32: u8 = 0x35;
-pub const BOARD_LORA32_V2_0: u8 = 0x36;
-pub const BOARD_LORA32_V2_1: u8 = 0x37;
-pub const BOARD_TECHO: u8 = 0x43;
-pub const BOARD_RAK4631: u8 = 0x51;
+pub(crate) const MODEL_DD: u8 = 0xDD;
+pub(crate) const PRODUCT_HMBRW: u8 = 0xF0;
+pub(crate) const MODEL_FF: u8 = 0xFF;
+pub(crate) const MODEL_FE: u8 = 0xFE;
+pub(crate) const ADDR_PRODUCT: u8 = 0x00;
+pub(crate) const ADDR_MODEL: u8 = 0x01;
+pub(crate) const ADDR_HW_REV: u8 = 0x02;
+pub(crate) const ADDR_SERIAL: u8 = 0x03;
+pub(crate) const ADDR_MADE: u8 = 0x07;
+pub(crate) const ADDR_CHKSUM: u8 = 0x0B;
+pub(crate) const ADDR_SIGNATURE: u8 = 0x1B;
+pub(crate) const ADDR_INFO_LOCK: u8 = 0x9B;
+pub(crate) const ADDR_CONF_SF: u8 = 0x9C;
+pub(crate) const ADDR_CONF_CR: u8 = 0x9D;
+pub(crate) const ADDR_CONF_TXP: u8 = 0x9E;
+pub(crate) const ADDR_CONF_BW: u8 = 0x9F;
+pub(crate) const ADDR_CONF_FREQ: u8 = 0xA3;
+pub(crate) const ADDR_CONF_OK: u8 = 0xA7;
+pub(crate) const ADDR_CONF_BT: u8 = 0xB0;
+pub(crate) const ADDR_CONF_DSET: u8 = 0xB1;
+pub(crate) const ADDR_CONF_DINT: u8 = 0xB2;
+pub(crate) const ADDR_CONF_DADR: u8 = 0xB3;
+pub(crate) const ADDR_CONF_DBLK: u8 = 0xB4;
+pub(crate) const ADDR_CONF_DROT: u8 = 0xB8;
+pub(crate) const ADDR_CONF_PSET: u8 = 0xB5;
+pub(crate) const ADDR_CONF_PINT: u8 = 0xB6;
+pub(crate) const ADDR_CONF_BSET: u8 = 0xB7;
+pub(crate) const ADDR_CONF_DIA: u8 = 0xB9;
+pub(crate) const ADDR_CONF_WIFI: u8 = 0xBA;
+pub(crate) const ADDR_CONF_WCHN: u8 = 0xBB;
+pub(crate) const ADDR_CONF_SSID: u8 = 0x00;
+pub(crate) const ADDR_CONF_PSK: u8 = 0x21;
+pub(crate) const ADDR_CONF_IP: u8 = 0x42;
+pub(crate) const ADDR_CONF_NM: u8 = 0x46;
+pub(crate) const INFO_LOCK_BYTE: u8 = 0x73;
+pub(crate) const CONF_OK_BYTE: u8 = 0x73;
+pub(crate) const BOARD_RNODE: u8 = 0x31;
+pub(crate) const BOARD_HMBRW: u8 = 0x32;
+pub(crate) const BOARD_TBEAM: u8 = 0x33;
+pub(crate) const BOARD_TDECK: u8 = 0x3B;
+pub(crate) const BOARD_HUZZAH32: u8 = 0x34;
+pub(crate) const BOARD_GENERIC_ESP32: u8 = 0x35;
+pub(crate) const BOARD_LORA32_V2_0: u8 = 0x36;
+pub(crate) const BOARD_LORA32_V2_1: u8 = 0x37;
+pub(crate) const BOARD_TECHO: u8 = 0x43;
+pub(crate) const BOARD_RAK4631: u8 = 0x51;
 
 /// A model's band and output power (upstream `models`).
-pub struct Model {
+pub(crate) struct Model {
     pub min_freq: u64,
     pub max_freq: u64,
     pub max_output: u8,
@@ -133,7 +133,7 @@ pub struct Model {
     pub modem: &'static str,
 }
 
-pub fn product_name(product: u8) -> Option<&'static str> {
+pub(crate) fn product_name(product: u8) -> Option<&'static str> {
     match product {
         PRODUCT_RNODE => Some("RNode"),
         PRODUCT_HMBRW => Some("Hombrew RNode"),
@@ -155,7 +155,7 @@ pub fn product_name(product: u8) -> Option<&'static str> {
     }
 }
 
-pub fn platform_name(platform: u8) -> Option<&'static str> {
+pub(crate) fn platform_name(platform: u8) -> Option<&'static str> {
     match platform {
         PLATFORM_AVR => Some("AVR"),
         PLATFORM_ESP32 => Some("ESP32"),
@@ -164,7 +164,7 @@ pub fn platform_name(platform: u8) -> Option<&'static str> {
     }
 }
 
-pub fn mcu_name(mcu: u8) -> Option<&'static str> {
+pub(crate) fn mcu_name(mcu: u8) -> Option<&'static str> {
     match mcu {
         MCU_1284P => Some("ATmega1284P"),
         MCU_2560 => Some("ATmega2560"),
@@ -174,7 +174,7 @@ pub fn mcu_name(mcu: u8) -> Option<&'static str> {
     }
 }
 
-pub fn model(model: u8) -> Option<Model> {
+pub(crate) fn model(model: u8) -> Option<Model> {
     let (min_freq, max_freq, max_output, band, firmware, modem) = match model {
         0xA4 => (
             410000000,

@@ -12,7 +12,7 @@ impl<'a> PacketHeader<'a> {
     /// Accept the same wire structure as `RawPacket::unpack`, without owning
     /// payload bytes or computing a packet hash. Consumers must still perform
     /// normal packet validation and authentication before processing traffic.
-    pub fn unpack(raw: &'a [u8]) -> Option<Self> {
+    pub(crate) fn unpack(raw: &'a [u8]) -> Option<Self> {
         if raw.len() < constants::HEADER_MINSIZE || raw[1] >= constants::PATHFINDER_M {
             return None;
         }

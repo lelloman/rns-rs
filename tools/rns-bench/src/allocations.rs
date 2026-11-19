@@ -110,7 +110,7 @@ fn validate(s: &Sample) -> Result<()> {
     Ok(())
 }
 
-pub fn run(root: &Path, requested: Option<PathBuf>) -> Result<()> {
+pub(crate) fn run(root: &Path, requested: Option<PathBuf>) -> Result<()> {
     ensure!(
         !cfg!(debug_assertions),
         "allocation profiling requires a release build"
@@ -188,7 +188,7 @@ pub fn run(root: &Path, requested: Option<PathBuf>) -> Result<()> {
     report(&dir)
 }
 
-pub fn report(dir: &Path) -> Result<()> {
+pub(crate) fn report(dir: &Path) -> Result<()> {
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.join("manifest.json"))?)?;
     ensure!(

@@ -4,7 +4,7 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Scenario {
+pub(crate) struct Scenario {
     pub schema_version: u32,
     pub workload_version: u32,
     pub id: String,
@@ -26,7 +26,7 @@ pub struct Scenario {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct ProbeConfig {
+pub(crate) struct ProbeConfig {
     pub count: usize,
     pub interval_us: u64,
     pub bulk_start_us: u64,
@@ -34,7 +34,7 @@ pub struct ProbeConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Payload {
+pub(crate) enum Payload {
     Repeated,
     Seeded,
     #[serde(rename = "sha256-counter")]
@@ -43,7 +43,7 @@ pub enum Payload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Profile {
+pub(crate) struct Profile {
     pub schema_version: u32,
     pub name: String,
     pub repetitions: usize,
@@ -56,7 +56,7 @@ pub struct Profile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct Case {
+pub(crate) struct Case {
     #[serde(default)]
     pub rate_bps: Option<u64>,
     pub id: String,
@@ -77,11 +77,11 @@ fn default_background() -> bool {
     true
 }
 
-pub fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+pub(crate) fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     toml::from_str(&std::fs::read_to_string(path)?).with_context(|| path.display().to_string())
 }
 
-pub fn expand(s: &Scenario, p: &Profile) -> Result<Vec<Case>> {
+pub(crate) fn expand(s: &Scenario, p: &Profile) -> Result<Vec<Case>> {
     ensure!(
         s.schema_version == 1 && p.schema_version == 1,
         "unsupported schema version"
@@ -208,7 +208,7 @@ pub fn expand(s: &Scenario, p: &Profile) -> Result<Vec<Case>> {
 }
 
 /// Apply an explicit synthetic network variant without changing unshaped IDs.
-pub fn apply_rate(cases: &mut [Case], rate_bps: Option<u64>) -> Result<()> {
+pub(crate) fn apply_rate(cases: &mut [Case], rate_bps: Option<u64>) -> Result<()> {
     if let Some(rate) = rate_bps {
         ensure!(
             (64_000..=1_000_000_000).contains(&rate),
@@ -238,7 +238,7 @@ pub fn apply_rate(cases: &mut [Case], rate_bps: Option<u64>) -> Result<()> {
 
 // Version 1 payload vector: xorshift64, low byte after each complete step.
 // Only application data is seeded; protocol keys use OsRng.
-pub fn payload(c: &Case) -> Vec<u8> {
+pub(crate) fn payload(c: &Case) -> Vec<u8> {
     if c.payload == Payload::Sha256Counter {
         let mut out = Vec::with_capacity(c.bytes);
         for i in 0..c.bytes.div_ceil(32) {

@@ -111,7 +111,7 @@ pub(super) struct AssemblyData {
     pub limit: usize,
 }
 impl AssemblyData {
-    pub fn run(
+    pub(super) fn run(
         mut self,
         compressor: &dyn Compressor,
     ) -> Result<Vec<ResourceAction>, ResourceError> {

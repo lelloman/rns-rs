@@ -258,13 +258,13 @@ mod unix_socket {
     }
 
     /// Try to bind a Unix abstract socket with the given instance name.
-    pub fn try_bind_unix(instance_name: &str) -> io::Result<UnixListener> {
+    pub(super) fn try_bind_unix(instance_name: &str) -> io::Result<UnixListener> {
         let addr = abstract_addr(instance_name)?;
         UnixListener::bind_addr(&addr)
     }
 
     /// Try to connect to a Unix abstract socket.
-    pub fn try_connect_unix(instance_name: &str) -> io::Result<UnixStream> {
+    pub(super) fn try_connect_unix(instance_name: &str) -> io::Result<UnixStream> {
         let addr = abstract_addr(instance_name)?;
         UnixStream::connect_addr(&addr)
     }
