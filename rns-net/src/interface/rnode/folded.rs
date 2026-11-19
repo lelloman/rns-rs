@@ -8,8 +8,6 @@
 //! on a thread of its own, at start and after the connection is lost, which
 //! exits once the configured device is served on the driver.
 
-#![allow(unsafe_code, reason = "OS calls through libc")]
-
 use std::io::{self, Write};
 use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -276,15 +274,8 @@ impl RNodeSource {
         let config = &link.config;
         let mut read = 0;
         while read < STREAM_READ_BUDGET {
-            // SAFETY: `cx.buf` is a valid writable buffer for the call; the
-            // connection is non-blocking.
-            let n = unsafe {
-                libc::read(
-                    self.reader.as_raw_fd(),
-                    cx.buf.as_mut_ptr().cast(),
-                    cx.buf.len(),
-                )
-            };
+            // The connection is non-blocking.
+            let n = crate::sys::read(self.reader.as_raw_fd(), cx.buf);
             if n < 0 {
                 let e = io::Error::last_os_error();
                 match e.kind() {

@@ -632,32 +632,20 @@ impl ListenerControl {
 }
 
 /// Wait for serial input without keeping a detached reader blocked forever.
-#[allow(unsafe_code, reason = "poll(2) on one descriptor")]
 pub(crate) fn poll_readable(fd: std::os::fd::RawFd, timeout: Duration) -> io::Result<bool> {
-    let mut pfd = libc::pollfd {
-        fd,
-        events: libc::POLLIN,
-        revents: 0,
-    };
     let timeout_ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
-    // SAFETY: `pfd` is a live, exclusively borrowed `pollfd` and the count is 1. An
-    // invalid fd is reported through POLLNVAL, handled below.
-    let result = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
-    if result < 0 {
-        let error = io::Error::last_os_error();
-        return if error.kind() == io::ErrorKind::Interrupted {
-            Ok(false)
-        } else {
-            Err(error)
-        };
-    }
-    if pfd.revents & libc::POLLNVAL != 0 {
+    let revents = match crate::sys::poll_in(fd, timeout_ms) {
+        Ok(revents) => revents,
+        Err(error) if error.kind() == io::ErrorKind::Interrupted => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if revents & libc::POLLNVAL != 0 {
         return Err(io::Error::new(
             io::ErrorKind::BrokenPipe,
             "serial port closed",
         ));
     }
-    Ok(result > 0)
+    Ok(revents != 0)
 }
 
 pub(crate) fn wait_while_active(control: &ListenerControl, duration: Duration) -> bool {

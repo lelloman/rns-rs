@@ -183,3 +183,34 @@ pub(crate) fn interface_index(name: &CStr) -> u32 {
     // SAFETY: `name` is a live NUL-terminated string.
     unsafe { libc::if_nametoindex(name.as_ptr()) }
 }
+
+/// `read(2)` into `buf`: the bytes read, 0 at end of file, or a negative
+/// value with the error in `errno` (`io::Error::last_os_error`).
+#[inline]
+pub(crate) fn read(fd: RawFd, buf: &mut [u8]) -> isize {
+    // SAFETY: `buf` is valid for writes of `buf.len()` bytes for the call.
+    unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) }
+}
+
+/// `recv(2)` into `buf` with `flags`, returning as [`read`] does.
+#[inline]
+pub(crate) fn recv(fd: RawFd, buf: &mut [u8], flags: libc::c_int) -> isize {
+    // SAFETY: `buf` is valid for writes of `buf.len()` bytes for the call.
+    unsafe { libc::recv(fd, buf.as_mut_ptr().cast(), buf.len(), flags) }
+}
+
+/// `poll(2)` for input on `fd`, waiting at most `timeout_ms` (negative:
+/// forever): the descriptor's `revents`, 0 on timeout. An invalid
+/// descriptor shows as `POLLNVAL`.
+pub(crate) fn poll_in(fd: RawFd, timeout_ms: libc::c_int) -> io::Result<libc::c_short> {
+    let mut pfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: `pfd` is a live, exclusively borrowed `pollfd` and the count is 1.
+    if unsafe { libc::poll(&mut pfd, 1, timeout_ms) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(pfd.revents)
+}
