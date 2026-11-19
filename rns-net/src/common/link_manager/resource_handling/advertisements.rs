@@ -34,7 +34,6 @@ impl LinkManager {
             Ok(r) => r,
             Err(e) => {
                 log::debug!("Resource ADV rejected: {}", e);
-                let _ = link;
                 return self.teardown_link(link_id);
             }
         };
@@ -66,7 +65,6 @@ impl LinkManager {
                 active_incoming
             );
             let reject_actions = receiver.reject();
-            let _ = link;
             return self.process_resource_actions(link_id, reject_actions, rng);
         }
 
@@ -97,7 +95,6 @@ impl LinkManager {
                     let mut receiver = receiver;
                     receiver.reject()
                 };
-                let _ = link;
                 return self.process_resource_actions(link_id, reject_actions, rng);
             }
         }
@@ -116,7 +113,6 @@ impl LinkManager {
                     let mut r = receiver;
                     r.reject()
                 };
-                let _ = link;
                 return self.process_resource_actions(link_id, reject_actions, rng);
             }
 
@@ -136,7 +132,6 @@ impl LinkManager {
                 split.current_total_parts = current_total_parts;
             }
             let resource_actions = link.incoming_resources[idx].accept(now);
-            let _ = link;
             return self.process_resource_actions(link_id, resource_actions, rng);
         }
 
@@ -159,7 +154,6 @@ impl LinkManager {
                     let mut receiver = receiver;
                     receiver.reject()
                 };
-                let _ = link;
                 return self.process_resource_actions(link_id, reject_actions, rng);
             }
             if is_split {
@@ -182,7 +176,6 @@ impl LinkManager {
             link.incoming_resources.push(receiver);
             let idx = link.incoming_resources.len() - 1;
             let resource_actions = link.incoming_resources[idx].accept(now);
-            let _ = link;
             return self.process_resource_actions(link_id, resource_actions, rng);
         }
 
@@ -208,7 +201,6 @@ impl LinkManager {
                         let mut receiver = receiver;
                         receiver.reject()
                     };
-                    let _ = link;
                     let mut actions = self.process_resource_actions(link_id, reject_actions, rng);
                     actions.push(LinkManagerAction::RequestFailed {
                         link_id: *link_id,
@@ -241,7 +233,6 @@ impl LinkManager {
             link.incoming_resources.push(receiver);
             let idx = link.incoming_resources.len() - 1;
             let resource_actions = link.incoming_resources[idx].accept(now);
-            let _ = link;
             return self.process_resource_actions(link_id, resource_actions, rng);
         }
 
@@ -267,7 +258,6 @@ impl LinkManager {
                                 let mut receiver = receiver;
                                 receiver.reject()
                             };
-                            let _ = link;
                             let mut actions =
                                 self.process_resource_actions(link_id, reject_actions, rng);
                             actions.push(LinkManagerAction::ResourceFailed {
@@ -301,7 +291,6 @@ impl LinkManager {
                     data_size: link.incoming_resources[idx].data_size,
                 };
                 let resource_actions = link.incoming_resources[idx].accept(now);
-                let _ = link;
                 let mut actions = vec![started];
                 actions.extend(self.process_resource_actions(link_id, resource_actions, rng));
                 actions
@@ -356,7 +345,6 @@ impl LinkManager {
                         Ok(storage) => storage,
                         Err(error) => {
                             let resource_actions = link.incoming_resources[idx].reject();
-                            let _ = link;
                             let mut actions =
                                 self.process_resource_actions(link_id, resource_actions, rng);
                             actions.push(LinkManagerAction::ResourceFailed {
@@ -397,7 +385,6 @@ impl LinkManager {
             link.incoming_resources[idx].reject()
         };
 
-        let _ = link;
         actions.extend(self.process_resource_actions(link_id, resource_actions, rng));
         actions
     }

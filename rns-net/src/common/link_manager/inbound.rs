@@ -543,7 +543,6 @@ impl LinkManager {
                             .count()
                             as u64;
                         // process_channel_actions needs immutable self, so collect first
-                        let _ = link;
                         out.extend(self.process_channel_actions(&link_id, chan_actions, rng));
                     }
                 }

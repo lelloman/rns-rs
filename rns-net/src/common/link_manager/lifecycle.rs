@@ -152,8 +152,6 @@ impl LinkManager {
             };
             if let Some(channel) = link.channel.as_mut() {
                 let chan_actions = channel.tick(now);
-                let _ = channel;
-                let _ = link;
                 all_actions.extend(self.process_channel_actions(link_id, chan_actions, rng));
             }
         }
@@ -254,7 +252,6 @@ impl LinkManager {
                     && active_split_hashes.contains(original_hash)
             });
 
-            let _ = link;
             all_actions.extend(self.process_resource_actions(link_id, sender_actions, rng));
             all_actions.extend(self.process_resource_actions(link_id, receiver_actions, rng));
         }

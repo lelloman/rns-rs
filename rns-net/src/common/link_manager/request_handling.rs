@@ -246,7 +246,6 @@ impl LinkManager {
 
         let adv_actions = Self::start_resource_senders(link, senders, now);
 
-        let _ = link;
         self.process_resource_actions(link_id, adv_actions, rng)
     }
 
@@ -391,7 +390,6 @@ impl LinkManager {
                 },
             );
             let adv_actions = Self::start_resource_senders(link, senders, now);
-            let _ = link;
             return self.process_resource_actions(link_id, adv_actions, rng);
         }
 
