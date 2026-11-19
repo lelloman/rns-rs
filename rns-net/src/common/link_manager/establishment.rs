@@ -228,7 +228,7 @@ impl LinkManager {
             outgoing_splits: Default::default(),
             outgoing_streams: Default::default(),
             resource_strategy: ld.resource_strategy,
-            resource_receive_mode: ResourceReceiveMode::default(),
+            resource_receive_mode: ld.resource_receive_mode.clone(),
             max_request_size: ld.max_request_size,
             route_interface: Some(receiving_interface),
             route_transport_id: if packet.flags.header_type == constants::HEADER_2 {

@@ -517,6 +517,10 @@ impl Driver {
                 Event::SetResourceReceiveMode { link_id, mode } => {
                     self.link_manager.set_resource_receive_mode(&link_id, mode);
                 }
+                Event::SetLinkDestinationResourceReceiveMode { dest_hash, mode } => {
+                    self.link_manager
+                        .set_link_destination_resource_receive_mode(&dest_hash, mode);
+                }
                 Event::AcceptResource {
                     link_id,
                     resource_hash,

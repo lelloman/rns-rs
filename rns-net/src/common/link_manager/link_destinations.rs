@@ -18,6 +18,7 @@ impl LinkManager {
                 sig_pub_bytes,
                 resource_strategy,
                 max_request_size: None,
+                resource_receive_mode: ResourceReceiveMode::default(),
                 answers_requests: true,
             },
         );
@@ -72,6 +73,25 @@ impl LinkManager {
                 link.max_request_size = max_request_size;
             }
         }
+        true
+    }
+
+    /// Set how links to this destination deliver independent Resources
+    /// from the moment they are established, before the application could
+    /// call [`LinkManager::set_resource_receive_mode`] on the link: a
+    /// Resource advertised right after the link comes up would otherwise
+    /// be received in memory. Links already established keep their mode.
+    ///
+    /// Returns false when the destination is not registered.
+    pub fn set_link_destination_resource_receive_mode(
+        &mut self,
+        dest_hash: &[u8; 16],
+        mode: ResourceReceiveMode,
+    ) -> bool {
+        let Some(destination) = self.link_destinations.get_mut(dest_hash) else {
+            return false;
+        };
+        destination.resource_receive_mode = mode;
         true
     }
 

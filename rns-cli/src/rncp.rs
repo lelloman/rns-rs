@@ -879,6 +879,18 @@ impl Rncp {
             signature_public,
             2,
         );
+        // Set before any link comes up: a sender advertises its file as
+        // soon as the link is established, before this loop could set the
+        // mode on the link, and the file would arrive in memory instead.
+        let resources = self.config_dir().join("storage").join("resources");
+        let _ = std::fs::create_dir_all(&resources);
+        let _ = self.node().set_link_destination_resource_receive_mode(
+            destination.hash.0,
+            ResourceReceiveMode::TemporaryFile {
+                directory: resources,
+                max_bytes: None,
+            },
+        );
         if allow_fetch {
             let allowed_list = if disable_auth {
                 pylog::log("Allowing unauthenticated fetch requests", LOG_WARNING);
@@ -917,15 +929,6 @@ impl Rncp {
             match event {
                 RncpEvent::LinkEstablished(link_id, false) => {
                     pylog::log("Incoming link established", LOG_VERBOSE);
-                    let resources = self.config_dir().join("storage").join("resources");
-                    let _ = std::fs::create_dir_all(&resources);
-                    let _ = self.node().set_resource_receive_mode(
-                        link_id,
-                        ResourceReceiveMode::TemporaryFile {
-                            directory: resources,
-                            max_bytes: None,
-                        },
-                    );
                     let _ = self.node().set_resource_strategy(link_id, 2);
                 }
                 RncpEvent::Identified(link_id, identity_hash) => {

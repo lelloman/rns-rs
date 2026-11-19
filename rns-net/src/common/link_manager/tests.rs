@@ -2233,6 +2233,75 @@ fn stream_receive_mode_delivers_verified_segments_in_order() {
     }
 }
 
+/// A Resource advertised as soon as the link is up, before the application
+/// could set the link's receive mode, is received as the destination asks:
+/// to a file, not in memory.
+#[test]
+fn a_link_starts_with_its_destinations_receive_mode() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut rng = OsRng;
+    let dest_hash = [0xDD; 16];
+    let mut resp_mgr = LinkManager::new();
+    let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
+    resp_mgr.register_link_destination(
+        dest_hash,
+        sig_prv,
+        sig_pub_bytes,
+        ResourceStrategy::AcceptAll,
+    );
+    assert!(resp_mgr.set_link_destination_resource_receive_mode(
+        &dest_hash,
+        ResourceReceiveMode::TemporaryFile {
+            directory: directory.path().to_path_buf(),
+            max_bytes: None,
+        },
+    ));
+    assert!(!resp_mgr
+        .set_link_destination_resource_receive_mode(&[0xEE; 16], ResourceReceiveMode::default()));
+    let mut init_mgr = LinkManager::new();
+    let (link_id, init_actions) = init_mgr.create_link(
+        &dest_hash,
+        &sig_pub_bytes,
+        1,
+        constants::MTU as u32,
+        &mut rng,
+    );
+    let lr_raw = extract_send_packet(&init_actions);
+    let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
+    let resp_actions = resp_mgr.handle_local_delivery(
+        lr_pkt.destination_hash,
+        &lr_raw,
+        lr_pkt.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut rng,
+    );
+    let lrproof_raw = extract_send_packet_at(&resp_actions, 1);
+    let lrproof_pkt = RawPacket::unpack(&lrproof_raw).unwrap();
+    let init_actions2 = init_mgr.handle_local_delivery(
+        lrproof_pkt.destination_hash,
+        &lrproof_raw,
+        lrproof_pkt.packet_hash,
+        rns_core::transport::types::InterfaceId(0),
+        &mut rng,
+    );
+    let lrrtt_raw = extract_any_send_packet(&init_actions2);
+    let (mut init_mgr, mut resp_mgr, link_id) =
+        activate_link(init_mgr, resp_mgr, link_id, lrrtt_raw);
+
+    assert!(matches!(
+        &resp_mgr.links[&link_id].resource_receive_mode,
+        ResourceReceiveMode::TemporaryFile { directory: d, .. } if d == directory.path()
+    ));
+
+    let data = deterministic_bytes(600);
+    let initial = init_mgr.send_resource(&link_id, &data, None, &mut rng);
+    let (received, completed, _progress, failures, _rounds) =
+        drive_link_manager_packets(&mut init_mgr, &mut resp_mgr, initial, 'i', &mut rng, 1_000);
+    assert_eq!(received, Some(data));
+    assert!(completed);
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
 #[test]
 fn stream_receive_mode_refuses_a_resource_over_its_limit() {
     let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
