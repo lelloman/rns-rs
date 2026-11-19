@@ -41,7 +41,6 @@ impl LinkManager {
             }
         };
 
-        let _ = link;
         Ok(self.process_channel_actions(link_id, chan_actions, rng))
     }
 

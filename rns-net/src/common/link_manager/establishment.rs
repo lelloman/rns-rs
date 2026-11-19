@@ -354,8 +354,6 @@ impl LinkManager {
         };
 
         let chan_actions = channel.packet_delivered(sequence);
-        let _ = channel;
-        let _ = link;
         actions.extend(self.process_channel_actions(link_id, chan_actions, rng));
         actions
     }

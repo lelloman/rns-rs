@@ -181,7 +181,6 @@ impl LinkManager {
             }));
             link.incoming_splits.clear();
 
-            let _ = link;
             all_actions.extend(self.process_resource_actions(link_id, sender_actions, rng));
             all_actions.extend(self.process_resource_actions(link_id, receiver_actions, rng));
         }

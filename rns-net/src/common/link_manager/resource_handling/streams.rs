@@ -282,7 +282,6 @@ impl LinkManager {
         }
         link.outgoing_streams.insert(original_hash, stream);
         link.outgoing_resources.push(first);
-        let _ = link;
         let actions = self.process_resource_actions(link_id, adv_actions, rng);
         if total_segments > 1 {
             self.schedule_segment_build(link_id, original_hash);

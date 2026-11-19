@@ -70,7 +70,6 @@ impl LinkManager {
             }
         }
 
-        let _ = link;
         if let Some(sender) = part_sender {
             for &part in &parts {
                 if !self.resource_link_is_active(link_id) {
@@ -150,7 +149,6 @@ impl LinkManager {
             }
         }
 
-        let _ = link;
         self.process_resource_actions(link_id, all_actions, rng)
     }
 
@@ -341,7 +339,6 @@ impl LinkManager {
         link.outgoing_resources
             .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
 
-        let _ = link;
         if let Some(next_actions) = advertise_next {
             actions.extend(self.process_resource_actions(link_id, next_actions, rng));
         }
@@ -440,7 +437,6 @@ impl LinkManager {
         // Upstream cancels the incoming resource in turn, which answers the
         // sender with RESOURCE_RCL.
         let actions = receiver.handle_cancel();
-        let _ = link;
         self.process_resource_actions(link_id, actions, rng)
     }
 

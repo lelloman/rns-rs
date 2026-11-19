@@ -124,7 +124,6 @@ impl LinkManager {
             }
         }
 
-        let _ = link;
         if let Some((segment_progress, transfer_size)) = segment_progress {
             out.push(LinkManagerAction::ResourceSegmentProgress {
                 link_id: *link_id,
@@ -151,7 +150,6 @@ impl LinkManager {
             else {
                 return;
             };
-            let _ = link;
             // Earlier application completions go first, with their final
             // action types.
             out.extend(self.wait_receive_for(link_id, rng));
@@ -219,7 +217,6 @@ impl LinkManager {
                     Err(actions) => actions,
                 };
                 all_actions.extend(actions);
-                let _ = link;
                 self.process_resource_actions_into(link_id, all_actions.drain(..), rng, out);
                 return;
             }
