@@ -64,7 +64,8 @@ pub struct NodeConfig {
     /// Pick a random non-zero hop delta, 2 to 7, that masks this node's
     /// locally originated zero-hop packets (`local_hops_delta`).
     pub local_hops_delta: bool,
-    /// Node identity; a new one is generated when `None`.
+    /// Node identity, with its private key (starting fails without one); a
+    /// new one is generated when `None`.
     pub identity: Option<Identity>,
     /// The configured `network_identity`, kept apart from the transport
     /// identity as upstream's `Transport.network_identity`. It signs this

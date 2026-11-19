@@ -3579,3 +3579,19 @@ fn configured_interfaces_get_upstream_display_names() {
     let radio = display("Radio", 6);
     assert!(radio.interface.is_none() && radio.listener.is_none());
 }
+
+/// A node identity without its private key is refused at start, not a
+/// panic.
+#[test]
+fn start_refuses_an_identity_without_private_key() {
+    let full = Identity::new(&mut OsRng);
+    let public = Identity::from_public_key(&full.get_public_key().unwrap()).unwrap();
+    let config = NodeConfig {
+        identity: Some(public),
+        ..NodeConfig::default()
+    };
+    let error = RnsNode::start(config, Box::new(NoopCallbacks))
+        .err()
+        .expect("a node needs a private key");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
