@@ -14,7 +14,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.9"
 rns-core.workspace = true
-rns-crypto.workspace = true
+# Its cases draw from `FixedRng`, for the same inputs every run.
+rns-crypto = { workspace = true, features = ["test-rng"] }
 rns-net.workspace = true
 libc = "0.2"
 ctrlc = "3"

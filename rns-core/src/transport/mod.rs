@@ -356,6 +356,7 @@ pub struct TransportEngine {
 }
 
 mod engine_state;
+#[cfg(any(test, feature = "fuzzing"))]
 #[doc(hidden)]
 pub mod fuzz;
 mod inbound_engine;

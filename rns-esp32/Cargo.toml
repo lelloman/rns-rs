@@ -37,6 +37,7 @@ test = false
 embuild = { version = "0.33", features = ["espidf"] }
 
 [dev-dependencies]
+rns-crypto = { path = "../rns-crypto", default-features = false, features = ["std", "test-rng"] }
 embedded-graphics = "0.8"
 embedded-hal = "1"
 ssd1306 = "0.10"

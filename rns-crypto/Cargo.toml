@@ -12,6 +12,8 @@ authors.workspace = true
 default = ["std"]
 std = []
 espidf = ["esp-idf-sys"]
+# `FixedRng`, a deterministic generator for tests, fuzzing and benchmarks.
+test-rng = []
 # X25519 on aws-lc (BoringSSL's assembly), about twice x25519-dalek's speed
 # on x86_64; x25519-dalek remains for results aws-lc refuses to produce. On
 # x86_64 and aarch64 only (see the target dependency below); a no-op elsewhere.
@@ -47,6 +49,8 @@ zeroize = { version = "1", default-features = false, features = ["alloc"] }
 aws-lc-sys = { version = "0.47", optional = true }
 
 [dev-dependencies]
+# The crate's own integration tests and benches use `FixedRng`.
+rns-crypto = { path = ".", features = ["test-rng"] }
 criterion = { version = "0.8", features = ["html_reports"] }
 serde_json = "1"
 

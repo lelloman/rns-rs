@@ -39,15 +39,20 @@ pub trait Rng {
     fn fill_bytes(&mut self, dest: &mut [u8]);
 }
 
-/// Deterministic RNG for testing.
+/// Deterministic RNG for tests, fuzzing and benchmarks, behind the
+/// `test-rng` feature: never for keys that protect anything.
+#[cfg(any(test, feature = "test-rng"))]
 pub struct FixedRng {
     bytes: alloc::vec::Vec<u8>,
     pos: usize,
 }
 
+#[cfg(any(test, feature = "test-rng"))]
 impl FixedRng {
-    /// A generator that repeats `bytes` forever.
+    /// A generator that repeats `bytes` forever, or zeros when `bytes` is
+    /// empty.
     pub fn new(bytes: &[u8]) -> Self {
+        let bytes = if bytes.is_empty() { &[0] } else { bytes };
         Self {
             bytes: bytes.to_vec(),
             pos: 0,
@@ -55,6 +60,7 @@ impl FixedRng {
     }
 }
 
+#[cfg(any(test, feature = "test-rng"))]
 impl Rng for FixedRng {
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         for b in dest.iter_mut() {

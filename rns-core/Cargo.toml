@@ -11,6 +11,8 @@ authors.workspace = true
 [features]
 default = ["std"]
 std = ["rns-crypto/std"]
+# `transport::fuzz`, the fuzz targets' entry point.
+fuzzing = ["rns-crypto/test-rng"]
 
 [dependencies]
 rns-crypto = { version = "0.3.0", path = "../rns-crypto", default-features = false }
@@ -20,6 +22,7 @@ hashbrown = { version = "0.17", default-features = false }
 foldhash = { version = "0.2", default-features = false }
 
 [dev-dependencies]
+rns-crypto = { version = "0.3.0", path = "../rns-crypto", default-features = false, features = ["test-rng"] }
 criterion = { version = "0.8", features = ["html_reports"] }
 serde_json = "1"
 proptest = { version = "1.9", default-features = false, features = ["std"] }
