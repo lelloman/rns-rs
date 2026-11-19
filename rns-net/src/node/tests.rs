@@ -2284,6 +2284,46 @@ enable_transport = False
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A Backbone listener's status row shows its configured mode and
+/// gravity, not the defaults its parsed config holds until it starts.
+#[test]
+fn backbone_listener_reports_its_configured_mode() {
+    let dir = std::env::temp_dir().join(format!("rns-test-backbone-mode-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let port = crate::test_support::port();
+    let config = format!(
+        r#"
+[reticulum]
+share_instance = No
+enable_transport = False
+
+[interfaces]
+  [[Mode Backbone]]
+    type = BackboneInterface
+    enabled = yes
+    listen_ip = 127.0.0.1
+    listen_port = {port}
+    interface_mode = gateway
+"#
+    );
+    fs::write(dir.join("config"), config).unwrap();
+    let node = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks)).unwrap();
+    let Ok(crate::event::QueryResponse::InterfaceStats(stats)) =
+        node.query(crate::event::QueryRequest::InterfaceStats)
+    else {
+        panic!("no interface stats");
+    };
+    let row = stats
+        .interfaces
+        .iter()
+        .find(|i| i.name.contains("Mode Backbone"))
+        .expect("listener row");
+    assert_eq!(row.mode, rns_core::constants::MODE_GATEWAY);
+    node.shutdown();
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn rnode_config_defaults() {
     use crate::interface::rnode::{RNodeConfig, RNodeSubConfig};

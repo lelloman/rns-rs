@@ -47,11 +47,11 @@ pub struct BackbonePeerStateHandle {
     pub interface_id: InterfaceId,
     /// Interface name.
     pub interface_name: String,
-    /// `mode` of the config the handle was made from.
+    /// The listener's interface mode.
     pub mode: u8,
-    /// `gravity` of the config the handle was made from.
+    /// The listener's gravity.
     pub gravity: i64,
-    /// `announces_to_internal` of the config the handle was made from.
+    /// The listener's `announces_to_internal`.
     pub announces_to_internal: Option<bool>,
     /// Per-address peer state.
     pub peer_state: Arc<Mutex<BackbonePeerMonitor>>,
@@ -106,14 +106,19 @@ pub(crate) fn runtime_handle_from_mode(mode: &BackboneMode) -> Option<BackboneRu
     }
 }
 
-pub(crate) fn peer_state_handle_from_mode(mode: &BackboneMode) -> Option<BackbonePeerStateHandle> {
+/// The interface's mode, gravity and `announces_to_internal` come from
+/// `interface`: the listener's own config takes them only when it starts.
+pub(crate) fn peer_state_handle_from_mode(
+    mode: &BackboneMode,
+    interface: &crate::InterfaceConfig,
+) -> Option<BackbonePeerStateHandle> {
     match mode {
         BackboneMode::Server(config) => Some(BackbonePeerStateHandle {
             interface_id: config.interface_id,
             interface_name: config.name.clone(),
-            mode: config.mode,
-            gravity: config.gravity,
-            announces_to_internal: config.announces_to_internal,
+            mode: interface.mode,
+            gravity: interface.gravity,
+            announces_to_internal: interface.announces_to_internal,
             peer_state: Arc::clone(&config.peer_state),
             fast_flap: config.fast_flap,
             fast_flap_state: Arc::clone(&config.fast_flap_state),
