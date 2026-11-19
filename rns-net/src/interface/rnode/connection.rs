@@ -68,12 +68,13 @@ pub(super) fn start_with_control(
     let mut writers: Vec<(InterfaceId, Box<dyn Writer>)> = Vec::with_capacity(num_subs);
     let mut flow_states: Vec<Arc<Mutex<SubFlowState>>> = Vec::with_capacity(num_subs);
 
+    let station_id: Option<Arc<[u8]>> = config
+        .id_interval
+        .and(config.id_callsign.as_deref())
+        .map(Arc::from);
     for (i, sub) in config.subinterfaces.iter().enumerate() {
         let sub_id = InterfaceId(config.base_interface_id.0 + i as u64);
-        let flow_state = Arc::new(Mutex::new(SubFlowState {
-            ready: true,
-            queue: std::collections::VecDeque::new(),
-        }));
+        let flow_state = Arc::new(Mutex::new(SubFlowState::new(station_id.clone())));
         flow_states.push(flow_state.clone());
         let sub_writer = make_sub_writer(
             shared_writer.clone(),

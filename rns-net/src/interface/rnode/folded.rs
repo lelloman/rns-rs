@@ -24,6 +24,7 @@ use super::{
     first_ble_open, open_until_configured, reopen_connection, reset_flow_states,
     signal_interface_up, wait_while_running, RNodeConfig, RNodeReceiver, SubFlowState,
 };
+use super::{identify_station, station_id_due};
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::interface::lock_or_recover;
 use crate::interface::stream_read::{set_nonblocking, STREAM_READ_BUDGET};
@@ -331,12 +332,17 @@ impl LoopSource for RNodeSource {
     }
 
     fn deadline(&self) -> Option<Instant> {
-        Some(self.keepalive_at)
+        let id_due = station_id_due(&self.link.config, &self.link.flow_states);
+        Some(id_due.map_or(self.keepalive_at, |due| due.min(self.keepalive_at)))
     }
 
     fn on_timer(&mut self, _cx: &mut LoopContext<'_>) -> SourceStatus {
         if !self.link.running() {
             return SourceStatus::Remove;
+        }
+        identify_station(&self.link.config, &self.link.flow_states, &self.link.writer);
+        if Instant::now() < self.keepalive_at {
+            return SourceStatus::Rearm;
         }
         self.keepalive_at = Instant::now() + KEEPALIVE_INTERVAL;
         if let Err(e) = lock_or_recover(&self.link.writer, "rnode shared writer")

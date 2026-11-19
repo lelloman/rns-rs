@@ -79,6 +79,13 @@ impl InterfaceFactory for RNodeFactory {
         let id_interval = params.get("id_interval").and_then(|v| v.parse().ok());
 
         let id_callsign = params.get("id_callsign").map(|v| v.as_bytes().to_vec());
+        // As upstream, a callsign longer than CALLSIGN_MAX_LEN makes the
+        // configuration invalid.
+        if id_interval.is_some() && id_callsign.as_ref().is_some_and(|c| c.len() > 32) {
+            return Err(format!(
+                "The encoded ID callsign for RNodeInterface[{name}] exceeds the max length of 32 bytes."
+            ));
+        }
 
         let sub = RNodeSubConfig {
             name: name.to_string(),

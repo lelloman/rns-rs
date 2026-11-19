@@ -16,6 +16,38 @@ pub(super) struct RNodeSubWriter {
 pub(super) struct SubFlowState {
     pub(super) ready: bool,
     pub(super) queue: std::collections::VecDeque<Vec<u8>>,
+    /// When a frame other than the station ID was first written since the
+    /// last ID (upstream's `first_tx`).
+    pub(super) first_tx: Option<std::time::Instant>,
+    /// The station ID callsign, when the interface identifies itself.
+    pub(super) station_id: Option<Arc<[u8]>>,
+}
+
+impl SubFlowState {
+    /// A subinterface ready to send, identifying with `station_id`.
+    pub(super) fn new(station_id: Option<Arc<[u8]>>) -> Self {
+        Self {
+            ready: true,
+            queue: std::collections::VecDeque::new(),
+            first_tx: None,
+            station_id,
+        }
+    }
+
+    /// Note that a frame of the interface's traffic was written.
+    fn wrote_frame(&mut self) {
+        self.first_tx.get_or_insert_with(std::time::Instant::now);
+    }
+
+    /// Note that `data` was written: the station ID restarts the interval,
+    /// anything else starts it if it is not running.
+    fn wrote(&mut self, data: &[u8]) {
+        if self.station_id.as_deref() == Some(data) {
+            self.first_tx = None;
+        } else {
+            self.first_tx.get_or_insert_with(std::time::Instant::now);
+        }
+    }
 }
 
 pub(super) fn make_sub_writer(
@@ -57,6 +89,7 @@ impl Writer for RNodeSubWriter {
             return Err(io::ErrorKind::WouldBlock.into());
         }
         state.ready = false;
+        state.wrote_frame();
         drop(state);
         let written = lock_or_recover(&self.writer, "rnode shared writer").write_all(frame);
         self.confirmed_pending = None;
@@ -72,6 +105,7 @@ impl Writer for RNodeSubWriter {
             let mut state = lock_or_recover(&self.flow_state, "rnode flow state");
             if state.ready {
                 state.ready = false;
+                state.wrote_frame();
                 drop(state);
                 lock_or_recover(&self.writer, "rnode shared writer").write_all(&frame)
             } else {
@@ -79,6 +113,7 @@ impl Writer for RNodeSubWriter {
                 Ok(())
             }
         } else {
+            lock_or_recover(&self.flow_state, "rnode flow state").wrote_frame();
             lock_or_recover(&self.writer, "rnode shared writer").write_all(&frame)
         }
     }
@@ -106,6 +141,7 @@ impl Writer for RNodeSubWriter {
         if self.flow_control {
             state.ready = false;
         }
+        state.wrote_frame();
         drop((writer, state));
         if let Some(completion) = completion.take() {
             completion.finish(Ok(()));
@@ -153,6 +189,7 @@ pub(super) fn process_flow_queue(
     let mut state = lock_or_recover(flow_state, "rnode flow state");
     if let Some(data) = state.queue.pop_front() {
         state.ready = false;
+        state.wrote(&data);
         drop(state);
         let frame = if multi {
             rnode_kiss::rnode_multi_data_frame(index, &data)
@@ -166,4 +203,69 @@ pub(super) fn process_flow_queue(
     } else {
         state.ready = true;
     }
+}
+
+/// Upstream's station identification: once `id_interval` seconds have
+/// passed since the first frame sent after the last identification, send
+/// `id_callsign` on every subinterface, through flow control as any frame.
+/// Returns when it is next due, if a frame is waiting for one.
+pub(super) fn identify_station(
+    config: &RNodeConfig,
+    flow_states: &[Arc<Mutex<SubFlowState>>],
+    writer: &Arc<Mutex<DeviceWriter>>,
+) -> Option<std::time::Instant> {
+    let callsign = config.id_callsign.as_deref()?;
+    let due = station_id_due(config, flow_states)?;
+    if std::time::Instant::now() <= due {
+        return Some(due);
+    }
+    if config.multi {
+        log::debug!(
+            "Interface RNodeMultiInterface[{}] is transmitting beacon data on all subinterfaces: {}",
+            config.name,
+            String::from_utf8_lossy(callsign)
+        );
+    } else {
+        log::debug!(
+            "Interface {} is transmitting beacon data: {}",
+            super::setup::display_name(config),
+            String::from_utf8_lossy(callsign)
+        );
+    }
+    for (fs, sub) in flow_states.iter().zip(&config.subinterfaces) {
+        let mut state = lock_or_recover(fs, "rnode flow state");
+        state.first_tx = None;
+        if sub.flow_control && !state.ready {
+            state.queue.push_back(callsign.to_vec());
+            continue;
+        }
+        if sub.flow_control {
+            state.ready = false;
+        }
+        drop(state);
+        let frame = if config.multi {
+            rnode_kiss::rnode_multi_data_frame(sub.vport, callsign)
+        } else {
+            rnode_kiss::rnode_data_frame(sub.vport, callsign)
+        };
+        if let Err(e) = lock_or_recover(writer, "rnode shared writer").write_all(&frame) {
+            log::debug!("[{}] station ID not written: {e}", config.name);
+        }
+    }
+    None
+}
+
+/// When the station ID is next due: `id_interval` after the first frame
+/// sent since the last one, if any was.
+pub(super) fn station_id_due(
+    config: &RNodeConfig,
+    flow_states: &[Arc<Mutex<SubFlowState>>],
+) -> Option<std::time::Instant> {
+    let interval = config.id_interval?;
+    config.id_callsign.as_ref()?;
+    let first_tx = flow_states
+        .iter()
+        .filter_map(|fs| lock_or_recover(fs, "rnode flow state").first_tx)
+        .min()?;
+    Some(first_tx + Duration::from_secs(u64::from(interval)))
 }

@@ -261,6 +261,8 @@ fn rnode_flow_control() {
     let flow_state = Arc::new(Mutex::new(SubFlowState {
         ready: true,
         queue: std::collections::VecDeque::new(),
+        first_tx: None,
+        station_id: None,
     }));
 
     let mut sub_writer = RNodeSubWriter {
@@ -390,6 +392,8 @@ fn confirmed_rnode_frame_waits_for_ready_and_flushes_once() {
     let state = Arc::new(Mutex::new(SubFlowState {
         ready: false,
         queue: std::collections::VecDeque::new(),
+        first_tx: None,
+        station_id: None,
     }));
     let mut writer = RNodeSubWriter {
         confirmed_pending: None,
@@ -465,6 +469,8 @@ fn rnode_sub_writer_format() {
     let flow_state = Arc::new(Mutex::new(SubFlowState {
         ready: true,
         queue: std::collections::VecDeque::new(),
+        first_tx: None,
+        station_id: None,
     }));
 
     let mut sub_writer = RNodeSubWriter {
@@ -1336,4 +1342,136 @@ fn closing_answer_is_read_up_to_the_radio_state() {
     let started = std::time::Instant::now();
     setup::read_closing_answer(&mut slave, &config, started + Duration::from_millis(200));
     assert!(started.elapsed() < Duration::from_millis(700));
+}
+
+fn station_id_config(flow_control: bool) -> RNodeConfig {
+    RNodeConfig {
+        name: "id".into(),
+        subinterfaces: vec![RNodeSubConfig {
+            name: "id".into(),
+            vport: 0,
+            outgoing: true,
+            frequency: 868_000_000,
+            bandwidth: 125_000,
+            txpower: 7,
+            spreading_factor: 8,
+            coding_rate: 5,
+            flow_control,
+            st_alock: None,
+            lt_alock: None,
+        }],
+        id_interval: Some(0),
+        id_callsign: Some(b"N0CALL".to_vec()),
+        ..RNodeConfig::default()
+    }
+}
+
+/// As upstream: the callsign goes out `id_interval` after the first frame
+/// sent since the last identification, and not while nothing is sent.
+#[test]
+fn station_id_follows_traffic_as_upstream() {
+    let (master_fd, slave_fd) = open_pty_pair().unwrap();
+    crate::sys::set_nonblocking(master_fd).unwrap();
+    let writer = Arc::new(Mutex::new(DeviceWriter::new(unsafe {
+        transport_from_raw_fd(slave_fd)
+    })));
+    let config = station_id_config(false);
+    let flow = Arc::new(Mutex::new(SubFlowState::new(Some(Arc::from(
+        &b"N0CALL"[..],
+    )))));
+    let flows = [flow.clone()];
+
+    assert_eq!(station_id_due(&config, &flows), None);
+    assert_eq!(identify_station(&config, &flows, &writer), None);
+
+    let mut sub = RNodeSubWriter {
+        confirmed_pending: None,
+        writer: writer.clone(),
+        index: 0,
+        flow_control: false,
+        flow_state: flow.clone(),
+        multi: false,
+    };
+    sub.send_frame(b"traffic").unwrap();
+    assert!(station_id_due(&config, &flows).is_some());
+    std::thread::sleep(Duration::from_millis(5));
+    assert_eq!(identify_station(&config, &flows, &writer), None);
+    assert_eq!(flow.lock().unwrap().first_tx, None);
+
+    let mut buf = [0u8; 256];
+    let mut n = 0isize;
+    while let read @ 1.. = crate::sys::read(master_fd, &mut buf[n as usize..]) {
+        n += read;
+    }
+    assert!(n > 0);
+    let id_frame = rnode_kiss::rnode_data_frame(0, b"N0CALL");
+    assert!(
+        buf[..n as usize]
+            .windows(id_frame.len())
+            .any(|w| w == id_frame),
+        "{:02x?} in {:02x?}",
+        id_frame,
+        &buf[..n as usize]
+    );
+    unsafe { libc::close(master_fd) };
+}
+
+/// With flow control, a station ID waiting behind traffic is queued, and
+/// sending it from the queue restarts the interval, as upstream.
+#[test]
+fn queued_station_id_restarts_the_interval() {
+    let (master_fd, slave_fd) = open_pty_pair().unwrap();
+    let writer = Arc::new(Mutex::new(DeviceWriter::new(unsafe {
+        transport_from_raw_fd(slave_fd)
+    })));
+    let config = station_id_config(true);
+    let flow = Arc::new(Mutex::new(SubFlowState::new(Some(Arc::from(
+        &b"N0CALL"[..],
+    )))));
+    let flows = [flow.clone()];
+    let mut sub = RNodeSubWriter {
+        confirmed_pending: None,
+        writer: writer.clone(),
+        index: 0,
+        flow_control: true,
+        flow_state: flow.clone(),
+        multi: false,
+    };
+    sub.send_frame(b"traffic").unwrap();
+    std::thread::sleep(Duration::from_millis(5));
+    identify_station(&config, &flows, &writer);
+    assert_eq!(flow.lock().unwrap().queue.len(), 1);
+    // Traffic queued after it starts a new interval...
+    sub.send_frame(b"more").unwrap();
+    // ...which the ID, sent from the queue first, does not end.
+    process_flow_queue(&flow, &writer, 0, false);
+    assert_eq!(flow.lock().unwrap().first_tx, None);
+    process_flow_queue(&flow, &writer, 0, false);
+    assert!(flow.lock().unwrap().first_tx.is_some());
+    unsafe { libc::close(master_fd) };
+}
+
+#[test]
+fn station_id_callsign_longer_than_32_bytes_is_refused() {
+    let params: std::collections::HashMap<String, String> = [
+        ("port", "/dev/ttyUSB0"),
+        ("frequency", "868000000"),
+        ("bandwidth", "125000"),
+        ("txpower", "7"),
+        ("spreadingfactor", "8"),
+        ("codingrate", "5"),
+        ("id_interval", "600"),
+        ("id_callsign", "A123456789012345678901234567890123"),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
+    let error = RNodeFactory
+        .parse_config("radio", InterfaceId(1), &params)
+        .err()
+        .unwrap();
+    assert!(
+        error.contains("exceeds the max length of 32 bytes"),
+        "{error}"
+    );
 }
