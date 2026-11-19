@@ -9,6 +9,7 @@ const BLOCK_SIZE: usize = 16;
 type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 
+/// AES-128 in CBC mode with a fixed key, for tokens whose key is 32 bytes.
 #[derive(Clone)]
 pub struct Aes128 {
     key: [u8; 16],

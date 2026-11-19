@@ -301,6 +301,7 @@ const MAX_FP: u32 = 256 * COST_FP;
 pub struct StampValue(u32);
 
 impl StampValue {
+    /// A stamp worth nothing.
     pub const ZERO: StampValue = StampValue(0);
 
     /// Value from its fixed-point representation, clamped to the maximum.
@@ -373,6 +374,7 @@ const _: () = assert!((MAX_FP - MAX_COST_FP) >> COST_FP_BITS >= MANTISSA_BITS);
 pub struct StampCost(u32);
 
 impl StampCost {
+    /// No stamp required.
     pub const ZERO: StampCost = StampCost(0);
 
     /// Cost from its fixed-point representation, clamped to the cap.

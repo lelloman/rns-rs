@@ -8,10 +8,12 @@ use sha2::Digest;
 pub struct Sha256(sha2::Sha256);
 
 impl Sha256 {
+    /// A hasher over no data yet.
     pub fn new() -> Self {
         Sha256(sha2::Sha256::new())
     }
 
+    /// Add `data` to the hashed input.
     pub fn update(&mut self, data: &[u8]) {
         self.0.update(data);
     }
@@ -22,6 +24,7 @@ impl Sha256 {
     }
 }
 
+/// The SHA-256 of `data`.
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     sha2::Sha256::digest(data).into()
 }

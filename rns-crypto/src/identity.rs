@@ -8,7 +8,9 @@ use crate::token::{Token, TokenError};
 use crate::x25519::{X25519PrivateKey, X25519PublicKey};
 use crate::Rng;
 
+/// An identity's key material in bits: an X25519 and an Ed25519 key.
 pub const KEYSIZE: usize = 512; // bits
+/// Bytes of key derived for each encrypted token: an HMAC key and an AES key.
 pub const DERIVED_KEY_LENGTH: usize = 64; // bytes
 
 /// The X25519 and Ed25519 halves of a 64-byte identity key, public or
@@ -20,15 +22,23 @@ pub fn split_key(key: &[u8; 64]) -> ([u8; 32], [u8; 32]) {
     signing.copy_from_slice(&key[32..]);
     (encryption, signing)
 }
+/// Bits of a truncated hash, as identity and destination hashes use.
 pub const TRUNCATED_HASHLENGTH: usize = 128; // bits (16 bytes)
 
+/// Why an identity operation failed.
 #[derive(Debug)]
 pub enum CryptoError {
+    /// The identity holds only public keys.
     NoPrivateKey,
+    /// The identity holds no public keys.
     NoPublicKey,
+    /// The token did not decrypt or verify.
     TokenError(TokenError),
+    /// Key derivation failed.
     HkdfError(hkdf::HkdfError),
+    /// The ciphertext is too short to hold an ephemeral key and a token.
     InvalidCiphertext,
+    /// The Ed25519 half of a public key is not a valid point.
     InvalidPublicKey,
 }
 
@@ -88,6 +98,9 @@ pub fn generate_stamped_key_until(
     }
 }
 
+/// A Reticulum identity: an X25519 key for encryption and an Ed25519 key
+/// for signing, with or without their private halves, and the truncated
+/// hash of the public keys that names it.
 pub struct Identity {
     prv: Option<X25519PrivateKey>,
     sig_prv: Option<Ed25519PrivateKey>,
@@ -97,6 +110,7 @@ pub struct Identity {
 }
 
 impl Identity {
+    /// A new identity with fresh private keys from `rng`.
     pub fn new(rng: &mut dyn Rng) -> Self {
         let prv = X25519PrivateKey::generate(rng);
         let sig_prv = Ed25519PrivateKey::generate(rng);
@@ -203,6 +217,7 @@ impl Identity {
         })
     }
 
+    /// The 64-byte private key, X25519 then Ed25519, when the identity has it.
     pub fn get_private_key(&self) -> Option<[u8; 64]> {
         match (&self.prv, &self.sig_prv) {
             (Some(prv), Some(sig_prv)) => {
@@ -215,6 +230,7 @@ impl Identity {
         }
     }
 
+    /// The 64-byte public key, X25519 then Ed25519, when the identity has it.
     pub fn get_public_key(&self) -> Option<[u8; 64]> {
         match (&self.pub_key, &self.sig_pub) {
             (Some(pub_key), Some(sig_pub)) => {
@@ -227,15 +243,20 @@ impl Identity {
         }
     }
 
+    /// The identity's hash: the truncated SHA-256 of its public key.
     pub fn hash(&self) -> &[u8; 16] {
         &self.hash
     }
 
+    /// Encrypt `plaintext` to this identity: an ephemeral X25519 public key
+    /// followed by a token under the key derived from the exchange.
     pub fn encrypt(&self, plaintext: &[u8], rng: &mut dyn Rng) -> Result<Vec<u8>, CryptoError> {
         let pub_key = self.pub_key.as_ref().ok_or(CryptoError::NoPublicKey)?;
         self.encrypt_to_public_key(plaintext, pub_key, rng)
     }
 
+    /// Encrypt `plaintext` to `ratchet`, the destination's current ratchet
+    /// public key, or to the identity's own key when there is none.
     pub fn encrypt_with_ratchet(
         &self,
         plaintext: &[u8],
@@ -300,6 +321,7 @@ impl Identity {
         Ok(result)
     }
 
+    /// Decrypt a ciphertext encrypted to this identity's own key.
     pub fn decrypt(&self, ciphertext_token: &[u8]) -> Result<Vec<u8>, CryptoError> {
         let prv = self.prv.as_ref().ok_or(CryptoError::NoPrivateKey)?;
         self.decrypt_with_key(ciphertext_token, prv)
@@ -369,11 +391,13 @@ impl Identity {
         self.sig_prv.as_ref()
     }
 
+    /// Sign `message` with the Ed25519 private key.
     pub fn sign(&self, message: &[u8]) -> Result<[u8; 64], CryptoError> {
         let sig_prv = self.sig_prv.as_ref().ok_or(CryptoError::NoPrivateKey)?;
         Ok(sig_prv.sign(message))
     }
 
+    /// Whether `signature` is a valid signature of `message` by this identity.
     pub fn verify(&self, signature: &[u8; 64], message: &[u8]) -> bool {
         match &self.sig_pub {
             Some(sig_pub) => sig_pub.verify(signature, message),

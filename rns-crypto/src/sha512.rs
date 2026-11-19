@@ -1,21 +1,26 @@
 use sha2::Digest;
 
+/// An incremental SHA-512 hasher whose digest can be read without
+/// consuming it.
 #[derive(Clone)]
 pub struct Sha512 {
     inner: sha2::Sha512,
 }
 
 impl Sha512 {
+    /// A hasher over no data yet.
     pub fn new() -> Self {
         Sha512 {
             inner: sha2::Sha512::new(),
         }
     }
 
+    /// Add `data` to the hashed input.
     pub fn update(&mut self, data: &[u8]) {
         self.inner.update(data);
     }
 
+    /// The SHA-512 of the input so far.
     pub fn digest(&self) -> [u8; 64] {
         self.inner.clone().finalize().into()
     }
@@ -27,6 +32,7 @@ impl Default for Sha512 {
     }
 }
 
+/// The SHA-512 of `data`.
 pub fn sha512(data: &[u8]) -> [u8; 64] {
     sha2::Sha512::digest(data).into()
 }

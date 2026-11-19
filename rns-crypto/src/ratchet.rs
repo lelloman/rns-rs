@@ -3,16 +3,23 @@ use crate::{x25519::X25519PrivateKey, Rng};
 use alloc::vec::Vec;
 use zeroize::Zeroizing;
 
+/// Seconds between ratchet rotations, as upstream rotates them.
 pub const DEFAULT_INTERVAL: u64 = 30 * 60;
+/// Ratchet keys a destination keeps by default, newest first.
 pub const DEFAULT_RETAINED: usize = 512;
 /// Allocation/decryption-work limit, including when importing untrusted storage.
 pub const MAX_RETAINED: usize = 4096;
 
+/// A decrypted payload and the ratchet that decrypted it.
 pub struct Decrypted {
+    /// The plaintext.
     pub plaintext: Vec<u8>,
+    /// The id of the ratchet key that decrypted it; none when the identity's
+    /// own key did.
     pub ratchet_id: Option<[u8; 10]>,
 }
 
+/// A ratchet public key's id: the first ten bytes of its SHA-256.
 pub fn ratchet_id(public: &[u8; 32]) -> [u8; 10] {
     let mut id = [0u8; 10];
     id.copy_from_slice(&crate::sha256::sha256(public)[..10]);
@@ -41,6 +48,7 @@ impl Default for RatchetRing {
 }
 
 impl RatchetRing {
+    /// An empty ring, with no ratchet yet.
     pub fn new() -> Self {
         Self {
             keys: Zeroizing::new(Vec::new()),
@@ -66,6 +74,7 @@ impl RatchetRing {
         &self.keys
     }
 
+    /// The public key of the newest ratchet, which announces carry.
     pub fn current_public(&self) -> Option<[u8; 32]> {
         self.keys.first().map(|key| {
             X25519PrivateKey::from_bytes(key)
@@ -74,6 +83,7 @@ impl RatchetRing {
         })
     }
 
+    /// Whether the ring still holds the private key of this ratchet.
     pub fn retains(&self, public: &[u8; 32]) -> bool {
         self.keys.iter().any(|key| {
             X25519PrivateKey::from_bytes(key)
@@ -110,6 +120,7 @@ impl RatchetRing {
         })
     }
 
+    /// Keep the `retained` newest keys, zeroizing the rest.
     pub fn prune(&mut self, retained: usize) {
         use zeroize::Zeroize;
         for key in self.keys.iter_mut().skip(retained) {
