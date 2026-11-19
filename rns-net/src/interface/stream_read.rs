@@ -1,8 +1,6 @@
 //! Reading stream sockets and accepting connections on the driver loop,
 //! shared by the interfaces whose I/O runs there.
 
-#![allow(unsafe_code, reason = "OS calls through libc")]
-
 use std::io;
 
 use rns_core::transport::types::InterfaceId;
@@ -76,20 +74,12 @@ fn read_frames(
     }
     let mut read = 0;
     while read < STREAM_READ_BUDGET {
-        // SAFETY: `cx.buf` is a valid writable buffer for the call.
         // MSG_DONTWAIT keeps a socket's own mode untouched; a device is
         // non-blocking already.
-        let n = unsafe {
-            if device {
-                libc::read(fd, cx.buf.as_mut_ptr().cast(), cx.buf.len())
-            } else {
-                libc::recv(
-                    fd,
-                    cx.buf.as_mut_ptr().cast(),
-                    cx.buf.len(),
-                    libc::MSG_DONTWAIT,
-                )
-            }
+        let n = if device {
+            crate::sys::read(fd, cx.buf)
+        } else {
+            crate::sys::recv(fd, cx.buf, libc::MSG_DONTWAIT)
         };
         if n < 0 {
             let e = io::Error::last_os_error();
@@ -141,15 +131,11 @@ fn read_frames(
 pub(crate) fn socket_hung_up(fd: std::os::fd::RawFd) -> bool {
     let mut byte = 0u8;
     loop {
-        // SAFETY: `byte` is a valid one-byte buffer for the call.
-        let n = unsafe {
-            libc::recv(
-                fd,
-                (&mut byte as *mut u8).cast(),
-                1,
-                libc::MSG_PEEK | libc::MSG_DONTWAIT,
-            )
-        };
+        let n = crate::sys::recv(
+            fd,
+            std::slice::from_mut(&mut byte),
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        );
         if n > 0 {
             return false;
         }

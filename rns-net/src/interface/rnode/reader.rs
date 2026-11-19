@@ -218,17 +218,9 @@ pub(super) fn reader_loop_connected(
     }
 }
 
-#[allow(unsafe_code, reason = "poll(2) on the reader")]
 pub(super) fn reader_ready(reader: &impl AsRawFd, timeout: Duration) -> bool {
-    let mut pfd = libc::pollfd {
-        fd: reader.as_raw_fd(),
-        events: libc::POLLIN,
-        revents: 0,
-    };
     let timeout_ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
-    // SAFETY: `pfd` is a live, exclusively borrowed `pollfd` and the count is 1; its fd
-    // belongs to `reader`, borrowed for the call.
-    unsafe { libc::poll(&mut pfd, 1, timeout_ms) > 0 }
+    matches!(crate::sys::poll_in(reader.as_raw_fd(), timeout_ms), Ok(revents) if revents != 0)
 }
 
 pub(super) fn signal_interface_down(tx: &EventSender, config: &RNodeConfig) {

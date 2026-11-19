@@ -12,8 +12,6 @@
 //! outbound peer, and one asks for the next incoming connection. Each exits
 //! once its stream is served on the driver.
 
-#![allow(unsafe_code, reason = "OS calls through libc")]
-
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::os::fd::AsRawFd;
@@ -389,15 +387,7 @@ impl StreamSource {
             return None;
         };
         let id = *id;
-        // SAFETY: `cx.buf` is a valid writable buffer for the call.
-        let n = unsafe {
-            libc::recv(
-                self.stream.as_raw_fd(),
-                cx.buf.as_mut_ptr().cast(),
-                cx.buf.len(),
-                libc::MSG_DONTWAIT,
-            )
-        };
+        let n = crate::sys::recv(self.stream.as_raw_fd(), cx.buf, libc::MSG_DONTWAIT);
         let read = match n {
             n if n > 0 => &cx.buf[..n as usize],
             0 => {

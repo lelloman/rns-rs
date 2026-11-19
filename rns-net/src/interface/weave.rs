@@ -1,7 +1,5 @@
 //! Weave Device Control Link (WDCL) framing and interface state.
 
-#![allow(unsafe_code, reason = "OS calls through libc")]
-
 use rns_core::display::hex;
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
@@ -443,18 +441,7 @@ impl WeaveSession {
         let mut buffer = [0u8; 32 * 1024];
         let mut last_peer_expiry = Instant::now();
         loop {
-            let mut pollfd = libc::pollfd {
-                fd: reader.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            // SAFETY: `pollfd` is a live, exclusively borrowed `pollfd` and the count
-            // is 1; its fd belongs to `reader`, which is open for this loop.
-            let ready = unsafe { libc::poll(&mut pollfd, 1, 250) };
-            if ready < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            if ready > 0 {
+            if crate::sys::poll_in(reader.as_raw_fd(), 250)? != 0 {
                 let read = reader.read(&mut buffer)?;
                 if read == 0 {
                     return Err(io::Error::new(
@@ -888,15 +875,8 @@ impl WeaveSource {
             if !self.session.tx.inbound_data_has_room() {
                 return Ok(SourceStatus::Suspend);
             }
-            // SAFETY: `cx.buf` is a valid writable buffer for the call; the
-            // device is non-blocking.
-            let n = unsafe {
-                libc::read(
-                    self.reader.as_raw_fd(),
-                    cx.buf.as_mut_ptr().cast(),
-                    cx.buf.len(),
-                )
-            };
+            // The device is non-blocking.
+            let n = crate::sys::read(self.reader.as_raw_fd(), cx.buf);
             if n < 0 {
                 let error = io::Error::last_os_error();
                 match error.kind() {
