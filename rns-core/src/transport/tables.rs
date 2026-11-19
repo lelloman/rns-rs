@@ -5,12 +5,19 @@ use super::types::InterfaceId;
 /// Entry in the path table, keyed by destination_hash.
 #[derive(Debug, Clone)]
 pub struct PathEntry {
+    /// When the path was learnt or last refreshed, in seconds.
     pub timestamp: f64,
+    /// Transport id of the next hop, or the destination itself when it is a direct neighbour.
     pub next_hop: [u8; 16],
+    /// Hops to the destination.
     pub hops: u8,
+    /// When the path expires, in seconds.
     pub expires: f64,
+    /// Random blobs of announces seen for this path, used to reject replays.
     pub random_blobs: Vec<[u8; 10]>,
+    /// Interface the announce came in on, and the path goes out on.
     pub receiving_interface: InterfaceId,
+    /// Hash of the announce packet that set the path.
     pub packet_hash: [u8; 32],
     /// Last time this path was used for outbound traffic; 0 means never used.
     pub used: f64,
@@ -21,17 +28,29 @@ pub struct PathEntry {
 /// Entry in the announce table, keyed by destination_hash.
 #[derive(Debug, Clone)]
 pub struct AnnounceEntry {
+    /// When the announce entered the table, in seconds.
     pub timestamp: f64,
+    /// When the announce is next due for retransmission, in seconds.
     pub retransmit_timeout: f64,
+    /// Retry counter; retransmission stops once it passes `PATHFINDER_R`.
     pub retries: u8,
+    /// Node the announce was received from.
     pub received_from: [u8; 16],
+    /// Hop count after counting the hop to this node; the retransmission carries it.
     pub hops: u8,
+    /// Announce packet bytes as received.
     pub packet_raw: Vec<u8>,
+    /// Announce payload, resent after the rebuilt header.
     pub packet_data: Vec<u8>,
+    /// Announced destination.
     pub destination_hash: [u8; 16],
+    /// Context flag of the announce, kept in the rebuilt header.
     pub context_flag: u8,
+    /// Times neighbours were heard rebroadcasting this announce at the same hop count.
     pub local_rebroadcasts: u8,
+    /// Retransmit as a path response (context `PATH_RESPONSE`), which other nodes do not rebroadcast.
     pub block_rebroadcasts: bool,
+    /// Interface a path response goes out on; `None` broadcasts on all interfaces.
     pub attached_interface: Option<InterfaceId>,
 }
 
@@ -46,22 +65,34 @@ pub type ReverseTable = hashbrown::HashMap<[u8; 16], ReverseEntry, foldhash::fas
 /// Entry in the reverse table, keyed by truncated packet hash.
 #[derive(Debug, Clone)]
 pub struct ReverseEntry {
+    /// Interface the packet arrived on.
     pub receiving_interface: InterfaceId,
+    /// Interface the packet was forwarded on.
     pub outbound_interface: InterfaceId,
+    /// When the entry was made, in seconds.
     pub timestamp: f64,
 }
 
 /// Entry in the link table, keyed by link_id.
 #[derive(Debug, Clone)]
 pub struct LinkEntry {
+    /// When the entry was made, in seconds.
     pub timestamp: f64,
+    /// Transport id of the next hop toward the destination.
     pub next_hop_transport_id: [u8; 16],
+    /// Interface toward the destination.
     pub next_hop_interface: InterfaceId,
+    /// Hops from this node to the destination.
     pub remaining_hops: u8,
+    /// Interface toward the link initiator.
     pub received_interface: InterfaceId,
+    /// Hops the link request took to reach this node.
     pub taken_hops: u8,
+    /// Destination the link request is addressed to.
     pub destination_hash: [u8; 16],
+    /// Whether a link proof has come back through this node.
     pub validated: bool,
+    /// Deadline for the link proof, in seconds.
     pub proof_timeout: f64,
 }
 
@@ -69,17 +100,24 @@ pub struct LinkEntry {
 /// on a DISCOVER_PATHS_FOR interface for an unknown destination.
 #[derive(Debug, Clone)]
 pub struct DiscoveryPathRequest {
+    /// When the first request arrived, in seconds.
     pub timestamp: f64,
+    /// Interfaces whose requesters wait for the path.
     pub requesting_interfaces: Vec<InterfaceId>,
+    /// Whether this node sent the request out on its own interfaces.
     pub engaged: bool,
 }
 
 /// Entry in the announce rate table, keyed by destination_hash.
 #[derive(Debug, Clone)]
 pub struct RateEntry {
+    /// Time of the last announce that was not blocked, in seconds.
     pub last: f64,
+    /// Current count of announces that came sooner than the rate target.
     pub rate_violations: u32,
+    /// Announces are blocked until this time, in seconds.
     pub blocked_until: f64,
+    /// Arrival times of recent announces, at most `MAX_RATE_TIMESTAMPS`.
     pub timestamps: Vec<f64>,
 }
 

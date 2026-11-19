@@ -1,6 +1,7 @@
 use super::*;
 
 impl TransportEngine {
+    /// Engine with empty tables, configured by `config`.
     pub fn new(config: TransportConfig) -> Self {
         let packet_hashlist_max_entries = config.packet_hashlist_max_entries;
         let packet_hashlist_allocation = config.packet_hashlist_allocation;
@@ -73,12 +74,16 @@ impl TransportEngine {
     // Interface management
     // =========================================================================
 
+    /// Register an interface, or replace the info of one already registered.
     pub fn register_interface(&mut self, info: InterfaceInfo) {
         self.interface_hashes
             .insert(info.id, hash::full_hash(info.name.as_bytes()));
         self.interfaces.insert(info.id, info);
     }
 
+    /// Remove an interface and everything that refers to it: paths, reverse and
+    /// link entries, tunnel state, its announce queue, ingress control state and
+    /// queued local path requests.
     pub fn deregister_interface(&mut self, id: InterfaceId) {
         self.interfaces.remove(&id);
         self.interface_hashes.remove(&id);
@@ -100,10 +105,13 @@ impl TransportEngine {
     // Destination management
     // =========================================================================
 
+    /// Register a local destination, with its destination type (a `DESTINATION_*`
+    /// constant), so packets addressed to it are delivered here.
     pub fn register_destination(&mut self, dest_hash: [u8; 16], dest_type: u8) {
         self.local_destinations.insert(dest_hash, dest_type);
     }
 
+    /// Remove a local destination.
     pub fn deregister_destination(&mut self, dest_hash: &[u8; 16]) {
         self.local_destinations.remove(dest_hash);
     }
@@ -112,12 +120,14 @@ impl TransportEngine {
     // Path queries
     // =========================================================================
 
+    /// Whether the path table holds at least one path to `dest_hash`.
     pub fn has_path(&self, dest_hash: &[u8; 16]) -> bool {
         self.path_table
             .get(dest_hash)
             .is_some_and(|ps| !ps.is_empty())
     }
 
+    /// Hops to `dest_hash` on its primary path.
     pub fn hops_to(&self, dest_hash: &[u8; 16]) -> Option<u8> {
         self.path_table
             .get(dest_hash)
@@ -125,6 +135,7 @@ impl TransportEngine {
             .map(|e| e.hops)
     }
 
+    /// Next hop of the primary path to `dest_hash`.
     pub fn next_hop(&self, dest_hash: &[u8; 16]) -> Option<[u8; 16]> {
         self.path_table
             .get(dest_hash)
@@ -132,6 +143,7 @@ impl TransportEngine {
             .map(|e| e.next_hop)
     }
 
+    /// Interface of the primary path to `dest_hash`.
     pub fn next_hop_interface(&self, dest_hash: &[u8; 16]) -> Option<InterfaceId> {
         self.path_table
             .get(dest_hash)
@@ -197,10 +209,12 @@ impl TransportEngine {
             .insert(*dest_hash, constants::STATE_RESPONSIVE);
     }
 
+    /// Whether the path to `dest_hash` is marked unresponsive.
     pub fn path_is_unresponsive(&self, dest_hash: &[u8; 16]) -> bool {
         self.path_states.get(dest_hash) == Some(&constants::STATE_UNRESPONSIVE)
     }
 
+    /// Expire every path to `dest_hash`; the next table cull removes them.
     pub fn expire_path(&mut self, dest_hash: &[u8; 16]) {
         if let Some(ps) = self.path_table.get_mut(dest_hash) {
             ps.expire_all();
@@ -211,16 +225,19 @@ impl TransportEngine {
     // Link table
     // =========================================================================
 
+    /// Add or replace a link table entry.
     pub fn register_link(&mut self, link_id: [u8; 16], entry: LinkEntry) {
         self.link_table.insert(link_id, entry);
     }
 
+    /// Mark a link table entry as validated.
     pub fn validate_link(&mut self, link_id: &[u8; 16]) {
         if let Some(entry) = self.link_table.get_mut(link_id) {
             entry.validated = true;
         }
     }
 
+    /// Remove a link table entry.
     pub fn remove_link(&mut self, link_id: &[u8; 16]) {
         self.link_table.remove(link_id);
     }
@@ -253,6 +270,7 @@ impl TransportEngine {
         self.decoded_lrproof_rebalance_candidate(&decoded, receiving_interface)
     }
 
+    /// [`Self::inbound_lrproof_rebalance_candidate`] for an already decoded packet.
     pub fn decoded_lrproof_rebalance_candidate(
         &self,
         decoded: &DecodedPacket,

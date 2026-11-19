@@ -1,20 +1,35 @@
+/// Announce processing: path and announce table entries from a validated
+/// announce, and rebuilt announces for retransmission.
 pub mod announce_proc;
 pub mod announce_queue;
+/// Queue of inbound announces awaiting signature verification.
 pub mod announce_verify_queue;
+/// Packet hash deduplication and the announce signature cache.
 pub mod dedup;
 pub mod destination_filter;
+/// Forwarding of inbound packets: transport, reverse and link table routing.
 pub mod inbound;
+/// Per-interface ingress control of announce and path request bursts.
 pub mod ingress_control;
+/// Periodic jobs: announce retransmission and path table culling.
 pub mod jobs;
+/// Routing of outbound packets and announces.
 pub mod outbound;
+/// Path requests: handling, discovery and their timeouts.
 pub mod path_requests;
+/// Path selection: random blob parsing and whether an announce updates a path.
 pub mod pathfinder;
 pub mod persistence;
+/// Read-only views and maintenance operations on the engine's tables.
 pub mod queries;
+/// Per-destination announce rate limiting.
 pub mod rate_limit;
+/// Size and age limits on the engine's tables.
 pub mod retention;
+/// Entries of the path, announce, reverse, link and rate tables.
 pub mod tables;
 pub mod tunnel;
+/// Interface descriptions, engine configuration and the actions the engine emits.
 pub mod types;
 
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -51,7 +66,11 @@ use self::types::{
     TransportConfig,
 };
 
+/// One path table row: destination hash, timestamp, next hop, hops, expiry
+/// (times in seconds), last use (0 when never used) and interface name.
 pub type PathTableRow = ([u8; 16], f64, [u8; 16], u8, f64, f64, String);
+/// One announce rate table row: destination hash, last announce time,
+/// rate violations, blocked-until time and recent announce times (in seconds).
 pub type RateTableRow = ([u8; 16], f64, u32, f64, Vec<f64>);
 /// Parsed LRPROOF data used to rebalance an existing link route.
 pub type LrproofRebalanceCandidate = ([u8; 16], [u8; 16], u8, Vec<u8>);
@@ -83,9 +102,12 @@ fn link_route_hops_match(
     }
 }
 
+/// Radio receive metadata of a frame, when the interface reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct RxMetadata {
+    /// Received signal strength, in dBm.
     pub rssi: Option<i16>,
+    /// Signal-to-noise ratio, in dB.
     pub snr: Option<f32>,
 }
 
@@ -106,19 +128,24 @@ pub struct ReleasedTraffic {
     pub filtered_announce: bool,
 }
 
+/// An inbound frame handed to the engine.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InboundFrame<'a> {
+    /// Frame bytes, after the driver's IFAC check and unmasking.
     pub raw: &'a [u8],
     /// The receiving interface. It is not optional: every inbound frame
     /// arrives on an interface, so protocol violations and receive counters
     /// can always be charged to it. Python drops interface-less frames on
     /// entry to `Transport.inbound` and so needs no later per-call guards.
     pub iface: InterfaceId,
+    /// Time of arrival, in seconds.
     pub now: f64,
+    /// Radio receive metadata.
     pub rx: RxMetadata,
 }
 
 impl<'a> InboundFrame<'a> {
+    /// Frame with no receive metadata.
     pub fn new(raw: &'a [u8], iface: InterfaceId, now: f64) -> Self {
         Self {
             raw,
@@ -128,6 +155,7 @@ impl<'a> InboundFrame<'a> {
         }
     }
 
+    /// Attach receive metadata.
     pub fn with_rx(mut self, rx: RxMetadata) -> Self {
         self.rx = rx;
         self
@@ -145,6 +173,7 @@ pub struct DecodedPacket {
 }
 
 impl DecodedPacket {
+    /// Decode wire bytes, copying them once into shared bytes.
     pub fn unpack(raw: &[u8]) -> Result<Self, crate::packet::PacketError> {
         Self::unpack_shared(PacketBytes::from(raw))
     }
@@ -180,9 +209,13 @@ impl DecodedPacket {
 
 /// Decoded bytes plus the current receive context; no admission decision cached.
 pub struct DecodedInboundFrame {
+    /// The decoded packet.
     pub decoded: DecodedPacket,
+    /// Interface the frame arrived on.
     pub iface: InterfaceId,
+    /// Time of arrival, in seconds.
     pub now: f64,
+    /// Radio receive metadata.
     pub rx: RxMetadata,
 }
 

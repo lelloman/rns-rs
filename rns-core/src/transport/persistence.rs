@@ -14,54 +14,84 @@ use crate::packet::RawPacket;
 
 const PERSIST_RANDOM_BLOBS: usize = 32;
 
+/// One stored path, of the path table or of a tunnel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PersistedPath {
+    /// Destination the path leads to.
     pub destination_hash: [u8; 16],
+    /// When the path was learnt or last refreshed, in seconds.
     pub timestamp: f64,
+    /// Next hop of the path.
     pub received_from: [u8; 16],
+    /// Hops to the destination.
     pub hops: u8,
+    /// When the path expires, in seconds.
     pub expires: f64,
+    /// The newest random blobs of the path, at most 32.
     pub random_blobs: Vec<[u8; 10]>,
+    /// Hash of the interface's name, matched against the registered interfaces on
+    /// restore; `None` for a tunnel path whose tunnel has no interface.
     pub interface_hash: Option<[u8; 32]>,
+    /// Hash of the announce packet that set the path, used to load it from the announce cache.
     pub packet_hash: [u8; 32],
     /// Last time this path was used; 0 means never used.
     pub used: f64,
 }
 
+/// One stored tunnel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PersistedTunnel {
+    /// Tunnel identifier.
     pub tunnel_id: [u8; 32],
+    /// Hash of the tunnel interface's name, or `None` when detached.
     pub interface_hash: Option<[u8; 32]>,
+    /// Paths of the tunnel.
     pub paths: Vec<PersistedPath>,
+    /// When the tunnel expires, in seconds.
     pub expires: f64,
 }
 
 /// One announce rate table entry (upstream d5f1e014 persists the table).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PersistedAnnounceRate {
+    /// Destination of the entry.
     pub destination_hash: [u8; 16],
     /// Last non-violating announce time.
     pub last: f64,
+    /// Current count of announces that came sooner than the rate target.
     pub rate_violations: u32,
+    /// Announces are blocked until this time, in seconds.
     pub blocked_until: f64,
     /// Recent announce times, oldest first.
     pub timestamps: Vec<f64>,
 }
 
+/// Transport state that survives a restart. Empty unless transport is enabled.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TransportStateSnapshot {
+    /// Packet hashes retained for duplicate suppression, oldest first.
     pub packet_hashes: Vec<[u8; 32]>,
+    /// Paths of the path table.
     pub paths: Vec<PersistedPath>,
+    /// Tunnels of the tunnel table.
     pub tunnels: Vec<PersistedTunnel>,
+    /// Entries of the announce rate table.
     pub announce_rates: Vec<PersistedAnnounceRate>,
 }
 
+/// What [`TransportEngine::restore_persistence_snapshot`] restored.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RestoreStats {
+    /// Packet hashes held after restoring.
     pub packet_hashes: usize,
+    /// Paths restored to the path table.
     pub paths: usize,
+    /// Tunnels restored, detached until their endpoint synthesizes them again.
     pub tunnels: usize,
+    /// Announce rate table entries restored.
     pub announce_rates: usize,
+    /// Paths, tunnel paths included, skipped as expired, without a known
+    /// interface, or without a cached announce.
     pub skipped_paths: usize,
     /// Paths not restored because the destination type filter rejects
     /// their announce (upstream 20e25a9f).

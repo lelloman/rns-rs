@@ -33,11 +33,17 @@ pub struct TunnelEntry {
 /// A path entry stored in a tunnel.
 #[derive(Debug, Clone)]
 pub struct TunnelPath {
+    /// When the path was learnt or last refreshed, in seconds.
     pub timestamp: f64,
+    /// Next hop of the path.
     pub received_from: [u8; 16],
+    /// Hops to the destination.
     pub hops: u8,
+    /// When the path expires, in seconds.
     pub expires: f64,
+    /// Random blobs of announces seen for this path.
     pub random_blobs: Vec<[u8; 10]>,
+    /// Hash of the announce packet that set the path.
     pub packet_hash: [u8; 32],
     /// When the path was last used, carried from the path table entry the
     /// announce updated; 0 means never.
@@ -47,9 +53,13 @@ pub struct TunnelPath {
 /// Result of validating tunnel synthesis data.
 #[derive(Debug)]
 pub struct ValidatedTunnel {
+    /// Tunnel identifier, SHA-256 of `public_key` and `interface_hash`.
     pub tunnel_id: [u8; 32],
+    /// Public key of the synthesizing transport identity (X25519 then Ed25519).
     pub public_key: [u8; 64],
+    /// Interface hash the remote node synthesized the tunnel for.
     pub interface_hash: [u8; 32],
+    /// Random hash of the synthesis.
     pub random_hash: [u8; 16],
     /// The signed extension after the signature (upstream b7a93b9b), empty
     /// when the synthesis has none.
@@ -63,10 +73,15 @@ pub struct ValidatedTunnel {
 /// upstream quantizes them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteTransportInfo {
+    /// Implementation name.
     pub implementation: alloc::string::String,
+    /// Implementation version, as its numeric components.
     pub version: Vec<u32>,
+    /// Whether the remote node has transport enabled.
     pub is_transport: bool,
+    /// Announce stamp cost of the interface it synthesized on.
     pub destination_cost: crate::stamp::StampCost,
+    /// Path request stamp cost of the interface it synthesized on.
     pub pr_cost: crate::stamp::StampCost,
 }
 
@@ -208,6 +223,7 @@ pub struct TunnelTable {
 }
 
 impl TunnelTable {
+    /// Empty tunnel table.
     pub fn new() -> Self {
         TunnelTable {
             tunnels: BTreeMap::new(),

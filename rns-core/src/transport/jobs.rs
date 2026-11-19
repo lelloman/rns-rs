@@ -244,12 +244,16 @@ pub fn cull_path_table(
 /// shrinks by one per extra used path, down to `min`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnusedPoolLimits {
+    /// Largest target for the never-used pool.
     pub max: usize,
+    /// Smallest target for the never-used pool.
     pub min: usize,
+    /// Number of used paths above which the target starts to shrink.
     pub used_target: usize,
 }
 
 impl UnusedPoolLimits {
+    /// Upstream's limits: `PATH_POOL_UNUSED_MAX`, `PATH_POOL_UNUSED_MIN` and `PATH_POOL_USED_TARGET`.
     pub const UPSTREAM: Self = Self {
         max: crate::constants::PATH_POOL_UNUSED_MAX,
         min: crate::constants::PATH_POOL_UNUSED_MIN,

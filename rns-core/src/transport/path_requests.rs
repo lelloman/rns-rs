@@ -1,5 +1,6 @@
 use super::*;
 
+/// Slowest positive bit rate among `interfaces`, in bits per second.
 pub fn lowest_interface_bitrate(interfaces: &BTreeMap<InterfaceId, InterfaceInfo>) -> Option<u64> {
     // Having no usable bitrate is a normal state, not a diagnostic condition.
     // Callers fall back to the fixed path-request timeout without logging.
@@ -10,6 +11,9 @@ pub fn lowest_interface_bitrate(interfaces: &BTreeMap<InterfaceId, InterfaceInfo
         .min()
 }
 
+/// Round trip of one MTU on the slowest interface plus the per-hop link
+/// establishment timeout, in seconds, as upstream's
+/// `Transport.medium_path_timeout`; 0 when no interface has a known bit rate.
 pub fn medium_path_timeout(interfaces: &BTreeMap<InterfaceId, InterfaceInfo>) -> f64 {
     let Some(lowest_bitrate) = lowest_interface_bitrate(interfaces) else {
         return 0.0;
@@ -45,6 +49,7 @@ impl TransportEngine {
             .should_egress_limit_pr(interface_id, &config, pr_freq, sample_count)
     }
 
+    /// Handle a path request received on `interface_id`, with `data` its payload.
     pub fn handle_path_request(
         &mut self,
         data: &[u8],
