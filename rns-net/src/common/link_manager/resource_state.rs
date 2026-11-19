@@ -80,7 +80,7 @@ impl LinkManager {
                 let capacity = usize::try_from(data_size.min(*max_bytes)).unwrap_or(0);
                 let buffer = Vec::with_capacity(capacity);
                 #[cfg(target_os = "linux")]
-                advise_huge_pages(&buffer);
+                crate::sys::advise_huge_pages(&buffer);
                 Ok(IncomingSplitStorage::Memory(buffer))
             }
             ResourceReceiveMode::TemporaryFile { directory, .. } => {

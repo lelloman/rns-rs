@@ -1,7 +1,5 @@
 //! Background cleanup of stale known destinations and ratchets.
 
-#![allow(unsafe_code, reason = "OS calls through libc")]
-
 use super::*;
 
 impl Driver {
@@ -94,11 +92,7 @@ impl Driver {
             .name("rns-destination-cleanup".into())
             .spawn(move || {
                 #[cfg(target_family = "unix")]
-                // SAFETY: `nice` takes a plain integer and only lowers scheduling
-                // priority (per thread on Linux); no memory is involved.
-                unsafe {
-                    libc::nice(5);
-                }
+                crate::sys::nice(5);
                 match store.cleanup(&known_destinations, now, expiry) {
                     Ok(stats) if stats.removed > 0 => log::info!(
                         "Known-destination cleanup removed {} stale ratchets",

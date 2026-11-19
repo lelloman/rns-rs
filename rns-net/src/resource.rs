@@ -1,7 +1,5 @@
 //! Standard-library Resource streaming and disk-delivery types.
 
-#![allow(unsafe_code, reason = "OS calls through libc")]
-
 use std::fs::{self, File, OpenOptions};
 #[cfg(test)]
 use std::io::Read;
@@ -206,22 +204,7 @@ fn rename_final(source: &Path, destination: &Path, overwrite: bool) -> io::Resul
     let destination = CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
         io::Error::new(io::ErrorKind::InvalidInput, "destination path contains NUL")
     })?;
-    // SAFETY: `source` and `destination` are live `CString`s, so both pointers are
-    // NUL-terminated and valid for the call; AT_FDCWD needs no open fd.
-    let result = unsafe {
-        libc::renameat2(
-            libc::AT_FDCWD,
-            source.as_ptr(),
-            libc::AT_FDCWD,
-            destination.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
+    crate::sys::rename_no_replace(&source, &destination)
 }
 
 #[cfg(not(target_os = "linux"))]

@@ -118,30 +118,6 @@ struct OutgoingStreamTransfer {
     app_flag: bool,
 }
 
-/// Ask Linux to back a large buffer's capacity with huge pages. Filling it
-/// then takes one page fault per 2 MiB instead of one per 4 KiB; with small
-/// pages, the faults were most of the time spent storing each received
-/// segment of a split Resource.
-#[cfg(target_os = "linux")]
-#[allow(unsafe_code, reason = "madvise on the link buffer")]
-fn advise_huge_pages(buffer: &Vec<u8>) {
-    const HUGE_PAGE: usize = 2 << 20;
-    if buffer.capacity() < 2 * HUGE_PAGE {
-        return;
-    }
-    let start = buffer.as_ptr() as usize;
-    let aligned = start.next_multiple_of(HUGE_PAGE);
-    let len = (start + buffer.capacity()).saturating_sub(aligned) / HUGE_PAGE * HUGE_PAGE;
-    if len == 0 {
-        return;
-    }
-    // SAFETY: the range lies within the buffer's own allocation, and the
-    // advice changes only how the kernel backs it, not its contents.
-    unsafe {
-        libc::madvise(aligned as *mut libc::c_void, len, libc::MADV_HUGEPAGE);
-    }
-}
-
 /// Response produced by an application request handler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestResponse {

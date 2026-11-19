@@ -5,7 +5,6 @@
 //! destination binding is checked when present; legacy imports must be assigned
 //! to the correct destination by the caller. Keys are not encrypted at rest.
 
-#![allow(unsafe_code, reason = "OS calls through libc")]
 use rns_core::{
     msgpack::{self, Value},
     types::Direction,
@@ -91,10 +90,7 @@ impl FileRatchetStore {
             .open(PathBuf::from(lock_path))?;
         #[cfg(unix)]
         {
-            use std::os::fd::AsRawFd;
-            // SAFETY: the fd belongs to `lock`, the file opened just above and still
-            // owned here; `flock` takes no pointers.
-            if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            if !crate::sys::try_lock_exclusive(&lock) {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
                     "ratchet file already owned",

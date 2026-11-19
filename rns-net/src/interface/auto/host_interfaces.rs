@@ -47,82 +47,40 @@ pub(super) fn should_adopt_interface_name(
 /// Enumerate network interfaces that have IPv6 link-local addresses (fe80::/10).
 ///
 /// Uses `libc::getifaddrs()`. Filters by allowed/ignored interface lists.
-#[allow(unsafe_code, reason = "getifaddrs/freeifaddrs")]
 pub fn enumerate_interfaces(allowed: &[String], ignored: &[String]) -> Vec<LocalInterface> {
-    let mut result = Vec::new();
+    let mut result: Vec<LocalInterface> = Vec::new();
     let platform_ignored = platform_ignored_interfaces();
-
-    // SAFETY: `getifaddrs` fills `ifaddrs` with a list that stays valid until the
-    // single `freeifaddrs` at the end (the early return happens before anything
-    // was allocated). Each node is non-null when dereferenced, `ifa_addr` is
-    // checked for null before reading `sa_family`, it is cast to `sockaddr_in6`
-    // only when the family is AF_INET6, and `ifa_name` is the NUL-terminated name
-    // the kernel sets on every entry.
-    unsafe {
-        let mut ifaddrs: *mut libc::ifaddrs = std::ptr::null_mut();
-        if libc::getifaddrs(&mut ifaddrs) != 0 {
-            return result;
+    for ifa in crate::sys::interface_addresses() {
+        // Must have an IPv6 address
+        let Some(std::net::IpAddr::V6(ipv6)) = ifa.addr else {
+            continue;
+        };
+        let Ok(name) = ifa.name.to_str() else {
+            continue;
+        };
+        if !should_adopt_interface_name(name, allowed, ignored, platform_ignored) {
+            continue;
         }
-
-        let mut current = ifaddrs;
-        while !current.is_null() {
-            let ifa = &*current;
-            current = ifa.ifa_next;
-
-            // Must have an address
-            if ifa.ifa_addr.is_null() {
-                continue;
-            }
-
-            // Must be AF_INET6
-            if (*ifa.ifa_addr).sa_family as i32 != libc::AF_INET6 {
-                continue;
-            }
-
-            // Get interface name
-            let name = match std::ffi::CStr::from_ptr(ifa.ifa_name).to_str() {
-                Ok(s) => s.to_string(),
-                Err(_) => continue,
-            };
-
-            if !should_adopt_interface_name(&name, allowed, ignored, platform_ignored) {
-                continue;
-            }
-
-            // Extract IPv6 address
-            let sa6 = ifa.ifa_addr as *const libc::sockaddr_in6;
-            let addr_bytes = (*sa6).sin6_addr.s6_addr;
-            let ipv6 = Ipv6Addr::from(addr_bytes);
-
-            // Must be link-local (fe80::/10)
-            let octets = ipv6.octets();
-            if octets[0] != 0xfe || (octets[1] & 0xc0) != 0x80 {
-                continue;
-            }
-
-            // Format the address (drop scope ID, matching Python's descope_linklocal)
-            let addr_str = format!("{}", ipv6);
-
-            // Get interface index
-            let index = libc::if_nametoindex(ifa.ifa_name);
-            if index == 0 {
-                continue;
-            }
-
-            // Avoid duplicates (same interface may appear multiple times)
-            if result.iter().any(|li: &LocalInterface| li.name == name) {
-                continue;
-            }
-
-            result.push(LocalInterface {
-                name,
-                link_local_addr: addr_str,
-                index,
-            });
+        // Must be link-local (fe80::/10)
+        let octets = ipv6.octets();
+        if octets[0] != 0xfe || (octets[1] & 0xc0) != 0x80 {
+            continue;
         }
-
-        libc::freeifaddrs(ifaddrs);
+        // Format the address (drop scope ID, matching Python's descope_linklocal)
+        let addr_str = format!("{}", ipv6);
+        let index = crate::sys::interface_index(&ifa.name);
+        if index == 0 {
+            continue;
+        }
+        // Avoid duplicates (same interface may appear multiple times)
+        if result.iter().any(|li| li.name == name) {
+            continue;
+        }
+        result.push(LocalInterface {
+            name: name.to_string(),
+            link_local_addr: addr_str,
+            index,
+        });
     }
-
     result
 }
