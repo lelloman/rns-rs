@@ -10,18 +10,26 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 /// Serial port parity setting.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Parity {
+    /// No parity bit.
     None,
+    /// Even parity.
     Even,
+    /// Odd parity.
     Odd,
 }
 
 /// Configuration for a serial port.
 #[derive(Debug, Clone)]
 pub struct SerialConfig {
+    /// Device path, e.g. `/dev/ttyUSB0`.
     pub path: String,
+    /// Baud rate; must be one of the rates the port supports.
     pub baud: u32,
+    /// Data bits per character: 5, 6 or 7; any other value means 8.
     pub data_bits: u8,
+    /// Parity setting.
     pub parity: Parity,
+    /// Stop bits: 2 means two, any other value means one.
     pub stop_bits: u8,
 }
 

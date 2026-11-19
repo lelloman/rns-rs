@@ -110,8 +110,11 @@ const SEND_RETRY_BACKOFF_MAX: Duration = Duration::from_millis(1000);
 /// Default announce-rate controls applied to transport-node interfaces.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AnnounceRateDefaults {
+    /// Minimum time between announces from one destination, in seconds; `None` applies no default.
     pub target: Option<f64>,
+    /// Extra block time once a destination is blocked, in seconds; used when the interface sets none.
     pub penalty: f64,
+    /// Rate violations tolerated before blocking; used when the interface sets none.
     pub grace: u32,
 }
 
@@ -266,6 +269,8 @@ struct KnownDestinationCleanup {
 /// Interval of the transport-state snapshot, as the persistence thread keeps.
 pub(crate) const TRANSPORT_STATE_PERSIST_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
 
+/// The node's event loop: owns the transport engine and the interfaces,
+/// handles each incoming event and carries out the resulting actions.
 pub struct Driver {
     resource_preparation: Option<resource_preparation::Worker>,
     pub(crate) tracked_link_send: Option<([u8; 32], crate::link_send::Completion)>,

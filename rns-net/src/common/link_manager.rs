@@ -125,15 +125,21 @@ pub enum RequestResponse {
     Bytes(Vec<u8>),
     /// Send the response as a resource response with optional metadata.
     Resource {
+        /// The response value, sent as the Resource's data.
         data: Vec<u8>,
+        /// Metadata attached to the Resource, if any.
         metadata: Option<Vec<u8>>,
+        /// Attempt compression and use the result only when smaller.
         auto_compress: bool,
     },
     /// Send raw file bytes with MessagePack metadata, matching Python's
     /// `[file_handle, metadata]` response. No response-value envelope is added.
     File {
+        /// The file's bytes.
         data: Vec<u8>,
+        /// MessagePack-encoded metadata attached to the Resource.
         metadata: Vec<u8>,
+        /// Attempt compression and use the result only when smaller.
         auto_compress: bool,
     },
 }
@@ -142,7 +148,12 @@ pub enum RequestResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestFailure {
     /// The peer advertised or sent a response larger than the configured limit.
-    ResponseTooLarge { size: u64, maximum: usize },
+    ResponseTooLarge {
+        /// Size of the response, in bytes.
+        size: u64,
+        /// The configured maximum response size, in bytes.
+        maximum: usize,
+    },
     /// No response arrived before the request's timeout.
     TimedOut,
 }
@@ -159,8 +170,11 @@ pub enum LinkManagerAction {
     /// Send a packet via the transport engine outbound path. The wire bytes
     /// are shared, so routing hands them to the interface without a copy.
     SendPacket {
+        /// The packet's wire bytes.
         raw: rns_core::transport::types::PacketBytes,
+        /// Destination type (`DESTINATION_*`) passed to outbound routing.
         dest_type: u8,
+        /// Interface the packet is bound to, passed to outbound routing.
         attached_interface: Option<rns_core::transport::types::InterfaceId>,
     },
     /// A plain link packet arrived on a link to `dest_hash`. As in upstream
@@ -168,170 +182,269 @@ pub enum LinkManagerAction {
     /// is proved; the driver holds the strategies and answers through
     /// [`LinkManager::prove_link_packet`].
     ProofRequired {
+        /// The link it concerns.
         link_id: LinkId,
+        /// The destination the link was established to.
         dest_hash: [u8; 16],
+        /// Hash of the packet to prove.
         packet_hash: [u8; 32],
     },
     /// The peer of `link_id` proved `packet_hash`: the proof's signature
     /// checked out against the peer's link key. The driver completes the
     /// receipt of that packet if it was sent on this link.
     PacketProved {
+        /// The link it concerns.
         link_id: LinkId,
+        /// Hash of the proved packet.
         packet_hash: [u8; 32],
     },
     /// Link established — notify callbacks.
     LinkEstablished {
+        /// The link it concerns.
         link_id: LinkId,
+        /// The destination the link was established to.
         dest_hash: [u8; 16],
+        /// Hops to the peer: the initial estimate, updated from the received
+        /// link proof (initiator) or RTT packet (responder).
         hops: u8,
+        /// When the link proof first reported a hop count different from the
+        /// initiator's estimate; `None` if it never did.
         rebalanced_at: Option<f64>,
+        /// Measured round-trip time, in seconds.
         rtt: f64,
+        /// Whether this node initiated the link.
         is_initiator: bool,
     },
     /// Link closed — notify callbacks.
     LinkClosed {
+        /// The link it concerns.
         link_id: LinkId,
+        /// Why the link closed, when known.
         reason: Option<TeardownReason>,
     },
     /// A link this node initiated closed without ever becoming active
     /// (a closed entry in `Transport.pending_links`).
-    PendingLinkFailed { dest_hash: [u8; 16] },
+    PendingLinkFailed {
+        /// The destination the link was requested to.
+        dest_hash: [u8; 16],
+    },
     /// Remote peer identified — notify callbacks.
     RemoteIdentified {
+        /// The link it concerns.
         link_id: LinkId,
+        /// Hash of the identity the peer identified as.
         identity_hash: [u8; 16],
+        /// That identity's public key (X25519 then Ed25519).
         public_key: [u8; 64],
     },
     /// Register a link_id as local destination in transport (for receiving link data).
-    RegisterLinkDest { link_id: LinkId },
+    RegisterLinkDest {
+        /// The link id to register.
+        link_id: LinkId,
+    },
     /// Deregister a link_id from transport local destinations.
-    DeregisterLinkDest { link_id: LinkId },
+    DeregisterLinkDest {
+        /// The link id to deregister.
+        link_id: LinkId,
+    },
     /// A management request that needs to be handled by the driver.
     /// The driver has access to engine state needed to build the response.
     ManagementRequest {
+        /// The link the request arrived on.
         link_id: LinkId,
+        /// Hash of the requested path.
         path_hash: [u8; 16],
         /// The request data (msgpack-encoded Value from the request array).
         data: Vec<u8>,
         /// The request_id (truncated hash of the packed request).
         request_id: [u8; 16],
+        /// Identity hash and public key the peer identified with, if it did.
         remote_identity: Option<([u8; 16], [u8; 64])>,
     },
     /// Resource data fully received and assembled.
     ResourceReceived {
+        /// The link it concerns.
         link_id: LinkId,
+        /// The Resource's data.
         data: Vec<u8>,
+        /// Metadata the sender attached, if any.
         metadata: Option<Vec<u8>>,
         /// The application flag the sender set in the advertisement.
         app_flag: bool,
     },
     /// A disk-backed Resource is ready for application ownership.
     ResourceFileReceived {
+        /// The link it concerns.
         link_id: LinkId,
+        /// The received file.
         resource: ReceivedResourceFile,
     },
     /// A verified segment of a streamed incoming Resource.
     ResourceSegmentReceived {
+        /// The link it concerns.
         link_id: LinkId,
+        /// The Resource's original hash.
         original_hash: [u8; 32],
+        /// Offset of the segment's data in the Resource, in bytes.
         offset: u64,
+        /// The segment's data.
         data: Vec<u8>,
     },
     /// Every segment of a streamed incoming Resource has been delivered.
     ResourceStreamReceived {
+        /// The link it concerns.
         link_id: LinkId,
+        /// The received Resource.
         resource: crate::resource::ReceivedResourceStream,
     },
     /// Resource transfer completed (proof validated on sender side).
-    ResourceCompleted { link_id: LinkId },
+    ResourceCompleted {
+        /// The link it concerns.
+        link_id: LinkId,
+    },
     /// Resource transfer failed.
-    ResourceFailed { link_id: LinkId, error: String },
+    ResourceFailed {
+        /// The link it concerns.
+        link_id: LinkId,
+        /// What failed.
+        error: String,
+    },
     /// An incoming resource was accepted and its transfer starts
     /// (upstream's `resource_started` callback): its hash and the
     /// uncompressed data size it advertised.
     ResourceStarted {
+        /// The link it concerns.
         link_id: LinkId,
+        /// The Resource's hash.
         resource_hash: Vec<u8>,
+        /// Uncompressed data size, in bytes.
         data_size: u64,
     },
     /// Resource transfer progress update.
     ResourceProgress {
+        /// The link it concerns.
         link_id: LinkId,
+        /// Parts sent or received so far.
         received: usize,
+        /// Parts in the transfer.
         total: usize,
     },
+    /// An outgoing streaming Resource was sent in full and proved.
     ResourceStreamCompleted {
+        /// The link it concerns.
         link_id: LinkId,
+        /// The transfer that completed.
         transfer_id: ResourceTransferId,
     },
+    /// An outgoing streaming Resource failed.
     ResourceStreamFailed {
+        /// The link it concerns.
         link_id: LinkId,
+        /// The transfer that failed.
         transfer_id: ResourceTransferId,
+        /// Why it failed.
         error: ResourceTransferError,
     },
+    /// Progress of an outgoing streaming Resource.
     ResourceStreamProgress {
+        /// The link it concerns.
         link_id: LinkId,
+        /// The transfer the progress is of.
         transfer_id: ResourceTransferId,
+        /// Bytes of the source transferred so far, estimated from the parts
+        /// sent.
         transferred: u64,
+        /// The source's declared length, in bytes.
         total: u64,
     },
     /// Progress of the segment being transferred, sent or received, ahead
     /// of the matching `ResourceProgress` or `ResourceStreamProgress`:
     /// upstream's `get_segment_progress()` and `get_transfer_size()`.
     ResourceSegmentProgress {
+        /// The link it concerns.
         link_id: LinkId,
+        /// Fraction of the segment's parts processed, 0.0 to 1.0.
         segment_progress: f64,
+        /// Bytes needed to transfer the segment.
         transfer_size: u64,
     },
     /// Query application whether to accept an incoming resource (for AcceptApp strategy).
     ResourceAcceptQuery {
+        /// The link it concerns.
         link_id: LinkId,
+        /// The Resource's hash.
         resource_hash: Vec<u8>,
+        /// Size of the encrypted transfer, in bytes, as advertised.
         transfer_size: u64,
+        /// Whether the Resource carries metadata.
         has_metadata: bool,
         /// The application flag set in the advertisement.
         app_flag: bool,
     },
     /// Channel message received on a link.
     ChannelMessageReceived {
+        /// The link it concerns.
         link_id: LinkId,
+        /// The message's type.
         msgtype: u16,
+        /// The message's payload.
         payload: Vec<u8>,
     },
     /// Direct Link signalling received on a link (decrypted, still framed;
     /// see `rns_core::holepunch::decode_signal`). Never proven and never
     /// shown to the application.
-    DirectLinkSignal { link_id: LinkId, data: Vec<u8> },
+    DirectLinkSignal {
+        /// The link it concerns.
+        link_id: LinkId,
+        /// The framed signal.
+        data: Vec<u8>,
+    },
     /// A link running over a direct path shows that the path failed (it
     /// went stale, or its channel ran out of retries): fall back to the
     /// original route.
-    DirectPathFailed { link_id: LinkId },
+    DirectPathFailed {
+        /// The link it concerns.
+        link_id: LinkId,
+    },
     /// Generic link data received (CONTEXT_NONE).
     LinkDataReceived {
+        /// The link it concerns.
         link_id: LinkId,
+        /// The packet's context byte.
         context: u8,
+        /// The decrypted data.
         data: Vec<u8>,
     },
     /// Response received on a link.
     ResponseReceived {
+        /// The link it concerns.
         link_id: LinkId,
+        /// The request answered.
         request_id: [u8; 16],
+        /// The response value, MessagePack-encoded.
         data: Vec<u8>,
+        /// Metadata of a Resource response, if any.
         metadata: Option<Vec<u8>>,
     },
     /// An outbound request failed.
     RequestFailed {
+        /// The link it concerns.
         link_id: LinkId,
+        /// The request that failed.
         request_id: [u8; 16],
+        /// Why it failed.
         reason: RequestFailure,
     },
     /// A link request was received (for hook notification).
     LinkRequestReceived {
+        /// Id of the link the request opens.
         link_id: LinkId,
+        /// Interface the request arrived on.
         receiving_interface: rns_core::transport::types::InterfaceId,
     },
     /// A malformed link request was rejected on an interface.
     ProtocolViolation {
+        /// Interface the request arrived on.
         receiving_interface: rns_core::transport::types::InterfaceId,
     },
 }
@@ -390,9 +503,13 @@ pub struct LinkManager {
     receive_decrypts: std::collections::VecDeque<(LinkId, [u8; 32])>,
 }
 
+/// Best-known outbound route for a link's packets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinkRouteHint {
+    /// Interface the link's packets go out on.
     pub interface: rns_core::transport::types::InterfaceId,
+    /// Next-hop transport id, when the link was reached through a transport
+    /// node; outbound packets can then be sent as HEADER_2 through it.
     pub transport_id: Option<[u8; 16]>,
     /// The link's current MTU: no packet of the link larger than this may
     /// take the route.

@@ -30,21 +30,37 @@ pub enum RemotePurpose {
     Blackhole,
 }
 
+/// Failures of [`RemoteManagementClient`] operations.
 #[derive(Debug, Clone)]
 pub enum RemoteManagementError {
+    /// The given text is not a 32-character hex transport identity hash.
     InvalidHash(String),
+    /// The management destination needs an identity and none was given.
     MissingIdentity,
+    /// The management identity file could not be loaded.
     IdentityLoad(String),
+    /// The local Reticulum config could not be parsed.
     Config(String),
+    /// The local shared instance could not be reached.
     ConnectShared,
+    /// The wait for the destination's path and identity ran out exactly at
+    /// its deadline.
     PathTimeout([u8; 16]),
+    /// The wait for the destination's path and identity passed its deadline.
     RecallTimeout([u8; 16]),
+    /// The link to the destination could not be created or was not
+    /// established in time.
     LinkTimeout([u8; 16]),
+    /// No response to the request on this path arrived in time.
     RequestTimeout(String),
     /// The link closed, by the reason the remote side gave if any.
     LinkClosed(Option<TeardownReason>),
+    /// The request or the identification could not be sent, or there was
+    /// no open link for it.
     SendFailed,
+    /// The response could not be decoded as expected.
     MalformedResponse(String),
+    /// A failure described only by its message, displayed as is.
     Unsupported(String),
 }
 
@@ -96,10 +112,14 @@ pub enum RemoteProgress {
     SendingRequest,
 }
 
+/// The response to a remote `/status` request.
 #[derive(Debug, Clone)]
 pub struct RemoteStatus {
+    /// The interface statistics, as received.
     pub stats: PickleValue,
+    /// The remote's link count, when requested and present.
     pub link_count: Option<i64>,
+    /// The remote's profiling results, when requested and present.
     pub profiling_results: Option<PickleValue>,
 }
 
@@ -144,6 +164,8 @@ impl Callbacks for RemoteCallbacks {
     }
 }
 
+/// A client that reaches a remote transport instance's management and
+/// blackhole destinations through the local shared instance.
 pub struct RemoteManagementClient {
     node: RnsNode,
     management_identity: Option<Identity>,
@@ -157,6 +179,10 @@ pub struct RemoteManagementClient {
 }
 
 impl RemoteManagementClient {
+    /// Connect to the shared instance configured in `config_path` (or the
+    /// default config directory), loading the management identity from
+    /// `management_identity_path` if given. `timeout` is as
+    /// [`set_timeout`](Self::set_timeout).
     pub fn connect(
         config_path: Option<&Path>,
         management_identity_path: Option<&Path>,
@@ -306,6 +332,8 @@ impl RemoteManagementClient {
         }
     }
 
+    /// Request the remote's `/status`, with its link count if
+    /// `include_link_count`.
     pub fn status(
         &mut self,
         transport_identity_hash: [u8; 16],
@@ -314,6 +342,8 @@ impl RemoteManagementClient {
         self.status_with_profiling(transport_identity_hash, include_link_count, false)
     }
 
+    /// [`status`](Self::status), also asking for profiling results if
+    /// `include_profiling`.
     pub fn status_with_profiling(
         &mut self,
         transport_identity_hash: [u8; 16],
@@ -328,6 +358,8 @@ impl RemoteManagementClient {
         decode_status_response(&response)
     }
 
+    /// Request the remote's path table, optionally only the entry for
+    /// `destination_filter` and only paths of at most `max_hops` hops.
     pub fn path_table(
         &mut self,
         transport_identity_hash: [u8; 16],
@@ -351,6 +383,8 @@ impl RemoteManagementClient {
         Ok(msgpack_to_pickle(&value))
     }
 
+    /// Request the remote's announce rate table, optionally only the entry
+    /// for `destination_filter`.
     pub fn rate_table(
         &mut self,
         transport_identity_hash: [u8; 16],
@@ -367,6 +401,9 @@ impl RemoteManagementClient {
         Ok(msgpack_to_pickle(&value))
     }
 
+    /// Request the blackhole list the remote publishes on its
+    /// `rnstransport.info.blackhole` destination, as a list of dicts each
+    /// carrying an `identity_hash`.
     pub fn published_blackhole_list(
         &mut self,
         transport_identity_hash: [u8; 16],
@@ -548,6 +585,8 @@ impl RemoteManagementClient {
     }
 }
 
+/// Parse a 32-character hex transport identity hash, ignoring surrounding
+/// whitespace.
 pub fn parse_transport_identity_hash(s: &str) -> Result<[u8; 16], RemoteManagementError> {
     let trimmed = s.trim();
     if trimmed.len() != 32 {
@@ -561,6 +600,8 @@ pub fn parse_transport_identity_hash(s: &str) -> Result<[u8; 16], RemoteManageme
     Ok(out)
 }
 
+/// Convert a msgpack value to the equivalent pickle value; unsigned
+/// integers above `i64::MAX` saturate.
 pub fn msgpack_to_pickle(value: &Value) -> PickleValue {
     match value {
         Value::Nil => PickleValue::None,

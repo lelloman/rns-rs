@@ -54,6 +54,8 @@ impl AnnounceCache {
         }
     }
 
+    /// Store the raw announce `raw` under its packet hash, with the name of
+    /// the interface it was received on, if any.
     pub fn store(
         &self,
         packet_hash: &[u8; 32],
@@ -66,6 +68,7 @@ impl AnnounceCache {
         }
     }
 
+    /// The raw announce stored under `packet_hash` and its interface name.
     pub fn get(&self, packet_hash: &[u8; 32]) -> io::Result<Option<(Vec<u8>, Option<String>)>> {
         match &self.backend {
             Backend::Sqlite(cache) => cache.get(packet_hash),

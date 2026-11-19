@@ -7,11 +7,18 @@ use crate::{DestHash, IdentityHash, InterfaceId, LinkId, PacketHash, TeardownRea
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SendTicket(pub u64);
 
+/// Receives the driver's events for the application. Methods with a
+/// default do nothing unless overridden.
 pub trait Callbacks: Send {
+    /// A validated announce was received.
     fn on_announce(&mut self, announced: crate::common::destination::AnnouncedIdentity);
 
+    /// The path to `dest_hash` was learned or changed; it is now `hops` hops
+    /// away.
     fn on_path_updated(&mut self, dest_hash: DestHash, hops: u8);
 
+    /// A packet for a local destination that is not handled by a link was
+    /// delivered, as raw packet bytes with its packet hash.
     fn on_local_delivery(&mut self, dest_hash: DestHash, raw: Vec<u8>, packet_hash: PacketHash);
 
     /// Called when an interface comes online.

@@ -40,26 +40,48 @@ struct TagCaptures {
     captures: VecDeque<Capture>,
 }
 
+/// Duration statistics over a set of completed samples, in seconds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProfilingStats {
+    /// Number of completed samples.
     pub count: usize,
+    /// Mean duration.
     pub mean: f64,
+    /// Median duration.
     pub median: f64,
+    /// Shortest duration.
     pub min: f64,
+    /// Longest duration.
     pub max: f64,
+    /// Sample standard deviation; `None` with fewer than two samples.
     pub stdev: Option<f64>,
+    /// Total duration of all samples.
     pub sum: f64,
+    /// Number of distinct threads that completed samples; set only for
+    /// [`ProfilingResult::stats_all`].
     pub threads: Option<usize>,
 }
 
+/// Retained statistics for one profiling tag.
+///
+/// The windowed stats cover samples by start time, as an age range that
+/// excludes the shorter windows; each is `None` when it has no completed
+/// sample.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProfilingResult {
+    /// The tag.
     pub name: String,
+    /// Parent tag the tag is nested under, if any.
     pub parent: Option<String>,
+    /// Stats over all retained completed samples.
     pub stats_all: ProfilingStats,
+    /// Samples started less than 1 minute ago.
     pub stats_1m: Option<ProfilingStats>,
+    /// Samples started 1 to 5 minutes ago.
     pub stats_5m: Option<ProfilingStats>,
+    /// Samples started 5 to 30 minutes ago.
     pub stats_30m: Option<ProfilingStats>,
+    /// Samples started 30 to 60 minutes ago.
     pub stats_60m: Option<ProfilingStats>,
 }
 

@@ -11,15 +11,25 @@ use crate::sync::lock_or_recover;
 /// A local send failure. Success never implies acknowledgement by the peer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkSendError {
+    /// Every send admission permit is in use.
     QueueFull,
+    /// The driver stopped before the send was admitted or completed.
     DriverStopped,
+    /// The send was dropped before anything reported its result.
     Interrupted,
+    /// The node is draining and accepts no new sends.
     Draining,
+    /// The link refused the payload (unknown link, not active, too large).
     InvalidPacket(crate::event::LinkDatagramError),
+    /// The packet could not be built or parsed for sending.
     PacketBuildFailed,
+    /// No outgoing interface was selected for the packet.
     NoRoute,
+    /// Routing, a hook or policy dropped the packet without writing it.
     Rejected,
+    /// The selected interface was offline or disabled.
     InterfaceUnavailable,
+    /// The interface writer failed, with its error message.
     WriteFailed(String),
 }
 
@@ -88,6 +98,7 @@ pub struct PacketSendReceipt {
     pub(crate) hash: rns_core::types::PacketHash,
 }
 impl PacketSendReceipt {
+    /// The hash of the sent packet, which a delivery proof of it carries.
     pub fn packet_hash(&self) -> rns_core::types::PacketHash {
         self.hash
     }

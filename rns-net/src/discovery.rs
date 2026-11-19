@@ -163,6 +163,7 @@ impl DiscoveredInterfaceStorage {
         Some(iface)
     }
 
+    /// Delete the stored record for `discovery_hash`, if there is one.
     pub fn remove(&self, discovery_hash: &[u8; 32]) -> io::Result<()> {
         let _guard = discovery_storage_guard();
         self.remove_unlocked(discovery_hash)
@@ -574,6 +575,7 @@ pub fn generate_discovery_stamp(
 pub struct DiscoverableInterface {
     /// Configured interface name used for runtime targeting.
     pub interface_name: String,
+    /// The interface's discovery settings.
     pub config: DiscoveryConfig,
     /// Whether the node has transport enabled.
     pub transport_enabled: bool,

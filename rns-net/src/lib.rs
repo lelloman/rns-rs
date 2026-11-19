@@ -33,6 +33,8 @@
 extern crate rns_hooks_crate as rns_hooks;
 
 mod action_pool;
+/// Node logic shared by the driver and the interfaces: configuration,
+/// callbacks, destinations, links, discovery and statistics.
 pub mod common;
 pub mod event;
 pub mod hdlc;
@@ -83,6 +85,8 @@ pub mod management;
 pub mod shared_client;
 pub use common::destination;
 pub mod discovery;
+/// UDP hole punching for direct links: endpoint probing, punching, and the
+/// point-to-point interface over the punched socket.
 pub mod holepunch;
 #[cfg(feature = "hooks")]
 pub mod provider_bridge;

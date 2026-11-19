@@ -16,6 +16,7 @@ use crate::storage::{KnownDestination, RatchetCleanupStats, RatchetEntry, Ratche
 /// Default database filename inside the Reticulum storage directory.
 pub const KNOWN_DESTINATIONS_DB: &str = "known_destinations.db";
 
+/// `<storage_dir>/known_destinations.db`.
 pub fn default_path(storage_dir: &Path) -> PathBuf {
     storage_dir.join(KNOWN_DESTINATIONS_DB)
 }
@@ -35,10 +36,15 @@ pub struct KnownDestinationsStore {
 }
 
 impl KnownDestinationsStore {
+    /// Open the database at `path` read-write, creating it, its parent
+    /// directory and the schema if missing. `hash_width` is stored but not
+    /// used.
     pub fn open(path: &Path, hash_width: usize) -> io::Result<Self> {
         Self::open_inner(path, hash_width, false)
     }
 
+    /// Open an existing database at `path` read-only, without touching its
+    /// schema; every write through it does nothing.
     pub fn open_read_only(path: &Path, hash_width: usize) -> io::Result<Self> {
         Self::open_inner(path, hash_width, true)
     }
@@ -74,6 +80,7 @@ impl KnownDestinationsStore {
         })
     }
 
+    /// Whether the store was opened with [`open_read_only`](Self::open_read_only).
     pub fn is_read_only(&self) -> bool {
         self.read_only
     }
@@ -82,6 +89,8 @@ impl KnownDestinationsStore {
         crate::sync::lock_or_recover(&self.conn, "storage sqlite conn")
     }
 
+    /// Load every stored known destination, skipping rows whose
+    /// destination hash or public key has the wrong length.
     pub fn load_all(&self) -> io::Result<Vec<([u8; 16], KnownDestination)>> {
         let conn = self.lock();
         // `known_destination_meta` is this implementation's own table: a

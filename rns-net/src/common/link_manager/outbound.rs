@@ -3,6 +3,8 @@
 use super::*;
 
 impl LinkManager {
+    /// Like [`try_send_on_link`](Self::try_send_on_link), returning no
+    /// actions when the packet cannot be sent.
     pub fn send_on_link(
         &self,
         link_id: &LinkId,

@@ -24,14 +24,17 @@ pub const PR_FREQ_DECAY: f64 = 10.0;
 /// carry it.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct RadioStats {
-    /// This device's airtime over 15 s and 1 h, percent.
+    /// This device's airtime over 15 s, percent.
     pub airtime_short: f64,
+    /// This device's airtime over 1 h, percent.
     pub airtime_long: f64,
-    /// Channel load over 15 s and 1 h, percent.
+    /// Channel load over 15 s, percent.
     pub channel_load_short: f64,
+    /// Channel load over 1 h, percent.
     pub channel_load_long: f64,
-    /// dBm, once reported.
+    /// Current channel RSSI, dBm, once reported.
     pub current_rssi: Option<i16>,
+    /// Noise floor, dBm, once reported.
     pub noise_floor: Option<i16>,
     /// RSSI of interference on the channel now, if any.
     pub interference: Option<i16>,
@@ -39,6 +42,7 @@ pub struct RadioStats {
     pub interference_last: Option<(f64, i16)>,
     /// 0 unknown, 1 discharging, 2 charging, 3 charged.
     pub battery_state: u8,
+    /// Battery charge, percent.
     pub battery_percent: u8,
     /// Device temperature, °C, when it reports one.
     pub temperature: Option<i16>,
@@ -59,56 +63,87 @@ impl RadioStats {
 /// Traffic statistics for an interface.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TrafficRates {
+    /// Received bits per second in the current sampling window.
     pub rxs: f64,
+    /// Transmitted bits per second in the current sampling window.
     pub txs: f64,
     /// Received packets per second in the current sampling window.
     pub rxpps: f64,
     /// Transmitted packets per second in the current sampling window.
     pub txpps: f64,
+    /// Received announce bits per second.
     pub arxs: f64,
+    /// Transmitted announce bits per second.
     pub atxs: f64,
+    /// Received path request bits per second.
     pub prxs: f64,
+    /// Transmitted path request bits per second.
     pub ptxs: f64,
-    /// Filtered inbound and outbound bits per second (upstream 134dc677).
+    /// Filtered inbound bits per second (upstream 134dc677).
     pub frxs: f64,
+    /// Filtered outbound bits per second.
     pub ftxs: f64,
 }
 
 /// Traffic statistics for an interface.
 #[derive(Debug, Clone, Default)]
 pub struct InterfaceStats {
+    /// Bytes received and accepted.
     pub rxb: u64,
+    /// Bytes transmitted.
     pub txb: u64,
     /// Received bytes dropped where upstream's `preprocess_inbound` drops
     /// them (upstream 134dc677); they are moved out of `rxb`.
     pub frxb: u64,
     /// Filtered outbound bytes. Upstream reports it and never counts any.
     pub ftxb: u64,
+    /// Bytes of announces received.
     pub arxb: u64,
+    /// Bytes of announces transmitted.
     pub atxb: u64,
+    /// Announces received.
     pub arxc: u64,
+    /// Announces transmitted.
     pub atxc: u64,
     /// Announces dropped as filtered (upstream 819076c3).
     pub afrxc: u64,
+    /// Bytes of path requests received.
     pub prxb: u64,
+    /// Bytes of path requests transmitted.
     pub ptxb: u64,
+    /// Path requests received.
     pub prxc: u64,
+    /// Path requests transmitted.
     pub ptxc: u64,
+    /// Inbound packets dropped as malformed, such as an oversized or
+    /// truncated announce.
     pub protocol_violations: u64,
+    /// Inbound packets dropped for failing IFAC, or for carrying the IFAC
+    /// flag on an interface without IFAC.
     pub ifac_violations: u64,
+    /// Inbound packets the transport packet filter dropped.
     pub packet_filter_hits: u64,
     /// Inbound packets dropped because their hop count reached `HOP_LIMITER`.
     pub hop_limiter_hits: u64,
     /// Inbound path requests whose stamp met `PATH_REQUEST_STAMP_COST`.
     pub stamped_path_requests: u64,
+    /// Rates over the last sampling window, refreshed about once a second.
     pub traffic_rates: TrafficRates,
+    /// Packets received and accepted.
     pub rx_packets: u64,
+    /// Packets transmitted.
     pub tx_packets: u64,
+    /// CPU load a Weave device reports, percent.
     pub cpu_load: Option<f64>,
+    /// Memory in use on a Weave device, percent.
     pub mem_load: Option<f64>,
+    /// The Weave switch ID of the connected device.
     pub switch_id: Option<[u8; 4]>,
+    /// The Weave endpoint ID of the connected device.
     pub endpoint_id: Option<[u8; 8]>,
+    /// The Weave switch a peer endpoint is reached through.
     pub via_switch_id: Option<[u8; 4]>,
+    /// Number of peers a Weave interface knows.
     pub peers: Option<usize>,
     /// Last reported receive signal strength in dBm.
     pub rssi: Option<i16>,
@@ -116,15 +151,23 @@ pub struct InterfaceStats {
     pub snr: Option<f32>,
     /// Signal quality percentage derived from SNR and spreading factor.
     pub signal_quality: Option<f64>,
+    /// Radio frequency, Hz.
     pub frequency: Option<u32>,
+    /// Radio bandwidth, Hz.
     pub bandwidth: Option<u32>,
+    /// Transmit power, dBm.
     pub txpower: Option<i8>,
+    /// LoRa spreading factor.
     pub spreading_factor: Option<u8>,
+    /// LoRa coding rate.
     pub coding_rate: Option<u8>,
+    /// Radio channel, when the interface reports one.
     pub channel: Option<u32>,
+    /// Modulation name, such as `LoRa`.
     pub modulation: Option<String>,
     /// Channel and device state an RNode reports.
     pub radio: Option<RadioStats>,
+    /// When the interface entry was created, Unix time in seconds.
     pub started: f64,
     /// Recent incoming announce timestamps (bounded).
     pub ia_timestamps: Vec<f64>,
@@ -295,10 +338,15 @@ impl InterfaceStats {
 /// The frequencies and sample counts the transport engine works from.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FrequencySample {
+    /// Incoming announce frequency, per second.
     pub ia_freq: f64,
+    /// Incoming announce samples held.
     pub ia_samples: usize,
+    /// Incoming path request frequency, per second.
     pub ip_freq: f64,
+    /// Outgoing path request frequency, per second.
     pub op_freq: f64,
+    /// Outgoing path request samples held.
     pub op_samples: usize,
 }
 

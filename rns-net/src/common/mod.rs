@@ -4,6 +4,8 @@ pub mod config;
 pub mod destination;
 pub mod discovery;
 pub mod event;
+/// Per-interface statistics: traffic counters, announce and path request
+/// rate samples, and RNode radio reports.
 pub mod interface_stats;
 pub mod link_manager;
 pub mod management;

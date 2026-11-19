@@ -19,9 +19,14 @@ pub struct ResourceTransferId(pub u64);
 /// Failure reported for the new streaming Resource API.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceTransferError {
+    /// Reading the outgoing source failed or it was longer than declared.
     Source(String),
+    /// Storage failure. Nothing in this crate reports it.
     Storage(String),
+    /// The link or the Resource protocol failed the transfer.
     Protocol(String),
+    /// The transfer was cancelled: its link went inactive, every transfer
+    /// was cancelled, or the node is draining.
     Cancelled,
 }
 
@@ -58,10 +63,16 @@ pub enum ResourceReceiveMode {
     /// and unrelated transfers are additional. Small, split, request/response
     /// and saturated work stays synchronous. Earlier same-link assemblies finish
     /// first, so overload can still stall the driver. Shutdown joins active work.
-    Memory { max_bytes: u64 },
+    Memory {
+        /// Larger advertised Resources are rejected, in bytes.
+        max_bytes: u64,
+    },
     /// Write verified segments to a managed temporary file.
     TemporaryFile {
+        /// Directory the temporary files are created in.
         directory: PathBuf,
+        /// Larger advertised Resources are rejected, in bytes; `None` for no
+        /// limit.
         max_bytes: Option<u64>,
     },
     /// Hand each verified segment to the application as it arrives
@@ -76,7 +87,11 @@ pub enum ResourceReceiveMode {
     /// [`Callbacks::on_resource_failed`](crate::Callbacks::on_resource_failed);
     /// the application discards what it received of it. Requests and
     /// responses are delivered as before.
-    Stream { max_bytes: Option<u64> },
+    Stream {
+        /// Larger advertised Resources are rejected, in bytes; `None` for no
+        /// limit.
+        max_bytes: Option<u64>,
+    },
 }
 
 impl Default for ResourceReceiveMode {
@@ -95,6 +110,7 @@ pub struct ReceivedResourceStream {
     pub original_hash: [u8; 32],
     /// Bytes delivered in all.
     pub size: u64,
+    /// Metadata the sender attached, if any.
     pub metadata: Option<Vec<u8>>,
     /// The application flag the sender set in the advertisement.
     pub app_flag: bool,
@@ -107,8 +123,11 @@ pub struct ReceivedResourceStream {
 #[derive(Debug)]
 pub struct ReceivedResourceFile {
     path: Option<PathBuf>,
+    /// The Resource's original hash.
     pub original_hash: [u8; 32],
+    /// Size of the received data, in bytes.
     pub size: u64,
+    /// Metadata the sender attached, if any.
     pub metadata: Option<Vec<u8>>,
     /// The application flag the sender set in the advertisement.
     pub app_flag: bool,

@@ -17,6 +17,7 @@ pub struct DestinationStampStore {
 }
 
 impl DestinationStampStore {
+    /// Store files under `stamps/` in `storage_dir`.
     pub fn new(storage_dir: &Path) -> Self {
         Self {
             dir: storage_dir.join("stamps"),

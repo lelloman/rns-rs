@@ -18,10 +18,15 @@ use rns_crypto::OsRng;
 /// Paths for storage directories.
 #[derive(Debug, Clone)]
 pub struct StoragePaths {
+    /// The configuration directory everything else lives under.
     pub config_dir: PathBuf,
+    /// `<config_dir>/storage`.
     pub storage: PathBuf,
+    /// `<config_dir>/cache`.
     pub cache: PathBuf,
+    /// `storage/identities`.
     pub identities: PathBuf,
+    /// `storage/ratchets`, the legacy per-destination ratchet files.
     pub ratchets: PathBuf,
     /// Directory for discovered interface data: storage/discovery/interfaces
     pub discovered_interfaces: PathBuf,
@@ -30,14 +35,23 @@ pub struct StoragePaths {
 /// A known destination entry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KnownDestination {
+    /// Hash of the announcing identity.
     pub identity_hash: [u8; 16],
+    /// The identity's public key: X25519 then Ed25519, 32 bytes each.
     pub public_key: [u8; 64],
+    /// App data of the last heard announce, if any.
     pub app_data: Option<Vec<u8>>,
+    /// Hops the last announce travelled.
     pub hops: u8,
+    /// When the announce was received, in Unix seconds.
     pub received_at: f64,
+    /// Id of the interface the announce arrived on.
     pub receiving_interface: u64,
+    /// Whether the destination has been used since it was learned.
     pub was_used: bool,
+    /// When the destination was last used, in Unix seconds.
     pub last_used_at: Option<f64>,
+    /// Whether the entry is retained: protected from eviction, and use is not recorded.
     pub retained: bool,
     /// Last heard announce stamp, if any.
     pub stamp: Option<Vec<u8>>,
@@ -101,27 +115,40 @@ impl KnownDestination {
     }
 }
 
+/// A ratchet public key received in a destination's announce.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RatchetEntry {
+    /// The ratchet public key.
     pub ratchet: [u8; 32],
+    /// When it was received, in Unix seconds.
     pub received_at: f64,
 }
 
+/// Counts from one [`RatchetStore::cleanup`] pass.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RatchetCleanupStats {
+    /// Stored entries examined.
     pub processed: usize,
+    /// Entries whose destination is not a known destination.
     pub not_known: usize,
+    /// Entries removed: unknown, expired, corrupt or badly named.
     pub removed: usize,
 }
 
+/// Where received ratchets are kept, keyed by destination hash.
 pub trait RatchetStore: Send + Sync {
+    /// Store `entry` as the destination's current ratchet.
     fn remember(&self, dest_hash: [u8; 16], entry: RatchetEntry) -> io::Result<()>;
+    /// The destination's ratchet, unless it is older than `expiry_secs` at
+    /// `now` (Unix seconds).
     fn current(
         &self,
         dest_hash: &[u8; 16],
         now: f64,
         expiry_secs: f64,
     ) -> io::Result<Option<RatchetEntry>>;
+    /// Drop ratchets of destinations not in `known_destinations` and those
+    /// older than `expiry_secs` at `now`.
     fn cleanup(
         &self,
         known_destinations: &HashSet<[u8; 16]>,
@@ -130,6 +157,8 @@ pub trait RatchetStore: Send + Sync {
     ) -> io::Result<RatchetCleanupStats>;
 }
 
+/// A [`RatchetStore`] keeping one msgpack file per destination, named by
+/// its hex hash, with an in-memory cache in front.
 #[derive(Debug)]
 pub struct FsRatchetStore {
     dir: PathBuf,
@@ -137,6 +166,7 @@ pub struct FsRatchetStore {
 }
 
 impl FsRatchetStore {
+    /// A store over the files in `dir`, created on first write.
     pub fn new(dir: PathBuf) -> Self {
         Self {
             dir,
@@ -305,7 +335,6 @@ impl RatchetStore for FsRatchetStore {
     }
 }
 
-/// Ensure all storage directories exist. Creates them if missing.
 /// The received-ratchet store of a shared instance client: ratchets from
 /// announces this client sees stay in memory, and a miss reads the shared
 /// instance's own store without writing to it, as the reference's shared
@@ -319,6 +348,8 @@ pub struct SharedClientRatchetStore {
 }
 
 impl SharedClientRatchetStore {
+    /// A store reading misses from the shared instance's `instance_storage`
+    /// directory; with `None`, from memory only.
     pub fn new(instance_storage: Option<PathBuf>) -> Self {
         Self {
             memory: Mutex::new(HashMap::new()),
@@ -426,6 +457,7 @@ pub fn ensure_config_file(config_dir: &Path) -> io::Result<bool> {
     Ok(true)
 }
 
+/// Ensure all storage directories exist. Creates them if missing.
 pub fn ensure_storage_dirs(config_dir: &Path) -> io::Result<StoragePaths> {
     let storage = config_dir.join("storage");
     let cache = config_dir.join("cache");

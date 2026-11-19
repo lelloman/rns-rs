@@ -54,13 +54,21 @@ const BYTEARRAY8: u8 = 0x96; // protocol 5: bytearray
 /// A pickle value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PickleValue {
+    /// Python `None`.
     None,
+    /// Python `bool`.
     Bool(bool),
+    /// Python `int` that fits in `i64`.
     Int(i64),
+    /// Python `float`.
     Float(f64),
+    /// Python `str`.
     String(String),
+    /// Python `bytes`; `bytearray` and protocol 0/1 binary strings also decode to this.
     Bytes(Vec<u8>),
+    /// Python `list`; tuples also decode to this.
     List(Vec<PickleValue>),
+    /// Python `dict`, as key/value pairs in pickle order.
     Dict(Vec<(PickleValue, PickleValue)>),
 }
 
@@ -281,12 +289,20 @@ fn long_to_bytes(n: i64) -> Vec<u8> {
 /// Decode error.
 #[derive(Debug)]
 pub enum DecodeError {
+    /// The data ended in the middle of an opcode's argument.
     UnexpectedEnd,
+    /// An opcode this decoder does not handle.
     UnknownOpcode(u8),
+    /// A string or global name that is not valid UTF-8.
     InvalidUtf8,
+    /// An opcode needed more stack entries than there were.
     StackUnderflow,
+    /// An opcode needed a MARK and none was on the stack.
     NoMarkFound,
+    /// The data ended without a STOP opcode.
     NoStop,
+    /// A global other than `_codecs.encode`, or that callable left where a
+    /// value was expected; holds the `module.name`.
     UnsupportedGlobal(String),
     /// A pickled integer outside the range of `i64`.
     IntegerOutOfRange,

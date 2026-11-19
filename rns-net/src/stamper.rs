@@ -95,10 +95,12 @@ impl StampTargets {
 /// A path request waiting for its stamp.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathRequestStampJob {
+    /// Destination the path is requested for.
     pub destination_hash: [u8; 16],
     /// 1..=16 bytes: the request's own random tag, or the tag of the local
     /// client request being forwarded.
     pub tag: Vec<u8>,
+    /// Where the stamped request is sent.
     pub target: PathRequestTarget,
 }
 
@@ -116,10 +118,12 @@ pub enum PathRequestTarget {
 
 /// An announce waiting for its destination stamp.
 pub struct AnnounceStampJob {
+    /// Destination to stamp and announce.
     pub dest: Destination,
     /// Full private key of the identity owning `dest`; the announce is
     /// signed with it once the stamp exists.
     pub identity_prv_key: [u8; 64],
+    /// Application data passed to the announce builder.
     pub app_data: Option<Vec<u8>>,
     /// Present when the caller used a confirmed-transmission API and waits
     /// on the matching receipt.
@@ -130,6 +134,7 @@ pub struct AnnounceStampJob {
 /// announce of one of its built-in destinations (remote management,
 /// blackhole list, probe responder), which it builds itself.
 pub struct DestinationStampJob {
+    /// Destination to stamp.
     pub dest: Destination,
     /// Full private key of the identity owning `dest`.
     pub identity_prv_key: [u8; 64],
@@ -138,9 +143,13 @@ pub struct DestinationStampJob {
 /// A path request stamp ground off the driver thread, ready to be sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StampedPathRequest {
+    /// Destination the path is requested for.
     pub destination_hash: [u8; 16],
+    /// Request tag, from [`PathRequestStampJob::tag`].
     pub tag: Vec<u8>,
+    /// Extension payload: marker, flags (0) and the stamp.
     pub ext_payload: [u8; constants::PR_EXT_PAYLOAD_LENGTH],
+    /// Where the request is sent.
     pub target: PathRequestTarget,
 }
 
@@ -297,6 +306,7 @@ impl Stamper {
         *crate::sync::lock_or_recover(&self.inner.stamp_store, "stamper stamp store") = stamp_store;
     }
 
+    /// Current stamp target values.
     pub fn targets(&self) -> StampTargets {
         self.inner.targets()
     }
