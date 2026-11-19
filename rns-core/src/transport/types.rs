@@ -256,6 +256,11 @@ pub enum TransportAction {
     /// Deliver a packet to a local destination.
     DeliverLocal {
         destination_hash: [u8; 16],
+        /// The packet as received, with its hop count as on the wire,
+        /// except for a link request proof or an LRRTT packet: their hop
+        /// byte holds the count after this hop, which the link learns its
+        /// distance from (upstream's `packet.hops`). Rewriting it in every
+        /// packet would copy each one delivered.
         raw: PacketBytes,
         /// May be zeroed for a link resource part, part request or proof,
         /// whose hash nothing on its delivery path reads (see
