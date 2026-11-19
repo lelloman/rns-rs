@@ -10,13 +10,20 @@ use crate::pkcs7;
 use crate::sha256::Sha256;
 use crate::Rng;
 
+/// Bytes a token adds to its ciphertext: a 16-byte IV and a 32-byte HMAC.
 pub const TOKEN_OVERHEAD: usize = 48; // 16 IV + 32 HMAC
 
+/// Why a token could not be made or opened.
 #[derive(Debug, PartialEq)]
 pub enum TokenError {
+    /// The key is neither 32 nor 64 bytes.
     InvalidKeyLength,
+    /// The token is too short to hold an IV, a ciphertext and an HMAC.
     InvalidToken,
+    /// The HMAC does not match: the token was not made with this key.
     HmacMismatch,
+    /// The ciphertext is not whole blocks, or did not decrypt to correctly
+    /// padded plaintext.
     DecryptionFailed,
 }
 
@@ -57,6 +64,9 @@ impl CbcDecryptor {
     }
 }
 
+/// Encrypts and decrypts tokens under one key: AES-CBC with PKCS#7
+/// padding, then an HMAC-SHA256 over the IV and ciphertext. A 32-byte key
+/// gives AES-128, a 64-byte key AES-256; the first half keys the HMAC.
 pub struct Token {
     /// HMAC keyed once with the signing key: each tag clones it instead of
     /// hashing the key's inner and outer pads again.
@@ -65,6 +75,7 @@ pub struct Token {
 }
 
 impl Token {
+    /// A token codec for a 32- or 64-byte key.
     pub fn new(key: &[u8]) -> Result<Self, TokenError> {
         if let (32, Some((signing_key, encryption_key))) = (key.len(), key.split_last_chunk()) {
             return Ok(Token {
@@ -81,6 +92,7 @@ impl Token {
         Err(TokenError::InvalidKeyLength)
     }
 
+    /// `plaintext` as a token, under a random IV from `rng`.
     pub fn encrypt(&self, plaintext: &[u8], rng: &mut dyn Rng) -> Vec<u8> {
         let mut iv = [0u8; 16];
         rng.fill_bytes(&mut iv);
@@ -122,6 +134,7 @@ impl Token {
         tag.copy_from_slice(&self.tag(body));
     }
 
+    /// `plaintext` as a token, under `iv`.
     pub fn encrypt_with_iv(&self, plaintext: &[u8], iv: &[u8; 16]) -> Vec<u8> {
         // Build the whole token in one buffer: the plaintext is copied once,
         // padded and encrypted in place, then signed and the tag appended.
@@ -170,6 +183,7 @@ impl Token {
         mac.finalize()
     }
 
+    /// Whether the token's HMAC matches; an error when it is too short to hold one.
     pub fn verify_hmac(&self, token: &[u8]) -> Result<bool, TokenError> {
         if token.len() <= 32 {
             return Err(TokenError::InvalidToken);
@@ -220,6 +234,7 @@ impl Token {
         }
     }
 
+    /// The token's plaintext, once its HMAC checks.
     pub fn decrypt(&self, token: &[u8]) -> Result<Vec<u8>, TokenError> {
         if token.len() <= TOKEN_OVERHEAD {
             return Err(TokenError::InvalidToken);

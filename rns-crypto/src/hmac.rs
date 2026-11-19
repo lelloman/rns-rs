@@ -4,10 +4,12 @@ use ::hmac::{KeyInit, Mac};
 
 type Inner = ::hmac::Hmac<sha2::Sha256>;
 
+/// An incremental HMAC-SHA256, keyed once; clone it to reuse the key.
 #[derive(Clone)]
 pub struct HmacSha256(Inner);
 
 impl HmacSha256 {
+    /// An HMAC keyed with `key`, of any length.
     pub fn new(key: &[u8]) -> Self {
         match Inner::new_from_slice(key) {
             Ok(mac) => HmacSha256(mac),
@@ -16,6 +18,7 @@ impl HmacSha256 {
         }
     }
 
+    /// Add `data` to the message.
     pub fn update(&mut self, data: &[u8]) {
         self.0.update(data);
     }
@@ -31,6 +34,7 @@ impl HmacSha256 {
     }
 }
 
+/// The HMAC-SHA256 of `data` under `key`.
 pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     let mut h = HmacSha256::new(key);
     h.update(data);

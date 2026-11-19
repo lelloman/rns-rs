@@ -7,10 +7,12 @@ fn clamp(mut bytes: [u8; 32]) -> [u8; 32] {
     bytes
 }
 
+/// An X25519 public key.
 pub struct X25519PublicKey {
     bytes: [u8; 32],
 }
 
+/// An X25519 private key.
 pub struct X25519PrivateKey {
     /// As given: serialized back unchanged, as upstream's (pyca's)
     /// `private_bytes()` does; clamped where it is used.
@@ -24,20 +26,24 @@ impl Drop for X25519PrivateKey {
 }
 
 impl X25519PrivateKey {
+    /// The private key with these 32 bytes.
     pub fn from_bytes(data: &[u8; 32]) -> Self {
         X25519PrivateKey { bytes: *data }
     }
 
+    /// A new private key from `rng`.
     pub fn generate(rng: &mut dyn Rng) -> Self {
         let mut bytes = [0u8; 32];
         rng.fill_bytes(&mut bytes);
         Self::from_bytes(&bytes)
     }
 
+    /// The 32 private key bytes, as an identity stores them.
     pub fn private_bytes(&self) -> [u8; 32] {
         self.bytes
     }
 
+    /// The public key that matches this private key.
     pub fn public_key(&self) -> X25519PublicKey {
         #[cfg(all(
             feature = "x25519-aws-lc",
@@ -53,6 +59,7 @@ impl X25519PrivateKey {
         }
     }
 
+    /// The shared secret with `peer`.
     pub fn exchange(&self, peer: &X25519PublicKey) -> [u8; 32] {
         #[cfg(all(
             feature = "x25519-aws-lc",
@@ -68,10 +75,12 @@ impl X25519PrivateKey {
 }
 
 impl X25519PublicKey {
+    /// The public key with these 32 bytes.
     pub fn from_bytes(data: &[u8; 32]) -> Self {
         X25519PublicKey { bytes: *data }
     }
 
+    /// The 32 public key bytes.
     pub fn public_bytes(&self) -> [u8; 32] {
         self.bytes
     }

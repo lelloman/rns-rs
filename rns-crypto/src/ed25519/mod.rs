@@ -4,6 +4,7 @@ use crate::Rng;
 use ed25519_dalek::Signer;
 use ed25519_dalek::Verifier;
 
+/// Why an Ed25519 key could not be used.
 #[derive(Debug, PartialEq)]
 pub enum Ed25519Error {
     /// The 32 bytes do not decode to a valid compressed Edwards point.
@@ -21,39 +22,46 @@ impl fmt::Display for Ed25519Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Ed25519Error {}
 
+/// An Ed25519 signing key.
 #[derive(Clone)]
 pub struct Ed25519PrivateKey {
     inner: ed25519_dalek::SigningKey,
 }
 
+/// An Ed25519 verifying key.
 #[derive(Clone)]
 pub struct Ed25519PublicKey {
     inner: ed25519_dalek::VerifyingKey,
 }
 
 impl Ed25519PrivateKey {
+    /// The signing key with this 32-byte seed.
     pub fn from_bytes(seed: &[u8; 32]) -> Self {
         Ed25519PrivateKey {
             inner: ed25519_dalek::SigningKey::from_bytes(seed),
         }
     }
 
+    /// A new signing key from a seed drawn from `rng`.
     pub fn generate(rng: &mut dyn Rng) -> Self {
         let mut seed = [0u8; 32];
         rng.fill_bytes(&mut seed);
         Self::from_bytes(&seed)
     }
 
+    /// The 32-byte seed, as an identity stores it.
     pub fn private_bytes(&self) -> [u8; 32] {
         self.inner.to_bytes()
     }
 
+    /// The verifying key that matches this signing key.
     pub fn public_key(&self) -> Ed25519PublicKey {
         Ed25519PublicKey {
             inner: self.inner.verifying_key(),
         }
     }
 
+    /// A signature of `message`.
     pub fn sign(&self, message: &[u8]) -> [u8; 64] {
         #[cfg(all(
             feature = "ed25519-aws-lc",
@@ -104,10 +112,12 @@ impl Ed25519PublicKey {
             .map_err(|_| Ed25519Error::InvalidPublicKey)
     }
 
+    /// The 32-byte compressed public key.
     pub fn public_bytes(&self) -> [u8; 32] {
         self.inner.to_bytes()
     }
 
+    /// Whether `signature` is a valid signature of `message` by this key.
     pub fn verify(&self, signature: &[u8; 64], message: &[u8]) -> bool {
         let sig = ed25519_dalek::Signature::from_bytes(signature);
         self.inner.verify(message, &sig).is_ok()

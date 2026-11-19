@@ -1,9 +1,12 @@
 use alloc::vec::Vec;
 use core::fmt;
 
+/// Why padding could not be removed.
 #[derive(Debug, PartialEq)]
 pub enum PadError {
+    /// The last byte names more padding than a block holds.
     InvalidPadding,
+    /// There is no data to unpad.
     EmptyInput,
 }
 
@@ -16,8 +19,10 @@ impl fmt::Display for PadError {
     }
 }
 
+/// The AES block size, in bytes.
 pub const BLOCK_SIZE: usize = 16;
 
+/// `data` padded to a multiple of `block_size`, always adding at least one byte.
 pub fn pad(data: &[u8], block_size: usize) -> Vec<u8> {
     let n = block_size - (data.len() % block_size);
     let mut result = Vec::with_capacity(data.len() + n);
@@ -28,6 +33,7 @@ pub fn pad(data: &[u8], block_size: usize) -> Vec<u8> {
     result
 }
 
+/// `data` without its padding.
 pub fn unpad(data: &[u8], block_size: usize) -> Result<&[u8], PadError> {
     if data.is_empty() {
         return Err(PadError::EmptyInput);

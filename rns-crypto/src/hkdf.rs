@@ -8,8 +8,10 @@ use sha2::Sha256;
 use crate::hmac::hmac_sha256;
 use crate::hmac::HmacSha256;
 
+/// Why key derivation failed.
 #[derive(Debug, PartialEq)]
 pub enum HkdfError {
+    /// The requested output length is zero.
     InvalidLength,
 }
 

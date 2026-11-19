@@ -1,27 +1,41 @@
+//! The cryptography Reticulum uses: X25519 and Ed25519 identities, AES-CBC
+//! tokens authenticated with HMAC-SHA256, HKDF, ratchets and stamps.
+
 #![cfg_attr(not(feature = "std"), no_std)]
+#![warn(missing_docs)]
 // Cryptographic logic lives in the RustCrypto/dalek crates. `unsafe` is
 // allowed only at FFI boundaries (OS randomness, the optional aws-lc
 // backends), each site opting in with `#[allow(unsafe_code)]`.
 #![deny(unsafe_code)]
 extern crate alloc;
 
+/// AES-128-CBC.
 pub mod aes128;
+/// AES-256-CBC.
 pub mod aes256;
+/// Ed25519 signing and verification.
 pub mod ed25519;
+/// HKDF with SHA-256.
 pub mod hkdf;
 pub mod hmac;
+/// Identities: encryption, decryption, signing and verification.
 pub mod identity;
+/// PKCS#7 padding.
 pub mod pkcs7;
 pub mod ratchet;
 pub mod sha256;
+/// SHA-512.
 pub mod sha512;
 pub mod stamp_value;
+/// Tokens: AES-CBC ciphertext authenticated with HMAC-SHA256.
 pub mod token;
+/// X25519 key exchange.
 pub mod x25519;
 
 /// Trait for random number generation.
 /// Callers provide an implementation; in `std` builds this wraps OS randomness.
 pub trait Rng {
+    /// Fill `dest` with random bytes.
     fn fill_bytes(&mut self, dest: &mut [u8]);
 }
 
@@ -32,6 +46,7 @@ pub struct FixedRng {
 }
 
 impl FixedRng {
+    /// A generator that repeats `bytes` forever.
     pub fn new(bytes: &[u8]) -> Self {
         Self {
             bytes: bytes.to_vec(),

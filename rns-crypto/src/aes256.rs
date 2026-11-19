@@ -28,6 +28,7 @@ impl std::error::Error for CbcError {}
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
+/// AES-256 in CBC mode with a fixed key, for tokens whose key is 64 bytes.
 #[derive(Clone)]
 pub struct Aes256 {
     key: [u8; 32],
