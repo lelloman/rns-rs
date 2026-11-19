@@ -4333,6 +4333,78 @@ pub fn derive_auth_key(private_key: &[u8]) -> [u8; 32] {
     sha256(private_key)
 }
 
+/// Entry points for the fuzz targets in `fuzz/`: what a local client can
+/// send the RPC server. Not a stable API.
+#[doc(hidden)]
+pub mod fuzz {
+    use super::*;
+
+    const AUTH_KEY: [u8; 32] = [0x5a; 32];
+
+    /// Bytes from a client that has not authenticated: the framing and the
+    /// challenge exchange, which any local process can reach.
+    pub fn handshake(data: &[u8]) {
+        let mut session = ServerSession::new(AUTH_KEY, [0x3c; CHALLENGE_LEN]);
+        for chunk in data.chunks(9) {
+            if session.receive(chunk).is_err() {
+                break;
+            }
+        }
+    }
+
+    /// A request from an authenticated client, answered by a driver that
+    /// knows nothing: decoding it and reading its arguments.
+    pub fn request(data: &[u8]) {
+        let _ = answer_request(data, &mut NoDriver);
+    }
+
+    struct NoDriver;
+
+    impl RpcDriver for NoDriver {
+        fn query(&mut self, _: QueryRequest) -> io::Result<QueryResponse> {
+            Err(io::Error::other("no driver"))
+        }
+
+        fn send(&mut self, _: Event) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn inbound_queue_snapshot(&self) -> crate::event::InboundQueueSnapshot {
+            crate::event::InboundQueueSnapshot {
+                heights: Default::default(),
+                capacities: Default::default(),
+                dropped: Default::default(),
+            }
+        }
+
+        fn dynamic_burst_stats(&self, _: InterfaceId) -> Option<DynamicBurstStats> {
+            None
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn fuzz_entry_points_take_any_bytes() {
+            let get_path_table = crate::pickle::encode(&crate::pickle::PickleValue::Dict(vec![(
+                crate::pickle::PickleValue::String("get".into()),
+                crate::pickle::PickleValue::String("path_table".into()),
+            )]));
+            let inputs: [&[u8]; 5] = [
+                b"",
+                &[0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff],
+                &[0, 0, 0, 3, b'a', b'b', b'c'],
+                &[0x80; 64],
+                &get_path_table,
+            ];
+            for data in inputs {
+                super::handshake(data);
+                super::request(data);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

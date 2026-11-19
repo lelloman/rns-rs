@@ -356,6 +356,8 @@ pub struct TransportEngine {
 }
 
 mod engine_state;
+#[doc(hidden)]
+pub mod fuzz;
 mod inbound_engine;
 mod maintenance;
 mod outbound_engine;

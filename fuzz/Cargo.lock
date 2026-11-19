@@ -518,7 +518,7 @@ checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
 name = "rns-core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "foldhash",
  "hashbrown",
@@ -529,7 +529,7 @@ dependencies = [
 
 [[package]]
 name = "rns-crypto"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "aes",
  "cbc",
@@ -555,7 +555,7 @@ dependencies = [
 
 [[package]]
 name = "rns-net"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "bzip2",
  "foldhash",

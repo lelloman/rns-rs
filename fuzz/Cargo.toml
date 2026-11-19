@@ -116,3 +116,31 @@ path = "fuzz_targets/direct_link_keepalive.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "transport_inbound"
+path = "fuzz_targets/transport_inbound.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "channel_receive"
+path = "fuzz_targets/channel_receive.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rnode_decode"
+path = "fuzz_targets/rnode_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rpc_request"
+path = "fuzz_targets/rpc_request.rs"
+test = false
+doc = false
+bench = false
