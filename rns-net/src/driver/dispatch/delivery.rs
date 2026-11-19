@@ -241,7 +241,7 @@ impl Driver {
         } else if self.link_manager.is_link_destination(&destination_hash) {
             // Only the flags are needed here; a full unpack would copy and
             // rehash the whole packet.
-            if let Some(packet) = crate::packet_header::PacketHeader::unpack(&raw) {
+            if let Ok(packet) = RawPacket::view_unhashed(&raw) {
                 // A link running over a direct path also takes packets on
                 // its original route, where the peer may have fallen back.
                 let arrived_on_stale_link_route = packet.flags.packet_type
@@ -297,9 +297,9 @@ impl Driver {
     ) {
         // Every transported proof is also offered to local receipts. The
         // header carries all the check needs; the packet hash is known.
-        if let Some(packet) = crate::packet_header::PacketHeader::unpack(raw) {
+        if let Ok(packet) = RawPacket::view_unhashed(raw) {
             if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
-                self.handle_inbound_proof(destination_hash, packet.data, &packet_hash);
+                self.handle_inbound_proof(destination_hash, packet.data(), &packet_hash);
                 return;
             }
             if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA
@@ -307,7 +307,7 @@ impl Driver {
             {
                 if let Some(identity) = self.decrypted_destinations.get(&destination_hash) {
                     let identity = Arc::clone(identity);
-                    let ciphertext = packet.data.to_vec();
+                    let ciphertext = packet.data().to_vec();
                     self.decrypt_for_delivery(
                         destination_hash,
                         packet_hash,

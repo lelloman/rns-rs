@@ -17,8 +17,8 @@ use super::*;
 const MAX_HOOK_INJECTION_DEPTH: usize = 4;
 
 fn is_outbound_path_request(raw: &[u8], path_request_dest: &[u8; 16]) -> bool {
-    crate::packet_header::PacketHeader::unpack(raw).is_some_and(|packet| {
-        packet.destination_hash == path_request_dest
+    RawPacket::view_unhashed(raw).is_ok_and(|packet| {
+        packet.destination_hash == *path_request_dest
             && packet.flags.destination_type == rns_core::constants::DESTINATION_PLAIN
             && packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA
     })

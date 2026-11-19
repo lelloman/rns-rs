@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::packet_header::PacketHeader;
 use rns_core::transport::types::InterfaceId;
 
 pub use crate::common::event::direct_link_reason_name;
@@ -604,7 +603,7 @@ impl EventSender {
         else {
             return None;
         };
-        let packet = PacketHeader::unpack(data);
+        let packet = rns_core::packet::RawPacket::view_unhashed(data).ok();
         if packet.as_ref().is_some_and(|packet| {
             packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE
         }) {
