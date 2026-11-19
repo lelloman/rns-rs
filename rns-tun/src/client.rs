@@ -1,3 +1,4 @@
+use rns_core::display::hex;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -629,8 +630,4 @@ fn record_transport_error(status: &SharedStatus, error: &crate::TransportError) 
         | crate::TransportError::WrongEpoch => value.counters.unauthorized += 1,
         _ => value.counters.malformed += 1,
     });
-}
-
-fn hex(value: &[u8]) -> String {
-    value.iter().map(|byte| format!("{byte:02x}")).collect()
 }

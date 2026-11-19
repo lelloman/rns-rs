@@ -10,6 +10,7 @@
 //! the next start. The links are the driver's own; applications never see
 //! them.
 
+use rns_core::display::hex;
 use std::collections::HashMap;
 use std::sync::mpsc;
 
@@ -104,15 +105,12 @@ impl Driver {
         let Some(announced) = announced else {
             log::info!(
                 "No path available for blackhole list update from {}, retrying later",
-                hex16(&source)
+                hex(&source)
             );
             self.handle_request_path(dest_hash);
             return;
         };
-        log::debug!(
-            "Attempting blackhole list update from {}...",
-            hex16(&source)
-        );
+        log::debug!("Attempting blackhole list update from {}...", hex(&source));
         let (_, sig_pub) = rns_crypto::identity::split_key(&announced.public_key);
         let (link_tx, link_rx) = mpsc::channel();
         self.handle_create_link(dest_hash, sig_pub, link_tx);
@@ -198,7 +196,7 @@ impl Driver {
         else {
             log::debug!(
                 "Blackhole list update from {} returned no list",
-                hex16(&source)
+                hex(&source)
             );
             return;
         };
@@ -211,21 +209,17 @@ impl Driver {
         }
         if added > 0 {
             let spec = if added == 1 { "identity" } else { "identities" };
-            log::debug!("Added {added} blackholed {spec} from {}", hex16(&source));
+            log::debug!("Added {added} blackholed {spec} from {}", hex(&source));
             if let Some(dir) = self.blackhole_dir.as_ref() {
                 if let Err(error) = crate::blackhole_store::save_source(dir, &source, list) {
                     log::error!(
                         "Error while persisting blackhole list from {}: {error}",
-                        hex16(&source)
+                        hex(&source)
                     );
                 }
             }
             self.remove_blackholed_paths();
         }
-        log::debug!("Blackhole list update from {} completed", hex16(&source));
+        log::debug!("Blackhole list update from {} completed", hex(&source));
     }
-}
-
-fn hex16(hash: &[u8; 16]) -> String {
-    hash.iter().map(|b| format!("{b:02x}")).collect()
 }

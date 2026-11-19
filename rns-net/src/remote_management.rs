@@ -4,6 +4,7 @@
 //! remote management destinations from a remote transport identity hash, and
 //! query the remote node over a Reticulum link.
 
+use rns_core::display::hex;
 use std::fmt;
 use std::path::Path;
 use std::sync::mpsc;
@@ -635,15 +636,6 @@ fn lock_link<'a>(
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        use std::fmt::Write;
-        let _ = write!(&mut out, "{byte:02x}");
-    }
-    out
 }
 
 #[cfg(test)]

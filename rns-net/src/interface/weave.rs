@@ -2,6 +2,7 @@
 
 #![allow(unsafe_code, reason = "OS calls through libc")]
 
+use rns_core::display::hex;
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
@@ -963,10 +964,6 @@ impl LoopSource for WeaveSource {
         self.session.expire_peers(crate::time::now());
         SourceStatus::Rearm
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 pub struct WeaveFactory;

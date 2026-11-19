@@ -2,6 +2,7 @@
 //!
 //! Connects to a running rnsd via RPC to query/modify the path table.
 
+use rns_core::display::hex;
 use std::io::Write;
 use std::path::Path;
 use std::process;
@@ -856,11 +857,6 @@ fn parse_hash(input: Option<&str>) -> Result<[u8; 16], String> {
         }
         _ => Err("Invalid hash entered. Check your input.".into()),
     }
-}
-
-/// The hash as plain hex, as upstream prints it in blackhole messages.
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn do_blackhole(

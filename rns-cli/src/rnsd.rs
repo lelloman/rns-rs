@@ -1,5 +1,6 @@
 #![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
 
+use rns_core::display::hex;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -286,10 +287,6 @@ fn register_native_sidecar_hooks() -> Result<(), String> {
 #[cfg(not(any(feature = "rns-hooks-native", feature = "rns-hooks-builtin")))]
 fn register_native_sidecar_hooks() -> Result<(), String> {
     Ok(())
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 /// The write end of the pipe that wakes the main thread on SIGINT or

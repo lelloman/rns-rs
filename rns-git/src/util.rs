@@ -49,15 +49,7 @@ pub fn load_or_create_identity(path: &Path) -> Result<Identity> {
     Ok(identity)
 }
 
-pub fn hex(bytes: &[u8]) -> String {
-    const CHARS: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(CHARS[(b >> 4) as usize] as char);
-        out.push(CHARS[(b & 0x0f) as usize] as char);
-    }
-    out
-}
+pub use rns_core::display::hex;
 
 pub fn parse_hex_16(s: &str) -> Result<[u8; 16]> {
     let clean = s.trim();

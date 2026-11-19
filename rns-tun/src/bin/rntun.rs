@@ -1,3 +1,4 @@
+use rns_core::display::hex;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -191,9 +192,6 @@ fn parse_hash(value: &str) -> Result<[u8; 16], Box<dyn std::error::Error>> {
     Ok(result)
 }
 
-fn hex(value: &[u8]) -> String {
-    value.iter().map(|byte| format!("{byte:02x}")).collect()
-}
 fn print_help() {
     println!("rntun - IPv4 tunnelling over Reticulum\n\nUSAGE:\n    rntun check [--config FILE]\n    rntun identity [--config FILE]\n    rntun listen [--config FILE]\n    rntun connect DESTINATION [--config FILE] [--route CIDR ...] [--default-route]\n    rntun status [--config FILE] [--json]\n    rntun cleanup [--config FILE]")
 }

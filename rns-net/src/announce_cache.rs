@@ -6,6 +6,7 @@
 //!
 //! Python reference: Transport.py:3087-3099 and Storage.py AnnounceCache.
 
+use rns_core::display::hex;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -263,7 +264,7 @@ impl FileAnnounceCache {
         raw: &[u8],
         interface_name: Option<&str>,
     ) -> io::Result<()> {
-        let path = self.base_path.join(hex_encode(packet_hash));
+        let path = self.base_path.join(hex(packet_hash));
         let iface_val = match interface_name {
             Some(name) => Value::Str(name.into()),
             None => Value::Nil,
@@ -273,7 +274,7 @@ impl FileAnnounceCache {
     }
 
     fn get(&self, packet_hash: &[u8; 32]) -> io::Result<Option<(Vec<u8>, Option<String>)>> {
-        let path = self.base_path.join(hex_encode(packet_hash));
+        let path = self.base_path.join(hex(packet_hash));
         if !path.is_file() {
             return Ok(None);
         }
@@ -396,20 +397,6 @@ fn sql_error(error: rusqlite::Error) -> io::Error {
     io::Error::other(error.to_string())
 }
 
-/// Encode 32 bytes as 64-char lowercase hex string.
-fn hex_encode(bytes: &[u8; 32]) -> String {
-    let mut s = String::with_capacity(64);
-    for b in bytes {
-        s.push(HEX_CHARS[(b >> 4) as usize]);
-        s.push(HEX_CHARS[(b & 0x0f) as usize]);
-    }
-    s
-}
-
-const HEX_CHARS: [char; 16] = [
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
-];
-
 /// Decode a 64-char hex string back to 32 bytes.
 fn hex_decode(s: &str) -> Option<[u8; 32]> {
     if s.len() != 64 {
@@ -452,7 +439,7 @@ mod tests {
     #[test]
     fn test_hex_encode_decode_roundtrip() {
         let hash = [0xAB; 32];
-        let encoded = hex_encode(&hash);
+        let encoded = hex(&hash);
         assert_eq!(encoded.len(), 64);
         assert!(encoded.chars().all(|c| c == 'a' || c == 'b'));
         assert_eq!(hex_decode(&encoded), Some(hash));
@@ -587,7 +574,7 @@ mod tests {
         let (raw, interface) = cache.get(&[0x55; 32]).unwrap().unwrap();
         assert_eq!(raw, vec![0xAA, 0xBB]);
         assert_eq!(interface.as_deref(), Some("legacy"));
-        assert!(!dir.join(hex_encode(&[0x55; 32])).exists());
+        assert!(!dir.join(hex(&[0x55; 32])).exists());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -644,7 +631,7 @@ mod tests {
         let cache = AnnounceCache::new(dir.clone());
         let hash = [0x88; 32];
         cache.store(&hash, &[0x01], None).unwrap();
-        assert!(dir.join(hex_encode(&hash)).exists());
+        assert!(dir.join(hex(&hash)).exists());
         let _ = fs::remove_dir_all(&root);
     }
 }

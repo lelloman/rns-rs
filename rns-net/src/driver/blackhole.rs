@@ -3,6 +3,7 @@
 //! `reload_blackhole` and `remove_blackholed_paths` do them.
 
 use super::*;
+use rns_core::display::hex;
 
 impl Driver {
     /// Blackhole an identity on this node. Returns `false` when it already
@@ -18,7 +19,7 @@ impl Driver {
             self.engine
                 .blackhole_identity(identity_hash, time::now(), duration_hours, reason);
         if added {
-            log::info!("Blackholed identity {}", hex16(&identity_hash));
+            log::info!("Blackholed identity {}", hex(&identity_hash));
             self.persist_blackhole();
             self.remove_blackholed_paths();
         }
@@ -30,7 +31,7 @@ impl Driver {
     pub(crate) fn unblackhole_identity_local(&mut self, identity_hash: &[u8; 16]) -> bool {
         let removed = self.engine.unblackhole_identity(identity_hash);
         if removed {
-            log::info!("Lifted blackhole for identity {}", hex16(identity_hash));
+            log::info!("Lifted blackhole for identity {}", hex(identity_hash));
             self.persist_blackhole();
         }
         removed
@@ -105,13 +106,9 @@ impl Driver {
             log::info!(
                 "Tearing down interface {} from blackholed transport node {}",
                 id.0,
-                hex16(&remote)
+                hex(&remote)
             );
             self.teardown_interface(id);
         }
     }
-}
-
-fn hex16(hash: &[u8; 16]) -> String {
-    hash.iter().map(|b| format!("{b:02x}")).collect()
 }
