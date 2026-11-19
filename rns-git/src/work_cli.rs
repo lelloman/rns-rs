@@ -6,7 +6,7 @@ use std::time::Duration;
 use rns_core::msgpack::{self, Value};
 use rns_crypto::identity::Identity;
 
-use crate::client::{decode_status, SyncClient};
+use crate::client::{ManagementRequests, SyncClient};
 use crate::config::ClientConfig;
 use crate::logging;
 use crate::protocol;
@@ -33,8 +33,8 @@ where
     let identity = load_or_create_identity(&config.identity_path)?;
     let client = SyncClient::connect(config, dest_hash)?;
     let mut transport = NetWorkTransport {
-        client,
-        repository,
+        requests: ManagementRequests::new(client, protocol::PATH_WORK, WORK_TIMEOUT_SHORT)
+            .for_repository(repository, "work"),
         identity,
     };
     run_work_command(&mut transport, &options.command, io::stdout())
@@ -51,24 +51,17 @@ trait WorkTransport {
 }
 
 struct NetWorkTransport {
-    client: SyncClient,
-    repository: String,
+    requests: ManagementRequests,
     identity: Identity,
 }
 
 impl WorkTransport for NetWorkTransport {
     fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
-        self.request_with_timeout(data, WORK_TIMEOUT_SHORT)
+        self.requests.request(data)
     }
 
     fn request_with_timeout(&mut self, data: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
-        let response = self.client.request_with_timeout(
-            protocol::PATH_WORK,
-            request_with_repository(data, &self.repository)?,
-            timeout,
-        )?;
-        let bytes = protocol::response_bin(&response.data)?;
-        decode_status(bytes)
+        self.requests.request_with_timeout(data, timeout)
     }
 
     fn sign(&self, content: &str) -> Result<Vec<u8>> {
@@ -476,20 +469,6 @@ fn request(operation: &str, fields: &[(&str, Value)]) -> Vec<u8> {
             .map(|(key, value)| (Value::Str((*key).into()), value.clone())),
     );
     msgpack::pack(&Value::Map(map))
-}
-
-fn request_with_repository(data: Vec<u8>, repository: &str) -> Result<Vec<u8>> {
-    let mut value =
-        msgpack::unpack_exact(&data).map_err(|e| Error::msg(format!("invalid request: {e}")))?;
-    if let Value::Map(entries) = &mut value {
-        for (key, val) in entries {
-            if matches!(key, Value::UInt(v) if *v == protocol::IDX_REPOSITORY) {
-                *val = Value::Str(repository.to_string());
-                return Ok(msgpack::pack(&value));
-            }
-        }
-    }
-    Err(Error::msg("work request missing repository field"))
 }
 
 fn print_work_list(value: &Value, mut output: impl Write) -> Result<()> {

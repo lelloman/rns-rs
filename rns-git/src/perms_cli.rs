@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use rns_core::msgpack::{self, Value};
 
-use crate::client::{decode_status, SyncClient};
+use crate::client::{ManagementRequests, SyncClient};
 use crate::config::ClientConfig;
 use crate::logging;
 use crate::protocol;
@@ -31,7 +31,7 @@ where
 
     let client = SyncClient::connect(config, dest_hash)?;
     let mut transport = NetPermsTransport {
-        client,
+        requests: ManagementRequests::new(client, protocol::PATH_PERMS, PERMS_TIMEOUT),
         target_path,
     };
     run_perms_command(
@@ -52,21 +52,17 @@ trait PermsTransport {
 }
 
 struct NetPermsTransport {
-    client: SyncClient,
+    requests: ManagementRequests,
     target_path: String,
 }
 
 impl PermsTransport for NetPermsTransport {
     fn request(&mut self, data: Vec<u8>) -> Result<Vec<u8>> {
-        self.request_with_timeout(data, PERMS_TIMEOUT)
+        self.requests.request(data)
     }
 
     fn request_with_timeout(&mut self, data: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
-        let response = self
-            .client
-            .request_with_timeout(protocol::PATH_PERMS, data, timeout)?;
-        let bytes = protocol::response_bin(&response.data)?;
-        decode_status(bytes)
+        self.requests.request_with_timeout(data, timeout)
     }
 
     fn target_path(&self) -> &str {
