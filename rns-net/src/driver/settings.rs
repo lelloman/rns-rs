@@ -3,6 +3,8 @@
 use super::*;
 
 impl Driver {
+    /// Replace the announce verification queue with an empty one using these
+    /// limits: entry count, bytes, staleness in seconds and overflow policy.
     pub fn set_announce_verify_queue_config(
         &mut self,
         max_entries: usize,
@@ -18,10 +20,14 @@ impl Driver {
         )));
     }
 
+    /// Set the announce rate options given to interfaces that configure no
+    /// announce rate target of their own, when transport is enabled.
     pub fn set_announce_rate_defaults(&mut self, defaults: AnnounceRateDefaults) {
         self.announce_rate_defaults = defaults;
     }
 
+    /// Set the ingress control values used in place of the built-in defaults
+    /// on interfaces registered while transport is enabled.
     pub fn set_ingress_control_defaults(
         &mut self,
         defaults: rns_core::transport::types::IngressControlConfig,

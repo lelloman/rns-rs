@@ -22,19 +22,27 @@ use crate::interface::{lock_or_recover, Writer};
 /// Configuration for a pipe interface.
 #[derive(Debug, Clone)]
 pub struct PipeConfig {
+    /// Interface name from the config section.
     pub name: String,
+    /// Command line of the subprocess (`command`).
     pub command: String,
+    /// Wait before respawning the subprocess (`respawn_delay`, in milliseconds; default 5 s).
     pub respawn_delay: Duration,
+    /// Interface ID assigned by the node.
     pub interface_id: InterfaceId,
+    /// Settings shared with the running interface, adjustable at runtime.
     pub runtime: Arc<Mutex<PipeRuntime>>,
 }
 
+/// Pipe interface settings that can be changed while it runs.
 #[derive(Debug, Clone)]
 pub struct PipeRuntime {
+    /// Wait before respawning the subprocess after it exits.
     pub respawn_delay: Duration,
 }
 
 impl PipeRuntime {
+    /// Runtime settings taken from `config`.
     pub fn from_config(config: &PipeConfig) -> Self {
         Self {
             respawn_delay: config.respawn_delay,
@@ -42,10 +50,14 @@ impl PipeRuntime {
     }
 }
 
+/// Driver-side handle to a running pipe interface's runtime settings.
 #[derive(Debug, Clone)]
 pub struct PipeRuntimeConfigHandle {
+    /// Name of the pipe interface.
     pub interface_name: String,
+    /// Live settings shared with the interface.
     pub runtime: Arc<Mutex<PipeRuntime>>,
+    /// Settings at startup, reported as the defaults.
     pub startup: PipeRuntime,
 }
 

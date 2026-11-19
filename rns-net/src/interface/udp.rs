@@ -22,22 +22,33 @@ pub(crate) const HW_MTU: u32 = 1064;
 /// Configuration for a UDP interface.
 #[derive(Debug, Clone)]
 pub struct UdpConfig {
+    /// Interface name from the config section.
     pub name: String,
+    /// Address to receive on (`listen_ip`); no receiving unless both it and `listen_port` are set.
     pub listen_ip: Option<String>,
+    /// UDP port to receive on (`listen_port`, or `port`).
     pub listen_port: Option<u16>,
+    /// IP address datagrams are sent to (`forward_ip`), e.g. a broadcast address.
     pub forward_ip: Option<String>,
+    /// UDP port datagrams are sent to (`forward_port`, or `port`).
     pub forward_port: Option<u16>,
+    /// Interface ID assigned by the node.
     pub interface_id: InterfaceId,
+    /// Settings shared with the running interface, adjustable at runtime.
     pub runtime: Arc<Mutex<UdpRuntime>>,
 }
 
+/// UDP interface settings that can be changed while it runs.
 #[derive(Debug, Clone)]
 pub struct UdpRuntime {
+    /// IP address datagrams are sent to; sending fails while it or the port is unset.
     pub forward_ip: Option<String>,
+    /// UDP port datagrams are sent to.
     pub forward_port: Option<u16>,
 }
 
 impl UdpRuntime {
+    /// Runtime settings taken from `config`.
     pub fn from_config(config: &UdpConfig) -> Self {
         Self {
             forward_ip: config.forward_ip.clone(),
@@ -46,10 +57,14 @@ impl UdpRuntime {
     }
 }
 
+/// Driver-side handle to a running UDP interface's runtime settings.
 #[derive(Debug, Clone)]
 pub struct UdpRuntimeConfigHandle {
+    /// Name of the UDP interface.
     pub interface_name: String,
+    /// Live settings shared with the interface.
     pub runtime: Arc<Mutex<UdpRuntime>>,
+    /// Settings at startup, reported as the defaults.
     pub startup: UdpRuntime,
 }
 

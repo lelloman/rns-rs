@@ -2,14 +2,19 @@
 
 use super::*;
 
+/// AutoInterface timing settings that can be changed while it runs.
 #[derive(Debug, Clone)]
 pub struct AutoRuntime {
+    /// Interval between multicast discovery announces, in seconds.
     pub announce_interval_secs: f64,
+    /// How long a peer may stay silent before it is removed, in seconds.
     pub peer_timeout_secs: f64,
+    /// Interval between peer maintenance passes, in seconds.
     pub peer_job_interval_secs: f64,
 }
 
 impl AutoRuntime {
+    /// Startup settings for an AutoInterface: the built-in defaults, whatever the config.
     pub fn from_config(_config: &AutoConfig) -> Self {
         Self {
             announce_interval_secs: ANNOUNCE_INTERVAL,
@@ -19,10 +24,14 @@ impl AutoRuntime {
     }
 }
 
+/// Driver-side handle to a running AutoInterface's runtime settings.
 #[derive(Debug, Clone)]
 pub struct AutoRuntimeConfigHandle {
+    /// Name of the AutoInterface.
     pub interface_name: String,
+    /// Live settings shared with the interface.
     pub runtime: Arc<Mutex<AutoRuntime>>,
+    /// Settings at startup, reported as the defaults.
     pub startup: AutoRuntime,
 }
 

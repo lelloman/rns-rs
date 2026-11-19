@@ -40,8 +40,11 @@ const WATCH_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum TunnelState {
+    /// Not connected yet (`TUNNEL_STATE_INIT`).
     Init = 0x00,
+    /// Something was read within the last 20 seconds (`TUNNEL_STATE_ACTIVE`).
     Active = 0x01,
+    /// Nothing was read for over 20 seconds (`TUNNEL_STATE_STALE`).
     Stale = 0x02,
 }
 
@@ -68,6 +71,7 @@ impl TunnelState {
 /// What one watchdog check found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WatchCheck {
+    /// The tunnel's state.
     pub state: TunnelState,
     /// Send a keepalive.
     pub keepalive: bool,
@@ -130,6 +134,7 @@ impl PeerTunnel {
         }
     }
 
+    /// The tunnel's current state.
     pub fn state(&self) -> TunnelState {
         TunnelState::from_u8(self.state.load(Ordering::Relaxed))
     }

@@ -5,18 +5,29 @@ use super::*;
 /// Configuration for a backbone client interface.
 #[derive(Debug, Clone)]
 pub struct BackboneClientConfig {
+    /// Interface name.
     pub name: String,
+    /// Host to connect to (`remote` or `target_host`).
     pub target_host: String,
+    /// TCP port to connect to (`target_port` or `port`); default 4242.
     pub target_port: u16,
+    /// ID of the interface.
     pub interface_id: InterfaceId,
+    /// Startup wait between connection attempts, and the base of the backoff
+    /// after a lost connection; default 5 seconds.
     pub reconnect_wait: Duration,
+    /// Startup limit on reconnection attempts (`max_reconnect_tries`); `None`
+    /// retries forever.
     pub max_reconnect_tries: Option<u32>,
+    /// Startup TCP connect timeout; default 5 seconds.
     pub connect_timeout: Duration,
+    /// The `transport_identity` config value, kept as given; nothing reads it.
     pub transport_identity: Option<String>,
     /// The client's bitrate, which sets its hardware MTU as upstream's
     /// `optimise_mtu` does: [`CLIENT_BITRATE_GUESS`] unless it was
     /// configured, as for an auto-connected client.
     pub bitrate: u64,
+    /// Live settings the client reads, which can be changed while it runs.
     pub runtime: Arc<Mutex<BackboneClientRuntime>>,
 }
 

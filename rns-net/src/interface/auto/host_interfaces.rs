@@ -5,8 +5,11 @@ use super::*;
 /// Information about a local network interface with an IPv6 link-local address.
 #[derive(Debug, Clone)]
 pub struct LocalInterface {
+    /// OS interface name, e.g. `eth0`.
     pub name: String,
+    /// IPv6 link-local address, without scope ID.
     pub link_local_addr: String,
+    /// OS interface index.
     pub index: u32,
 }
 

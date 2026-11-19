@@ -5,13 +5,20 @@ use super::*;
 /// Live runtime state for a backbone server interface.
 #[derive(Debug, Clone)]
 pub struct BackboneServerRuntime {
+    /// Limit on concurrent clients; `None` for no limit.
     pub max_connections: Option<usize>,
+    /// Disconnect a client that sends nothing this long after connecting;
+    /// `None` disables it.
     pub idle_timeout: Option<Duration>,
+    /// Disconnect a client whose writes stall this long; `None` uses the
+    /// default egress dead time.
     pub write_stall_timeout: Option<Duration>,
+    /// Abuse handling settings.
     pub abuse: BackboneAbuseConfig,
 }
 
 impl BackboneServerRuntime {
+    /// The settings `config` starts with.
     pub fn from_config(config: &BackboneConfig) -> Self {
         Self {
             max_connections: config.max_connections,
@@ -22,33 +29,52 @@ impl BackboneServerRuntime {
     }
 }
 
+/// Handle the driver keeps to read and change a listener's runtime settings.
 #[derive(Debug, Clone)]
 pub struct BackboneRuntimeConfigHandle {
+    /// Interface name.
     pub interface_name: String,
+    /// Live settings.
     pub runtime: Arc<Mutex<BackboneServerRuntime>>,
+    /// Settings at start, restored on reset.
     pub startup: BackboneServerRuntime,
 }
 
+/// Handle the driver keeps to a listener's peer and fast-flap state.
 #[derive(Debug, Clone)]
 pub struct BackbonePeerStateHandle {
+    /// ID of the listener interface.
     pub interface_id: InterfaceId,
+    /// Interface name.
     pub interface_name: String,
+    /// `mode` of the config the handle was made from.
     pub mode: u8,
+    /// `gravity` of the config the handle was made from.
     pub gravity: i64,
+    /// `announces_to_internal` of the config the handle was made from.
     pub announces_to_internal: Option<bool>,
+    /// Per-address peer state.
     pub peer_state: Arc<Mutex<BackbonePeerMonitor>>,
+    /// The listener's fast-flap policy.
     pub fast_flap: BackboneFastFlapConfig,
+    /// Fast-flap history.
     pub fast_flap_state: Arc<Mutex<BackboneFastFlapMonitor>>,
 }
 
+/// Live runtime settings of a backbone client interface.
 #[derive(Debug, Clone)]
 pub struct BackboneClientRuntime {
+    /// Wait between connection attempts, and the base of the backoff after a
+    /// lost connection.
     pub reconnect_wait: Duration,
+    /// Limit on reconnection attempts; `None` retries forever.
     pub max_reconnect_tries: Option<u32>,
+    /// TCP connect timeout.
     pub connect_timeout: Duration,
 }
 
 impl BackboneClientRuntime {
+    /// The settings `config` starts with.
     pub fn from_config(config: &BackboneClientConfig) -> Self {
         Self {
             reconnect_wait: config.reconnect_wait,
@@ -58,10 +84,14 @@ impl BackboneClientRuntime {
     }
 }
 
+/// Handle the driver keeps to read and change a client's runtime settings.
 #[derive(Debug, Clone)]
 pub struct BackboneClientRuntimeConfigHandle {
+    /// Interface name.
     pub interface_name: String,
+    /// Live settings.
     pub runtime: Arc<Mutex<BackboneClientRuntime>>,
+    /// Settings at start, restored on reset.
     pub startup: BackboneClientRuntime,
 }
 

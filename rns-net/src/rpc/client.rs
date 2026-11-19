@@ -104,6 +104,7 @@ impl RpcClient {
         decode_rpc_payload(&response_bytes).map(|(value, _)| value)
     }
 
+    /// List the hooks loaded in the node.
     pub fn list_hooks(&mut self) -> io::Result<Vec<HookInfo>> {
         let response = self.call(&PickleValue::Dict(vec![(
             PickleValue::String("get".into()),
@@ -112,6 +113,8 @@ impl RpcClient {
         parse_hook_list(&response)
     }
 
+    /// Ask the node to enter drain mode with the given timeout. Returns
+    /// whether the request was accepted.
     pub fn begin_drain(&mut self, timeout: Duration) -> io::Result<bool> {
         let response = self.call(&PickleValue::Dict(vec![(
             PickleValue::String("begin_drain".into()),
@@ -120,6 +123,7 @@ impl RpcClient {
         Ok(response.as_bool().unwrap_or(false))
     }
 
+    /// Current lifecycle and drain status, or `None` if the node sent none.
     pub fn drain_status(&mut self) -> io::Result<Option<DrainStatus>> {
         let response = self.call(&PickleValue::Dict(vec![(
             PickleValue::String("get".into()),
@@ -128,6 +132,8 @@ impl RpcClient {
         parse_drain_status(&response)
     }
 
+    /// Provider bridge queue and drop counters, as the raw response value
+    /// (`None` when the node runs no provider bridge).
     pub fn provider_bridge_stats(&mut self) -> io::Result<PickleValue> {
         self.call(&PickleValue::Dict(vec![(
             PickleValue::String("get".into()),
@@ -135,6 +141,8 @@ impl RpcClient {
         )]))
     }
 
+    /// Load the WebAssembly hook `wasm` as `name` at `attach_point`. The inner
+    /// result carries the node's error message on failure.
     pub fn load_hook(
         &mut self,
         name: &str,
@@ -167,6 +175,8 @@ impl RpcClient {
         parse_hook_result(&response)
     }
 
+    /// Load the built-in hook `builtin_id` as `name` at `attach_point`. The
+    /// inner result carries the node's error message on failure.
     pub fn load_builtin_hook(
         &mut self,
         name: &str,
@@ -199,6 +209,8 @@ impl RpcClient {
         parse_hook_result(&response)
     }
 
+    /// Unload the hook `name` from `attach_point`. The inner result carries
+    /// the node's error message on failure.
     pub fn unload_hook(
         &mut self,
         name: &str,
@@ -221,6 +233,8 @@ impl RpcClient {
         parse_hook_result(&response)
     }
 
+    /// Enable or disable the hook `name` at `attach_point`. The inner result
+    /// carries the node's error message on failure.
     pub fn set_hook_enabled(
         &mut self,
         name: &str,
@@ -245,6 +259,8 @@ impl RpcClient {
         parse_hook_result(&response)
     }
 
+    /// Change the priority of the hook `name` at `attach_point`. The inner
+    /// result carries the node's error message on failure.
     pub fn set_hook_priority(
         &mut self,
         name: &str,
@@ -272,6 +288,9 @@ impl RpcClient {
         parse_hook_result(&response)
     }
 
+    /// Blacklist peer `ip` on the Backbone interface `interface` for
+    /// `duration_secs` seconds, capped by the interface's maximum penalty.
+    /// Returns whether the peer was blacklisted.
     pub fn blacklist_backbone_peer(
         &mut self,
         interface: &str,
@@ -314,6 +333,7 @@ impl RpcClient {
         Ok(response.as_bool().unwrap_or(false))
     }
 
+    /// List the node's known destinations.
     pub fn known_destinations(&mut self) -> io::Result<Vec<KnownDestinationEntry>> {
         let response = self.call(&PickleValue::Dict(vec![(
             PickleValue::String("get".into()),
@@ -322,6 +342,8 @@ impl RpcClient {
         parse_known_destination_list(&response)
     }
 
+    /// Keep a known destination from being cleaned up. Returns whether the
+    /// destination was known.
     pub fn retain_known_destination(&mut self, dest_hash: [u8; 16]) -> io::Result<bool> {
         let response = self.call(&PickleValue::Dict(vec![
             (
@@ -336,6 +358,8 @@ impl RpcClient {
         Ok(response.as_bool().unwrap_or(false))
     }
 
+    /// Retain every known destination of an identity. Returns whether any
+    /// was found.
     pub fn retain_identity(&mut self, identity_hash: [u8; 16]) -> io::Result<bool> {
         let response = self.call(&PickleValue::Dict(vec![
             (
@@ -350,6 +374,8 @@ impl RpcClient {
         Ok(response.as_bool().unwrap_or(false))
     }
 
+    /// Stop retaining a known destination; it counts as used now. Returns
+    /// whether the destination was known.
     pub fn unretain_known_destination(&mut self, dest_hash: [u8; 16]) -> io::Result<bool> {
         let response = self.call(&PickleValue::Dict(vec![
             (
@@ -364,6 +390,8 @@ impl RpcClient {
         Ok(response.as_bool().unwrap_or(false))
     }
 
+    /// Mark a known destination as used now. Returns false when it is
+    /// unknown or retained.
     pub fn mark_known_destination_used(&mut self, dest_hash: [u8; 16]) -> io::Result<bool> {
         let response = self.call(&PickleValue::Dict(vec![
             (

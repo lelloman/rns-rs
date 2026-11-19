@@ -14,11 +14,16 @@ pub(super) type BackboneCandidateOrder = (
 );
 
 #[cfg(feature = "iface-backbone")]
+/// Limits of the backbone peer pool, from the `backbone_peer_pool_*` options.
 #[derive(Debug, Clone)]
 pub struct BackbonePeerPoolSettings {
+    /// Most outbound pool connections active at once.
     pub max_connected: usize,
+    /// Failures within `failure_window` that put a discovered peer in cooldown.
     pub failure_threshold: usize,
+    /// How long a failure counts toward `failure_threshold`.
     pub failure_window: Duration,
+    /// How long a discovered peer stays in cooldown before it is retried.
     pub cooldown: Duration,
 }
 

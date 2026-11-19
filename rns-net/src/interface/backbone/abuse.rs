@@ -6,6 +6,8 @@ use super::*;
 /// Configurable behavior-based abuse detection for inbound peers.
 #[derive(Debug, Clone, Default)]
 pub struct BackboneAbuseConfig {
+    /// Longest blacklist penalty applied to a peer (`max_penalty_duration`, seconds); `None` leaves
+    /// penalties uncapped.
     pub max_penalty_duration: Option<Duration>,
 }
 
@@ -13,9 +15,15 @@ pub struct BackboneAbuseConfig {
 /// Backbone connections.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct BackboneFastFlapConfig {
+    /// Whether fast-flap blocking is on (`block_fast_flapping`); default yes.
     pub enabled: bool,
+    /// A connection shorter than this counts as a flap (`fast_flapping_threshold`, seconds);
+    /// default 20 seconds.
     pub connection_threshold: Duration,
+    /// An address is blocked once its flap count exceeds this (`fast_flapping_grace`); default 5.
     pub grace: u64,
+    /// How long an address stays blocked after its last flap (`fast_flapping_block_time`, minutes);
+    /// default 12 hours.
     pub block_duration: Duration,
 }
 
@@ -40,10 +48,15 @@ pub(super) struct FastFlapPeerState {
 /// Result of recording one short-lived connection.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct FastFlapRecord {
+    /// Flaps recorded for the address, this one included.
     pub flap_count: u64,
+    /// Whether the address is blocked.
     pub blocked: bool,
+    /// Whether this flap is the one that blocked it.
     pub newly_blocked: bool,
+    /// When the block ends, if blocked.
     pub blocked_until: Option<Instant>,
+    /// Time since the first recorded flap of the address.
     pub elapsed_since_first: Duration,
 }
 
@@ -63,10 +76,13 @@ pub struct BackboneFastFlapMonitor {
 }
 
 impl BackboneFastFlapMonitor {
+    /// An empty monitor.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Record a disconnect of `peer_ip` after `connected_for`. `None` when
+    /// fast-flap blocking is off or the connection lasted the threshold or longer.
     pub fn record_disconnect(
         &mut self,
         peer_ip: IpAddr,
@@ -100,6 +116,7 @@ impl BackboneFastFlapMonitor {
         })
     }
 
+    /// Whether `peer_ip` is blocked, by the `blocked_ips` file or by fast flapping.
     pub fn is_blocked(
         &mut self,
         peer_ip: IpAddr,
@@ -127,6 +144,8 @@ impl BackboneFastFlapMonitor {
         config.enabled && STATIC_BLOCK_FLAP_COUNT > config.grace
     }
 
+    /// When the fast-flap block on `peer_ip` ends; `None` if it has none.
+    /// Ignores the `blocked_ips` file.
     pub fn blocked_until(
         &mut self,
         peer_ip: IpAddr,
@@ -143,6 +162,7 @@ impl BackboneFastFlapMonitor {
             .and_then(|state| state.last_flap_at.checked_add(config.block_duration))
     }
 
+    /// Number of blocked addresses; see [`Self::blocked_ip_list`].
     pub fn blocked_ip_count(&mut self, config: &BackboneFastFlapConfig, now: Instant) -> usize {
         if !config.enabled {
             return 0;
@@ -150,6 +170,9 @@ impl BackboneFastFlapMonitor {
         self.blocked_ip_list(config, now).len()
     }
 
+    /// Blocked addresses, sorted: fast-flap blocks and, where they apply,
+    /// `blocked_ips` file entries. Expired history is dropped first; empty when
+    /// fast-flap blocking is off.
     pub fn blocked_ip_list(
         &mut self,
         config: &BackboneFastFlapConfig,
@@ -173,6 +196,7 @@ impl BackboneFastFlapMonitor {
         blocked
     }
 
+    /// Flaps recorded for `peer_ip`; 0 if none.
     pub fn flap_count(&self, peer_ip: IpAddr) -> u64 {
         self.peers
             .get(&peer_ip)
@@ -271,12 +295,15 @@ impl PeerBehaviorState {
     }
 }
 
+/// Per-address state of a listener's peers: connections, rejections and
+/// blacklisting.
 #[derive(Debug, Clone, Default)]
 pub struct BackbonePeerMonitor {
     peers: HashMap<IpAddr, PeerBehaviorState>,
 }
 
 impl BackbonePeerMonitor {
+    /// An empty monitor.
     pub fn new() -> Self {
         Self {
             peers: HashMap::new(),
@@ -320,6 +347,7 @@ impl BackbonePeerMonitor {
         });
     }
 
+    /// Every tracked address, sorted, labelled with `interface_name`.
     pub fn list(&self, interface_name: &str) -> Vec<BackbonePeerStateEntry> {
         let now = Instant::now();
         let mut entries: Vec<BackbonePeerStateEntry> = self
@@ -340,10 +368,13 @@ impl BackbonePeerMonitor {
         entries
     }
 
+    /// Forget `peer_ip`; `true` if it was tracked.
     pub fn clear(&mut self, peer_ip: IpAddr) -> bool {
         self.peers.remove(&peer_ip).is_some()
     }
 
+    /// Blacklist `peer_ip` for `duration` from now, recording `reason`.
+    /// Always `true`.
     pub fn blacklist(&mut self, peer_ip: IpAddr, duration: Duration, reason: String) -> bool {
         let state = self
             .peers

@@ -39,6 +39,8 @@ pub fn start_probe_server(listen_addr: SocketAddr) -> io::Result<ProbeServerHand
     start_probe_server_with_mark(listen_addr, None, ProbeRateLimit::default())
 }
 
+/// [`start_probe_server`] with a Linux `SO_MARK` for the server socket and
+/// explicit rate limits.
 pub fn start_probe_server_with_mark(
     listen_addr: SocketAddr,
     underlay_mark: Option<u32>,
@@ -471,6 +473,7 @@ impl ProbeServerHandle {
         Arc::clone(&self.counters)
     }
 
+    /// Stop the server and wait for its thread to exit.
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
         self.wake.wake();
@@ -501,6 +504,7 @@ pub fn probe_endpoint(
     probe_endpoint_with_mark(probe_server, existing_socket, timeout, device, None)
 }
 
+/// [`probe_endpoint`] with a Linux `SO_MARK` applied to the probe socket.
 pub fn probe_endpoint_with_mark(
     probe_server: SocketAddr,
     existing_socket: Option<UdpSocket>,
@@ -600,6 +604,7 @@ pub fn stun_probe_endpoint(
     stun_probe_endpoint_with_mark(stun_server, existing_socket, timeout, device, None)
 }
 
+/// [`stun_probe_endpoint`] with a Linux `SO_MARK` applied to the probe socket.
 pub fn stun_probe_endpoint_with_mark(
     stun_server: SocketAddr,
     existing_socket: Option<UdpSocket>,
@@ -789,6 +794,8 @@ pub fn probe_endpoint_with_protocol(
     probe_endpoint_with_protocol_and_mark(server, protocol, existing_socket, timeout, device, None)
 }
 
+/// [`probe_endpoint_with_protocol`] with a Linux `SO_MARK` applied to the probe
+/// socket.
 pub fn probe_endpoint_with_protocol_and_mark(
     server: SocketAddr,
     protocol: rns_core::holepunch::ProbeProtocol,
@@ -820,6 +827,8 @@ pub fn probe_endpoint_failover(
     probe_endpoint_failover_with_mark(servers, protocol, timeout_per_server, device, None)
 }
 
+/// [`probe_endpoint_failover`] with a Linux `SO_MARK` applied to each probe
+/// socket.
 pub fn probe_endpoint_failover_with_mark(
     servers: &[SocketAddr],
     protocol: rns_core::holepunch::ProbeProtocol,

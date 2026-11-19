@@ -21,43 +21,73 @@ use crate::event::{
 use crate::interface::device_writer::DeviceWriter;
 use crate::serial::{Parity, SerialConfig, SerialPort};
 
+/// WDCL frame type: device discovery, signed by the switch.
 pub const WDCL_T_DISCOVER: u8 = 0x00;
+/// WDCL frame type: host connect request.
 pub const WDCL_T_CONNECT: u8 = 0x01;
+/// WDCL frame type: command.
 pub const WDCL_T_CMD: u8 = 0x02;
+/// WDCL frame type: device log event.
 pub const WDCL_T_LOG: u8 = 0x03;
+/// WDCL frame type: remote display data.
 pub const WDCL_T_DISP: u8 = 0x04;
+/// WDCL frame type: packet from a Weave endpoint.
 pub const WDCL_T_ENDPOINT_PKT: u8 = 0x05;
+/// WDCL frame type: encapsulated protocol (upstream `WDCL_T_ENCAP_PROTO`); not handled.
 pub const WDCL_T_ENCAP_PROTO: u8 = 0x06;
+/// WDCL broadcast destination address.
 pub const WDCL_BROADCAST: [u8; 4] = [0xff; 4];
 
+/// WDCL command: send a packet to an endpoint.
 pub const WDCL_CMD_ENDPOINT_PKT: u16 = 0x0001;
+/// WDCL command: list endpoints (upstream `WDCL_CMD_ENDPOINTS_LIST`); not sent.
 pub const WDCL_CMD_ENDPOINTS_LIST: u16 = 0x0100;
+/// WDCL command: remote display control (upstream `WDCL_CMD_REMOTE_DISPLAY`); not sent.
 pub const WDCL_CMD_REMOTE_DISPLAY: u16 = 0x0a00;
+/// WDCL command: remote input (upstream `WDCL_CMD_REMOTE_INPUT`); not sent.
 pub const WDCL_CMD_REMOTE_INPUT: u16 = 0x0a01;
 
+/// Log event: the board initialised.
 pub const ET_BOARD_INIT: u16 = 0x0003;
+/// Log event: the host connection is established.
 pub const ET_PROTO_WDCL_CONNECTION: u16 = 0x3002;
+/// Log event: the endpoint id assigned to the host.
 pub const ET_PROTO_WDCL_HOST_ENDPOINT: u16 = 0x3003;
+/// Log event: an endpoint was heard.
 pub const ET_PROTO_WEAVE_EP_ALIVE: u16 = 0x3102;
+/// Log event: an endpoint timed out.
 pub const ET_PROTO_WEAVE_EP_TIMEOUT: u16 = 0x3103;
+/// Log event: the switch an endpoint is reached through.
 pub const ET_PROTO_WEAVE_EP_VIA: u16 = 0x3104;
+/// Log event: CPU load, in percent.
 pub const ET_STAT_CPU: u16 = 0xe003;
+/// Log event: free and total memory, in bytes.
 pub const ET_STAT_MEMORY: u16 = 0xe005;
 
+/// Hardware MTU of a Weave interface, in bytes (upstream `HW_MTU`).
 pub const WEAVE_HW_MTU: u32 = 1024;
+/// Bitrate assumed when none is configured, in bits per second (upstream `BITRATE_GUESS`).
 pub const WEAVE_DEFAULT_BITRATE: u64 = 250_000;
+/// Seconds without hearing from a peer before it is dropped (upstream `PEERING_TIMEOUT`).
 pub const WEAVE_PEERING_TIMEOUT: f64 = 20.0;
+/// Seconds a received packet hash is remembered for duplicate detection.
 pub const WEAVE_DUPLICATE_TTL: f64 = 0.75;
+/// Most packet hashes remembered for duplicate detection.
 pub const WEAVE_DUPLICATE_CAPACITY: usize = 48;
 
+/// A WDCL frame: destination, type and payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WdclFrame {
+    /// Destination switch id, or [`WDCL_BROADCAST`].
     pub destination: [u8; 4],
+    /// One of the `WDCL_T_*` frame types.
     pub frame_type: u8,
+    /// Frame payload.
     pub payload: Vec<u8>,
 }
 
 impl WdclFrame {
+    /// Serializes the frame: destination, type byte, payload.
     pub fn encode(&self) -> Vec<u8> {
         let mut output = Vec::with_capacity(5 + self.payload.len());
         output.extend_from_slice(&self.destination);
@@ -66,6 +96,7 @@ impl WdclFrame {
         output
     }
 
+    /// Parses a frame; `None` if shorter than the five-byte header.
     pub fn decode(data: &[u8]) -> Option<Self> {
         if data.len() < 5 {
             return None;
@@ -77,6 +108,7 @@ impl WdclFrame {
         })
     }
 
+    /// A command frame carrying the big-endian `command` code followed by `data`.
     pub fn command(destination: [u8; 4], command: u16, data: &[u8]) -> Self {
         let mut payload = Vec::with_capacity(2 + data.len());
         payload.extend_from_slice(&command.to_be_bytes());
@@ -88,6 +120,7 @@ impl WdclFrame {
         }
     }
 
+    /// A command frame sending `packet` to `endpoint` through switch `destination`.
     pub fn endpoint_packet(destination: [u8; 4], endpoint: [u8; 8], packet: &[u8]) -> Self {
         let mut data = Vec::with_capacity(8 + packet.len());
         data.extend_from_slice(&endpoint);
@@ -96,11 +129,16 @@ impl WdclFrame {
     }
 }
 
+/// A log event reported by the device.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WeaveLogFrame {
+    /// Device timestamp, in seconds.
     pub timestamp: f64,
+    /// Log level.
     pub level: u8,
+    /// Event code, one of the `ET_*` constants or another.
     pub event: u16,
+    /// Event data.
     pub data: Vec<u8>,
 }
 
@@ -153,22 +191,35 @@ impl WeaveLogFrame {
     }
 }
 
+/// A classified frame from the device.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WeaveInput {
+    /// A switch announced itself with a valid signature.
     Discovery {
+        /// The switch id: the last four bytes of its signing key.
         switch_id: [u8; 4],
+        /// The switch's Ed25519 public key.
         signing_key: [u8; 32],
     },
+    /// A packet from a Weave endpoint, addressed to this host.
     EndpointPacket {
+        /// Endpoint id of the sender.
         source: [u8; 8],
+        /// The packet.
         packet: Vec<u8>,
     },
+    /// A device log event.
     Log(WeaveLogFrame),
+    /// A fragment of the remote display buffer.
     Display {
+        /// Byte offset of the fragment in the buffer.
         offset: usize,
+        /// Total buffer size, in bytes.
         total: usize,
+        /// The fragment's bytes.
         fragment: Vec<u8>,
     },
+    /// Any other frame, or a known type with an unexpected payload length or destination.
     Unknown(WdclFrame),
 }
 
@@ -217,28 +268,44 @@ pub fn parse_device_frame(data: &[u8], host_switch_id: [u8; 4]) -> Option<WeaveI
     }
 }
 
+/// A Weave endpoint heard on the device.
 #[derive(Debug, Clone)]
 pub struct WeavePeerState {
+    /// The endpoint's id.
     pub endpoint_id: [u8; 8],
+    /// The switch the endpoint is reached through, once reported.
     pub via_switch_id: Option<[u8; 4]>,
+    /// When the endpoint was last heard, in seconds since the Unix epoch.
     pub last_heard: f64,
 }
 
+/// What is known about a Weave device and its peers.
 #[derive(Debug, Clone, Default)]
 pub struct WeaveState {
+    /// Whether the device reported the host connection established.
     pub connected: bool,
+    /// Id of the switch that answered discovery.
     pub switch_id: Option<[u8; 4]>,
+    /// Endpoint id the device assigned to this host.
     pub endpoint_id: Option<[u8; 8]>,
+    /// Last reported CPU load, in percent.
     pub cpu_load: Option<u8>,
+    /// Last reported memory use, in percent.
     pub mem_load: Option<f64>,
+    /// Endpoints currently heard, by endpoint id.
     pub peers: HashMap<[u8; 8], WeavePeerState>,
+    /// The last 1024 log events.
     pub logs: VecDeque<WeaveLogFrame>,
+    /// Remote display buffer.
     pub display: Vec<u8>,
+    /// Log events with an unknown code or unexpected data length.
     pub unknown_events: VecDeque<WeaveLogFrame>,
     duplicates: VecDeque<([u8; 32], f64)>,
 }
 
 impl WeaveState {
+    /// Records `packet` and reports whether it is new, i.e. not seen in the
+    /// last [`WEAVE_DUPLICATE_TTL`] seconds.
     pub fn accept_packet(&mut self, packet: &[u8], now: f64) -> bool {
         while self
             .duplicates
@@ -258,6 +325,7 @@ impl WeaveState {
         true
     }
 
+    /// Records a log event and applies what it reports to the state.
     pub fn handle_log(&mut self, frame: WeaveLogFrame, now: f64) {
         if self.logs.len() == 1024 {
             self.logs.pop_front();
@@ -294,6 +362,7 @@ impl WeaveState {
         }
     }
 
+    /// Drops peers not heard for [`WEAVE_PEERING_TIMEOUT`] seconds and returns their ids.
     pub fn expire_peers(&mut self, now: f64) -> Vec<[u8; 8]> {
         let expired: Vec<_> = self
             .peers
@@ -308,6 +377,8 @@ impl WeaveState {
         expired
     }
 
+    /// Writes a display fragment into the buffer; `true` when it ends the
+    /// buffer. Fragments beyond 1024 bytes or out of range are ignored.
     pub fn apply_display(&mut self, offset: usize, total: usize, fragment: &[u8]) -> bool {
         if total > 128 * 64 / 8 || offset > total || fragment.len() > total - offset {
             return false;
@@ -318,12 +389,18 @@ impl WeaveState {
     }
 }
 
+/// Configuration for a Weave interface.
 #[derive(Debug, Clone)]
 pub struct WeaveConfig {
+    /// Interface name.
     pub name: String,
+    /// Serial port of the Weave device.
     pub port: String,
+    /// Bitrate reported for the interface, in bits per second (`configured_bitrate`).
     pub configured_bitrate: u64,
+    /// The interface's id.
     pub interface_id: InterfaceId,
+    /// Device and peer state, shared with the running interface.
     pub state: Arc<Mutex<WeaveState>>,
 }
 
@@ -946,6 +1023,7 @@ impl LoopSource for WeaveSource {
     }
 }
 
+/// Factory for `WeaveInterface`.
 pub struct WeaveFactory;
 /// The parent interface's writer: it transmits nothing, but the driver
 /// reports the device writable under the parent's id, so it writes out

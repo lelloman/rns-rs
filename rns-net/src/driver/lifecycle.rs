@@ -232,6 +232,7 @@ impl Driver {
         matches!(self.lifecycle_state, LifecycleState::Draining)
     }
 
+    /// Keep `control` so the driver stops the listener when it shuts down.
     pub fn register_listener_control(&mut self, control: crate::interface::ListenerControl) {
         self.listener_controls.push(control);
     }

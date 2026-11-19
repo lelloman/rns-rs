@@ -3,6 +3,9 @@
 use super::*;
 
 impl HolePunchManager {
+    /// Create a manager with the given probe servers, their protocol and the
+    /// device probes and punches are bound to. Probe servers at NAT64
+    /// addresses are dropped; every other setting starts at its default.
     pub fn new(
         probe_addrs: Vec<SocketAddr>,
         probe_protocol: ProbeProtocol,
@@ -56,14 +59,17 @@ impl HolePunchManager {
         self.event_tx = Some(tx);
     }
 
+    /// Set the policy for proposals from link peers.
     pub fn set_policy(&mut self, policy: HolePunchPolicy) {
         self.policy = policy;
     }
 
+    /// Policy for proposals from link peers.
     pub fn policy(&self) -> HolePunchPolicy {
         self.policy
     }
 
+    /// Set the Linux `SO_MARK` applied to probe and punch sockets.
     pub fn set_underlay_mark(&mut self, underlay_mark: Option<u32>) {
         self.underlay_mark = underlay_mark;
     }
@@ -85,10 +91,12 @@ impl HolePunchManager {
         self.allow_private_endpoints = allow;
     }
 
+    /// Whether peer-supplied endpoints in private ranges are accepted.
     pub fn allow_private_endpoints(&self) -> bool {
         self.allow_private_endpoints
     }
 
+    /// Set the re-upgrade settings; disabling them drops pending re-upgrades.
     pub fn set_reupgrade_config(&mut self, config: DirectReupgradeConfig) {
         self.reupgrade_config = config;
         if !config.enabled {
@@ -96,12 +104,11 @@ impl HolePunchManager {
         }
     }
 
+    /// Re-upgrade settings.
     pub fn reupgrade_config(&self) -> DirectReupgradeConfig {
         self.reupgrade_config
     }
 
-    /// UDP ports this node listens on, which it never punches toward at
-    /// its own public address.
     /// Report the counters of this node's own probe server.
     pub fn set_probe_server_counters(
         &mut self,
@@ -110,10 +117,13 @@ impl HolePunchManager {
         self.probe_server_counters = Some(counters);
     }
 
+    /// UDP ports this node listens on, which it never punches toward at
+    /// its own public address.
     pub fn set_own_listen_ports(&mut self, ports: Vec<u16>) {
         self.own_ports = ports;
     }
 
+    /// UDP ports set by [`Self::set_own_listen_ports`].
     pub fn own_listen_ports(&self) -> &[u16] {
         &self.own_ports
     }

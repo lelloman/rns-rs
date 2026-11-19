@@ -271,17 +271,25 @@ pub enum HolePunchManagerAction {
     /// Send a Direct Link signalling message (kind and body) to the link
     /// peer, in a link packet with `CONTEXT_DIRECT_LINK`.
     SendSignal {
+        /// Link to send on.
         link_id: [u8; 16],
+        /// Message kind.
         msgtype: u8,
+        /// Message body.
         payload: Vec<u8>,
     },
     /// Direct connection established: register the new interface and
     /// route the link over it.
     DirectConnectEstablished {
+        /// Link being upgraded.
         link_id: [u8; 16],
+        /// Hole punching session that made the connection.
         session_id: [u8; 16],
+        /// ID of the new direct interface.
         interface_id: rns_core::transport::types::InterfaceId,
+        /// Writer of the direct interface.
         writer: Box<dyn crate::interface::Writer>,
+        /// Transport-level description of the direct interface.
         info: Box<rns_core::transport::types::InterfaceInfo>,
         /// RTT measured during punch (time from first send to first ACK).
         rtt: f64,
@@ -294,16 +302,24 @@ pub enum HolePunchManagerAction {
     /// Remove a direct interface that no longer belongs to a live upgrade
     /// (its link closed, or a newer upgrade replaced it).
     RemoveDirectInterface {
+        /// Link the interface belonged to.
         link_id: [u8; 16],
+        /// Direct interface to remove.
         interface_id: rns_core::transport::types::InterfaceId,
     },
     /// Propose again on a link that lost its direct path, if it is still
     /// active (see [`DirectReupgradeConfig`]).
-    Reupgrade { link_id: [u8; 16] },
+    Reupgrade {
+        /// Link to propose on.
+        link_id: [u8; 16],
+    },
     /// Direct connection failed.
     DirectConnectFailed {
+        /// Link whose upgrade failed.
         link_id: [u8; 16],
+        /// Hole punching session, all zeros when none was started.
         session_id: [u8; 16],
+        /// Failure reason, a `FAIL_*` or `REJECT_*` code.
         reason: u8,
     },
 }
