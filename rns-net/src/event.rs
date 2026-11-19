@@ -494,11 +494,8 @@ impl EventSender {
         key: usize,
         source: Box<dyn LoopSource>,
     ) -> std::io::Result<()> {
-        let mut registry = self
-            .shared
-            .sources
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut registry =
+            crate::sync::lock_or_recover(&self.shared.sources, "event queue sources");
         self.shared.add_source(&mut registry, key, source)
     }
 
@@ -513,7 +510,7 @@ impl EventSender {
         &self,
         events: impl IntoIterator<Item = Event>,
     ) -> Result<bool, std::sync::mpsc::RecvError> {
-        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = crate::sync::lock_or_recover(&self.shared.state, "event queue state");
         if !state.receiver_alive {
             return Err(std::sync::mpsc::RecvError);
         }
@@ -547,7 +544,7 @@ impl EventSender {
 
     /// Whether inbound data has room; loop sources check before reading.
     pub(crate) fn inbound_data_has_room(&self) -> bool {
-        let state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let state = crate::sync::lock_or_recover(&self.shared.state, "event queue state");
         self.shared.data_has_room(&state)
     }
 
@@ -638,7 +635,7 @@ impl EventSender {
         block_control: bool,
         drop_full_inbound: bool,
     ) -> Result<(), std::sync::mpsc::TrySendError<Event>> {
-        let state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let state = crate::sync::lock_or_recover(&self.shared.state, "event queue state");
         let (state, result) = self.enqueue_locked(state, event, block_control, drop_full_inbound);
         self.shared.notify_change(&state, false);
         drop(state);
@@ -732,7 +729,7 @@ impl EventSender {
         &self,
         events: impl IntoIterator<Item = Event>,
     ) -> Result<(), std::sync::mpsc::SendError<Event>> {
-        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = crate::sync::lock_or_recover(&self.shared.state, "event queue state");
         let mut result = Ok(());
         for event in events {
             let (next, sent) = self.enqueue_locked(state, event, true, true);
@@ -773,7 +770,7 @@ impl EventSender {
         announce_activated: Option<f64>,
         path_request_activated: Option<f64>,
     ) {
-        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = crate::sync::lock_or_recover(&self.shared.state, "event queue state");
         if let Some(activated) = announce_activated {
             state.announce_bursts.insert(interface_id, activated);
         } else {
@@ -791,23 +788,20 @@ impl EventSender {
         interface_id: InterfaceId,
         parent_id: InterfaceId,
     ) {
-        self.shared
-            .state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
+        crate::sync::lock_or_recover(&self.shared.state, "event queue state")
             .dynamic_interface_parents
             .insert(interface_id, parent_id);
     }
 
     pub(crate) fn remove_interface(&self, interface_id: InterfaceId) {
-        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = crate::sync::lock_or_recover(&self.shared.state, "event queue state");
         state.announce_bursts.remove(&interface_id);
         state.path_request_bursts.remove(&interface_id);
         state.dynamic_interface_parents.remove(&interface_id);
     }
 
     pub(crate) fn inbound_queue_snapshot(&self) -> InboundQueueSnapshot {
-        let state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let state = crate::sync::lock_or_recover(&self.shared.state, "event queue state");
         InboundQueueSnapshot {
             heights: std::array::from_fn(|index| state.inbound[index].len()),
             capacities: self.shared.inbound_capacities,
@@ -816,7 +810,7 @@ impl EventSender {
     }
 
     pub(crate) fn dynamic_burst_stats(&self, parent_id: InterfaceId) -> Option<DynamicBurstStats> {
-        let state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let state = crate::sync::lock_or_recover(&self.shared.state, "event queue state");
         let children = state
             .dynamic_interface_parents
             .iter()
@@ -871,7 +865,7 @@ const RECEIVE_BATCH: usize = 16;
 
 impl Drop for EventReceiver {
     fn drop(&mut self) {
-        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = crate::sync::lock_or_recover(&self.shared.state, "event queue state");
         state.receiver_alive = false;
         drop(state);
         self.shared.changed.notify_all();
@@ -881,11 +875,8 @@ impl Drop for EventReceiver {
         // the senders they hold, which would otherwise keep this queue (and
         // them) alive forever through the registry.
         let sources: Vec<_> = {
-            let mut registry = self
-                .shared
-                .sources
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
+            let mut registry =
+                crate::sync::lock_or_recover(&self.shared.sources, "event queue sources");
             registry.suspended.clear();
             registry.paused.clear();
             registry.sources.drain().map(|(_, source)| source).collect()
@@ -919,7 +910,7 @@ impl EventReceiver {
         if let Some(event) = self.prefetched.borrow_mut().pop_front() {
             return Ok(Some(event));
         }
-        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = crate::sync::lock_or_recover(&self.shared.state, "event queue state");
         if let Some(event) = self.pop_locked(&mut state) {
             let mut prefetched = self.prefetched.borrow_mut();
             while prefetched.len() + 1 < RECEIVE_BATCH {
@@ -959,7 +950,7 @@ impl EventReceiver {
             }
             None => timeout,
         };
-        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = crate::sync::lock_or_recover(&self.shared.state, "event queue state");
         if state.has_events() || self.shared.sender_count.load(Ordering::Acquire) == 0 {
             return Ok(());
         }
@@ -969,11 +960,8 @@ impl EventReceiver {
         state.receiver_parked = true;
         drop(state);
         let result = self.shared.poller.wait(ready, timeout).map(|_| ());
-        self.shared
-            .state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .receiver_parked = false;
+        crate::sync::lock_or_recover(&self.shared.state, "event queue state").receiver_parked =
+            false;
         result
     }
 
@@ -983,7 +971,7 @@ impl EventReceiver {
     /// inbound data has room again.
     pub(crate) fn poll_ready(&self, ready: &mut crate::poll::Events) -> std::io::Result<()> {
         let room = {
-            let state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+            let state = crate::sync::lock_or_recover(&self.shared.state, "event queue state");
             self.shared.data_has_room(&state)
         };
         if room {
@@ -999,11 +987,8 @@ impl EventReceiver {
     /// receiver is about to wait, i.e. has drained the queue. Returns the
     /// earliest source timer deadline.
     fn resume_suspended(&self) -> Option<Instant> {
-        let mut registry = self
-            .shared
-            .sources
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut registry =
+            crate::sync::lock_or_recover(&self.shared.sources, "event queue sources");
         let registry = &mut *registry;
         for key in registry.suspended.drain(..) {
             if let Some(source) = registry.sources.get(&key) {
@@ -1016,11 +1001,8 @@ impl EventReceiver {
     /// Serve the loop sources `ready` reports readable. Keys of other kinds
     /// (the driver's writers) are left to the caller.
     pub(crate) fn serve_sources(&self, ready: &crate::poll::Events) {
-        let mut registry = self
-            .shared
-            .sources
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut registry =
+            crate::sync::lock_or_recover(&self.shared.sources, "event queue sources");
         let registry = &mut *registry;
         if registry.buf.is_empty() {
             registry.buf = vec![0; LOOP_READ_BUFFER];
@@ -1105,11 +1087,8 @@ impl EventReceiver {
 
     /// Close sources that report themselves stopped.
     pub(crate) fn sweep_stopped_sources(&self) {
-        let mut registry = self
-            .shared
-            .sources
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut registry =
+            crate::sync::lock_or_recover(&self.shared.sources, "event queue sources");
         let stopped: Vec<usize> = registry
             .sources
             .iter()
@@ -1129,11 +1108,8 @@ impl EventReceiver {
     /// Watch sources paused by [`SourceStatus::Pause`] again. Called once
     /// per tick, so a paused source stays idle for about a second.
     pub(crate) fn resume_paused_sources(&self) {
-        let mut registry = self
-            .shared
-            .sources
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut registry =
+            crate::sync::lock_or_recover(&self.shared.sources, "event queue sources");
         let registry = &mut *registry;
         for key in registry.paused.drain(..) {
             if let Some(source) = registry.sources.get(&key) {
@@ -1166,7 +1142,7 @@ impl EventReceiver {
         if let Some(event) = self.prefetched.borrow_mut().pop_front() {
             return Ok(event.event);
         }
-        let mut state = self.shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = crate::sync::lock_or_recover(&self.shared.state, "event queue state");
         if let Some(event) = self.pop_locked(&mut state) {
             drop(state);
             self.shared.wake_async_senders();

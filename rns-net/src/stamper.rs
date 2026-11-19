@@ -223,43 +223,27 @@ struct Inner {
 
 impl Inner {
     fn lock_queues(&self) -> MutexGuard<'_, Queues> {
-        self.queues
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::sync::lock_or_recover(&self.queues, "stamper queues")
     }
 
     fn stamp_store(&self) -> Option<DestinationStampStore> {
-        self.stamp_store
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        crate::sync::lock_or_recover(&self.stamp_store, "stamper stamp store").clone()
     }
 
     fn targets(&self) -> StampTargets {
-        *self
-            .targets
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        *crate::sync::lock_or_recover(&self.targets, "stamper targets")
     }
 
     fn path_request_timeout(&self) -> Duration {
-        *self
-            .path_request_timeout
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        *crate::sync::lock_or_recover(&self.path_request_timeout, "stamper path request timeout")
     }
 
     fn cached_path_request_stamp(&self, material: &[u8]) -> Option<Vec<u8>> {
-        self.pr_stamp_cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(material)
+        crate::sync::lock_or_recover(&self.pr_stamp_cache, "stamper pr stamp cache").get(material)
     }
 
     fn cache_path_request_stamp(&self, material: Vec<u8>, stamp: Vec<u8>) {
-        self.pr_stamp_cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::sync::lock_or_recover(&self.pr_stamp_cache, "stamper pr stamp cache")
             .insert(material, stamp);
     }
 }
@@ -310,11 +294,7 @@ impl Stamper {
 
     /// Where destination stamps are persisted and reloaded from.
     pub fn set_stamp_store(&self, stamp_store: Option<DestinationStampStore>) {
-        *self
-            .inner
-            .stamp_store
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = stamp_store;
+        *crate::sync::lock_or_recover(&self.inner.stamp_store, "stamper stamp store") = stamp_store;
     }
 
     pub fn targets(&self) -> StampTargets {
@@ -323,11 +303,7 @@ impl Stamper {
 
     #[doc(hidden)]
     pub fn set_targets(&self, targets: StampTargets) {
-        *self
-            .inner
-            .targets
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = targets;
+        *crate::sync::lock_or_recover(&self.inner.targets, "stamper targets") = targets;
     }
 
     /// How long a path request stamp may take before the request is dropped
@@ -338,11 +314,10 @@ impl Stamper {
 
     /// Set the path request stamp timeout.
     pub fn set_path_request_timeout(&self, timeout: Duration) {
-        *self
-            .inner
-            .path_request_timeout
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = timeout;
+        *crate::sync::lock_or_recover(
+            &self.inner.path_request_timeout,
+            "stamper path request timeout",
+        ) = timeout;
     }
 
     /// `Transport.pr_stamp_material`.
@@ -365,11 +340,7 @@ impl Stamper {
 
     /// Number of cached path request stamps.
     pub fn cached_path_request_stamps(&self) -> usize {
-        self.inner
-            .pr_stamp_cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .len()
+        crate::sync::lock_or_recover(&self.inner.pr_stamp_cache, "stamper pr stamp cache").len()
     }
 
     /// Queue a path request for stamping (`Transport.enqueue_stamped_pr`).

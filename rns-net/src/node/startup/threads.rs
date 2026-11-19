@@ -32,9 +32,10 @@ pub(super) fn spawn_announce_verifier(
 
                     while !verify_shutdown_thread.stopped() {
                         let batch = {
-                            let mut queue = announce_verify_queue
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            let mut queue = crate::sync::lock_or_recover(
+                                &announce_verify_queue,
+                                "threads announce verify queue",
+                            );
                             queue.take_pending(time::now())
                         };
 

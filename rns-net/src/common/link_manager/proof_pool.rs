@@ -228,7 +228,7 @@ impl ProofPool {
                     // One job, and the proof checks queued right behind it.
                     let mut jobs = Vec::with_capacity(MAX_BATCH);
                     {
-                        let queue = queue.lock().unwrap_or_else(|p| p.into_inner());
+                        let queue = crate::sync::lock_or_recover(&queue, "proof pool queue");
                         let Ok(job) = queue.recv() else {
                             return;
                         };
