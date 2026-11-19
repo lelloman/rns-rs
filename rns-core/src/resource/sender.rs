@@ -17,6 +17,7 @@ use crate::hash::get_random_hash;
 
 /// How a resource's data is encrypted. Any `Fn(&[u8]) -> Vec<u8>` is one.
 pub trait ResourceEncrypt {
+    /// Encrypt `data`.
     fn encrypt(&self, data: &[u8]) -> Vec<u8>;
 
     /// The encryption with its tag left to the caller, when it has that

@@ -45,6 +45,7 @@ fn decompress_error(error: DecompressError) -> ResourceError {
 }
 
 impl ResourceAssembly {
+    /// Identity of this assembly attempt.
     pub fn id(&self) -> &AssemblyId {
         &self.id
     }
@@ -91,6 +92,8 @@ impl ResourceAssembly {
     pub fn max_output_size(&self) -> usize {
         self.data.limit
     }
+    /// Decompress the data if needed, check it against the resource hash
+    /// and build the proof and delivery actions.
     pub fn run(self, compressor: &dyn Compressor) -> AssemblyResult {
         AssemblyResult {
             id: self.id,

@@ -727,6 +727,7 @@ impl ResourceReceiver {
         Ok(ResourceAssembly { id, data })
     }
 
+    /// Identity of the pending assembly attempt, while the receiver is assembling.
     pub fn assembly_id(&self) -> Option<&AssemblyId> {
         (self.status == ResourceStatus::Assembling)
             .then_some(self.assembly_id.as_ref())

@@ -6,15 +6,22 @@ use crate::constants::*;
 /// fast/very-slow link adaptation.
 #[derive(Debug, Clone)]
 pub struct WindowState {
+    /// Current window, in parts requested per round.
     pub window: usize,
+    /// Upper bound of the window.
     pub window_max: usize,
+    /// Lower bound of the window.
     pub window_min: usize,
+    /// Gap between the window and a bound at which that bound is moved toward the window.
     pub window_flexibility: usize,
+    /// Rounds measured above the fast rate, counted up to the fast-rate threshold.
     pub fast_rate_rounds: usize,
+    /// Rounds measured below the very-slow rate, counted up to its threshold.
     pub very_slow_rate_rounds: usize,
 }
 
 impl WindowState {
+    /// Initial window state, with the slow-link window maximum.
     pub fn new() -> Self {
         WindowState {
             window: RESOURCE_WINDOW,

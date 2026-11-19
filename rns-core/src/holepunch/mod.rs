@@ -1,4 +1,5 @@
 pub mod engine;
+/// Direct Link signalling constants, states, actions and errors.
 pub mod types;
 
 pub use engine::{

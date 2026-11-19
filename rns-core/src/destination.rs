@@ -4,9 +4,12 @@ use core::fmt;
 use crate::constants;
 use crate::hash;
 
+/// Errors building a destination name.
 #[derive(Debug)]
 pub enum DestinationError {
+    /// App name contains a dot.
     DotInAppName,
+    /// An aspect contains a dot.
     DotInAspect,
 }
 
@@ -53,16 +56,16 @@ pub fn expand_name(
 
 /// Compute name hash from app_name and aspects.
 ///
-/// = SHA-256("app_name.aspect1.aspect2".as_bytes())[:10]
+/// `= SHA-256("app_name.aspect1.aspect2".as_bytes())[:10]`
 pub fn name_hash(app_name: &str, aspects: &[&str]) -> [u8; constants::NAME_HASH_LENGTH / 8] {
     hash::name_hash(app_name, aspects)
 }
 
 /// Compute destination hash.
 ///
-/// 1. name_hash = SHA256(expand_name(None, app_name, aspects))[:10]
-/// 2. addr_material = name_hash || identity_hash (if present)
-/// 3. destination_hash = SHA256(addr_material)[:16]
+/// 1. `name_hash = SHA256(expand_name(None, app_name, aspects))[:10]`
+/// 2. `addr_material = name_hash || identity_hash` (if present)
+/// 3. `destination_hash = SHA256(addr_material)[:16]`
 pub fn destination_hash(
     app_name: &str,
     aspects: &[&str],

@@ -1,7 +1,12 @@
+/// Session token creation and link encryption and decryption.
 pub mod crypto;
+/// Link request and proof encoding, link ID derivation and key exchange.
 pub mod handshake;
+/// LINKIDENTIFY data building and validation.
 pub mod identify;
+/// Keepalive, stale and establishment timer calculations.
 pub mod keepalive;
+/// Link states, actions and errors.
 pub mod types;
 
 use alloc::vec::Vec;
@@ -746,14 +751,17 @@ impl LinkEngine {
 
     // --- Queries ---
 
+    /// Link ID.
     pub fn link_id(&self) -> &LinkId {
         &self.link_id
     }
 
+    /// Current link state.
     pub fn state(&self) -> LinkState {
         self.state
     }
 
+    /// Round-trip time in seconds, once measured.
     pub fn rtt(&self) -> Option<f64> {
         self.rtt
     }
@@ -770,14 +778,17 @@ impl LinkEngine {
         self.establishment_cost = self.establishment_cost.saturating_add(bytes);
     }
 
+    /// Link MDU in bytes, derived from [`Self::mtu`].
     pub fn mdu(&self) -> usize {
         self.mdu
     }
 
+    /// Link MTU in bytes.
     pub fn mtu(&self) -> u32 {
         self.mtu
     }
 
+    /// Whether this end initiated the link.
     pub fn is_initiator(&self) -> bool {
         self.is_initiator
     }
@@ -787,38 +798,49 @@ impl LinkEngine {
         self.activated_at
     }
 
+    /// Encryption mode.
     pub fn mode(&self) -> LinkMode {
         self.mode
     }
 
+    /// Peer identity as (identity hash, public key), once identified via LINKIDENTIFY.
     pub fn remote_identity(&self) -> Option<&([u8; 16], [u8; 64])> {
         self.remote_identity.as_ref()
     }
 
+    /// Hash of the destination the link was requested to.
     pub fn destination_hash(&self) -> &[u8; 16] {
         &self.destination_hash
     }
 
+    /// Hop count to the peer: the initial estimate, updated from the hops
+    /// of the received link proof (initiator) or RTT packet (responder).
     pub fn expected_hops(&self) -> u8 {
         self.expected_hops
     }
 
+    /// When the link proof first reported a hop count different from the
+    /// initiator's estimate; `None` if it never did.
     pub fn rebalanced_at(&self) -> Option<f64> {
         self.rebalanced_at
     }
 
+    /// Outbound packets counted by [`Self::record_outbound_traffic`].
     pub fn tx_packets(&self) -> u64 {
         self.tx_packets
     }
 
+    /// Inbound packets counted by [`Self::record_inbound_traffic`].
     pub fn rx_packets(&self) -> u64 {
         self.rx_packets
     }
 
+    /// Outbound bytes counted by [`Self::record_outbound_traffic`].
     pub fn tx_bytes(&self) -> u64 {
         self.tx_bytes
     }
 
+    /// Inbound bytes counted by [`Self::record_inbound_traffic`].
     pub fn rx_bytes(&self) -> u64 {
         self.rx_bytes
     }
@@ -828,6 +850,7 @@ impl LinkEngine {
         self.derived_key.as_deref()
     }
 
+    /// Keepalive interval in seconds.
     pub fn keepalive_interval(&self) -> f64 {
         self.keepalive_interval
     }

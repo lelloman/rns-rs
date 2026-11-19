@@ -1,4 +1,6 @@
+/// Channel envelope packing and unpacking.
 pub mod envelope;
+/// Channel actions, errors and identifier types.
 pub mod types;
 
 use alloc::collections::VecDeque;
