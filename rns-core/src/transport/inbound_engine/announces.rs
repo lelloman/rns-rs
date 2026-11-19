@@ -496,10 +496,6 @@ impl TransportEngine {
         actions
     }
 
-    /// Hook for an announce whose verification failed. Does nothing: the
-    /// engine keeps no state for it.
-    pub fn clear_failed_verified_announce(&mut self, _sig_cache_key: [u8; 32], _now: f64) {}
-
     /// Whether an announce with this signature cache key was verified recently.
     pub fn announce_sig_cache_contains(&self, sig_cache_key: &[u8; 32]) -> bool {
         self.announce_sig_cache.contains(sig_cache_key)

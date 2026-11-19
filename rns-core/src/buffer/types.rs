@@ -52,8 +52,6 @@ impl Compressor for NoopCompressor {
 /// Errors in buffer operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BufferError {
-    /// Invalid stream ID; not produced within this crate.
-    InvalidStreamId,
     /// Message is shorter than its header.
     InvalidData,
     /// Compressed data could not be decompressed within the limit.
@@ -63,7 +61,6 @@ pub enum BufferError {
 impl fmt::Display for BufferError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            BufferError::InvalidStreamId => write!(f, "Invalid stream ID"),
             BufferError::InvalidData => write!(f, "Invalid stream data"),
             BufferError::DecompressionFailed => write!(f, "Decompression failed"),
         }
@@ -107,9 +104,6 @@ mod tests {
 
     #[test]
     fn errors_describe_themselves() {
-        assert_eq!(
-            BufferError::InvalidStreamId.to_string(),
-            "Invalid stream ID"
-        );
+        assert_eq!(BufferError::InvalidData.to_string(), "Invalid stream data");
     }
 }
