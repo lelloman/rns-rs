@@ -7,29 +7,40 @@ pub type LinkId = [u8; 16];
 /// Link lifecycle states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkState {
+    /// Initiator sent the link request and waits for the proof.
     Pending,
+    /// Responder sent the proof and waits for the RTT packet.
     Handshake,
+    /// Handshake complete; data can flow.
     Active,
+    /// Nothing heard from the peer for the stale time; closes on the next watchdog run unless traffic arrives.
     Stale,
+    /// Link is closed.
     Closed,
 }
 
 /// Reason a link was torn down.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TeardownReason {
+    /// Establishment timed out, or the link went stale and was closed.
     Timeout,
+    /// The initiator closed the link.
     InitiatorClosed,
+    /// The destination (responder) closed the link.
     DestinationClosed,
 }
 
 /// Link encryption mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkMode {
+    /// AES-128 in CBC mode (mode byte `0x00`), as upstream's `Link.MODE_AES128_CBC`.
     Aes128Cbc,
+    /// AES-256 in CBC mode (mode byte `0x01`), as upstream's `Link.MODE_AES256_CBC`.
     Aes256Cbc,
 }
 
 impl LinkMode {
+    /// Mode value as carried in link request and proof signalling.
     pub fn mode_byte(self) -> u8 {
         match self {
             LinkMode::Aes128Cbc => 0x00,
@@ -37,6 +48,7 @@ impl LinkMode {
         }
     }
 
+    /// Parse a mode value; fails with [`LinkError::UnsupportedMode`] for any other value.
     pub fn from_byte(b: u8) -> Result<Self, LinkError> {
         match b {
             0x00 => Ok(LinkMode::Aes128Cbc),
@@ -59,43 +71,65 @@ impl LinkMode {
 pub enum LinkAction {
     /// Link state changed.
     StateChanged {
+        /// Link whose state changed.
         link_id: LinkId,
+        /// State the link moved to.
         new_state: LinkState,
+        /// Why the link closed; `None` unless `new_state` is [`LinkState::Closed`].
         reason: Option<TeardownReason>,
     },
     /// Decrypted data received for application dispatch.
     DataReceived {
+        /// Link the data arrived on.
         link_id: LinkId,
+        /// Decrypted payload.
         plaintext: Vec<u8>,
+        /// Packet context byte.
         context: u8,
     },
     /// Remote peer identified via LINKIDENTIFY.
     RemoteIdentified {
+        /// Link the peer identified on.
         link_id: LinkId,
+        /// Truncated hash of the peer's identity.
         identity_hash: [u8; 16],
+        /// Peer's public key (X25519 then Ed25519).
         public_key: [u8; 64],
     },
     /// Link fully established.
     LinkEstablished {
+        /// Link that became active.
         link_id: LinkId,
+        /// Measured round-trip time in seconds.
         rtt: f64,
+        /// Whether this end initiated the link.
         is_initiator: bool,
     },
     /// The watchdog wants a keepalive probe (`0xff`, context KEEPALIVE)
     /// sent on the link. Only initiators send them; the engine has already
     /// recorded it as sent.
-    SendKeepalive { link_id: LinkId },
+    SendKeepalive {
+        /// Link to send the keepalive on.
+        link_id: LinkId,
+    },
 }
 
 /// Errors in link operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkError {
+    /// Operation is not valid in the link's current state or role.
     InvalidState,
+    /// Packet data is malformed.
     InvalidData,
+    /// A key or signature failed to parse or verify.
     InvalidSignature,
+    /// Link mode is unknown or differs from the requested one.
     UnsupportedMode,
+    /// Key derivation, signing, encryption or decryption failed.
     CryptoError,
+    /// No session key has been derived yet.
     NoSessionKey,
+    /// Handshake failed; not produced within this crate.
     HandshakeFailed,
 }
 

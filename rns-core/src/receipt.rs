@@ -5,9 +5,13 @@ use crate::constants;
 /// Result of proof validation.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProofResult {
+    /// Proof is valid.
     Valid,
+    /// Explicit proof names a different packet hash.
     InvalidHash,
+    /// Signature does not verify.
     InvalidSignature,
+    /// Proof is neither the explicit nor the implicit proof length.
     InvalidLength,
 }
 

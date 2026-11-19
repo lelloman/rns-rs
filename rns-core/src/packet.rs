@@ -13,6 +13,7 @@ use crate::transport::types::PacketBytes;
 /// Storage for a packet's wire bytes that can hand them over as shared
 /// [`PacketBytes`]: shared bytes are cloned, anything else is copied.
 pub trait PacketStorage: AsRef<[u8]> {
+    /// The bytes as shared [`PacketBytes`].
     fn to_shared(&self) -> PacketBytes;
 }
 
@@ -34,12 +35,18 @@ impl PacketStorage for Arc<[u8]> {
     }
 }
 
+/// Errors packing or unpacking a packet.
 #[derive(Debug)]
 pub enum PacketError {
+    /// Wire bytes are shorter than the header requires.
     TooShort,
+    /// Packed packet would exceed the MTU.
     ExceedsMtu,
+    /// `HEADER_2` packet packed without a transport ID.
     MissingTransportId,
+    /// Header type is neither `HEADER_1` nor `HEADER_2`.
     InvalidHeaderType,
+    /// Packet has a header but no data.
     ZeroLengthData,
     /// Hop counts at or above `PATHFINDER_M` are malformed, as upstream
     /// `Packet.unpack` (Packet.py:250) rejects them before the transport
@@ -65,12 +72,18 @@ impl fmt::Display for PacketError {
 // PacketFlags: packs 5 fields into one byte
 // =============================================================================
 
+/// Fields of a packet's flags byte.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PacketFlags {
+    /// Header type, `HEADER_1` or `HEADER_2` (1 bit).
     pub header_type: u8,
+    /// Context flag, `FLAG_SET` or `FLAG_UNSET` (1 bit).
     pub context_flag: u8,
+    /// Transport type, such as `TRANSPORT_BROADCAST` (1 bit).
     pub transport_type: u8,
+    /// Destination type, such as `DESTINATION_SINGLE` (2 bits).
     pub destination_type: u8,
+    /// Packet type, such as `PACKET_TYPE_DATA` (2 bits).
     pub packet_type: u8,
 }
 
@@ -114,14 +127,23 @@ impl PacketFlags {
 /// without copying it, and shared bytes (`PacketBytes`) are cloned, not copied.
 #[derive(Debug, Clone)]
 pub struct RawPacket<B = Vec<u8>> {
+    /// Flags byte fields.
     pub flags: PacketFlags,
+    /// Hop count.
     pub hops: u8,
+    /// Transport ID; present only in `HEADER_2` packets.
     pub transport_id: Option<[u8; 16]>,
+    /// Destination hash.
     pub destination_hash: [u8; 16],
+    /// Packet context byte, such as `CONTEXT_NONE`.
     pub context: u8,
+    /// Wire bytes of the whole packet.
     pub raw: B,
+    /// SHA-256 of the packet's hashable part; zeroed when the packet was left unhashed.
     pub packet_hash: [u8; 32],
+    /// Signal strength reported by the receiving interface, if any.
     pub rssi: Option<i16>,
+    /// Signal-to-noise ratio reported by the receiving interface, if any.
     pub snr: Option<f32>,
 }
 
@@ -398,6 +420,7 @@ impl RawPacket {
         Ok(unsafe { shared.assume_init() })
     }
 
+    /// Pack fields into wire bytes with a caller-provided MTU limit, without the packet hash.
     pub fn pack_raw_with_max_mtu(
         flags: PacketFlags,
         hops: u8,
@@ -570,9 +593,9 @@ impl<B: AsRef<[u8]>> RawPacket<B> {
     /// Get the hashable part of the packet.
     ///
     /// From Python Packet.py:354-361:
-    /// - Take raw[0] & 0x0F (mask out upper 4 bits of flags)
-    /// - For HEADER_1: append raw[2:]
-    /// - For HEADER_2: skip transport_id: append raw[18:]
+    /// - Take `raw[0] & 0x0F` (mask out upper 4 bits of flags)
+    /// - For HEADER_1: append `raw[2:]`
+    /// - For HEADER_2: skip transport_id: append `raw[18:]`
     pub fn get_hashable_part(&self) -> Vec<u8> {
         <RawPacket>::compute_hashable_part(self.flags.header_type, self.raw.as_ref())
     }

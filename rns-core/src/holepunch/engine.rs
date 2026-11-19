@@ -175,22 +175,27 @@ impl HolePunchEngine {
         actions
     }
 
+    /// Current state.
     pub fn state(&self) -> HolePunchState {
         self.state
     }
 
+    /// Current session ID; all zeroes when no session has started.
     pub fn session_id(&self) -> &[u8; 16] {
         &self.session_id
     }
 
+    /// Whether this end proposed the current session.
     pub fn is_initiator(&self) -> bool {
         self.is_initiator
     }
 
+    /// Punch token of the current session (see [`derive_punch_token`]).
     pub fn punch_token(&self) -> &[u8; 32] {
         &self.punch_token
     }
 
+    /// Direct-path keepalive key of the current session (see [`derive_keepalive_key`]).
     pub fn keepalive_key(&self) -> &[u8; 32] {
         &self.keepalive_key
     }

@@ -8,11 +8,16 @@ use crate::constants;
 use crate::hash;
 use crate::stamp::{stamp_valid, stamp_value, stamp_workblock, StampCost, StampValue};
 
+/// Errors building or validating an announce.
 #[derive(Debug)]
 pub enum AnnounceError {
+    /// Announce data is shorter than its fixed fields.
     DataTooShort,
+    /// Public key or signature is invalid.
     InvalidSignature,
+    /// Destination hash does not match the announced name hash and identity.
     DestinationMismatch,
+    /// Signing the announce failed.
     SigningError,
 }
 
@@ -40,22 +45,34 @@ impl fmt::Display for AnnounceError {
 /// ```
 #[derive(Debug, Clone)]
 pub struct AnnounceData {
+    /// Announcing identity's public key (X25519 then Ed25519).
     pub public_key: [u8; 64],
+    /// Name hash of the destination.
     pub name_hash: [u8; 10],
+    /// Random hash of the announce (random bytes and a timestamp in upstream's announces).
     pub random_hash: [u8; 10],
+    /// Ratchet public key, when the context flag is set.
     pub ratchet: Option<[u8; 32]>,
+    /// Ed25519 signature over the destination hash and the announce fields.
     pub signature: [u8; 64],
+    /// Application data, if any.
     pub app_data: Option<Vec<u8>>,
 }
 
 /// Result of a successfully validated announce.
 #[derive(Debug)]
 pub struct ValidatedAnnounce {
+    /// Truncated hash of the announcing identity.
     pub identity_hash: [u8; 16],
+    /// Announcing identity's public key (X25519 then Ed25519).
     pub public_key: [u8; 64],
+    /// Name hash of the destination.
     pub name_hash: [u8; 10],
+    /// Random hash of the announce.
     pub random_hash: [u8; 10],
+    /// Ratchet public key, if the announce carried one.
     pub ratchet: Option<[u8; 32]>,
+    /// Application data, if any.
     pub app_data: Option<Vec<u8>>,
     /// Detached destination stamp parsed from the announce, if present.
     pub stamp: Option<[u8; constants::STAMP_LENGTH]>,

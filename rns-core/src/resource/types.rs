@@ -3,15 +3,25 @@ use core::fmt;
 /// Resource transfer status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResourceStatus {
+    /// Initial receiver state, before the transfer starts.
     None = 0x00,
+    /// Sender created, not yet advertised.
     Queued = 0x01,
+    /// Advertisement sent, waiting for the first part request.
     Advertised = 0x02,
+    /// Parts are being requested and sent.
     Transferring = 0x03,
+    /// Sender has sent every part and waits for the receiver's proof.
     AwaitingProof = 0x04,
+    /// Receiver holds every part and is decrypting, decompressing and verifying them.
     Assembling = 0x05,
+    /// Transfer finished successfully.
     Complete = 0x06,
+    /// Transfer failed or was cancelled.
     Failed = 0x07,
+    /// Received data was found invalid during assembly.
     Corrupt = 0x08,
+    /// Resource was rejected by the receiver.
     Rejected = 0x09,
 }
 
@@ -28,16 +38,24 @@ pub enum ResourceStatus {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdvFlags {
+    /// Data is encrypted for the link (bit 0).
     pub encrypted: bool,
+    /// Data is compressed (bit 1).
     pub compressed: bool,
+    /// Resource is one segment of a larger split transfer (bit 2).
     pub split: bool,
+    /// Resource carries a link request (bit 3).
     pub is_request: bool,
+    /// Resource carries a response to a link request (bit 4).
     pub is_response: bool,
+    /// Data is prefixed with metadata (bit 5).
     pub has_metadata: bool,
+    /// Application-defined flag carried to the receiver (bit 6).
     pub app_flag: bool,
 }
 
 impl AdvFlags {
+    /// Pack the flags into the advertisement flags byte.
     pub fn to_byte(self) -> u8 {
         let mut f: u8 = 0;
         if self.encrypted {
@@ -64,6 +82,7 @@ impl AdvFlags {
         f
     }
 
+    /// Unpack an advertisement flags byte; bit 7 is ignored.
     pub fn from_byte(f: u8) -> Self {
         AdvFlags {
             encrypted: (f & 0x01) != 0,
@@ -99,8 +118,11 @@ pub enum ResourceAction {
     /// Resource data received successfully, with its metadata and the
     /// advertised application flag.
     DataReceived {
+        /// Assembled resource data.
         data: alloc::vec::Vec<u8>,
+        /// Metadata sent with the resource, if any.
         metadata: Option<alloc::vec::Vec<u8>>,
+        /// Application flag from the advertisement.
         app_flag: bool,
     },
     /// Transfer completed (proof validated).
@@ -108,24 +130,42 @@ pub enum ResourceAction {
     /// Transfer failed.
     Failed(ResourceError),
     /// Progress update: (received_parts, total_parts).
-    ProgressUpdate { received: usize, total: usize },
+    ProgressUpdate {
+        /// Parts received so far.
+        received: usize,
+        /// Total parts in the transfer.
+        total: usize,
+    },
 }
 
 /// Resource errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceError {
+    /// Advertisement could not be decoded or has invalid fields.
     InvalidAdvertisement,
+    /// Part data or the metadata within it is malformed.
     InvalidPart,
+    /// Proof data is malformed.
     InvalidProof,
+    /// Assembled data does not hash to the advertised resource hash.
     HashMismatch,
+    /// Assembled parts could not be decrypted.
     DecryptionFailed,
+    /// Assembled data could not be decompressed.
     DecompressionFailed,
+    /// Transfer timed out.
     Timeout,
+    /// Resource was rejected or cancelled by the peer.
     Rejected,
+    /// Resource exceeds a size limit.
     TooLarge,
+    /// Receiver gave up after too many retries.
     MaxRetriesExceeded,
+    /// Msgpack encoding or decoding failed; not produced within this crate.
     MsgpackError,
+    /// Operation is not valid in the current transfer state, or local assembly failed.
     InvalidState,
+    /// No collision-free part hashmap was found within the retry limit.
     CollisionDetected,
     /// The advertised part count differs from ceil(transfer size / SDU).
     PartCountMismatch,

@@ -14,14 +14,23 @@ use core::fmt;
 /// A msgpack value.
 #[derive(Debug, Clone)]
 pub enum Value {
+    /// Nil.
     Nil,
+    /// Boolean.
     Bool(bool),
+    /// Unsigned integer (positive fixint and uint formats).
     UInt(u64),
+    /// Signed integer (negative fixint and int formats).
     Int(i64),
+    /// Float32 or float64.
     Float(f64),
+    /// Binary data.
     Bin(Vec<u8>),
+    /// UTF-8 string.
     Str(String),
+    /// Array.
     Array(Vec<Value>),
+    /// Map as (key, value) pairs in encoded order.
     Map(Vec<(Value, Value)>),
 }
 
@@ -158,10 +167,15 @@ const MAX_DEPTH: usize = 32;
 /// Msgpack error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
+    /// Input ended before the value was complete.
     UnexpectedEof,
+    /// Format byte not supported by this decoder.
     UnsupportedFormat(u8),
+    /// String is not valid UTF-8.
     InvalidUtf8,
+    /// Bytes remain after the decoded value.
     TrailingData,
+    /// Arrays and maps are nested deeper than the decoder allows.
     MaxDepthExceeded,
 }
 
@@ -410,26 +424,42 @@ fn ensure_len(data: &[u8], needed: usize) -> Result<(), Error> {
 /// decode on demand.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ValueRef<'a> {
+    /// Nil.
     Nil,
+    /// Boolean.
     Bool(bool),
+    /// Unsigned integer (positive fixint and uint formats).
     UInt(u64),
+    /// Signed integer (negative fixint and int formats).
     Int(i64),
+    /// Float32 or float64.
     Float(f64),
+    /// Binary data.
     Bin(&'a [u8]),
+    /// UTF-8 string.
     Str(&'a str),
+    /// Array.
     Array {
+        /// Number of items.
         len: usize,
+        /// Encoded items.
         items: &'a [u8],
+        /// Nesting depth the array was decoded at.
         depth: usize,
     },
+    /// Map.
     Map {
+        /// Number of (key, value) entries.
         len: usize,
+        /// Encoded entries, each key followed by its value.
         entries: &'a [u8],
+        /// Nesting depth the map was decoded at.
         depth: usize,
     },
 }
 
 impl<'a> ValueRef<'a> {
+    /// Get as u64 if this is a UInt.
     pub fn as_uint(&self) -> Option<u64> {
         match self {
             ValueRef::UInt(v) => Some(*v),
@@ -437,6 +467,7 @@ impl<'a> ValueRef<'a> {
         }
     }
 
+    /// Get as byte slice if Bin.
     pub fn as_bin(&self) -> Option<&'a [u8]> {
         match self {
             ValueRef::Bin(v) => Some(v),
@@ -444,6 +475,7 @@ impl<'a> ValueRef<'a> {
         }
     }
 
+    /// Get as string slice if Str.
     pub fn as_str(&self) -> Option<&'a str> {
         match self {
             ValueRef::Str(v) => Some(v),
@@ -451,6 +483,7 @@ impl<'a> ValueRef<'a> {
         }
     }
 
+    /// Check if nil.
     pub fn is_nil(&self) -> bool {
         matches!(self, ValueRef::Nil)
     }

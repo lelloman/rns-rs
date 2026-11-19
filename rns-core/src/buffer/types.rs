@@ -1,20 +1,28 @@
 use alloc::vec::Vec;
 use core::fmt;
 
+/// Buffer stream identifier; 14 bits are carried on the wire.
 pub type StreamId = u16;
 
+/// Errors from bounded decompression.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecompressError {
+    /// Input is not valid compressed data, or decompression is unavailable.
     InvalidData,
+    /// Output would exceed the size limit.
     TooLarge,
 }
 
 /// Compression trait for buffer operations (`no_std` compatible).
 pub trait Compressor {
+    /// Compress `data`; `None` when it cannot be compressed.
     fn compress(&self, data: &[u8]) -> Option<Vec<u8>>;
+    /// Decompress `data` without a size limit; `None` on failure.
     fn decompress(&self, data: &[u8]) -> Option<Vec<u8>> {
         self.decompress_bounded(data, usize::MAX).ok()
     }
+    /// Decompress `data`, failing with [`DecompressError::TooLarge`] when the
+    /// output would exceed `max_output_size` bytes.
     fn decompress_bounded(
         &self,
         data: &[u8],
@@ -44,8 +52,11 @@ impl Compressor for NoopCompressor {
 /// Errors in buffer operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BufferError {
+    /// Invalid stream ID; not produced within this crate.
     InvalidStreamId,
+    /// Message is shorter than its header.
     InvalidData,
+    /// Compressed data could not be decompressed within the limit.
     DecompressionFailed,
 }
 

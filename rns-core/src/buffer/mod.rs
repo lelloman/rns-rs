@@ -1,3 +1,4 @@
+/// Stream identifiers, compression trait and buffer errors.
 pub mod types;
 
 use alloc::vec::Vec;
@@ -13,9 +14,14 @@ pub use types::{BufferError, Compressor, DecompressError, NoopCompressor, Stream
 /// Header format: `(stream_id & 0x3FFF) | (eof << 15) | (compressed << 14)`
 #[derive(Debug, Clone, PartialEq)]
 pub struct StreamDataMessage {
+    /// Stream the data belongs to (low 14 bits on the wire).
     pub stream_id: StreamId,
+    /// Data was compressed on the wire.
     pub compressed: bool,
+    /// Last message of the stream.
     pub eof: bool,
+    /// Payload; compressed when `compressed` is set, except after unpacking,
+    /// which decompresses it.
     pub data: Vec<u8>,
 }
 
@@ -95,6 +101,7 @@ pub struct BufferWriter {
 }
 
 impl BufferWriter {
+    /// Create a writer for `stream_id`.
     pub fn new(stream_id: StreamId) -> Self {
         BufferWriter {
             stream_id,
@@ -161,6 +168,7 @@ impl BufferWriter {
         StreamDataMessage::new(self.stream_id, Vec::new(), true, false)
     }
 
+    /// Whether [`Self::close`] was called.
     pub fn is_closed(&self) -> bool {
         self.closed
     }
@@ -174,6 +182,7 @@ pub struct BufferReader {
 }
 
 impl BufferReader {
+    /// Create a reader for `stream_id`; messages for other streams are ignored.
     pub fn new(stream_id: StreamId) -> Self {
         BufferReader {
             stream_id,

@@ -23,7 +23,7 @@ pub fn get_random_hash(rng: &mut dyn Rng) -> [u8; 16] {
 }
 
 /// Compute name hash from app_name and aspects.
-/// = SHA-256("app_name.aspect1.aspect2".as_bytes())[:10]
+/// `= SHA-256("app_name.aspect1.aspect2".as_bytes())[:10]`
 ///
 /// Panics if app_name or any aspect contains a dot, matching Python's
 /// `ValueError("Dots can't be used in app names/aspects")`.

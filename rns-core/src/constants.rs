@@ -179,41 +179,74 @@ const _: () = assert!(LINK_REQUEST_STAMP_COST.whole() <= LINK_COST_CAP as u32);
 
 // --- From Packet.py ---
 
-/// Packet types
+// Packet types
+
+/// Packet type: data.
 pub const PACKET_TYPE_DATA: u8 = 0x00;
+/// Packet type: announce.
 pub const PACKET_TYPE_ANNOUNCE: u8 = 0x01;
+/// Packet type: link request.
 pub const PACKET_TYPE_LINKREQUEST: u8 = 0x02;
+/// Packet type: proof.
 pub const PACKET_TYPE_PROOF: u8 = 0x03;
 
-/// Header types
+// Header types
+
+/// Header type 1: one address field (destination hash only).
 pub const HEADER_1: u8 = 0x00;
+/// Header type 2: two address fields (transport ID, then destination hash), used for packets in transport.
 pub const HEADER_2: u8 = 0x01;
 
-/// Packet context types
+// Packet context types
+
+/// Context: generic data packet.
 pub const CONTEXT_NONE: u8 = 0x00;
+/// Context: resource data part.
 pub const CONTEXT_RESOURCE: u8 = 0x01;
+/// Context: resource advertisement.
 pub const CONTEXT_RESOURCE_ADV: u8 = 0x02;
+/// Context: resource part request.
 pub const CONTEXT_RESOURCE_REQ: u8 = 0x03;
+/// Context: resource hashmap update.
 pub const CONTEXT_RESOURCE_HMU: u8 = 0x04;
+/// Context: resource proof.
 pub const CONTEXT_RESOURCE_PRF: u8 = 0x05;
+/// Context: resource cancel sent by the initiator (sender).
 pub const CONTEXT_RESOURCE_ICL: u8 = 0x06;
+/// Context: resource cancel sent by the receiver.
 pub const CONTEXT_RESOURCE_RCL: u8 = 0x07;
+/// Context: cache request.
 pub const CONTEXT_CACHE_REQUEST: u8 = 0x08;
+/// Context: link request.
 pub const CONTEXT_REQUEST: u8 = 0x09;
+/// Context: response to a link request.
 pub const CONTEXT_RESPONSE: u8 = 0x0A;
+/// Context: announce sent in response to a path request.
 pub const CONTEXT_PATH_RESPONSE: u8 = 0x0B;
+/// Context: command.
 pub const CONTEXT_COMMAND: u8 = 0x0C;
+/// Context: status of an executed command.
 pub const CONTEXT_COMMAND_STATUS: u8 = 0x0D;
+/// Context: link channel data.
 pub const CONTEXT_CHANNEL: u8 = 0x0E;
+/// Context: link keepalive.
 pub const CONTEXT_KEEPALIVE: u8 = 0xFA;
+/// Context: link peer identification proof.
 pub const CONTEXT_LINKIDENTIFY: u8 = 0xFB;
+/// Context: link close message.
 pub const CONTEXT_LINKCLOSE: u8 = 0xFC;
+/// Context: proof of a packet received over a link.
 pub const CONTEXT_LINKPROOF: u8 = 0xFD;
+/// Context: link request round-trip time measurement.
 pub const CONTEXT_LRRTT: u8 = 0xFE;
+/// Context: link request proof.
 pub const CONTEXT_LRPROOF: u8 = 0xFF;
 
-/// Context flag values
+// Context flag values
+
+/// Context flag set.
 pub const FLAG_SET: u8 = 0x01;
+/// Context flag unset.
 pub const FLAG_UNSET: u8 = 0x00;
 
 /// Encrypted MDU: floor((MDU - TOKEN_OVERHEAD - KEYSIZE/16) / AES128_BLOCKSIZE) * AES128_BLOCKSIZE - 1
@@ -231,30 +264,48 @@ pub const EXPL_LENGTH: usize = HASHLENGTH / 8 + SIGLENGTH / 8;
 /// Implicit proof length: SIGLENGTH/8 = 64
 pub const IMPL_LENGTH: usize = SIGLENGTH / 8;
 
-/// Receipt status constants
+// Receipt status constants
+
+/// Receipt status: delivery failed or timed out.
 pub const RECEIPT_FAILED: u8 = 0x00;
+/// Receipt status: sent, no proof received yet.
 pub const RECEIPT_SENT: u8 = 0x01;
+/// Receipt status: a valid proof was received.
 pub const RECEIPT_DELIVERED: u8 = 0x02;
+/// Receipt status: culled, as upstream's `PacketReceipt.CULLED`.
 pub const RECEIPT_CULLED: u8 = 0xFF;
 
 // --- From Destination.py ---
 
-/// Destination types
+// Destination types
+
+/// Destination type: single (one identity, asymmetric encryption).
 pub const DESTINATION_SINGLE: u8 = 0x00;
+/// Destination type: group (shared symmetric key).
 pub const DESTINATION_GROUP: u8 = 0x01;
+/// Destination type: plain (unencrypted).
 pub const DESTINATION_PLAIN: u8 = 0x02;
+/// Destination type: link.
 pub const DESTINATION_LINK: u8 = 0x03;
 
-/// Destination directions
+// Destination directions
+
+/// Destination direction: inbound (local, receives packets).
 pub const DESTINATION_IN: u8 = 0x11;
+/// Destination direction: outbound (remote, packets are sent to it).
 pub const DESTINATION_OUT: u8 = 0x12;
 
 // --- From Transport.py ---
 
-/// Transport types
+// Transport types
+
+/// Transport type: broadcast.
 pub const TRANSPORT_BROADCAST: u8 = 0x00;
+/// Transport type: transport (the packet carries a transport ID).
 pub const TRANSPORT_TRANSPORT: u8 = 0x01;
+/// Transport type: relay, as upstream's `Transport.RELAY`.
 pub const TRANSPORT_RELAY: u8 = 0x02;
+/// Transport type: tunnel, as upstream's `Transport.TUNNEL`.
 pub const TRANSPORT_TUNNEL: u8 = 0x03;
 
 /// Maximum hops
@@ -463,12 +514,19 @@ pub const IC_MAX_HELD_ANNOUNCES: usize = 64;
 
 // --- Interface modes (from Interface.py) ---
 
+/// Interface mode: full (the default).
 pub const MODE_FULL: u8 = 0x01;
+/// Interface mode: point-to-point.
 pub const MODE_POINT_TO_POINT: u8 = 0x02;
+/// Interface mode: access point.
 pub const MODE_ACCESS_POINT: u8 = 0x03;
+/// Interface mode: roaming.
 pub const MODE_ROAMING: u8 = 0x04;
+/// Interface mode: boundary.
 pub const MODE_BOUNDARY: u8 = 0x05;
+/// Interface mode: gateway.
 pub const MODE_GATEWAY: u8 = 0x06;
+/// Interface mode: internal, as upstream's `Interface.MODE_INTERNAL`.
 pub const MODE_INTERNAL: u8 = 0x07;
 
 /// Interface modes that forward path requests for unknown destinations.
@@ -484,8 +542,11 @@ pub const DISCOVERY_PATH_REQUEST_TIMEOUT: f64 = 15.0;
 
 // --- Path states ---
 
+/// Path state: no information about the path.
 pub const STATE_UNKNOWN: u8 = 0x00;
+/// Path state: marked unresponsive.
 pub const STATE_UNRESPONSIVE: u8 = 0x01;
+/// Path state: marked responsive.
 pub const STATE_RESPONSIVE: u8 = 0x02;
 
 // --- From Link.py ---

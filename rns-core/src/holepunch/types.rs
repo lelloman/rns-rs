@@ -24,9 +24,15 @@ pub const DIRECT_LINK_VERSION: u8 = 1;
 
 /// Capability query and answer: "I implement Direct Link".
 pub const HELLO: u8 = 0x00;
+/// Initiator asks to upgrade the link to a direct path; carries the
+/// facilitator and the initiator's public endpoint.
 pub const UPGRADE_REQUEST: u8 = 0x01;
+/// Responder accepts an `UPGRADE_REQUEST`.
 pub const UPGRADE_ACCEPT: u8 = 0x02;
+/// Responder refuses an `UPGRADE_REQUEST`, or gives up after accepting;
+/// carries a reject reason.
 pub const UPGRADE_REJECT: u8 = 0x03;
+/// Responder reports its public endpoint; both sides then start punching.
 pub const UPGRADE_READY: u8 = 0x04;
 /// "I stopped using the direct path of this session; use the link's
 /// original path." Sent over the original path.
@@ -66,8 +72,11 @@ pub fn decode_signal(data: &[u8]) -> Option<(u8, &[u8])> {
 
 // --- Reject reasons ---
 
+/// The responder's policy refuses the upgrade.
 pub const REJECT_POLICY: u8 = 0x01;
+/// The responder already has a session in progress.
 pub const REJECT_BUSY: u8 = 0x02;
+/// The peer does not implement Direct Link.
 pub const REJECT_UNSUPPORTED: u8 = 0x03;
 /// The responder accepted, but could not learn its public endpoint from the
 /// facilitator named in the request.
@@ -155,6 +164,7 @@ pub enum HolePunchState {
 pub struct Endpoint {
     /// IPv4 (4 bytes) or IPv6 (16 bytes).
     pub addr: Vec<u8>,
+    /// Port number.
     pub port: u16,
 }
 
@@ -164,36 +174,59 @@ pub enum HolePunchAction {
     /// Send a signalling message to the link peer (kind and body; the caller
     /// frames it with [`encode_signal`]).
     SendSignal {
+        /// Link to send the message on.
         link_id: [u8; 16],
+        /// Signalling kind, such as [`UPGRADE_REQUEST`].
         msgtype: u8,
+        /// Msgpack-encoded message body.
         payload: Vec<u8>,
     },
     /// Discover our public endpoint by probing the given address.
     DiscoverEndpoints {
+        /// Address of the probe server (facilitator).
         probe_addr: Endpoint,
+        /// Probe protocol to use.
         protocol: ProbeProtocol,
     },
     /// Start UDP hole punching to the given peer endpoint, and to the
     /// peer's host candidates.
     StartUdpPunch {
+        /// Peer's public endpoint.
         peer_public: Endpoint,
+        /// Peer's host candidates.
         peer_hosts: Vec<Endpoint>,
+        /// Key for the tags of punch packets and their acknowledgements.
         punch_token: [u8; 32],
+        /// Hole-punch session ID.
         session_id: [u8; 16],
     },
     /// Direct connection succeeded.
-    Succeeded { session_id: [u8; 16] },
+    Succeeded {
+        /// Hole-punch session ID.
+        session_id: [u8; 16],
+    },
     /// Hole punch failed.
-    Failed { session_id: [u8; 16], reason: u8 },
+    Failed {
+        /// Hole-punch session ID.
+        session_id: [u8; 16],
+        /// A reject reason received from the peer (`REJECT_*`) or a local
+        /// fail reason (`FAIL_*`).
+        reason: u8,
+    },
 }
 
 /// Errors from hole-punch operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HolePunchError {
+    /// Operation is not valid in the engine's current state or role.
     InvalidState,
+    /// Signalling message is malformed or of an unexpected kind.
     InvalidPayload,
+    /// Message belongs to a different session than the current one.
     SessionMismatch,
+    /// No probe address is configured.
     NoProbeAddr,
+    /// No link key was given, or key derivation failed.
     NoDerivedKey,
 }
 
