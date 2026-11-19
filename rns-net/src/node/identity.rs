@@ -19,10 +19,7 @@ pub(super) fn effective_static_transport_identity(
 /// A new identity, logged as upstream's `Identity.create_keys` logs it.
 pub(crate) fn create_identity() -> Identity {
     let identity = Identity::new(&mut OsRng);
-    log::info!(
-        "Identity keys created for <{}>",
-        hex_string(identity.hash())
-    );
+    log::info!("Identity keys created for <{}>", hex(identity.hash()));
     identity
 }
 

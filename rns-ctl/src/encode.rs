@@ -1,16 +1,4 @@
-/// Encode bytes as lowercase hex string.
-pub fn to_hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        s.push(HEX_CHARS[(b >> 4) as usize]);
-        s.push(HEX_CHARS[(b & 0x0f) as usize]);
-    }
-    s
-}
-
-const HEX_CHARS: [char; 16] = [
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
-];
+pub use rns_core::display::hex as to_hex;
 
 /// Decode a hex string to bytes. Returns None on invalid input.
 pub fn from_hex(s: &str) -> Option<Vec<u8>> {

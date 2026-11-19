@@ -299,7 +299,4 @@ impl Drop for RnsNode {
     }
 }
 
-/// Lowercase hex of `bytes`, as upstream prints hashes in log lines.
-pub(crate) fn hex_string(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
+pub(crate) use rns_core::display::hex;

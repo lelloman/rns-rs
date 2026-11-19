@@ -923,8 +923,9 @@ pub fn hex_decode(text: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
+/// `bytes` as lowercase hex.
 pub fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    rns_core::display::hex(bytes)
 }
 
 /// Check if a string is a valid IP address

@@ -52,7 +52,7 @@ impl Driver {
         if registered {
             log::debug!(
                 "Registered <{full_name}> destinations requirement for <{}>",
-                hex_bytes(requester)
+                hex(requester)
             );
         }
         registered
@@ -68,7 +68,7 @@ impl Driver {
         if was_registered {
             log::debug!(
                 "Deregistered <{full_name}> destinations requirement for <{}>",
-                hex_bytes(requester)
+                hex(requester)
             );
             if !filter.is_wanted(&destination_type) {
                 log::debug!(

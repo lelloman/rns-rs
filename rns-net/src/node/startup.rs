@@ -466,7 +466,7 @@ impl RnsNode {
             let identity = create_identity();
             log::info!(
                 "Initialized ephemeral transport identity <{}>",
-                hex_string(identity.hash())
+                hex(identity.hash())
             );
             identity
         };
@@ -1020,10 +1020,7 @@ impl RnsNode {
             enable_probe_responder(&mut driver, &transport_id);
         }
         if config.transport_enabled {
-            log::info!(
-                "Transport instance <{}> started",
-                hex_string(transport_id.hash())
-            );
+            log::info!("Transport instance <{}> started", hex(transport_id.hash()));
         }
 
         // Spawn timer thread with configurable tick interval, unless the

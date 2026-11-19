@@ -50,8 +50,8 @@ pub(super) fn enable_remote_management(
     log::info!(
         target: crate::logging::NOTICE_TARGET,
         "Enabled remote management on <rnstransport.remote.management.{}:{}>",
-        hex_string(&identity_hash),
-        hex_string(&mgmt_dest),
+        hex(&identity_hash),
+        hex(&mgmt_dest),
     );
     if !management.remote_management_allowed.is_empty() {
         log::info!(
@@ -82,7 +82,7 @@ pub(super) fn enable_blackhole_publishing(driver: &mut Driver, transport_id: &Id
     log::info!(
         target: crate::logging::NOTICE_TARGET,
         "Enabled blackhole list publishing for transport identity <{}>",
-        hex_string(&identity_hash),
+        hex(&identity_hash),
     );
 }
 
@@ -119,7 +119,7 @@ pub(super) fn enable_probe_responder(driver: &mut Driver, transport_id: &Identit
     log::info!(
         target: crate::logging::NOTICE_TARGET,
         "Transport Instance will respond to probe requests on <rnstransport.probe.{}:{}>",
-        hex_string(&identity_hash),
-        hex_string(&probe_dest),
+        hex(&identity_hash),
+        hex(&probe_dest),
     );
 }

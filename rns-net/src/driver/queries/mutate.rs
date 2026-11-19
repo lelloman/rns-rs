@@ -283,7 +283,7 @@ impl Driver {
                 self.engine.destination_filter_mut().unwant_all(&requester);
                 log::debug!(
                     "Deregistered all destination requirements for <{}>",
-                    hex_bytes(&requester)
+                    hex(&requester)
                 );
                 QueryResponse::DestinationTypeRegistration(true)
             }

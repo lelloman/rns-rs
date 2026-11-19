@@ -384,7 +384,7 @@ impl RnsNode {
                 let identity = crate::node::create_identity();
                 log::info!(
                     "Initialized ephemeral transport identity <{}>",
-                    crate::node::hex_string(identity.hash())
+                    rns_core::display::hex(identity.hash())
                 );
                 identity
             }
