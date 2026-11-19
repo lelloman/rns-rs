@@ -19,9 +19,9 @@ firmware = [
 rns-core = { path = "../rns-core", default-features = false, features = ["std"] }
 rns-crypto = { path = "../rns-crypto", default-features = false, features = ["std"] }
 
-esp-idf-sys = { version = "0.37", optional = true }
-esp-idf-svc = { version = "0.52", optional = true }
-esp-idf-hal = { version = "0.46", optional = true }
+esp-idf-sys = { version = "0.38", optional = true }
+esp-idf-svc = { version = "0.53", optional = true }
+esp-idf-hal = { version = "0.47", optional = true }
 
 log = "0.4"
 ssd1306 = { version = "0.10", optional = true }
