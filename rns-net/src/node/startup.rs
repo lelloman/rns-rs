@@ -649,87 +649,8 @@ impl RnsNode {
         // Store transport identity for tunnel synthesis and management announces.
         driver.transport_identity = Some(transport_identity);
 
-        // Load hooks from config
         #[cfg(feature = "hooks")]
-        {
-            for hook_cfg in &config.hooks {
-                if !hook_cfg.enabled {
-                    continue;
-                }
-                let point_idx = match config::parse_hook_point(&hook_cfg.attach_point) {
-                    Some(idx) => idx,
-                    None => {
-                        log::warn!(
-                            "Unknown hook point '{}' for hook '{}'",
-                            hook_cfg.attach_point,
-                            hook_cfg.name,
-                        );
-                        continue;
-                    }
-                };
-                let mgr = match driver.hook_manager.as_ref() {
-                    Some(m) => m,
-                    None => {
-                        log::warn!(
-                            "Hook manager not available, skipping hook '{}'",
-                            hook_cfg.name
-                        );
-                        continue;
-                    }
-                };
-                let hook_backend = match config::parse_hook_backend(&hook_cfg.hook_type) {
-                    Ok(backend) => backend,
-                    Err(e) => {
-                        log::warn!(
-                            "Invalid hook type '{}' for hook '{}': {}",
-                            hook_cfg.hook_type,
-                            hook_cfg.name,
-                            e,
-                        );
-                        continue;
-                    }
-                };
-                let load_result = if hook_backend == rns_hooks::HookBackend::Builtin {
-                    let builtin_id = hook_cfg
-                        .builtin_id
-                        .as_deref()
-                        .filter(|id| !id.is_empty())
-                        .or_else(|| (!hook_cfg.path.is_empty()).then_some(hook_cfg.path.as_str()));
-                    match builtin_id {
-                        Some(id) => mgr.load_builtin(hook_cfg.name.clone(), id, hook_cfg.priority),
-                        None => Err(rns_hooks::HookError::CompileError(
-                            "built-in hook requires builtin/id or path".to_string(),
-                        )),
-                    }
-                } else {
-                    mgr.load_file_backend(
-                        hook_cfg.name.clone(),
-                        std::path::Path::new(&hook_cfg.path),
-                        hook_cfg.priority,
-                        hook_backend,
-                    )
-                };
-                match load_result {
-                    Ok(program) => {
-                        driver.hook_slots[point_idx].attach(program);
-                        log::info!(
-                            "Loaded hook '{}' at point {} (priority {})",
-                            hook_cfg.name,
-                            hook_cfg.attach_point,
-                            hook_cfg.priority,
-                        );
-                    }
-                    Err(e) => {
-                        log::error!(
-                            "Failed to load hook '{}' from '{}': {}",
-                            hook_cfg.name,
-                            hook_cfg.path,
-                            e,
-                        );
-                    }
-                }
-            }
-        }
+        load_configured_hooks(&mut driver, &config.hooks);
 
         // Configure discovery
         driver.discover_interfaces = config.discover_interfaces;
@@ -1201,159 +1122,17 @@ impl RnsNode {
                 .and_then(|identity| identity.get_private_key())
                 .expect("the node has a transport identity"),
         );
-        // Set up management destinations if enabled
         if config.management.enable_remote_management {
-            if let Some(prv_key) = transport_id.get_private_key() {
-                let identity_hash = *transport_id.hash();
-                let mgmt_dest = crate::management::management_dest_hash(&identity_hash);
-
-                // Extract Ed25519 signing keys from the identity
-                let (_, sig_seed) = rns_crypto::identity::split_key(&prv_key);
-                let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(&sig_seed);
-                let sig_pub_bytes = sig_prv.public_key().public_bytes();
-
-                // Register as SINGLE destination in transport engine
-                driver
-                    .engine
-                    .register_destination(mgmt_dest, rns_core::constants::DESTINATION_SINGLE);
-                driver
-                    .local_destinations
-                    .insert(mgmt_dest, rns_core::constants::DESTINATION_SINGLE);
-
-                // Register as link destination in link manager
-                driver.builtin_link_destinations.insert(mgmt_dest);
-                driver.link_manager.register_link_destination(
-                    mgmt_dest,
-                    sig_prv,
-                    sig_pub_bytes,
-                    crate::link_manager::ResourceStrategy::AcceptNone,
-                );
-
-                // Register management path hashes
-                driver
-                    .link_manager
-                    .register_management_path(crate::management::status_path_hash());
-                driver
-                    .link_manager
-                    .register_management_path(crate::management::path_path_hash());
-
-                log::info!(
-                    target: crate::logging::NOTICE_TARGET,
-                    "Enabled remote management on <rnstransport.remote.management.{}:{}>",
-                    hex_string(&identity_hash),
-                    hex_string(&mgmt_dest),
-                );
-
-                // Set up allowed list
-                if !config.management.remote_management_allowed.is_empty() {
-                    log::info!(
-                        "Remote management allowed for {} identities",
-                        config.management.remote_management_allowed.len(),
-                    );
-                }
-            }
+            enable_remote_management(&mut driver, &transport_id, &config.management);
         }
-
         if config.management.publish_blackhole {
-            if let Some(prv_key) = transport_id.get_private_key() {
-                let identity_hash = *transport_id.hash();
-                let bh_dest = crate::management::blackhole_dest_hash(&identity_hash);
-
-                let (_, sig_seed) = rns_crypto::identity::split_key(&prv_key);
-                let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(&sig_seed);
-                let sig_pub_bytes = sig_prv.public_key().public_bytes();
-
-                driver
-                    .engine
-                    .register_destination(bh_dest, rns_core::constants::DESTINATION_SINGLE);
-                driver
-                    .local_destinations
-                    .insert(bh_dest, rns_core::constants::DESTINATION_SINGLE);
-                driver.builtin_link_destinations.insert(bh_dest);
-                driver.link_manager.register_link_destination(
-                    bh_dest,
-                    sig_prv,
-                    sig_pub_bytes,
-                    crate::link_manager::ResourceStrategy::AcceptNone,
-                );
-                driver
-                    .link_manager
-                    .register_management_path(crate::management::list_path_hash());
-                // Upstream 426673e9: requesting the list costs a 5.25 stamp,
-                // below the `LR_COST` default.
-                driver
-                    .link_manager
-                    .link_request_costs()
-                    .set(bh_dest, rns_core::constants::BLACKHOLE_LINK_COST.as_f64());
-
-                log::info!(
-                    target: crate::logging::NOTICE_TARGET,
-                    "Enabled blackhole list publishing for transport identity <{}>",
-                    hex_string(&identity_hash),
-                );
-            }
+            enable_blackhole_publishing(&mut driver, &transport_id);
         }
-
         if let (Some(stats), Some(storage_dir)) = (restored_tables, transport_state_dir.as_ref()) {
-            // Upstream's lines, for the tables it found in storage.
-            let entries = |n: usize| if n == 1 { "entry" } else { "entries" };
-            if storage_dir.join("destination_table").is_file() {
-                let filtered = if stats.filtered_paths > 0 {
-                    format!(", {} filtered", stats.filtered_paths)
-                } else {
-                    String::new()
-                };
-                log::info!(
-                    "Loaded {} path table {} from storage{}",
-                    stats.paths,
-                    entries(stats.paths),
-                    filtered
-                );
-            }
-            if storage_dir.join("tunnels").is_file() {
-                log::info!(
-                    "Loaded {} tunnel table {} from storage",
-                    stats.tunnels,
-                    entries(stats.tunnels)
-                );
-            }
+            log_restored_tables(&stats, storage_dir);
         }
-
-        // Set up probe responder if enabled
         if config.respond_to_probes && config.transport_enabled {
-            let identity_hash = *transport_id.hash();
-            let probe_dest = crate::management::probe_dest_hash(&identity_hash);
-
-            // Register as SINGLE destination in transport engine
-            driver
-                .engine
-                .register_destination(probe_dest, rns_core::constants::DESTINATION_SINGLE);
-            driver
-                .local_destinations
-                .insert(probe_dest, rns_core::constants::DESTINATION_SINGLE);
-
-            // Register PROVE_ALL proof strategy with transport identity
-            let probe_identity = rns_crypto::identity::Identity::from_private_key(
-                &transport_id
-                    .get_private_key()
-                    .expect("the transport identity was built from its private key"),
-            );
-            driver.proof_strategies.insert(
-                probe_dest,
-                (
-                    rns_core::types::ProofStrategy::ProveAll,
-                    Some(probe_identity),
-                ),
-            );
-
-            driver.probe_responder_hash = Some(probe_dest);
-
-            log::info!(
-                target: crate::logging::NOTICE_TARGET,
-                "Transport Instance will respond to probe requests on <rnstransport.probe.{}:{}>",
-                hex_string(&identity_hash),
-                hex_string(&probe_dest),
-            );
+            enable_probe_responder(&mut driver, &transport_id);
         }
         if config.transport_enabled {
             log::info!(
@@ -1497,67 +1276,9 @@ impl RnsNode {
             None
         };
 
-        let announce_verify_queue = Arc::clone(&driver.announce_verify_queue);
         let verify_shutdown = Arc::clone(&driver.announce_verify_signal);
-        let verify_shutdown_thread = Arc::clone(&verify_shutdown);
-        let verify_tx = tx.clone();
-        // The verification thread, unless the compact engine verifies
-        // announces on its driver loop.
-        let verify_handle = if crate::engine::FOLD_WORK {
-            None
-        } else {
-            Some(
-                thread::Builder::new()
-                    .name("rns-verify".into())
-                    .spawn(move || {
-                        #[cfg(target_family = "unix")]
-                        {
-                            // SAFETY: `nice` takes a plain integer and only lowers scheduling
-                            // priority (per thread on Linux); no memory is involved.
-                            unsafe {
-                                libc::nice(5);
-                            }
-                        }
-
-                        while !verify_shutdown_thread.stopped() {
-                            let batch = {
-                                let mut queue = announce_verify_queue
-                                    .lock()
-                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                                queue.take_pending(time::now())
-                            };
-
-                            if batch.is_empty() {
-                                // Until the driver queues an announce.
-                                verify_shutdown_thread.wait();
-                                continue;
-                            }
-
-                            for (key, pending) in batch {
-                                if verify_shutdown_thread.stopped() {
-                                    break;
-                                }
-                                let event = match crate::driver::check_pending_announce(&pending) {
-                                    crate::driver::AnnounceCheck::Valid {
-                                        validated,
-                                        sig_cache_key,
-                                    } => Event::AnnounceVerified {
-                                        key,
-                                        validated,
-                                        sig_cache_key,
-                                    },
-                                    crate::driver::AnnounceCheck::Invalid { sig_cache_key } => {
-                                        Event::AnnounceVerifyFailed { key, sig_cache_key }
-                                    }
-                                };
-                                if verify_tx.send(event).is_err() {
-                                    return;
-                                }
-                            }
-                        }
-                    })?,
-            )
-        };
+        let verify_handle =
+            spawn_announce_verifier(&driver.announce_verify_queue, &verify_shutdown, tx.clone())?;
 
         // Spawn the driver after startup has registered local destinations and static interfaces.
         // Interface readers can enqueue frames before this point; the bounded event queue preserves
@@ -1573,56 +1294,8 @@ impl RnsNode {
                 driver.run();
             })?;
 
-        // Match upstream's 12-hour background persistence cadence. The worker
-        // performs disk serialization at low priority and never touches engine
-        // state directly; it obtains a consistent snapshot through the driver.
-        let (persist_handle, persist_stop) = if let Some(storage_dir) = transport_state_dir
-            .clone()
-            .filter(|_| !crate::engine::FOLD_TIMERS)
-        {
-            let persist_tx = tx.clone();
-            let (stop_tx, stop_rx) = std::sync::mpsc::channel();
-            let handle = thread::Builder::new()
-                .name("rns-persist".into())
-                .spawn(move || {
-                    #[cfg(target_family = "unix")]
-                    // SAFETY: `nice` takes a plain integer and only lowers scheduling
-                    // priority (per thread on Linux); no memory is involved.
-                    unsafe {
-                        libc::nice(5);
-                    }
-
-                    loop {
-                        match stop_rx.recv_timeout(Duration::from_secs(12 * 60 * 60)) {
-                            Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                        }
-                        let (response_tx, response_rx) = std::sync::mpsc::channel();
-                        if persist_tx
-                            .send(Event::query(
-                                QueryRequest::TransportStateSnapshot,
-                                response_tx,
-                            ))
-                            .is_err()
-                        {
-                            break;
-                        }
-                        let Ok(QueryResponse::TransportStateSnapshot(snapshot)) =
-                            response_rx.recv()
-                        else {
-                            continue;
-                        };
-                        if let Err(err) =
-                            storage::save_transport_state(&snapshot, &storage_dir, true)
-                        {
-                            log::warn!("failed to persist transport state: {}", err);
-                        }
-                    }
-                })?;
-            (Some(handle), Some(stop_tx))
-        } else {
-            (None, None)
-        };
+        let (persist_handle, persist_stop) =
+            spawn_transport_state_persister(transport_state_dir.clone(), tx.clone())?.unzip();
 
         let mut node = RnsNode {
             tx,
@@ -2126,4 +1799,350 @@ fn autoconnect_policy(rns_config: &config::RnsConfig) -> (bool, Vec<String>) {
         );
     }
     (upstream_policy, bootstrap_interfaces)
+}
+
+/// Register `dest` as a built-in SINGLE destination taking links, signed
+/// with the Ed25519 half of `prv_key`, as the management destinations are.
+fn register_builtin_link_destination(driver: &mut Driver, dest: [u8; 16], prv_key: &[u8; 64]) {
+    let (_, sig_seed) = rns_crypto::identity::split_key(prv_key);
+    let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(&sig_seed);
+    let sig_pub_bytes = sig_prv.public_key().public_bytes();
+    driver
+        .engine
+        .register_destination(dest, rns_core::constants::DESTINATION_SINGLE);
+    driver
+        .local_destinations
+        .insert(dest, rns_core::constants::DESTINATION_SINGLE);
+    driver.builtin_link_destinations.insert(dest);
+    driver.link_manager.register_link_destination(
+        dest,
+        sig_prv,
+        sig_pub_bytes,
+        crate::link_manager::ResourceStrategy::AcceptNone,
+    );
+}
+
+/// The remote management destination of the transport identity
+/// `transport_id`, answering status and path requests.
+fn enable_remote_management(
+    driver: &mut Driver,
+    transport_id: &Identity,
+    management: &crate::management::ManagementConfig,
+) {
+    let Some(prv_key) = transport_id.get_private_key() else {
+        return;
+    };
+    let identity_hash = *transport_id.hash();
+    let mgmt_dest = crate::management::management_dest_hash(&identity_hash);
+    register_builtin_link_destination(driver, mgmt_dest, &prv_key);
+    driver
+        .link_manager
+        .register_management_path(crate::management::status_path_hash());
+    driver
+        .link_manager
+        .register_management_path(crate::management::path_path_hash());
+    log::info!(
+        target: crate::logging::NOTICE_TARGET,
+        "Enabled remote management on <rnstransport.remote.management.{}:{}>",
+        hex_string(&identity_hash),
+        hex_string(&mgmt_dest),
+    );
+    if !management.remote_management_allowed.is_empty() {
+        log::info!(
+            "Remote management allowed for {} identities",
+            management.remote_management_allowed.len(),
+        );
+    }
+}
+
+/// The blackhole list destination of the transport identity
+/// `transport_id`.
+fn enable_blackhole_publishing(driver: &mut Driver, transport_id: &Identity) {
+    let Some(prv_key) = transport_id.get_private_key() else {
+        return;
+    };
+    let identity_hash = *transport_id.hash();
+    let bh_dest = crate::management::blackhole_dest_hash(&identity_hash);
+    register_builtin_link_destination(driver, bh_dest, &prv_key);
+    driver
+        .link_manager
+        .register_management_path(crate::management::list_path_hash());
+    // Upstream 426673e9: requesting the list costs a 5.25 stamp, below the
+    // `LR_COST` default.
+    driver
+        .link_manager
+        .link_request_costs()
+        .set(bh_dest, rns_core::constants::BLACKHOLE_LINK_COST.as_f64());
+    log::info!(
+        target: crate::logging::NOTICE_TARGET,
+        "Enabled blackhole list publishing for transport identity <{}>",
+        hex_string(&identity_hash),
+    );
+}
+
+/// Upstream's lines for the path and tunnel tables found in storage.
+fn log_restored_tables(stats: &rns_core::transport::persistence::RestoreStats, storage_dir: &Path) {
+    // Upstream's lines, for the tables it found in storage.
+    let entries = |n: usize| if n == 1 { "entry" } else { "entries" };
+    if storage_dir.join("destination_table").is_file() {
+        let filtered = if stats.filtered_paths > 0 {
+            format!(", {} filtered", stats.filtered_paths)
+        } else {
+            String::new()
+        };
+        log::info!(
+            "Loaded {} path table {} from storage{}",
+            stats.paths,
+            entries(stats.paths),
+            filtered
+        );
+    }
+    if storage_dir.join("tunnels").is_file() {
+        log::info!(
+            "Loaded {} tunnel table {} from storage",
+            stats.tunnels,
+            entries(stats.tunnels)
+        );
+    }
+}
+
+/// The probe destination of the transport identity `transport_id`, which
+/// proves every packet it receives.
+fn enable_probe_responder(driver: &mut Driver, transport_id: &Identity) {
+    let identity_hash = *transport_id.hash();
+    let probe_dest = crate::management::probe_dest_hash(&identity_hash);
+
+    // Register as SINGLE destination in transport engine
+    driver
+        .engine
+        .register_destination(probe_dest, rns_core::constants::DESTINATION_SINGLE);
+    driver
+        .local_destinations
+        .insert(probe_dest, rns_core::constants::DESTINATION_SINGLE);
+
+    // Register PROVE_ALL proof strategy with transport identity
+    let probe_identity = rns_crypto::identity::Identity::from_private_key(
+        &transport_id
+            .get_private_key()
+            .expect("the transport identity was built from its private key"),
+    );
+    driver.proof_strategies.insert(
+        probe_dest,
+        (
+            rns_core::types::ProofStrategy::ProveAll,
+            Some(probe_identity),
+        ),
+    );
+
+    driver.probe_responder_hash = Some(probe_dest);
+
+    log::info!(
+        target: crate::logging::NOTICE_TARGET,
+        "Transport Instance will respond to probe requests on <rnstransport.probe.{}:{}>",
+        hex_string(&identity_hash),
+        hex_string(&probe_dest),
+    );
+}
+
+/// Load the enabled hooks of the config into `driver`'s hook slots,
+/// skipping, with a warning or an error, those that cannot be loaded.
+#[cfg(feature = "hooks")]
+fn load_configured_hooks(driver: &mut Driver, hooks: &[config::ParsedHook]) {
+    for hook_cfg in hooks {
+        if !hook_cfg.enabled {
+            continue;
+        }
+        let point_idx = match config::parse_hook_point(&hook_cfg.attach_point) {
+            Some(idx) => idx,
+            None => {
+                log::warn!(
+                    "Unknown hook point '{}' for hook '{}'",
+                    hook_cfg.attach_point,
+                    hook_cfg.name,
+                );
+                continue;
+            }
+        };
+        let mgr = match driver.hook_manager.as_ref() {
+            Some(m) => m,
+            None => {
+                log::warn!(
+                    "Hook manager not available, skipping hook '{}'",
+                    hook_cfg.name
+                );
+                continue;
+            }
+        };
+        let hook_backend = match config::parse_hook_backend(&hook_cfg.hook_type) {
+            Ok(backend) => backend,
+            Err(e) => {
+                log::warn!(
+                    "Invalid hook type '{}' for hook '{}': {}",
+                    hook_cfg.hook_type,
+                    hook_cfg.name,
+                    e,
+                );
+                continue;
+            }
+        };
+        let load_result = if hook_backend == rns_hooks::HookBackend::Builtin {
+            let builtin_id = hook_cfg
+                .builtin_id
+                .as_deref()
+                .filter(|id| !id.is_empty())
+                .or_else(|| (!hook_cfg.path.is_empty()).then_some(hook_cfg.path.as_str()));
+            match builtin_id {
+                Some(id) => mgr.load_builtin(hook_cfg.name.clone(), id, hook_cfg.priority),
+                None => Err(rns_hooks::HookError::CompileError(
+                    "built-in hook requires builtin/id or path".to_string(),
+                )),
+            }
+        } else {
+            mgr.load_file_backend(
+                hook_cfg.name.clone(),
+                std::path::Path::new(&hook_cfg.path),
+                hook_cfg.priority,
+                hook_backend,
+            )
+        };
+        match load_result {
+            Ok(program) => {
+                driver.hook_slots[point_idx].attach(program);
+                log::info!(
+                    "Loaded hook '{}' at point {} (priority {})",
+                    hook_cfg.name,
+                    hook_cfg.attach_point,
+                    hook_cfg.priority,
+                );
+            }
+            Err(e) => {
+                log::error!(
+                    "Failed to load hook '{}' from '{}': {}",
+                    hook_cfg.name,
+                    hook_cfg.path,
+                    e,
+                );
+            }
+        }
+    }
+}
+
+/// The thread that verifies announces, unless the compact engine verifies
+/// them on its driver loop.
+fn spawn_announce_verifier(
+    queue: &Arc<std::sync::Mutex<rns_core::transport::announce_verify_queue::AnnounceVerifyQueue>>,
+    signal: &Arc<crate::driver::WorkSignal>,
+    verify_tx: EventSender,
+) -> io::Result<Option<JoinHandle<()>>> {
+    let announce_verify_queue = Arc::clone(queue);
+    let verify_shutdown_thread = Arc::clone(signal);
+    let handle = if crate::engine::FOLD_WORK {
+        None
+    } else {
+        Some(
+            thread::Builder::new()
+                .name("rns-verify".into())
+                .spawn(move || {
+                    #[cfg(target_family = "unix")]
+                    {
+                        // SAFETY: `nice` takes a plain integer and only lowers scheduling
+                        // priority (per thread on Linux); no memory is involved.
+                        unsafe {
+                            libc::nice(5);
+                        }
+                    }
+
+                    while !verify_shutdown_thread.stopped() {
+                        let batch = {
+                            let mut queue = announce_verify_queue
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            queue.take_pending(time::now())
+                        };
+
+                        if batch.is_empty() {
+                            // Until the driver queues an announce.
+                            verify_shutdown_thread.wait();
+                            continue;
+                        }
+
+                        for (key, pending) in batch {
+                            if verify_shutdown_thread.stopped() {
+                                break;
+                            }
+                            let event = match crate::driver::check_pending_announce(&pending) {
+                                crate::driver::AnnounceCheck::Valid {
+                                    validated,
+                                    sig_cache_key,
+                                } => Event::AnnounceVerified {
+                                    key,
+                                    validated,
+                                    sig_cache_key,
+                                },
+                                crate::driver::AnnounceCheck::Invalid { sig_cache_key } => {
+                                    Event::AnnounceVerifyFailed { key, sig_cache_key }
+                                }
+                            };
+                            if verify_tx.send(event).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                })?,
+        )
+    };
+    Ok(handle)
+}
+
+/// The thread that persists the transport state every 12 hours, as
+/// upstream's background persistence does, and the sender that stops it;
+/// none when the compact engine persists on its driver loop. It writes at
+/// low priority and reads engine state only through the driver's snapshot.
+fn spawn_transport_state_persister(
+    transport_state_dir: Option<std::path::PathBuf>,
+    persist_tx: EventSender,
+) -> io::Result<Option<(JoinHandle<()>, std::sync::mpsc::Sender<()>)>> {
+    let threads = if let Some(storage_dir) =
+        transport_state_dir.filter(|_| !crate::engine::FOLD_TIMERS)
+    {
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        let handle = thread::Builder::new()
+            .name("rns-persist".into())
+            .spawn(move || {
+                #[cfg(target_family = "unix")]
+                // SAFETY: `nice` takes a plain integer and only lowers scheduling
+                // priority (per thread on Linux); no memory is involved.
+                unsafe {
+                    libc::nice(5);
+                }
+
+                loop {
+                    match stop_rx.recv_timeout(Duration::from_secs(12 * 60 * 60)) {
+                        Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                    let (response_tx, response_rx) = std::sync::mpsc::channel();
+                    if persist_tx
+                        .send(Event::query(
+                            QueryRequest::TransportStateSnapshot,
+                            response_tx,
+                        ))
+                        .is_err()
+                    {
+                        break;
+                    }
+                    let Ok(QueryResponse::TransportStateSnapshot(snapshot)) = response_rx.recv()
+                    else {
+                        continue;
+                    };
+                    if let Err(err) = storage::save_transport_state(&snapshot, &storage_dir, true) {
+                        log::warn!("failed to persist transport state: {}", err);
+                    }
+                }
+            })?;
+        Some((handle, stop_tx))
+    } else {
+        None
+    };
+    Ok(threads)
 }
