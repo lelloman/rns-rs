@@ -3,11 +3,15 @@
 /// Interface statistics response.
 #[derive(Debug, Clone, Default)]
 pub struct InterfaceStatsResponse {
+    /// Statistics of each interface, in upstream's interface order.
     pub interfaces: Vec<SingleInterfaceStat>,
+    /// The transport identity hash, or `None` without one.
     pub transport_id: Option<[u8; 16]>,
     /// The hash of the configured network identity (upstream `network_id`).
     pub network_id: Option<[u8; 16]>,
+    /// The node is a transport node.
     pub transport_enabled: bool,
+    /// Seconds since the driver started.
     pub transport_uptime: f64,
     /// Total received bytes across all interfaces.
     pub total_rxb: u64,
@@ -52,54 +56,89 @@ pub struct InterfaceStatsResponse {
 /// Detailed traffic counters and average rates in bits per second.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TrafficDetail {
+    /// Received bits per second.
     pub rxs: f64,
+    /// Transmitted bits per second.
     pub txs: f64,
-    /// Filtered traffic (upstream 134dc677): bytes and bits per second.
+    /// Received bytes dropped as filtered (upstream 134dc677).
     pub frxb: u64,
+    /// Transmitted bytes counted as filtered; upstream counts none.
     pub ftxb: u64,
+    /// Filtered received bits per second.
     pub frxs: f64,
+    /// Filtered transmitted bits per second.
     pub ftxs: f64,
+    /// Announce bytes received.
     pub arxb: u64,
+    /// Announce bytes transmitted.
     pub atxb: u64,
+    /// Announces received.
     pub arxc: u64,
+    /// Announces transmitted.
     pub atxc: u64,
     /// Filtered announces (upstream 819076c3).
     pub afrxc: u64,
+    /// Announce bits per second received.
     pub arxs: f64,
+    /// Announce bits per second transmitted.
     pub atxs: f64,
+    /// Path request bytes received.
     pub prxb: u64,
+    /// Path request bytes transmitted.
     pub ptxb: u64,
+    /// Path requests received.
     pub prxc: u64,
+    /// Path requests transmitted.
     pub ptxc: u64,
+    /// Path request bits per second received.
     pub prxs: f64,
+    /// Path request bits per second transmitted.
     pub ptxs: f64,
+    /// Incoming announce frequency, per second.
     pub arxf: f64,
+    /// Outgoing announce frequency, per second.
     pub atxf: f64,
+    /// Incoming path request frequency, per second.
     pub prxf: f64,
+    /// Outgoing path request frequency, per second.
     pub ptxf: f64,
 }
 
 /// Runtime status for the outbound Backbone peer pool.
 #[derive(Debug, Clone)]
 pub struct BackbonePeerPoolStatus {
+    /// Most members connected at once.
     pub max_connected: usize,
+    /// Members with a connection, up or still connecting.
     pub active_count: usize,
+    /// Members waiting to connect.
     pub standby_count: usize,
+    /// Members cooling down after too many failures within the window.
     pub cooldown_count: usize,
+    /// Each member's state.
     pub members: Vec<BackbonePeerPoolMemberStatus>,
 }
 
 /// Runtime status for one outbound Backbone peer-pool member.
 #[derive(Debug, Clone)]
 pub struct BackbonePeerPoolMemberStatus {
+    /// Name of the member's interface.
     pub name: String,
+    /// The member's `host:port`.
     pub remote: String,
+    /// `configured` or `discovered`.
     pub source: String,
+    /// Its priority; higher is tried first.
     pub priority: u8,
+    /// `active`, `connecting`, `standby` or `cooldown`.
     pub state: String,
+    /// Id of its interface while it has a connection.
     pub interface_id: Option<u64>,
+    /// Failures within the pool's failure window.
     pub failure_count: usize,
+    /// Its last connection error.
     pub last_error: Option<String>,
+    /// Seconds left of its cooldown.
     pub cooldown_remaining_seconds: Option<f64>,
 }
 
@@ -116,6 +155,7 @@ pub struct I2pEndpointStat {
 /// Statistics for a single interface.
 #[derive(Debug, Clone)]
 pub struct SingleInterfaceStat {
+    /// The interface's id.
     pub id: u64,
     /// The interface's name: its config name, or the name a listener gave
     /// a spawned interface (upstream's `interface.name`, `short_name` in
@@ -138,53 +178,88 @@ pub struct SingleInterfaceStat {
     /// (upstream b7a93b9b `rem_impl`, `rem_vers`, `rem_is_tn`,
     /// `rem_dst_cost`, `rem_pr_cost`); `None` on a shared medium.
     pub remote_transport_info: Option<rns_core::transport::tunnel::RemoteTransportInfo>,
+    /// The interface is online and enabled.
     pub status: bool,
+    /// Interface mode (`constants::MODE_*`).
     pub mode: u8,
     /// Signed interface preference used by path selection.
     pub gravity: i64,
     /// Whether boundary ingress announces may propagate to internal interfaces.
     pub announces_to_internal: Option<bool>,
+    /// Bytes received.
     pub rxb: u64,
+    /// Bytes transmitted.
     pub txb: u64,
+    /// Frames the interface's writer dropped.
     pub tx_drops: u64,
+    /// Bytes of those frames.
     pub tx_dropped_bytes: u64,
+    /// The writer is stalled: what it buffered is not draining, and new frames
+    /// are dropped.
     pub tx_stalled: bool,
+    /// Encoded bytes waiting in the writer's queue or the writer itself.
     pub tx_buffered: usize,
     /// Byte counters and rates for total, announce and path-request traffic.
     pub traffic: TrafficDetail,
+    /// Inbound packets dropped as protocol violations.
     pub protocol_violations: u64,
+    /// Inbound packets dropped for failing IFAC, or for an IFAC flag on an
+    /// interface without IFAC.
     pub ifac_violations: u64,
+    /// Inbound packets dropped by the packet filter.
     pub packet_filter_hits: u64,
+    /// Inbound packets dropped because their hop count reached `HOP_LIMITER`.
     pub hop_limiter_hits: u64,
     /// Inbound path requests whose stamp met the required cost.
     pub stamped_path_requests: u64,
+    /// Packets received.
     pub rx_packets: u64,
+    /// Packets transmitted.
     pub tx_packets: u64,
+    /// CPU load of the interface's device, in percent.
     pub cpu_load: Option<f64>,
+    /// Memory use of the interface's device, in percent.
     pub mem_load: Option<f64>,
+    /// Switch id of a Weave device.
     pub switch_id: Option<[u8; 4]>,
+    /// Endpoint id of a Weave device.
     pub endpoint_id: Option<[u8; 8]>,
+    /// Switch a Weave peer is reached through.
     pub via_switch_id: Option<[u8; 4]>,
+    /// Number of peers a Weave device knows.
     pub peers: Option<usize>,
+    /// Last received signal strength, in dBm.
     pub rssi: Option<i16>,
+    /// Last signal-to-noise ratio, in dB.
     pub snr: Option<f32>,
+    /// Signal quality in percent, from SNR and spreading factor.
     pub signal_quality: Option<f64>,
+    /// Radio frequency, in Hz.
     pub frequency: Option<u32>,
+    /// Radio bandwidth, in Hz.
     pub bandwidth: Option<u32>,
+    /// Transmit power, in dBm.
     pub txpower: Option<i8>,
+    /// LoRa spreading factor.
     pub spreading_factor: Option<u8>,
+    /// LoRa coding rate.
     pub coding_rate: Option<u8>,
+    /// Radio channel number.
     pub channel: Option<u32>,
+    /// Modulation name, such as `LoRa`.
     pub modulation: Option<String>,
     /// Channel and device state an RNode reports.
     pub radio: Option<crate::common::interface_stats::RadioStats>,
+    /// Bitrate in bits per second, when known.
     pub bitrate: Option<u64>,
     /// Whether upstream holds the bitrate as a float, and so reports it as
     /// one: an auto-connected interface's, configured as `5E6`.
     pub bitrate_is_float: bool,
     /// Hardware MTU advertised for this interface, when known.
     pub mtu: Option<u32>,
+    /// Size of the IFAC signature, in bytes, when the interface uses IFAC.
     pub ifac_size: Option<usize>,
+    /// When the interface's statistics started, as Unix time in seconds.
     pub started: f64,
     /// Incoming announce frequency (per second).
     pub ia_freq: f64,

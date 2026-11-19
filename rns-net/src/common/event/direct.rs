@@ -98,6 +98,7 @@ pub enum DirectCandidateKind {
 }
 
 impl DirectCandidateKind {
+    /// The kind's name: `reflexive`, `host` or `peer_reflexive`.
     pub fn as_str(&self) -> &'static str {
         match self {
             DirectCandidateKind::Reflexive => "reflexive",
@@ -133,7 +134,9 @@ impl DirectLinkCounters {
 /// The direct path a link runs over.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DirectPathStatus {
+    /// The direct interface.
     pub interface_id: rns_core::transport::types::InterfaceId,
+    /// Id of the upgrade session that established the path.
     pub session_id: [u8; 16],
     /// This side proposed the upgrade.
     pub initiator: bool,
@@ -172,6 +175,8 @@ pub enum DirectLossCause {
 }
 
 impl DirectLossCause {
+    /// The cause's name: `interface_down`, `link_failed` or
+    /// `peer_fallback`.
     pub fn as_str(&self) -> &'static str {
         match self {
             DirectLossCause::InterfaceDown => "interface_down",
@@ -184,6 +189,7 @@ impl DirectLossCause {
 /// Direct Link state of one link.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DirectLinkEntry {
+    /// The link's id.
     pub link_id: [u8; 16],
     /// The direct path the link runs over, or `None` when it runs over its
     /// original (transport) path.
@@ -195,6 +201,7 @@ pub struct DirectLinkEntry {
     /// The link peer implements Direct Link: `Some(true)` once it answered
     /// or signalled, `None` when not known.
     pub peer_supported: Option<bool>,
+    /// Upgrade counts for this link.
     pub counters: DirectLinkCounters,
     /// The reason code of the last failure and when it happened.
     pub last_failure: Option<(u8, f64)>,
