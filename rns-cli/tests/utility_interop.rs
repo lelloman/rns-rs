@@ -855,7 +855,12 @@ fn rust_rnsh_delivers_burst_output_and_reuses_listener() {
         harness.rnsh_command(Side::Listener, &listener_app_config, &listener_identity);
     identity_command.args(["--listen", "--print-identity"]);
     let identity_output = run(identity_command);
-    assert_success(&identity_output, "print rnsh listener identity");
+    // As upstream's, rnsh exits 1 after printing its identity.
+    assert_eq!(
+        identity_output.status.code(),
+        Some(1),
+        "print rnsh listener identity: {identity_output:?}"
+    );
     let destination = parse_destination(&identity_output);
 
     let mut listener_command =
@@ -947,7 +952,12 @@ fn rust_rnsh_listener_without_announce_is_reachable() {
         harness.rnsh_command(Side::Listener, &listener_app_config, &listener_identity);
     identity_command.args(["--listen", "--print-identity"]);
     let identity_output = run(identity_command);
-    assert_success(&identity_output, "print rnsh listener identity");
+    // As upstream's, rnsh exits 1 after printing its identity.
+    assert_eq!(
+        identity_output.status.code(),
+        Some(1),
+        "print rnsh listener identity: {identity_output:?}"
+    );
     let destination = parse_destination(&identity_output);
 
     let mut listener_command =

@@ -27,6 +27,8 @@ pub static TOP: Cli = Cli::new(
     Parser {
         name: "rns-ctl",
         description: Some("Reticulum Network Stack control tool"),
+        epilog: None,
+        raw_description: false,
         actions: &[
             help(),
             version(),
@@ -53,6 +55,8 @@ pub static CONFIG: Cli = Cli::new(
     Parser {
         name: "rns-ctl config",
         description: Some("Inspect and update runtime configuration on a running node"),
+        epilog: None,
+        raw_description: false,
         actions: &[
             help(),
             value(
@@ -96,6 +100,8 @@ pub static BACKBONE: Cli = Cli::new(
     Parser {
         name: "rns-ctl backbone",
         description: Some("Inspect backbone peer state and blacklist"),
+        epilog: None,
+        raw_description: false,
         actions: &[
             help(),
             value(
@@ -125,6 +131,8 @@ pub static HTTP: Cli = Cli::new(
     Parser {
         name: "rns-ctl http",
         description: Some("HTTP/WebSocket control interface for Reticulum"),
+        epilog: None,
+        raw_description: false,
         actions: &[
             help(),
             value(
@@ -237,6 +245,8 @@ pub static HOOK: Cli = Cli::new(
     Parser {
         name: "rns-ctl hook",
         description: Some("Manage the hooks of a node serving rns-ctl http"),
+        epilog: None,
+        raw_description: false,
         actions: &[
             help(),
             value(

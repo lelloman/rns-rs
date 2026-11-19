@@ -97,6 +97,8 @@ pub static CLI: Cli = Cli::new(
     Parser {
         name: "rns-statsd",
         description: Some("Traffic statistics recorder for a running Reticulum instance"),
+        epilog: None,
+        raw_description: false,
         actions: &[
             native_cli::help(),
             native_cli::value(

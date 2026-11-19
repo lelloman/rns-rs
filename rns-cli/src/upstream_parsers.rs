@@ -6,6 +6,8 @@ use crate::argparse::{Action, Kind, Nargs, Parser, Ty};
 pub const RNSD: Parser = Parser {
     name: "rnsd",
     description: Some("Reticulum Network Stack Daemon"),
+    epilog: None,
+    raw_description: false,
     actions: &[
         Action {
             opts: &["-h", "--help"],
@@ -93,6 +95,8 @@ pub const RNSD: Parser = Parser {
 pub const RNSTATUS: Parser = Parser {
     name: "rnstatus",
     description: Some("Reticulum Network Stack Status"),
+    epilog: None,
+    raw_description: false,
     actions: &[
         Action { opts: &["-h", "--help"], dest: "help", kind: Kind::Help, nargs: Nargs::Zero, metavar: None, help: Some("show this help message and exit"), ty: Ty::Str, required: false },
         Action { opts: &["--config"], dest: "config", kind: Kind::Store, nargs: Nargs::One, metavar: None, help: Some("path to alternative Reticulum config directory"), ty: Ty::Str, required: false },
@@ -132,6 +136,8 @@ pub const RNSTATUS: Parser = Parser {
 pub const RNPATH: Parser = Parser {
     name: "rnpath",
     description: Some("Reticulum Path Management Utility"),
+    epilog: None,
+    raw_description: false,
     actions: &[
         Action {
             opts: &["-h", "--help"],
@@ -379,6 +385,8 @@ pub const RNPATH: Parser = Parser {
 pub const RNPROBE: Parser = Parser {
     name: "rnprobe",
     description: Some("Reticulum Probe Utility"),
+    epilog: None,
+    raw_description: false,
     actions: &[
         Action {
             opts: &["-h", "--help"],
@@ -486,6 +494,8 @@ pub const RNPROBE: Parser = Parser {
 pub const RNID: Parser = Parser {
     name: "rnid",
     description: Some("Reticulum Identity & Encryption Utility"),
+    epilog: None,
+    raw_description: false,
     actions: &[
         Action {
             opts: &["-h", "--help"],
@@ -857,6 +867,8 @@ pub const RNID: Parser = Parser {
 pub const RNCP: Parser = Parser {
     name: "rncp",
     description: Some("Reticulum File Transfer Utility"),
+    epilog: None,
+    raw_description: false,
     actions: &[
         Action {
             opts: &["-h", "--help"],
@@ -1084,6 +1096,8 @@ pub const RNCP: Parser = Parser {
 pub const RNX: Parser = Parser {
     name: "rnx",
     description: Some("Reticulum Remote Execution Utility"),
+    epilog: None,
+    raw_description: false,
     actions: &[
         Action {
             opts: &["-h", "--help"],
@@ -1311,6 +1325,8 @@ pub const RNX: Parser = Parser {
 pub const RNIR: Parser = Parser {
     name: "rnir",
     description: Some("Reticulum Distributed Identity Resolver"),
+    epilog: None,
+    raw_description: false,
     actions: &[
         Action {
             opts: &["-h", "--help"],
@@ -1368,6 +1384,8 @@ pub const RNIR: Parser = Parser {
 pub const RNPKG: Parser = Parser {
     name: "rnpkg",
     description: Some("Reticulum Meta Package Manager"),
+    epilog: None,
+    raw_description: false,
     actions: &[
         Action {
             opts: &["-h", "--help"],
@@ -1432,6 +1450,34 @@ pub const RNPKG: Parser = Parser {
     ],
 };
 
+pub const RNSH: Parser = Parser {
+    name: "rnsh",
+    description: Some("Reticulum Remote Shell Utility"),
+    epilog: Some("When specifying a command to execute, separate rnsh\noptions from the command and its arguments with --\n\nFor example:\n  rnsh -l -- /bin/bash --login\n  rnsh <destination> -- ls -la /tmp"),
+    raw_description: true,
+    actions: &[
+        Action { opts: &["-h", "--help"], dest: "help", kind: Kind::Help, nargs: Nargs::Zero, metavar: None, help: Some("show this help message and exit"), ty: Ty::Str, required: false },
+        Action { opts: &["--config", "-c"], dest: "config", kind: Kind::Store, nargs: Nargs::One, metavar: None, help: Some("path to config directory"), ty: Ty::Str, required: false },
+        Action { opts: &["--rnsconfig"], dest: "rnsconfig", kind: Kind::Store, nargs: Nargs::One, metavar: None, help: Some("path to alternative Reticulum config directory"), ty: Ty::Str, required: false },
+        Action { opts: &["--identity", "-i"], dest: "identity", kind: Kind::Store, nargs: Nargs::One, metavar: None, help: Some("path to identity file to use"), ty: Ty::Str, required: false },
+        Action { opts: &["-v", "--verbose"], dest: "verbose", kind: Kind::Count, nargs: Nargs::Zero, metavar: None, help: Some("increase verbosity"), ty: Ty::Str, required: false },
+        Action { opts: &["-q", "--quiet"], dest: "quiet", kind: Kind::Count, nargs: Nargs::Zero, metavar: None, help: Some("decrease verbosity"), ty: Ty::Str, required: false },
+        Action { opts: &["-p", "--print-identity"], dest: "print_identity", kind: Kind::StoreTrue, nargs: Nargs::Zero, metavar: None, help: Some("print identity and destination info and exit"), ty: Ty::Str, required: false },
+        Action { opts: &["--version"], dest: "version", kind: Kind::Version, nargs: Nargs::Zero, metavar: None, help: Some("show program's version number and exit"), ty: Ty::Str, required: false },
+        Action { opts: &["-l", "--listen"], dest: "listen", kind: Kind::StoreTrue, nargs: Nargs::Zero, metavar: None, help: Some("listen (server) mode; any command specified after -- will be used as the default command when the initiator does not provide one or when remote command execution is disabled; if no command is specified, the default shell of the user running rnsh will be used"), ty: Ty::Str, required: false },
+        Action { opts: &["-s", "--service"], dest: "service", kind: Kind::Store, nargs: Nargs::One, metavar: None, help: Some("service name for identity file if not the default"), ty: Ty::Str, required: false },
+        Action { opts: &["-b", "--announce"], dest: "announce", kind: Kind::Store, nargs: Nargs::One, metavar: Some("PERIOD"), help: Some("announce on startup and every PERIOD seconds; specify 0 to announce on startup only"), ty: Ty::Int, required: false },
+        Action { opts: &["-a", "--allowed"], dest: "allowed", kind: Kind::Append, nargs: Nargs::One, metavar: Some("HASH"), help: Some("allow this identity to connect (may be specified multiple times); allowed identities can also be specified in ~/.rnsh/allowed_identities or ~/.config/rnsh/allowed_identities, one hash per line"), ty: Ty::Str, required: false },
+        Action { opts: &["-n", "--no-auth"], dest: "no_auth", kind: Kind::StoreTrue, nargs: Nargs::Zero, metavar: None, help: Some("disable authentication (allow any identity to connect)"), ty: Ty::Str, required: false },
+        Action { opts: &["-A", "--remote-command-as-args"], dest: "remote_command_as_args", kind: Kind::StoreTrue, nargs: Nargs::Zero, metavar: None, help: Some("concatenate remote command to the argument list of the default program or shell"), ty: Ty::Str, required: false },
+        Action { opts: &["-C", "--no-remote-command"], dest: "no_remote_command", kind: Kind::StoreTrue, nargs: Nargs::Zero, metavar: None, help: Some("disable executing command lines received from the remote initiator"), ty: Ty::Str, required: false },
+        Action { opts: &["-N", "--no-id"], dest: "no_id", kind: Kind::StoreTrue, nargs: Nargs::Zero, metavar: None, help: Some("disable identity announcement on connect"), ty: Ty::Str, required: false },
+        Action { opts: &["-m", "--mirror"], dest: "mirror", kind: Kind::StoreTrue, nargs: Nargs::Zero, metavar: None, help: Some("return with the exit code of the remote process"), ty: Ty::Str, required: false },
+        Action { opts: &["-w", "--timeout"], dest: "timeout", kind: Kind::Store, nargs: Nargs::One, metavar: Some("SECONDS"), help: Some("connect and request timeout in seconds"), ty: Ty::Float, required: false },
+        Action { opts: &[], dest: "destination", kind: Kind::Store, nargs: Nargs::Optional, metavar: None, help: Some("hexadecimal hash of the destination to connect to"), ty: Ty::Str, required: false },
+    ],
+};
+
 /// The upstream parser of a tool, by its name.
 pub fn by_name(name: &str) -> Option<&'static Parser> {
     match name {
@@ -1444,6 +1490,7 @@ pub fn by_name(name: &str) -> Option<&'static Parser> {
         "rnx" => Some(&RNX),
         "rnir" => Some(&RNIR),
         "rnpkg" => Some(&RNPKG),
+        "rnsh" => Some(&RNSH),
         _ => None,
     }
 }

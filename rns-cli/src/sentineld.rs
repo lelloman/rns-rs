@@ -58,6 +58,8 @@ pub static CLI: Cli = Cli::new(
     Parser {
         name: "rns-sentineld",
         description: Some("Backbone peer sentinel for a running Reticulum instance"),
+        epilog: None,
+        raw_description: false,
         actions: &[
             native_cli::help(),
             native_cli::value(

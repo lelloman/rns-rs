@@ -24,7 +24,6 @@ Use `--print-identity` to print the listener identity and destination hash:
 
 ```bash
 cargo run --bin rnsh -- -l --print-identity
-cargo run --bin rnsh -- -l --print-identity --base256
 ```
 
 ## Initiator

@@ -1,5 +1,11 @@
 use std::process::Command;
 
+/// As upstream's, rnsh exits 1 after its help, its version and printing
+/// its identity: its main() swallows the SystemExit they end with.
+fn swallowed_exit(output: &std::process::Output) -> bool {
+    output.status.code() == Some(1)
+}
+
 fn rnsh(args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_rnsh"))
         .args(args)
@@ -10,25 +16,32 @@ fn rnsh(args: &[&str]) -> std::process::Output {
 #[test]
 fn help_documents_separate_application_and_reticulum_config_paths() {
     let output = rnsh(&["--help"]);
-    assert!(output.status.success());
+    assert!(swallowed_exit(&output));
     let help = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
 
-    assert!(help.contains("-c, --config PATH        rnsh application config directory"));
-    assert!(help.contains("--rnsconfig PATH     Reticulum config directory"));
+    assert!(help.contains(
+        "  --config CONFIG, -c CONFIG\n                        path to config directory\n"
+    ));
+    assert!(help.contains(
+        "  --rnsconfig RNSCONFIG\n                        path to alternative Reticulum config directory\n"
+    ));
 }
 
 #[test]
 fn rnsconfig_is_long_only_at_the_process_boundary() {
     let accepted = rnsh(&["--rnsconfig", "/tmp/reticulum", "--version"]);
-    assert!(accepted.status.success());
+    assert!(swallowed_exit(&accepted));
+    assert!(String::from_utf8_lossy(&accepted.stdout).starts_with("rnsh "));
 
-    let rejected = rnsh(&["-r", "/tmp/reticulum", "--version"]);
-    assert!(!rejected.status.success());
-    assert!(String::from_utf8_lossy(&rejected.stderr).contains("unknown option -r"));
+    let rejected = rnsh(&["-r", "/tmp/reticulum"]);
+    assert!(swallowed_exit(&rejected));
+    assert!(rejected.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&rejected.stderr)
+        .ends_with("rnsh: error: unrecognized arguments: -r\n"));
 }
 
 #[test]
@@ -46,7 +59,7 @@ fn print_identity_creates_upstream_paths_in_selected_rnsh_directory() {
         &rns_string,
         "--print-identity",
     ]);
-    assert!(initiator.status.success());
+    assert!(swallowed_exit(&initiator));
     assert!(app.join("identity").is_file());
     // As upstream's, printing the identity logs to stdout, not to a file.
     assert!(!app.join("logfile.initiator").exists());
@@ -69,7 +82,7 @@ fn print_identity_creates_upstream_paths_in_selected_rnsh_directory() {
         "dev-shell_1!",
         "--print-identity",
     ]);
-    assert!(listener.status.success());
+    assert!(swallowed_exit(&listener));
     assert!(app.join("identity.devshell1").is_file());
 }
 
@@ -91,7 +104,7 @@ fn legacy_identity_warns_but_is_not_silently_copied() {
         "--print-identity",
     ]);
 
-    assert!(output.status.success());
+    assert!(swallowed_exit(&output));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("existing pre-migration rnsh identity"));
     assert!(stderr.contains(old.to_string_lossy().as_ref()));

@@ -623,14 +623,17 @@ fn stream_data_uses_upstream_header_bits() {
 
 #[test]
 fn cli_splits_command_after_double_dash() {
-    let args = CliOptions::parse(vec![
-        "-l".into(),
-        "-s".into(),
-        "ops".into(),
-        "--".into(),
-        "/bin/sh".into(),
-        "-l".into(),
-    ])
+    let args = CliOptions::parse(
+        vec![
+            "-l".into(),
+            "-s".into(),
+            "ops".into(),
+            "--".into(),
+            "/bin/sh".into(),
+            "-l".into(),
+        ],
+        80,
+    )
     .unwrap();
     assert!(args.listen);
     assert_eq!(args.service.as_deref(), Some("ops"));
@@ -638,42 +641,40 @@ fn cli_splits_command_after_double_dash() {
 }
 
 #[test]
-fn cli_parses_base256_display_flag() {
-    let short = CliOptions::parse(vec!["-Zp".into()]).unwrap();
-    assert!(short.base256);
-    assert!(short.print_identity);
-
-    let long = CliOptions::parse(vec!["--base256".into(), "--print-identity".into()]).unwrap();
-    assert!(long.base256);
-    assert!(long.print_identity);
-}
-
-#[test]
 fn cli_separates_rnsh_and_reticulum_config_directories() {
-    let short = CliOptions::parse(vec![
-        "-c".into(),
-        "/tmp/rnsh-app".into(),
-        "--rnsconfig".into(),
-        "/tmp/reticulum".into(),
-    ])
+    let short = CliOptions::parse(
+        vec![
+            "-c".into(),
+            "/tmp/rnsh-app".into(),
+            "--rnsconfig".into(),
+            "/tmp/reticulum".into(),
+        ],
+        80,
+    )
     .unwrap();
     assert_eq!(short.rnsh_config.as_deref(), Some("/tmp/rnsh-app"));
     assert_eq!(short.rns_config.as_deref(), Some("/tmp/reticulum"));
 
-    let long = CliOptions::parse(vec![
-        "--config".into(),
-        "/tmp/rnsh-long".into(),
-        "--rnsconfig".into(),
-        "/tmp/rns-long".into(),
-    ])
+    let long = CliOptions::parse(
+        vec![
+            "--config".into(),
+            "/tmp/rnsh-long".into(),
+            "--rnsconfig".into(),
+            "/tmp/rns-long".into(),
+        ],
+        80,
+    )
     .unwrap();
     assert_eq!(long.rnsh_config.as_deref(), Some("/tmp/rnsh-long"));
     assert_eq!(long.rns_config.as_deref(), Some("/tmp/rns-long"));
 
-    let equals = CliOptions::parse(vec![
-        "--config=/tmp/rnsh-equals".into(),
-        "--rnsconfig=/tmp/rns-equals".into(),
-    ])
+    let equals = CliOptions::parse(
+        vec![
+            "--config=/tmp/rnsh-equals".into(),
+            "--rnsconfig=/tmp/rns-equals".into(),
+        ],
+        80,
+    )
     .unwrap();
     assert_eq!(equals.rnsh_config.as_deref(), Some("/tmp/rnsh-equals"));
     assert_eq!(equals.rns_config.as_deref(), Some("/tmp/rns-equals"));
@@ -682,8 +683,8 @@ fn cli_separates_rnsh_and_reticulum_config_directories() {
 #[test]
 fn cli_parses_upstream_invocations_as_argparse_does() {
     let parse = |argv: &[&str]| {
-        CliOptions::parse(argv.iter().map(|s| s.to_string()).collect())
-            .unwrap_or_else(|e| panic!("{argv:?}: {e}"))
+        CliOptions::parse(argv.iter().map(|s| s.to_string()).collect(), 80)
+            .unwrap_or_else(|e| panic!("{argv:?}: {e:?}"))
     };
     let o = parse(&["-l", "-a", "aa", "-abb", "-n", "-b", "60", "-vv"]);
     assert!(o.listen && o.no_auth);
@@ -730,17 +731,30 @@ fn cli_parses_upstream_invocations_as_argparse_does() {
     assert_eq!((o.timeout, o.identity.as_deref()), (Some(5.0), Some("id")));
     assert_eq!(parse(&["-cdir"]).rnsh_config.as_deref(), Some("dir"));
     assert!(parse(&["-p", "--print"]).print_identity);
-    assert!(parse(&["-h"]).help && parse(&["--version"]).version);
+    assert!(parse(&["--version"]).version);
+    assert_eq!(parse(&["-b", "-5"]).announce_period, Some(0));
+    let exit = |argv: &[&str]| {
+        CliOptions::parse(argv.iter().map(|s| s.to_string()).collect(), 80).unwrap_err()
+    };
+    let help = exit(&["-h"]);
+    assert_eq!(help.code, 0);
+    assert!(help.stdout.starts_with("usage: rnsh [-h]"));
     // `--no` is ambiguous: --no-auth, --no-remote-command or --no-id.
-    assert!(CliOptions::parse(vec!["--no".into()]).is_err());
-    assert!(CliOptions::parse(vec!["a".into(), "b".into()]).is_err());
-    assert!(CliOptions::parse(vec!["-w".into()]).is_err());
+    assert_eq!(exit(&["--no"]).code, 2);
+    assert_eq!(exit(&["a", "b"]).code, 2);
+    assert_eq!(exit(&["-w"]).code, 2);
+    assert_eq!(exit(&["-Z"]).code, 2);
+    assert!(exit(&["-b", "x"])
+        .stderr
+        .ends_with("rnsh: error: argument -b/--announce: invalid int value: 'x'\n"));
 }
 
 #[test]
 fn rnsconfig_has_no_short_alias() {
-    let error = CliOptions::parse(vec!["-r".into(), "/tmp/reticulum".into()]).unwrap_err();
-    assert!(error.contains("unknown option -r"));
+    let error = CliOptions::parse(vec!["-r".into(), "/tmp/reticulum".into()], 80).unwrap_err();
+    assert!(error
+        .stderr
+        .ends_with("rnsh: error: unrecognized arguments: -r\n"));
 }
 
 #[test]

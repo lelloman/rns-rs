@@ -217,6 +217,8 @@ mod tests {
         Parser {
             name: "tool",
             description: Some("A tool"),
+            epilog: None,
+            raw_description: false,
             actions: &[
                 help(),
                 value(&["-c", "--config"], "config", "PATH", Ty::Str, "config"),
