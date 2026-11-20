@@ -2083,6 +2083,80 @@ fn non_transport_node_uses_ephemeral_transport_identity_by_default() {
     node.shutdown();
 }
 
+/// Upstream 25cce0a8 makes the transport identity available before the
+/// interfaces start, so a client that connects during startup can sign its
+/// tunnel synthesis. A node's dialing TCP client sends, as its first frame,
+/// a synthesis signed by the node's transport identity (the ephemeral one
+/// of a node without transport).
+#[cfg(feature = "iface-tcp")]
+#[test]
+fn a_dialing_tcp_client_first_sends_a_synthesis_signed_by_the_transport_identity() {
+    use std::io::Read as _;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let node = RnsNode::start(
+        NodeConfig {
+            transport_enabled: false,
+            static_transport_identity: false,
+            local_hops_delta: false,
+            identity: Some(Identity::new(&mut OsRng)),
+            share_instance: false,
+            interfaces: vec![InterfaceConfig {
+                name: "Client TCP".into(),
+                type_name: "TCPClientInterface".into(),
+                config_data: Box::new(TcpClientConfig {
+                    name: "Client TCP".into(),
+                    target_host: "127.0.0.1".into(),
+                    target_port: port,
+                    interface_id: rns_core::transport::types::InterfaceId(1),
+                    ..Default::default()
+                }),
+                mode: rns_core::constants::MODE_FULL,
+                gravity: 0,
+                hop_limiter: None,
+                recursive_prs: false,
+                announces_from_internal: true,
+                announces_to_internal: None,
+                ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
+                stamp_costs: Default::default(),
+                announce_limits: Default::default(),
+                ifac: None,
+                discovery: None,
+            }],
+            ..Default::default()
+        },
+        Box::new(NoopCallbacks),
+    )
+    .unwrap();
+
+    let (mut stream, _) = listener.accept().unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let mut decoder = crate::hdlc::Decoder::new();
+    let first = loop {
+        let mut buf = [0u8; 4096];
+        let n = stream.read(&mut buf).unwrap();
+        assert!(n > 0, "the client closed before sending a frame");
+        if let Some(frame) = decoder.feed(&buf[..n]).into_iter().next() {
+            break frame;
+        }
+    };
+    let packet = rns_core::packet::RawPacket::unpack(&first).unwrap();
+    let synthesis = rns_core::transport::tunnel::validate_tunnel_synthesize_data(packet.data())
+        .expect("the first frame is a validly signed tunnel synthesis");
+    let signer = Identity::from_public_key(&synthesis.public_key).unwrap();
+
+    let response = node.query(QueryRequest::TransportIdentity).unwrap();
+    let QueryResponse::TransportIdentity(Some(transport_identity)) = response else {
+        panic!("transport identity query returned {response:?}");
+    };
+    assert_eq!(*signer.hash(), transport_identity);
+
+    node.shutdown();
+}
+
 #[test]
 fn non_transport_node_can_use_static_transport_identity() {
     let identity = Identity::new(&mut rns_crypto::FixedRng::new(&[0x42; 32]));
