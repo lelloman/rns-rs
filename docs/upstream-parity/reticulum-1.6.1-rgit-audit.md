@@ -75,9 +75,9 @@ evidence exist; until then nothing here is claimed as passed.
 | 16 | `70eb417d` | 2026-11-17 | Fixed non path table resident shared local instance destination path response announces broadcasting on all interfaces instead of requestor only | Integrated | `edb988ac`; `only_a_local_clients_path_response_answers_a_pending_request` (updated), `a_local_clients_path_response_answers_only_the_requesting_interface`, `test_shared_instance_without_transport_relays_path_request_to_local_client` (updated) |
 | 17 | `8c73e203` | 2026-11-18 | Don't rebroadcast on unresponsive path lenient table insertions | Integrated | `b789aa30`; `unresponsive_path_replacement_is_not_rebroadcast`; follow-up `dac604d7` (decision 8) |
 | 18 | `4a058544` | 2026-11-18 | Well, yeah | Structurally covered | `f2e7fdcf`; doc comment on `persist_known_destinations` (`rns-net/src/node/known_destinations.rs`) |
-| 19 | `8e7dc8b7` | 2026-11-18 | Added medium reliability flag to interfaces | Proposed: Integrated | Reviewed 2026-11-20; no mapping commit yet |
-| 20 | `9568b704` | 2026-11-18 | Improved rnpath display and filtering options | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
-| 21 | `c90a5d58` | 2026-11-18 | Added destination type loading | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
+| 19 | `8e7dc8b7` | 2026-11-18 | Added medium reliability flag to interfaces | Integrated | `cc15c501`; `lossless_medium_matches_upstreams_interface_classes` (decision 6) |
+| 20 | `9568b704` | 2026-11-18 | Improved rnpath display and filtering options | Integrated | `d0fb8d79`; `path_table_display_options_and_filters_as_upstream`, `path_table_prints_as_upstream` (updated), `parses_upstream_invocations_as_argparse_does` (extended), argparse fixture and golden help regenerated at `9568b704`, live `python_rnpath_reads_rust_remote_path_table` and `python_rnpath_lists_rust_path_table` at `9568b704` |
+| 21 | `c90a5d58` | 2026-11-18 | Added destination type loading | Integrated | `f72cbf56`; `known_destination_types_are_read_as_upstream`, `missing_unreadable_and_flagged_type_files_add_nothing`, `the_config_filter_names_come_first_and_the_file_overrides_them`, `splitlines_and_strip_follow_python`, `wanted_destination_types_are_named_in_the_type_map`, `unwant_all_reports_types_in_the_order_they_were_first_wanted`, `configured_destination_types_name_as_upstreams_type_map`, `path_and_rate_tables_follow_upstreams_keys_and_types` (extended), `path_table_prints_as_upstream` (JSON), live `python_rnpath_reads_rust_remote_path_table` at `c90a5d58` |
 | 22 | `3f55e9eb` | 2026-11-18 | Added flagged destination type map, added per-link traffic counter, added link distribution stats getter | Proposed: Needs coordinated port | Reviewed 2026-11-20; no mapping commit yet |
 | 23 | `f7b54ccc` | 2026-11-18 | Added prettynamehash convenience function | Proposed: Non-runtime | Reviewed 2026-11-20; no mapping commit yet |
 | 24 | `1a71073c` | 2026-11-18 | Initial rnpath analysis stub | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
@@ -819,11 +819,22 @@ and I2P interfaces. Nothing reads it yet.
 **Rust applicability:** No equivalent. With no reader there is no observable
 behaviour.
 
-**Local handling:** Add `lossless_medium_hint` next to `shared_medium_hint`
-with a class-defaults test, documented as having no runtime reader yet, or
-record only the analysis (decision pending).
+**Local handling and evidence:** `cc15c501`. `interface::lossless_medium()`
+in `rns-net/src/interface/mod.rs`, next to `shared_medium_hint` and
+`tunnels_allowed` and keyed by the interface type like them, is true for
+`TCPClientInterface`, `TCPServerInterface`, `TCPServerClientInterface` (a
+TCP server's spawned clients, `TCPClientInterface` upstream),
+`BackboneInterface`, `BackboneClientInterface`, `BackboneInterfacePeer` (a
+Backbone server's spawned peers, `BackboneClientInterface` upstream),
+`I2PInterface` and `I2PInterfacePeer`, and false for every other class. As
+decision 6, nothing reads it; it is `pub(crate)` with `#[allow(dead_code)]`
+and a comment giving the reason (upstream adds it with no reader, kept for
+parity). It is not reported over RPC, as upstream. Test:
+`lossless_medium_matches_upstreams_interface_classes` (new; the function did
+not exist before). Tests run: `cargo test -p rns-net` passed (1699 passed,
+0 failed); `cargo fmt --check` and `bash scripts/lint-host.sh` passed.
 
-**Proposed disposition:** Integrated (decision 6).
+**Final disposition:** Integrated (decision 6).
 
 ### 20. `9568b704` — Improved rnpath display and filtering options
 
@@ -838,11 +849,39 @@ flags and always prints via and expiry. The interop test
 `rns-cli/tests/utility_interop.rs:2070` expects ` via ` in Python's output and
 will fail against the new target unless it passes `-V`.
 
-**Local handling:** Port the flags and quirks, regenerate the parser table,
-argparse fixture and golden help at `9568b704`, update the docs and the
-interop assertion.
+**Local handling and evidence:** `d0fb8d79`. `rnpath` (and `rns-ctl path`,
+which shares its option table and code) takes `-a/--active`, `-V/--vias`,
+`-E/--expiry` and `-M/--min-value` (metavar `hops`, a float); a line shows
+` via …` only with `-V` and ` expires in …` only with `-E`. The filters
+follow upstream's code: a path counts as displayed before `-M` or `-a`
+leave it out (so a filtered `rnpath -t <hash>` prints nothing and exits 0),
+`-M` filters only when its value is non-zero and then drops paths with no or
+a zero value and those below it (a negative or NaN value filters too), `-a`
+drops paths whose `used` is falsy and none from a table without usage
+info, and `-j` ignores all four. Both local and `-R` remote tables. The
+parser table, `tests/fixtures/argparse/rnpath.pickle` and
+`tests/fixtures/cli_golden/rnpath.txt` were regenerated with
+`tests/generate_argparse_fixtures.py` and `RNS_GOLDEN_BLESS=1` from a
+disposable upstream worktree at `9568b704`; only rnpath's entries changed,
+and the golden help matches Python's `--help` at 80 columns apart from the
+program name. The expected texts of the new test are upstream's rendering
+code at `9568b704` run on the same tables. `utility_interop`'s remote path
+table check passes `-V` when the Python rnpath has `--vias`.
+`docs/cli-tools.md` lists the options; `docs/rns-ctl.md` lists no rnpath
+flags.
 
-**Proposed disposition:** Needs port.
+Tests: `path_table_display_options_and_filters_as_upstream` (new),
+`path_table_prints_as_upstream` (default line updated; fails before the
+change), `parses_upstream_invocations_as_argparse_does` (new cases). Tests
+run: `cargo test -p rns-cli` passed (163 passed, 34 ignored), `cargo test -p
+rns-ctl` passed (131), `cargo fmt --check` and `bash scripts/lint-host.sh`
+passed. Live, with `PYTHONPATH` and `RETICULUM_UPSTREAM_DIR` on a
+disposable worktree at `9568b704`: `cargo test -p rns-cli --test
+utility_interop -- --ignored --exact python_rns_is_available_for_utility_interop
+python_rnpath_reads_rust_remote_path_table python_rnpath_lists_rust_path_table`
+passed (3 passed).
+
+**Final disposition:** Integrated.
 
 ### 21. `c90a5d58` — Added destination type loading
 
@@ -855,11 +894,66 @@ interop assertion.
 (`rpc/responses.rs:26-74`); the display name it hashes is already available.
 (a) has no consumer beyond logging.
 
-**Local handling:** Add `interface_hash` and extend
-`path_and_rate_tables_follow_upstreams_keys_and_types`; record (a) as
-deferred until something other than logging reads the map.
+**Local handling and evidence:** `f72cbf56`. Both parts are ported (a is
+needed by decision 3). The review's analysis was incomplete on two points:
+upstream already had `destination_type_map` and `destination_type_name()`
+at the `884f109b` baseline, and rns-rs had neither (it logged the requested
+full name without the type hash and did not log the types `unwants_all`
+withdraws); and at `c90a5d58` upstream's `Transport` has no
+`flagged_type_map` (3f55e9eb adds it), so loading a flagged types file with
+any line fails.
 
-**Proposed disposition:** Needs port.
+(a) `rns_net::destination_types::DestinationTypeNames` is the map: the
+`[filter]` ignored and allowed types' names (for the bracketed form the kept
+characters, as `block/allow_destination_type` record them, via the new
+`rns_core` `configured_destination_type_name`), then
+`<configdir>/known_destination_types`, read as upstream: only if it is a
+file, `strip()` and `splitlines()` with Python's semantics, each line
+stripped, `#` lines skipped, every other line (an empty one too) recorded
+under its name hash; an unreadable file logs `Error while loading known
+destination types list: …` (Rust's error text) and adds nothing.
+`flagged_destination_types` with any line to record logs upstream's
+`Error while loading flagged destination types list: type object
+'Transport' has no attribute 'flagged_type_map'` and records nothing.
+Shared instances and shared instance clients each load it with their config;
+the driver holds it (`Driver::destination_type_names`), for commits 22 and
+24. A wanted type records its name; the Registered, Deregistered and "No
+remaining requesters" debug lines read as upstream's (`<name> <hash>
+destinations …`), and `unwants_all_destination_types` logs each withdrawn
+type in upstream's dict order (`DestinationTypeFilter` keeps it).
+`docs/configuration.md` describes the files.
+
+(b) Path table entries gain `interface_hash` after `interface`: the full
+hash of the interface's display name, as `parent_interface_hash`. It reaches
+the RPC path table, remote management `/path` and `rnpath -j`.
+`utility_interop`'s remote table shape comparison drops `interface_hash`
+only against a Python Reticulum without it.
+
+Tests (new): `known_destination_types_are_read_as_upstream`,
+`missing_unreadable_and_flagged_type_files_add_nothing`,
+`the_config_filter_names_come_first_and_the_file_overrides_them`,
+`splitlines_and_strip_follow_python`,
+`wanted_destination_types_are_named_in_the_type_map`,
+`unwant_all_reports_types_in_the_order_they_were_first_wanted`,
+`configured_destination_types_name_as_upstreams_type_map`; extended:
+`path_and_rate_tables_follow_upstreams_keys_and_types`,
+`unwant_all_withdraws_only_that_requester` (both fail before the change),
+and the JSON case of `path_table_prints_as_upstream`, whose table now
+carries `interface_hash` (rnpath passes it through unchanged). Tests run:
+`cargo test -p rns-core` passed (1253), `cargo test -p rns-net` passed
+(1704 passed, 4 ignored), `cargo test -p rns-cli` passed (163 passed, 34
+ignored), `cargo fmt --check` and `bash scripts/lint-host.sh` passed. Live,
+on a disposable worktree at `c90a5d58`: `python_rns_is_available_for_utility_interop`,
+`python_rnpath_reads_rust_remote_path_table` and
+`python_rnpath_lists_rust_path_table` passed (3 passed).
+
+Not ported (pre-existing, outside this commit): upstream's `Blocked …` and
+`Allowing …` debug lines when the `[filter]` section is applied, and the
+`Could not … destination type …` error lines. `Allowing` depends on whether
+`required_only` comes before `allowed_types` in the config, which the
+parser does not record.
+
+**Final disposition:** Integrated.
 
 ### 22. `3f55e9eb` — Added flagged destination type map, per-link traffic counter, link distribution stats getter
 
