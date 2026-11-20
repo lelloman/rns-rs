@@ -120,6 +120,25 @@ Upstream's behaviour. Nothing is auto-connected unless
 The `backbone_peer_pool_*` settings are ignored under this policy, with a
 warning.
 
+### How many to auto-connect
+
+As upstream's manual advises, auto-connecting dozens of interfaces gives no
+benefit and wastes the limited resources of transport node operators: a
+deeper, more branched topology is much more efficient than a flat fan-out
+where everyone connects to everyone. In almost all situations 2-3
+auto-connected interfaces are enough:
+
+- A device that connects directly to the distributed backbone, such as a
+  phone, needs one or two, or a fixed node you like plus one auto-connect as
+  a redundant backup.
+- A transport node at home, serving the devices in it: 2 or 3.
+- A fast boundary node in front of a large internal network with hundreds of
+  active destinations, or a general-purpose transport node on the public
+  internet: five to six.
+- Up to 12 only in extreme cases, and only on a node prepared to process
+  serious traffic. 12 is also the cap rns-rs applies, as upstream does, unless
+  `autoconnect_discovered_interfaces_disable_caps` lifts it (see above).
+
 ### `autoconnect_policy = pool`
 
 The rns-rs Backbone peer pool. `backbone_peer_pool_max_connected` caps active
