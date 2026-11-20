@@ -15603,6 +15603,48 @@ fn failed_own_link_rediscovery_is_throttled_and_left_to_transport_and_shared_ins
     assert!(queued_rediscoveries(&mut driver, time::now()).is_empty());
 }
 
+#[test]
+fn failed_own_link_to_an_instance_local_destination_is_not_rediscovered() {
+    // Upstream 5bd93ad9: a hops-0 path neither expires nor is rediscovered
+    // when a link to it fails; a path one hop away is.
+    for (hops, rediscovered) in [(0, false), (1, true)] {
+        let (tx, rx) = event::channel();
+        let (mut driver, _sent) = rediscovery_driver(tx, rx, false);
+        let dest = [0xB6; 16];
+        driver.engine.inject_path(
+            dest,
+            rns_core::transport::tables::PathEntry {
+                timestamp: time::now(),
+                next_hop: [0x77; 16],
+                hops,
+                expires: time::now() + 3600.0,
+                random_blobs: Vec::new(),
+                receiving_interface: InterfaceId(1),
+                packet_hash: [0; 32],
+                used: 0.0,
+                announce_raw: None,
+            },
+        );
+        driver.dispatch_link_actions(vec![LinkManagerAction::PendingLinkFailed {
+            dest_hash: dest,
+        }]);
+        let expired = driver
+            .engine
+            .path_table_entries()
+            .any(|(hash, path)| *hash == dest && path.expires == 0.0);
+        assert_eq!(expired, rediscovered, "hops {hops}");
+        assert_eq!(
+            queued_rediscoveries(&mut driver, time::now()),
+            if rediscovered {
+                vec![(dest, None)]
+            } else {
+                vec![]
+            },
+            "hops {hops}"
+        );
+    }
+}
+
 /// Built-in destination announces in `sent`, validated, by destination.
 fn sent_builtin_announces(
     sent: &[Vec<u8>],

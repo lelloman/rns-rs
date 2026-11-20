@@ -141,11 +141,18 @@ impl TransportEngine {
             } else if throttled {
                 false
             } else if entry.taken_hops == 0 {
-                log::trace!(target: crate::logging::PATHING_LOG_TARGET,
-                    "Trying to rediscover path for {:02x?} since an attempted local client link was never established",
-                    &destination_hash[..4],
-                );
-                true
+                // Upstream 5bd93ad9: not for an instance-local (hops-0)
+                // destination, and as upstream's elif chain, such a link
+                // request triggers none of the cases below either.
+                if self.hops_to(&destination_hash) == Some(0) {
+                    false
+                } else {
+                    log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                        "Trying to rediscover path for {:02x?} since an attempted local client link was never established",
+                        &destination_hash[..4],
+                    );
+                    true
+                }
             } else if self.hops_to(&destination_hash) == Some(1) {
                 // The destination was local to one of our interfaces and
                 // probably roamed.
@@ -290,14 +297,13 @@ impl TransportEngine {
         }
 
         let unused_path_linger = self.unused_path_linger();
-        jobs::cull_path_table_on_instance(
+        jobs::cull_path_table(
             &mut self.path_table,
             &self.interfaces,
             ctx.now,
             unused_path_linger,
             jobs::UnusedPoolLimits::UPSTREAM,
             self.hop_limiter,
-            self.config.identity_hash.is_some(),
         );
         jobs::cull_reverse_table(&mut self.reverse_table, &self.interfaces, ctx.now);
         self.rediscover_unproven_link_paths(ctx.now);

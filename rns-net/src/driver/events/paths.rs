@@ -51,11 +51,14 @@ impl Driver {
 
     /// A link this node initiated was never established (Transport.py
     /// 842-862). A transport node leaves its path alone: the link table job
-    /// rediscovers paths for the links it forwards. Any other node expires
-    /// the path, and unless a shared instance will send the request for it,
-    /// queues a new path request at most every `PATH_REQUEST_MI` seconds.
+    /// rediscovers paths for the links it forwards. So does any node for an
+    /// instance-local (hops-0) destination (upstream 5bd93ad9). Any other
+    /// node expires the path, and unless a shared instance will send the
+    /// request for it, queues a new path request at most every
+    /// `PATH_REQUEST_MI` seconds.
     pub(crate) fn rediscover_path_after_failed_link(&mut self, dest_hash: [u8; 16]) {
-        if self.engine.transport_enabled() {
+        let local_destination = self.engine.hops_to(&dest_hash) == Some(0);
+        if local_destination || self.engine.transport_enabled() {
             return;
         }
         self.engine.expire_path(&dest_hash);

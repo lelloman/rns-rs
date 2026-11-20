@@ -165,6 +165,39 @@ fn rediscovery_throttle_lasts_path_request_mi() {
     }
 }
 
+/// Upstream 5bd93ad9: an unproven link request from a local client
+/// (taken hops 0) to an instance-local (hops-0) destination triggers no
+/// rediscovery and leaves the path state alone. To a destination further
+/// away it does trigger one.
+#[test]
+fn local_client_link_to_an_instance_local_destination_is_not_rediscovered() {
+    for (hops, rediscovered) in [(0, false), (2, true)] {
+        let mut engine = rediscovery_engine();
+        let mut rng = rns_crypto::FixedRng::new(&[0x21; 32]);
+        let destination = [0xC4; 16];
+        engine.path_table.insert(
+            destination,
+            PathSet::from_single(
+                path_entry(&destination, 1000.0, hops, InterfaceId(1), [0x77; 16]),
+                1,
+            ),
+        );
+        unproven_link(&mut engine, 1, destination, 1010.0);
+        engine.link_table.get_mut(&[1; 16]).unwrap().taken_hops = 0;
+        engine.tick(1020.0, &mut rng);
+        assert_eq!(
+            queued_rediscoveries(&engine),
+            if rediscovered {
+                vec![destination]
+            } else {
+                vec![]
+            },
+            "hops {hops}"
+        );
+        assert!(!engine.path_is_unresponsive(&destination), "hops {hops}");
+    }
+}
+
 fn due_announce(engine: &mut TransportEngine, destination: [u8; 16], due: f64) {
     engine.insert_announce_entry(
         destination,
