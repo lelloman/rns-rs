@@ -203,6 +203,9 @@ pub(super) fn start_with_template(
     underlay_mark: Option<u32>,
 ) -> io::Result<()> {
     let addr = format!("{}:{}", config.listen_ip, config.listen_port);
+    // std listens with a backlog of 128 (Rust 1.96.0,
+    // library/std/src/sys/net/connection/socket/mod.rs), above the 16
+    // upstream's BackboneInterface listeners use since 52898683 (1 before).
     let listener = TcpListener::bind(&addr)?;
     crate::interface::apply_underlay_mark(listener.as_fd(), underlay_mark)?;
     listener.set_nonblocking(true)?;

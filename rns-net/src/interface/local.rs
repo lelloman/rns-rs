@@ -266,6 +266,14 @@ mod unix_socket {
     }
 
     /// Try to bind a Unix abstract socket with the given instance name.
+    ///
+    /// Upstream's shared instance listens through
+    /// `BackboneInterface.add_listener` where it has epoll, with a backlog
+    /// of 16 since 52898683 (1 before). std's `bind_addr` listens with -1
+    /// on Linux, which the kernel caps at `net.core.somaxconn` (4096 by
+    /// default since Linux 5.4, 128 before; Rust 1.96.0,
+    /// library/std/src/os/unix/net/listener.rs), and the TCP fallback
+    /// with 128.
     pub(super) fn try_bind_unix(instance_name: &str) -> io::Result<UnixListener> {
         let addr = abstract_addr(instance_name)?;
         UnixListener::bind_addr(&addr)

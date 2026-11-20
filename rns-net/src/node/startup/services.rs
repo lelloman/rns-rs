@@ -347,6 +347,8 @@ pub(super) fn start_rpc_servers(
         #[cfg(not(target_os = "linux"))]
         let on_unix = false;
         if !on_unix {
+            // std's backlog of 128, as upstream's RPC listener since
+            // 52898683 (see rpc/server.rs).
             match std::net::TcpListener::bind(("127.0.0.1", config.rpc_port)).and_then(|listener| {
                 service.add_listener(crate::driver::RpcListener::Tcp(listener))
             }) {
