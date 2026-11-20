@@ -108,13 +108,13 @@ impl Default for LocalClientConfig {
 }
 
 /// HDLC writer over a TCP or Unix stream.
-struct LocalWriter {
-    stream: TcpStream,
+struct LocalWriter<S = TcpStream> {
+    stream: S,
     sleep_hold: Option<ClientSleepHold>,
     transmit_buffer: TransmitBuffer,
 }
 
-impl Writer for LocalWriter {
+impl<S: Write + Send> Writer for LocalWriter<S> {
     fn send_frame_confirmed(&mut self, data: &[u8]) -> io::Result<()> {
         if self
             .sleep_hold
@@ -526,8 +526,7 @@ fn unix_server_loop(
         };
 
         let sleep_hold = android_client_sleep_hold();
-        let info = make_local_interface_info(client_id);
-        let writer: Box<dyn Writer> = Box::new(UnixLocalWriter {
+        let writer: Box<dyn Writer> = Box::new(LocalWriter {
             stream: writer_stream,
             sleep_hold: sleep_hold.clone(),
             transmit_buffer: TransmitBuffer::new(),
@@ -536,7 +535,6 @@ fn unix_server_loop(
         let events = client_up_events(
             client_id,
             writer,
-            info,
             dynamic_template.as_ref(),
             ClientNames::Unix(unix_client_display_name(&name)),
         );
@@ -552,49 +550,6 @@ fn unix_server_loop(
                 unix_reader_loop(stream, client_id, client_tx, sleep_hold, ifac_size);
             })
             .ok();
-    }
-}
-
-#[cfg(target_os = "linux")]
-struct UnixLocalWriter {
-    stream: std::os::unix::net::UnixStream,
-    sleep_hold: Option<ClientSleepHold>,
-    transmit_buffer: TransmitBuffer,
-}
-
-#[cfg(target_os = "linux")]
-impl Writer for UnixLocalWriter {
-    fn send_frame_confirmed(&mut self, data: &[u8]) -> io::Result<()> {
-        if self
-            .sleep_hold
-            .as_ref()
-            .is_some_and(ClientSleepHold::should_drop_outbound)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "local client has paused transmission",
-            ));
-        }
-        append_and_drain(
-            &mut self.transmit_buffer,
-            &mut self.stream,
-            &[crate::interface::FrameBytes::Owned(data.to_vec())],
-        )
-    }
-    fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        self.send_frames(&[crate::interface::FrameBytes::Owned(data.to_vec())])
-    }
-
-    fn send_frames(&mut self, frames: &[crate::interface::FrameBytes]) -> io::Result<()> {
-        if self
-            .sleep_hold
-            .as_ref()
-            .is_some_and(ClientSleepHold::should_drop_outbound)
-        {
-            log::debug!("TX paused for LocalInterface client, dropping outbound packet");
-            return Ok(());
-        }
-        append_and_drain(&mut self.transmit_buffer, &mut self.stream, frames)
     }
 }
 
@@ -673,10 +628,10 @@ impl ClientNames {
 pub(crate) fn client_up_events(
     client_id: InterfaceId,
     writer: Box<dyn Writer>,
-    info: InterfaceInfo,
     template: Option<&super::DynamicInterfaceTemplate>,
     names: ClientNames,
 ) -> Vec<Event> {
+    let info = make_local_interface_info(client_id);
     let (display_name, short_name) = match names {
         #[cfg(target_os = "linux")]
         ClientNames::Unix(display_name) if template.is_some() => (Some(display_name), None),
@@ -738,7 +693,6 @@ fn spawn_local_client_handler(
     };
 
     let sleep_hold = android_client_sleep_hold();
-    let info = make_local_interface_info(client_id);
     let writer: Box<dyn Writer> = Box::new(LocalWriter {
         stream: writer_stream,
         sleep_hold: sleep_hold.clone(),
@@ -748,7 +702,6 @@ fn spawn_local_client_handler(
     let events = client_up_events(
         client_id,
         writer,
-        info,
         dynamic_template,
         ClientNames::tcp(&stream),
     );
@@ -863,7 +816,7 @@ impl LocalClientStream {
 
     fn writer(&self) -> io::Result<Box<dyn Writer>> {
         match self {
-            LocalClientStream::Unix(stream) => Ok(Box::new(UnixLocalWriter {
+            LocalClientStream::Unix(stream) => Ok(Box::new(LocalWriter {
                 stream: stream.try_clone()?,
                 sleep_hold: None,
                 transmit_buffer: TransmitBuffer::new(),
@@ -978,6 +931,15 @@ fn reconnect_local_client(config: &LocalClientConfig, tx: &EventSender) -> Local
     }
 }
 
+/// Say a shared-instance client lost its connection: `error` is the read
+/// error, `None` when the instance closed it.
+fn log_shared_connection_lost(config: &LocalClientConfig, error: Option<&io::Error>) {
+    match error {
+        Some(e) => log::warn!("[{}] shared read error: {}", config.name, e),
+        None => log::warn!("[{}] shared connection closed", config.name),
+    }
+}
+
 fn local_client_reader_loop(
     mut stream: LocalClientStream,
     config: LocalClientConfig,
@@ -990,7 +952,7 @@ fn local_client_reader_loop(
     loop {
         match stream.read(&mut buf) {
             Ok(0) => {
-                log::warn!("[{}] shared connection closed", config.name);
+                log_shared_connection_lost(&config, None);
                 let _ = tx.send(Event::InterfaceDown(id));
                 stream = reconnect_local_client(&config, &tx);
                 decoder = frame_decoder(0);
@@ -1011,7 +973,7 @@ fn local_client_reader_loop(
                 }
             }
             Err(e) => {
-                log::warn!("[{}] shared read error: {}", config.name, e);
+                log_shared_connection_lost(&config, Some(&e));
                 let _ = tx.send(Event::InterfaceDown(id));
                 stream = reconnect_local_client(&config, &tx);
                 decoder = frame_decoder(0);
