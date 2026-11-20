@@ -1,3 +1,3 @@
-fn main() {
-    rns_cli::rnprobe::main();
+fn main() -> std::process::ExitCode {
+    rns_cli::rnprobe::main()
 }

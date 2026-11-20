@@ -5,11 +5,12 @@
 //! running shared instance (Rust or Python), or as an instance of its own.
 
 use std::path::Path;
-use std::process;
+use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::args::{Args, Opt, OptionSpec};
+use crate::exit::{self, Exit, Status};
 use crate::format::python_float;
 use crate::pyfmt::{prettyhexrep, round_float, str_of};
 use rns_core::types::{DestHash, PacketHash};
@@ -39,9 +40,13 @@ pub const OPTIONS: OptionSpec = OptionSpec {
 };
 
 /// The `rnprobe` binary: options from the command line.
-pub fn main() {
+pub fn main() -> ExitCode {
     crate::stdout::exit_quietly_on_closed_stdout();
-    run_with_args(Args::parse_spec(&OPTIONS), "rnprobe", "rnprobe");
+    exit::exit_code(run_with_args(
+        Args::parse_spec(&OPTIONS),
+        "rnprobe",
+        "rnprobe",
+    ))
 }
 
 /// A delivery proof: the probe it proves, the round trip, and the packet
@@ -68,17 +73,17 @@ impl Callbacks for ProbeCallbacks {
 /// printed in usage and errors (e.g. `rns-ctl rnprobe`), `version_name` the one
 /// printed by `--version`.
 ///
-/// Blocks until the command is done, and exits the process itself on an
-/// argument error or a failure, with upstream's exit status.
-pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
+/// Blocks until the command is done, and gives upstream's exit status;
+/// exits the process itself on an argument error.
+pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) -> Status {
     crate::argparse::enforce(&args, "rnprobe", usage_name);
     if args.has("version") {
         println!("{} {}", version_name, VERSION);
-        return;
+        return Ok(());
     }
     if args.has("help") || args.has("h") {
         print_usage(usage_name);
-        return;
+        return Ok(());
     }
 
     // As upstream, the first -v adds detail to the output rather than log
@@ -97,16 +102,19 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             println!();
             print_usage(usage_name);
             println!();
-            return;
+            return Ok(());
         }
         Err(OptionsError::Message(message)) => {
             println!("{message}");
-            return;
+            return Ok(());
         }
     };
     // Upstream's Reticulum exits quietly with 0 on SIGINT.
     crate::stdout::exit_on_interrupt(0);
-    process::exit(probe(&options));
+    match probe(&options) {
+        0 => Ok(()),
+        code => Err(Exit(code)),
+    }
 }
 
 #[derive(Debug, PartialEq)]

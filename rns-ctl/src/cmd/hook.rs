@@ -3,6 +3,7 @@
 //! Connects to a running rns-ctl HTTP server to list, load, and unload hooks.
 
 use crate::args::Args;
+use rns_cli::exit::{Exit, Status};
 
 /// Hook type used when the caller omits `type`. Native hooks must be
 /// requested explicitly.
@@ -20,11 +21,11 @@ const DEFAULT_HOOK_TYPE: &str = {
 /// Run `rns-ctl hook`: manage hooks through the HTTP API of a running
 /// `rns-ctl http` (`--url`, default `http://127.0.0.1:8080`, with the bearer
 /// token from `--token`). Prints help for an unknown or missing command;
-/// exits with status 1 when a request fails.
-pub fn run(args: Args) {
+// gives status 1 when a request fails.
+pub fn run(args: Args) -> Status {
     if args.has("help") {
         crate::cli::HOOK.print_help("rns-ctl hook");
-        return;
+        return Ok(());
     }
 
     let base_url = args
@@ -44,11 +45,14 @@ pub fn run(args: Args) {
         Some("enable") => do_set_enabled(&args, &base_url, token.as_deref(), true),
         Some("disable") => do_set_enabled(&args, &base_url, token.as_deref(), false),
         Some("set-priority") => do_set_priority(&args, &base_url, token.as_deref()),
-        _ => crate::cli::HOOK.print_help("rns-ctl hook"),
+        _ => {
+            crate::cli::HOOK.print_help("rns-ctl hook");
+            Ok(())
+        }
     }
 }
 
-fn do_list(base_url: &str, token: Option<&str>) {
+fn do_list(base_url: &str, token: Option<&str>) -> Status {
     let url = format!("{}/api/hooks", base_url);
     match simple_get(&url, token) {
         Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
@@ -56,7 +60,7 @@ fn do_list(base_url: &str, token: Option<&str>) {
                 if let Some(hooks) = val["hooks"].as_array() {
                     if hooks.is_empty() {
                         println!("No hooks loaded");
-                        return;
+                        return Ok(());
                     }
                     println!(
                         "{:<20} {:<8} {:<28} {:>8} {:>8} {:>6}",
@@ -86,12 +90,13 @@ fn do_list(base_url: &str, token: Option<&str>) {
         },
         Err(e) => {
             eprintln!("Error: {}", e);
-            std::process::exit(1);
+            return Err(Exit::FAILURE);
         }
     }
+    Ok(())
 }
 
-fn do_load(args: &Args, base_url: &str, token: Option<&str>) {
+fn do_load(args: &Args, base_url: &str, token: Option<&str>) -> Status {
     let path = match args.positional.get(1) {
         Some(p) => p,
         None => {
@@ -131,12 +136,13 @@ fn do_load(args: &Args, base_url: &str, token: Option<&str>) {
         Ok(resp) => println!("{}", resp),
         Err(e) => {
             eprintln!("Error: {}", e);
-            std::process::exit(1);
+            return Err(Exit::FAILURE);
         }
     }
+    Ok(())
 }
 
-fn do_unload(args: &Args, base_url: &str, token: Option<&str>) {
+fn do_unload(args: &Args, base_url: &str, token: Option<&str>) -> Status {
     let name = match args.positional.get(1) {
         Some(n) => n,
         None => {
@@ -160,12 +166,13 @@ fn do_unload(args: &Args, base_url: &str, token: Option<&str>) {
         Ok(resp) => println!("{}", resp),
         Err(e) => {
             eprintln!("Error: {}", e);
-            std::process::exit(1);
+            return Err(Exit::FAILURE);
         }
     }
+    Ok(())
 }
 
-fn do_reload(args: &Args, base_url: &str, token: Option<&str>) {
+fn do_reload(args: &Args, base_url: &str, token: Option<&str>) -> Status {
     let name = match args.positional.get(1) {
         Some(n) => n,
         None => {
@@ -199,12 +206,13 @@ fn do_reload(args: &Args, base_url: &str, token: Option<&str>) {
         Ok(resp) => println!("{}", resp),
         Err(e) => {
             eprintln!("Error: {}", e);
-            std::process::exit(1);
+            return Err(Exit::FAILURE);
         }
     }
+    Ok(())
 }
 
-fn do_set_enabled(args: &Args, base_url: &str, token: Option<&str>, enabled: bool) {
+fn do_set_enabled(args: &Args, base_url: &str, token: Option<&str>, enabled: bool) -> Status {
     let name = match args.positional.get(1) {
         Some(n) => n,
         None => {
@@ -231,12 +239,13 @@ fn do_set_enabled(args: &Args, base_url: &str, token: Option<&str>, enabled: boo
         Ok(resp) => println!("{}", resp),
         Err(e) => {
             eprintln!("Error: {}", e);
-            std::process::exit(1);
+            return Err(Exit::FAILURE);
         }
     }
+    Ok(())
 }
 
-fn do_set_priority(args: &Args, base_url: &str, token: Option<&str>) {
+fn do_set_priority(args: &Args, base_url: &str, token: Option<&str>) -> Status {
     let name = match args.positional.get(1) {
         Some(n) => n,
         None => {
@@ -266,9 +275,10 @@ fn do_set_priority(args: &Args, base_url: &str, token: Option<&str>) {
         Ok(resp) => println!("{}", resp),
         Err(e) => {
             eprintln!("Error: {}", e);
-            std::process::exit(1);
+            return Err(Exit::FAILURE);
         }
     }
+    Ok(())
 }
 
 /// Simple HTTP GET using std::net::TcpStream (no external HTTP client dependency).

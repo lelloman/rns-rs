@@ -8,6 +8,7 @@ pub mod app;
 pub mod argparse;
 pub mod args;
 pub mod configobj;
+pub mod exit;
 pub mod format;
 pub mod native_cli;
 pub mod placeholder;

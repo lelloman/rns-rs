@@ -1,25 +1,22 @@
-use std::path::Path;
-use std::process;
-
+use super::{connect_rpc, rpc_call};
 use crate::args::Args;
-use rns_cli::shared_instance::LocalInstance;
+use rns_cli::exit::{Exit, Status};
 use rns_net::pickle::PickleValue;
-use rns_net::storage;
 use rns_net::RpcClient;
 use serde_json::{json, Value};
 
 /// Run `rns-ctl backbone`: list or clear the backbone blacklist, or show
 /// the provider bridge statistics, over the RPC socket of the node using the
-/// config directory. Prints help without a command. Exits with status 1 when
+/// config directory. Prints help without a command. Gives status 1 when
 /// the node cannot be reached or the call fails.
-pub fn run(args: Args) {
+pub fn run(args: Args) -> Status {
     if args.has("help") || args.positional.is_empty() {
         crate::cli::BACKBONE.print_help("rns-ctl backbone");
-        return;
+        return Ok(());
     }
 
     let json_output = args.has("j") || args.has("json");
-    let mut client = connect(args.config_path());
+    let mut client = connect_rpc(args.config_path())?;
 
     match args.positional.first().map(|s| s.as_str()) {
         Some("blacklist") => run_blacklist(&args, &mut client, json_output),
@@ -30,11 +27,14 @@ pub fn run(args: Args) {
                 &format!("Unknown backbone subcommand: {}", other),
             );
         }
-        None => crate::cli::BACKBONE.print_help("rns-ctl backbone"),
+        None => {
+            crate::cli::BACKBONE.print_help("rns-ctl backbone");
+            Ok(())
+        }
     }
 }
 
-fn run_blacklist(args: &Args, client: &mut RpcClient, json_output: bool) {
+fn run_blacklist(args: &Args, client: &mut RpcClient, json_output: bool) -> Status {
     match args.positional.get(1).map(|s| s.as_str()) {
         Some("list") => {
             let mut request = vec![(
@@ -47,7 +47,7 @@ fn run_blacklist(args: &Args, client: &mut RpcClient, json_output: bool) {
                     PickleValue::String(interface.clone()),
                 ));
             }
-            let response = rpc_call(client, PickleValue::Dict(request));
+            let response = rpc_call(client, PickleValue::Dict(request))?;
             if json_output {
                 println!(
                     "{}",
@@ -55,18 +55,18 @@ fn run_blacklist(args: &Args, client: &mut RpcClient, json_output: bool) {
                         .unwrap_or_default()
                 );
             } else {
-                print_blacklist(&response);
+                print_blacklist(&response)?;
             }
         }
         Some("clear") => {
-            let interface = args.positional.get(2).cloned().unwrap_or_else(|| {
+            let Some(interface) = args.positional.get(2).cloned() else {
                 eprintln!("Missing interface name");
-                process::exit(1);
-            });
-            let ip = args.positional.get(3).cloned().unwrap_or_else(|| {
+                return Err(Exit::FAILURE);
+            };
+            let Some(ip) = args.positional.get(3).cloned() else {
                 eprintln!("Missing peer IP");
-                process::exit(1);
-            });
+                return Err(Exit::FAILURE);
+            };
             let response = rpc_call(
                 client,
                 PickleValue::Dict(vec![
@@ -80,16 +80,16 @@ fn run_blacklist(args: &Args, client: &mut RpcClient, json_output: bool) {
                     ),
                     (PickleValue::String("ip".into()), PickleValue::String(ip)),
                 ]),
-            );
+            )?;
             match response {
                 PickleValue::Bool(true) => println!("Cleared"),
                 PickleValue::Bool(false) => {
                     eprintln!("No matching backbone peer state entry");
-                    process::exit(1);
+                    return Err(Exit::FAILURE);
                 }
                 _ => {
                     eprintln!("Unexpected response");
-                    process::exit(1);
+                    return Err(Exit::FAILURE);
                 }
             }
         }
@@ -97,34 +97,36 @@ fn run_blacklist(args: &Args, client: &mut RpcClient, json_output: bool) {
             crate::cli::BACKBONE.error("rns-ctl backbone", "Unknown backbone blacklist action");
         }
     }
+    Ok(())
 }
 
-fn run_provider(client: &mut RpcClient, json_output: bool) {
+fn run_provider(client: &mut RpcClient, json_output: bool) -> Status {
     let response = rpc_call(
         client,
         PickleValue::Dict(vec![(
             PickleValue::String("get".into()),
             PickleValue::String("provider_bridge_stats".into()),
         )]),
-    );
+    )?;
     if json_output {
         println!(
             "{}",
             serde_json::to_string_pretty(&provider_stats_to_json(&response)).unwrap_or_default()
         );
     } else {
-        print_provider_stats(&response);
+        print_provider_stats(&response)?;
     }
+    Ok(())
 }
 
-fn print_blacklist(response: &PickleValue) {
+fn print_blacklist(response: &PickleValue) -> Status {
     let Some(entries) = response.as_list() else {
         eprintln!("Unexpected response");
-        process::exit(1);
+        return Err(Exit::FAILURE);
     };
     if entries.is_empty() {
         println!("No backbone peer state entries");
-        return;
+        return Ok(());
     }
 
     println!(
@@ -160,6 +162,7 @@ fn print_blacklist(response: &PickleValue) {
             interface, ip, connected, blacklist, rejects, reason
         );
     }
+    Ok(())
 }
 
 fn pickle_list_to_json(value: &PickleValue) -> Value {
@@ -213,15 +216,15 @@ fn provider_stats_to_json(value: &PickleValue) -> Value {
     })
 }
 
-fn print_provider_stats(response: &PickleValue) {
+fn print_provider_stats(response: &PickleValue) -> Status {
     if matches!(response, PickleValue::None) {
         println!("Provider bridge disabled or unavailable");
-        return;
+        return Ok(());
     }
 
     let Some(consumers) = response.get("consumers").and_then(|v| v.as_list()) else {
         eprintln!("Unexpected response");
-        process::exit(1);
+        return Err(Exit::FAILURE);
     };
 
     println!(
@@ -266,7 +269,7 @@ fn print_provider_stats(response: &PickleValue) {
 
     if consumers.is_empty() {
         println!("No connected provider consumers");
-        return;
+        return Ok(());
     }
 
     println!(
@@ -320,33 +323,5 @@ fn print_provider_stats(response: &PickleValue) {
                 .unwrap_or(0),
         );
     }
-}
-
-fn connect(config_path: Option<&str>) -> RpcClient {
-    let config_dir = storage::resolve_config_dir(config_path.map(Path::new));
-    let rpc = match LocalInstance::open(&config_dir) {
-        Ok(instance) => instance.rpc,
-        Err(e) => {
-            eprintln!("{e}");
-            process::exit(1);
-        }
-    };
-    match rpc.connect() {
-        Ok(client) => client,
-        Err(e) => {
-            eprintln!("Could not connect to rnsd: {}", e);
-            eprintln!("Is rnsd running?");
-            process::exit(1);
-        }
-    }
-}
-
-fn rpc_call(client: &mut RpcClient, request: PickleValue) -> PickleValue {
-    match client.call(&request) {
-        Ok(response) => response,
-        Err(e) => {
-            eprintln!("RPC error: {}", e);
-            process::exit(1);
-        }
-    }
+    Ok(())
 }

@@ -2,6 +2,6 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-fn main() {
-    rns_cli::rnsd::main_entry();
+fn main() -> std::process::ExitCode {
+    rns_cli::rnsd::main_entry()
 }

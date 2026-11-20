@@ -1020,7 +1020,7 @@ impl Rncp {
         if !Path::new(&file_path).is_file() {
             println!("File not found");
             flush();
-            std::process::exit(1);
+            return 1;
         }
         let metadata = app::filename_metadata(basename(&file_path));
         let silent = self.args.silent;

@@ -7,7 +7,7 @@ use std::io::{self, Read};
 use std::net::IpAddr;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process;
+use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -188,15 +188,15 @@ pub fn parse_args(argv: Vec<String>) -> Args {
 }
 
 /// Runs `rns-sentineld` on the process's command line; see [`main_entry_from`].
-pub fn main_entry() {
-    main_entry_from(parse_args(std::env::args().skip(1).collect()));
+pub fn main_entry() -> ExitCode {
+    main_entry_from(parse_args(std::env::args().skip(1).collect()))
 }
 
-/// Runs `rns-sentineld` on already parsed `args` and exits the process: blocks
-/// until SIGINT, SIGTERM or SIGHUP, then exits 0, 1 on an error, or 101 after a
+/// Runs `rns-sentineld` on already parsed `args`: blocks until SIGINT,
+/// SIGTERM or SIGHUP, then gives exit status 0, 1 on an error, or 101 after a
 /// panic. Installs the process's logger, signal handlers and a panic hook
 /// that asks the service to stop.
-pub fn main_entry_from(args: Args) {
+pub fn main_entry_from(args: Args) -> ExitCode {
     let previous_panic_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         SHOULD_STOP.store(true, Ordering::Relaxed);
@@ -213,7 +213,7 @@ pub fn main_entry_from(args: Args) {
         Err(_) => 101,
     };
 
-    process::exit(exit_code);
+    crate::exit::code(exit_code)
 }
 
 fn run(args: Args) -> Result<(), String> {

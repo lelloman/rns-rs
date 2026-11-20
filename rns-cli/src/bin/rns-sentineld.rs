@@ -1,3 +1,3 @@
-fn main() {
-    rns_cli::sentineld::main_entry();
+fn main() -> std::process::ExitCode {
+    rns_cli::sentineld::main_entry()
 }

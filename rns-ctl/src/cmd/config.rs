@@ -1,28 +1,24 @@
 //! Inspect and update runtime configuration on a running daemon.
 
-use std::path::Path;
-use std::process;
-
+use super::{connect_rpc, rpc_call};
 use crate::args::Args;
-use rns_cli::shared_instance::LocalInstance;
+use rns_cli::exit::{Exit, Status};
 use rns_net::pickle::PickleValue;
-use rns_net::storage;
-use rns_net::RpcClient;
 use serde_json::{json, Value};
 
 /// Run `rns-ctl config`: list, get, set or reset runtime configuration
 /// values over the RPC socket of the node using the config directory. Prints
-/// help without an action. Exits with status 1 when the node cannot be reached
+/// help without an action. Gives status 1 when the node cannot be reached
 /// or the call fails.
-pub fn run(args: Args) {
+pub fn run(args: Args) -> Status {
     if args.has("version") {
         println!("rns-ctl {}", env!("FULL_VERSION"));
-        return;
+        return Ok(());
     }
 
     if args.has("help") || args.positional.is_empty() {
         crate::cli::CONFIG.print_help("rns-ctl config");
-        return;
+        return Ok(());
     }
 
     let json_output = args.has("j") || args.has("json");
@@ -34,7 +30,7 @@ pub fn run(args: Args) {
         .map(|s| s.as_str())
         .unwrap_or_default();
 
-    let mut client = connect(args.config_path());
+    let mut client = connect_rpc(args.config_path())?;
 
     match action {
         "list" => {
@@ -44,7 +40,7 @@ pub fn run(args: Args) {
                     PickleValue::String("get".into()),
                     PickleValue::String("runtime_config".into()),
                 )]),
-            );
+            )?;
             let response = if let Some(prefix) = args.get("prefix") {
                 filter_list_by_prefix(response, prefix)
             } else {
@@ -56,7 +52,7 @@ pub fn run(args: Args) {
                     serde_json::to_string_pretty(&pickle_to_json(&response)).unwrap_or_default()
                 );
             } else {
-                print_list(&response, keys_only);
+                print_list(&response, keys_only)?;
             }
         }
         "get" => {
@@ -64,7 +60,7 @@ pub fn run(args: Args) {
                 Some(key) => key,
                 None => {
                     eprintln!("Missing runtime-config key");
-                    process::exit(1);
+                    return Err(Exit::FAILURE);
                 }
             };
             let response = rpc_call(
@@ -79,7 +75,7 @@ pub fn run(args: Args) {
                         PickleValue::String(key.clone()),
                     ),
                 ]),
-            );
+            )?;
             if json_output {
                 println!(
                     "{}",
@@ -94,14 +90,14 @@ pub fn run(args: Args) {
                 Some(key) => key,
                 None => {
                     eprintln!("Missing runtime-config key");
-                    process::exit(1);
+                    return Err(Exit::FAILURE);
                 }
             };
             let raw_value = match args.positional.get(2) {
                 Some(value) => value,
                 None => {
                     eprintln!("Missing runtime-config value");
-                    process::exit(1);
+                    return Err(Exit::FAILURE);
                 }
             };
             let response = rpc_call(
@@ -120,15 +116,15 @@ pub fn run(args: Args) {
                         parse_scalar_value(raw_value),
                     ),
                 ]),
-            );
-            handle_mutation_response(&response, json_output, value_only);
+            )?;
+            handle_mutation_response(&response, json_output, value_only)?;
         }
         "reset" => {
             let key = match args.positional.get(1) {
                 Some(key) => key,
                 None => {
                     eprintln!("Missing runtime-config key");
-                    process::exit(1);
+                    return Err(Exit::FAILURE);
                 }
             };
             let response = rpc_call(
@@ -143,8 +139,8 @@ pub fn run(args: Args) {
                         PickleValue::String(key.clone()),
                     ),
                 ]),
-            );
-            handle_mutation_response(&response, json_output, value_only);
+            )?;
+            handle_mutation_response(&response, json_output, value_only)?;
         }
         _ => {
             crate::cli::CONFIG.error(
@@ -153,35 +149,7 @@ pub fn run(args: Args) {
             );
         }
     }
-}
-
-fn connect(config_path: Option<&str>) -> RpcClient {
-    let config_dir = storage::resolve_config_dir(config_path.map(Path::new));
-    let rpc = match LocalInstance::open(&config_dir) {
-        Ok(instance) => instance.rpc,
-        Err(e) => {
-            eprintln!("{e}");
-            process::exit(1);
-        }
-    };
-    match rpc.connect() {
-        Ok(client) => client,
-        Err(e) => {
-            eprintln!("Could not connect to rnsd: {}", e);
-            eprintln!("Is rnsd running?");
-            process::exit(1);
-        }
-    }
-}
-
-fn rpc_call(client: &mut RpcClient, request: PickleValue) -> PickleValue {
-    match client.call(&request) {
-        Ok(response) => response,
-        Err(e) => {
-            eprintln!("RPC error: {}", e);
-            process::exit(1);
-        }
-    }
+    Ok(())
 }
 
 fn parse_scalar_value(raw: &str) -> PickleValue {
@@ -202,10 +170,10 @@ fn parse_scalar_value(raw: &str) -> PickleValue {
     }
 }
 
-fn print_list(response: &PickleValue, keys_only: bool) {
+fn print_list(response: &PickleValue, keys_only: bool) -> Status {
     let Some(entries) = response.as_list() else {
         eprintln!("Unexpected response");
-        process::exit(1);
+        return Err(Exit::FAILURE);
     };
     let mut sorted_entries: Vec<&PickleValue> = entries.iter().collect();
     sorted_entries.sort_by(|a, b| {
@@ -216,7 +184,7 @@ fn print_list(response: &PickleValue, keys_only: bool) {
 
     if sorted_entries.is_empty() {
         println!("No runtime config entries");
-        return;
+        return Ok(());
     }
 
     if keys_only {
@@ -229,7 +197,7 @@ fn print_list(response: &PickleValue, keys_only: bool) {
                     .unwrap_or("<unknown>")
             );
         }
-        return;
+        return Ok(());
     }
 
     println!(
@@ -240,6 +208,7 @@ fn print_list(response: &PickleValue, keys_only: bool) {
     for entry in sorted_entries {
         print_list_entry(entry);
     }
+    Ok(())
 }
 
 fn print_entry_or_none(response: &PickleValue, key: &str, value_only: bool) {
@@ -268,7 +237,7 @@ fn filter_list_by_prefix(response: PickleValue, prefix: &str) -> PickleValue {
     }
 }
 
-fn handle_mutation_response(response: &PickleValue, json_output: bool, value_only: bool) {
+fn handle_mutation_response(response: &PickleValue, json_output: bool, value_only: bool) -> Status {
     if json_output {
         println!(
             "{}",
@@ -280,10 +249,11 @@ fn handle_mutation_response(response: &PickleValue, json_output: bool, value_onl
             .and_then(|v| v.as_str())
             .unwrap_or("unknown runtime-config error");
         eprintln!("{}", message);
-        process::exit(1);
+        return Err(Exit::FAILURE);
     } else {
         print_entry(response, value_only);
     }
+    Ok(())
 }
 
 fn print_list_entry(entry: &PickleValue) {
