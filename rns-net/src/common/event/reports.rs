@@ -76,6 +76,8 @@ pub struct KnownDestinationEntry {
     pub identity_hash: [u8; 16],
     /// The identity's public key (X25519 then Ed25519).
     pub public_key: [u8; 64],
+    /// Hash of its last heard announce packet, when known.
+    pub packet_hash: Option<[u8; 32]>,
     /// Application data of its announce.
     pub app_data: Option<Vec<u8>>,
     /// Hops its announce came over.

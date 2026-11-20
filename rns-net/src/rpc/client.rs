@@ -333,11 +333,13 @@ impl RpcClient {
         Ok(response.as_bool().unwrap_or(false))
     }
 
-    /// List the node's known destinations.
+    /// List the node's known destinations, with this implementation's
+    /// fields (`{"get": "known_destination_entries"}`). The
+    /// `known_destinations` call answers upstream's dict instead.
     pub fn known_destinations(&mut self) -> io::Result<Vec<KnownDestinationEntry>> {
         let response = self.call(&PickleValue::Dict(vec![(
             PickleValue::String("get".into()),
-            PickleValue::String("known_destinations".into()),
+            PickleValue::String("known_destination_entries".into()),
         )]))?;
         parse_known_destination_list(&response)
     }

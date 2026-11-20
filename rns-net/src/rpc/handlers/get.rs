@@ -34,7 +34,11 @@ pub(super) fn handle_get_request(
         "discovered_interfaces" => get_discovered_interfaces(request, event_tx),
         "hooks" => get_hooks(event_tx),
         "runtime_config" => get_runtime_config(event_tx),
+        // Upstream's dict (48c77061), which its shared instance clients
+        // load in split mode; this implementation's richer list has its own
+        // name.
         "known_destinations" => get_known_destinations(event_tx),
+        "known_destination_entries" => get_known_destination_entries(event_tx),
         "runtime_config_entry" => get_runtime_config_entry(request, event_tx),
         "backbone_peer_state" => get_backbone_peer_state(request, event_tx),
         "backbone_interfaces" => get_backbone_interfaces(event_tx),
@@ -299,8 +303,18 @@ fn get_runtime_config(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
     }
 }
 
-/// The known destinations.
+/// The known destinations in upstream's shape.
 fn get_known_destinations(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
+    let resp = send_query(event_tx, QueryRequest::KnownDestinations)?;
+    if let QueryResponse::KnownDestinations(entries) = resp {
+        Ok(known_destinations_to_upstream(&entries))
+    } else {
+        Ok(PickleValue::None)
+    }
+}
+
+/// The known destinations as this implementation's list.
+fn get_known_destination_entries(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
     let resp = send_query(event_tx, QueryRequest::KnownDestinations)?;
     if let QueryResponse::KnownDestinations(entries) = resp {
         Ok(known_destinations_to_pickle(&entries))

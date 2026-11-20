@@ -354,10 +354,6 @@ impl RnsNode {
             .map(crate::stamps::DestinationStampStore::new);
         // Received ratchets: without a store, packets to destinations that
         // enforce ratchets would go out encrypted to the identity key alone.
-        let known_destinations = instance_storage
-            .as_deref()
-            .map(load_instance_known_destinations)
-            .unwrap_or_default();
         // Upstream's client runs Transport.start too: it loads the stored
         // transport identity, or creates and stores one, then, without
         // static_transport_identity, uses an ephemeral one, and creates its
@@ -524,7 +520,6 @@ impl RnsNode {
         if let Some(store) = stamp_store {
             node.set_stamp_store(store);
         }
-        node.restore_known_destinations(known_destinations);
         Ok(node)
     }
 
@@ -574,7 +569,81 @@ impl RnsNode {
             rns_config.reticulum.static_transport_identity,
         )?;
         node.use_shared_instance_rpc(&config_dir, rpc_addr, rns_config.reticulum.rpc_key);
+        // After the RPC is set up, which the split mode fallback needs
+        // (upstream 48c77061 moved the load after `rpc_key` for this).
+        let known_destinations = node.load_instance_known_destinations(&config_dir.join("storage"));
+        node.restore_known_destinations(known_destinations);
         Ok(node)
+    }
+
+    /// `Identity.load_known_destinations` on a shared instance client: what
+    /// the instance knows, read from its database without writing to it.
+    /// When the database cannot be read, as when the client runs in its own
+    /// storage path (split mode), the instance is asked over RPC, as
+    /// upstream since 48c77061. Its log lines and levels are upstream's.
+    fn load_instance_known_destinations(
+        &self,
+        storage_dir: &std::path::Path,
+    ) -> Vec<([u8; 16], storage::KnownDestination)> {
+        let db = crate::storage_sqlite::default_path(storage_dir);
+        let loaded = if db.is_file() {
+            crate::storage_sqlite::KnownDestinationsStore::open_read_only(&db)
+                .and_then(|store| store.load_all())
+        } else {
+            // Upstream's read-only sqlite open fails the same way.
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "unable to open database file",
+            ))
+        };
+        let entries = match loaded {
+            Ok(entries) => entries,
+            Err(e) => {
+                log::debug!("Could not load known destinations from shared instance database: {e}");
+                log::debug!("Potentially running in split mode, attempting to load known destinations over RPC...");
+                match self.instance_known_destinations_over_rpc() {
+                    Ok(entries) => entries,
+                    Err(e) => {
+                        log::error!("Could not load known destinations from shared instance: {e}");
+                        return Vec::new();
+                    }
+                }
+            }
+        };
+        log::info!(
+            "Loaded {} known destinations from shared instance",
+            entries.len()
+        );
+        entries
+    }
+
+    /// Upstream's `Reticulum.get_known_destinations()` on a client: the
+    /// instance's table over RPC, or an empty one when the call fails.
+    fn instance_known_destinations_over_rpc(
+        &self,
+    ) -> io::Result<Vec<([u8; 16], storage::KnownDestination)>> {
+        let request = PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("known_destinations".into()),
+        )]);
+        let response = match &self.destination_types.shared_rpc {
+            Some((addr, auth_key)) => {
+                RpcClient::connect(addr, auth_key).and_then(|mut client| client.call(&request))
+            }
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "no shared instance RPC key",
+            )),
+        };
+        match response {
+            // `get_known_destinations() or {}`: an empty answer is an empty table.
+            Ok(PickleValue::None) => Ok(Vec::new()),
+            Ok(response) => crate::rpc::parse_upstream_known_destinations(&response),
+            Err(e) => {
+                log::error!("Shared instance RPC failed while getting known destinations: {e}");
+                Ok(Vec::new())
+            }
+        }
     }
 
     /// Reach the shared instance's RPC server for destination type
@@ -926,41 +995,11 @@ fn load_or_create_transport_identity(storage_dir: &std::path::Path) -> io::Resul
     Ok(identity)
 }
 
-/// `Identity.load_known_destinations` on a shared instance client: what
-/// the instance knows, read from its database without writing to it (or
-/// from its older snapshot file).
-fn load_instance_known_destinations(
-    storage_dir: &std::path::Path,
-) -> Vec<([u8; 16], storage::KnownDestination)> {
-    let db = crate::storage_sqlite::default_path(storage_dir);
-    if db.is_file() {
-        match crate::storage_sqlite::KnownDestinationsStore::open_read_only(&db)
-            .and_then(|store| store.load_all())
-        {
-            Ok(entries) => {
-                log::info!(
-                    "Loaded {} known destinations from shared instance database",
-                    entries.len()
-                );
-                return entries;
-            }
-            Err(e) => {
-                log::error!("Could not load known destinations from shared instance database, continuing with an empty table. The contained exception was: {e}");
-                return Vec::new();
-            }
-        }
-    }
-    match storage::load_known_destinations(&storage_dir.join("known_destinations")) {
-        Ok(entries) => entries.into_iter().collect(),
-        Err(_) => Vec::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use rns_core::packet::RawPacket;
-    use rns_core::types::IdentityHash;
+    use rns_core::types::{DestHash, IdentityHash};
     use rns_crypto::identity::Identity;
     use rns_crypto::OsRng;
     use std::io::Read;
@@ -1030,6 +1069,67 @@ mod tests {
             ]))
             .unwrap();
         assert_eq!(response, PickleValue::Bool(false));
+        daemon.shutdown();
+    }
+
+    /// Upstream 48c77061: a client in its own storage path (split mode)
+    /// cannot open the instance's known destinations database, so it loads
+    /// the instance's table over RPC.
+    #[test]
+    fn a_split_mode_client_loads_known_destinations_over_rpc() {
+        let instance_dir = tempfile::tempdir().unwrap();
+        let client_dir = tempfile::tempdir().unwrap();
+        let rpc_port = find_free_port();
+        let shared_port = find_free_port();
+        let instance = crate::test_support::instance_name("test-split-known");
+        let config = format!(
+            "[reticulum]\nshare_instance = yes\ninstance_name = {instance}\n\
+             instance_control_port = {rpc_port}\n\
+             shared_instance_port = {shared_port}\n\
+             rpc_key = {}\n",
+            "ab".repeat(32)
+        );
+        std::fs::write(instance_dir.path().join("config"), &config).unwrap();
+        std::fs::write(client_dir.path().join("config"), &config).unwrap();
+        let daemon =
+            RnsNode::from_config(Some(instance_dir.path()), Box::new(NoopCallbacks)).unwrap();
+        let identity = Identity::new(&mut OsRng);
+        let dest_hash = [0x5d; 16];
+        let response = daemon
+            .query(QueryRequest::InjectIdentity {
+                dest_hash,
+                identity_hash: *identity.hash(),
+                public_key: identity.get_public_key().unwrap(),
+                app_data: Some(b"split".to_vec()),
+                hops: 2,
+                received_at: 1_700_000_000.0,
+            })
+            .unwrap();
+        assert!(matches!(response, QueryResponse::InjectIdentity(true)));
+        assert!(daemon
+            .retain_known_destination(&DestHash(dest_hash))
+            .unwrap());
+
+        let client =
+            RnsNode::connect_shared_from_config(Some(client_dir.path()), Box::new(NoopCallbacks))
+                .unwrap();
+        assert!(!crate::storage_sqlite::default_path(&client_dir.path().join("storage")).exists());
+        let known = client.known_destinations().unwrap();
+        let entry = known
+            .iter()
+            .find(|entry| entry.dest_hash == dest_hash)
+            .unwrap_or_else(|| panic!("not loaded over RPC: {known:?}"));
+        assert_eq!(entry.public_key, identity.get_public_key().unwrap());
+        assert_eq!(entry.identity_hash, *identity.hash());
+        assert_eq!(entry.app_data.as_deref(), Some(&b"split"[..]));
+        assert_eq!(entry.received_at, 1_700_000_000.0);
+        assert!(entry.retained);
+        assert!(client
+            .recall_identity(&DestHash(dest_hash))
+            .unwrap()
+            .is_some());
+
+        client.shutdown();
         daemon.shutdown();
     }
 

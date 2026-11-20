@@ -264,6 +264,8 @@ pub use crate::common::callbacks::Callbacks;
 #[derive(Debug, Clone)]
 pub(crate) struct KnownDestinationState {
     announced: crate::destination::AnnouncedIdentity,
+    /// Hash of the last announce heard, upstream's `packet_hash` element.
+    packet_hash: Option<[u8; 32]>,
     was_used: bool,
     last_used_at: Option<f64>,
     retained: bool,

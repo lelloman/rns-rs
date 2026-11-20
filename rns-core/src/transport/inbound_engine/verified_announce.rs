@@ -307,6 +307,7 @@ impl TransportEngine {
         actions.push(TransportAction::AnnounceReceived(alloc::boxed::Box::new(
             types::ReceivedAnnounce {
                 destination_hash: ctx.packet.destination_hash,
+                packet_hash: ctx.packet.packet_hash,
                 identity_hash: ctx.validated.identity_hash,
                 public_key: ctx.validated.public_key,
                 name_hash: ctx.validated.name_hash,

@@ -248,6 +248,8 @@ pub(super) fn convert_injected_actions(
                     hops,
                     receiving_interface,
                 } => TransportAction::AnnounceReceived(Box::new(ReceivedAnnounce {
+                    // A hook-injected announce came in no packet.
+                    packet_hash: [0u8; 32],
                     destination_hash,
                     identity_hash,
                     public_key,

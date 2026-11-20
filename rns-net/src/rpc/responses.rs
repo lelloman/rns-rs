@@ -824,6 +824,124 @@ pub(super) fn known_destination_entry_to_pickle(entry: &KnownDestinationEntry) -
     ])
 }
 
+/// Upstream's `Reticulum.get_known_destinations()` (48c77061), the answer to
+/// `{"get": "known_destinations"}`: a copy of `Identity.known_destinations`,
+/// a dict from destination hash to `[last_heard, packet_hash, public_key,
+/// app_data, used, stamp, stamp_value, lr_cost]`. As `Identity.remember`
+/// and `_retain_destination_data` write them, `used` is `0` when never
+/// used, the time of last use, or `-1` when retained, and `stamp_value` is
+/// `0` without a stamp. An unknown packet hash is all zeros, as this
+/// implementation's database holds it.
+pub(super) fn known_destinations_to_upstream(entries: &[KnownDestinationEntry]) -> PickleValue {
+    PickleValue::Dict(
+        entries
+            .iter()
+            .map(|entry| {
+                let used = if entry.retained {
+                    PickleValue::Int(-1)
+                } else if let Some(last_used_at) = entry.last_used_at {
+                    PickleValue::Float(last_used_at)
+                } else {
+                    PickleValue::Int(0)
+                };
+                let stamp_value = if entry.stamp.is_some() {
+                    PickleValue::Float(entry.stamp_value.as_f64())
+                } else {
+                    PickleValue::Int(0)
+                };
+                let value = PickleValue::List(vec![
+                    PickleValue::Float(entry.received_at),
+                    PickleValue::Bytes(entry.packet_hash.unwrap_or([0u8; 32]).to_vec()),
+                    PickleValue::Bytes(entry.public_key.to_vec()),
+                    entry
+                        .app_data
+                        .as_ref()
+                        .map(|data| PickleValue::Bytes(data.clone()))
+                        .unwrap_or(PickleValue::None),
+                    used,
+                    entry
+                        .stamp
+                        .map(|stamp| PickleValue::Bytes(stamp.to_vec()))
+                        .unwrap_or(PickleValue::None),
+                    stamp_value,
+                    entry
+                        .lr_cost
+                        .map(|cost| PickleValue::Float(cost.as_f64()))
+                        .unwrap_or(PickleValue::None),
+                ]);
+                (PickleValue::Bytes(entry.dest_hash.to_vec()), value)
+            })
+            .collect(),
+    )
+}
+
+/// Read a `known_destinations` answer in upstream's shape, as
+/// [`known_destinations_to_upstream`] writes it or an upstream instance
+/// does. Entries without a 16-byte hash and a 64-byte public key are
+/// skipped; a value that is not a dict is an error. Upstream's entries
+/// carry no hops or receiving interface, which read as zero, and a
+/// negative `used` is a retained destination.
+#[cfg(any(feature = "iface-local", test))]
+pub(crate) fn parse_upstream_known_destinations(
+    value: &PickleValue,
+) -> io::Result<Vec<([u8; 16], crate::storage::KnownDestination)>> {
+    let PickleValue::Dict(entries) = value else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "known destinations answer is not a dict",
+        ));
+    };
+    let number = |value: Option<&PickleValue>| {
+        value.and_then(|v| v.as_float().or_else(|| v.as_int().map(|n| n as f64)))
+    };
+    let bytes = |value: Option<&PickleValue>| value.and_then(|v| v.as_bytes()).map(<[u8]>::to_vec);
+    let mut destinations = Vec::with_capacity(entries.len());
+    for (key, entry) in entries {
+        let (Some(dest_hash), Some(fields)) = (
+            key.as_bytes().and_then(|b| <[u8; 16]>::try_from(b).ok()),
+            entry.as_list(),
+        ) else {
+            continue;
+        };
+        let Some(public_key) = fields
+            .get(2)
+            .and_then(|v| v.as_bytes())
+            .and_then(|b| <[u8; 64]>::try_from(b).ok())
+        else {
+            continue;
+        };
+        let used = number(fields.get(4)).unwrap_or(0.0);
+        destinations.push((
+            dest_hash,
+            crate::storage::KnownDestination {
+                packet_hash: fields
+                    .get(1)
+                    .and_then(|v| v.as_bytes())
+                    .and_then(|b| <[u8; 32]>::try_from(b).ok())
+                    .filter(|hash| *hash != [0u8; 32]),
+                identity_hash: crate::storage::full_hash_prefix(&public_key),
+                public_key,
+                app_data: bytes(fields.get(3)),
+                hops: 0,
+                received_at: number(fields.first()).unwrap_or(0.0),
+                receiving_interface: 0,
+                was_used: used != 0.0,
+                last_used_at: (used > 0.0).then_some(used),
+                retained: used < 0.0,
+                stamp: bytes(fields.get(5)),
+                stamp_value: rns_core::stamp::StampValue::from_f64(
+                    number(fields.get(6)).unwrap_or(0.0),
+                ),
+                lr_cost: number(fields.get(7)).and_then(crate::storage::stored_link_cost),
+            },
+        ));
+    }
+    Ok(destinations)
+}
+
+/// This implementation's own known destination list, the answer to
+/// `{"get": "known_destination_entries"}`: one dict of named fields per
+/// destination, with its hops, receiving interface and retention.
 pub(super) fn known_destinations_to_pickle(entries: &[KnownDestinationEntry]) -> PickleValue {
     PickleValue::List(
         entries
@@ -898,6 +1016,7 @@ pub(super) fn parse_known_destination_entry(
         .unwrap_or_default();
 
     Ok(KnownDestinationEntry {
+        packet_hash: None,
         dest_hash,
         identity_hash,
         public_key,

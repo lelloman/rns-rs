@@ -1067,6 +1067,7 @@ fn known_destinations_persist_across_restart() {
     node.event_sender()
         .send(crate::event::Event::query(
             QueryRequest::RestoreKnownDestination(crate::event::KnownDestinationEntry {
+                packet_hash: None,
                 dest_hash,
                 identity_hash: *identity.hash(),
                 public_key: identity.get_public_key().unwrap(),
@@ -1234,6 +1235,7 @@ fn from_config_cleans_persistent_ratchets_after_loading_known_destinations() {
         (
             known_live,
             storage::KnownDestination {
+                packet_hash: None,
                 identity_hash: *identity.hash(),
                 public_key: identity.get_public_key().unwrap(),
                 app_data: None,
@@ -1251,6 +1253,7 @@ fn from_config_cleans_persistent_ratchets_after_loading_known_destinations() {
         (
             known_expired,
             storage::KnownDestination {
+                packet_hash: None,
                 identity_hash: *identity.hash(),
                 public_key: identity.get_public_key().unwrap(),
                 app_data: None,
@@ -1268,6 +1271,7 @@ fn from_config_cleans_persistent_ratchets_after_loading_known_destinations() {
         (
             known_corrupt,
             storage::KnownDestination {
+                packet_hash: None,
                 identity_hash: *identity.hash(),
                 public_key: identity.get_public_key().unwrap(),
                 app_data: None,

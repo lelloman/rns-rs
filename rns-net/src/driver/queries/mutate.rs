@@ -144,6 +144,7 @@ impl Driver {
                 self.known.entries.insert(
                     entry.dest_hash,
                     KnownDestinationState {
+                        packet_hash: entry.packet_hash,
                         announced: crate::destination::AnnouncedIdentity {
                             dest_hash: rns_core::types::DestHash(entry.dest_hash),
                             identity_hash: rns_core::types::IdentityHash(entry.identity_hash),

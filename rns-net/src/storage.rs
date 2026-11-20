@@ -40,6 +40,8 @@ pub struct KnownDestination {
     pub identity_hash: [u8; 16],
     /// The identity's public key: X25519 then Ed25519, 32 bytes each.
     pub public_key: [u8; 64],
+    /// Hash of the last heard announce packet, when known.
+    pub packet_hash: Option<[u8; 32]>,
     /// App data of the last heard announce, if any.
     pub app_data: Option<Vec<u8>>,
     /// Hops the last announce travelled.
@@ -81,6 +83,7 @@ pub(crate) fn known_destination_fingerprint(
     stamp: Option<&[u8]>,
     stamp_value: rns_core::stamp::StampValue,
     lr_cost: Option<rns_core::stamp::StampCost>,
+    packet_hash: Option<&[u8; 32]>,
 ) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -96,6 +99,7 @@ pub(crate) fn known_destination_fingerprint(
     stamp.hash(&mut hasher);
     stamp_value.hash(&mut hasher);
     lr_cost.hash(&mut hasher);
+    packet_hash.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -115,6 +119,7 @@ impl KnownDestination {
             self.stamp.as_deref(),
             self.stamp_value,
             self.lr_cost,
+            self.packet_hash.as_ref(),
         )
     }
 }
@@ -720,6 +725,7 @@ pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], Know
         result.insert(
             dest_hash,
             KnownDestination {
+                packet_hash: None,
                 identity_hash,
                 public_key,
                 app_data,
@@ -1265,6 +1271,7 @@ mod tests {
     #[test]
     fn a_known_destination_fingerprint_follows_every_field() {
         let base = KnownDestination {
+            packet_hash: None,
             identity_hash: [1; 16],
             public_key: [2; 64],
             app_data: Some(vec![3]),
@@ -1311,6 +1318,10 @@ mod tests {
             },
             KnownDestination {
                 lr_cost: Some(rns_core::stamp::StampCost::from_whole(9)),
+                ..base.clone()
+            },
+            KnownDestination {
+                packet_hash: Some([10; 32]),
                 ..base.clone()
             },
         ];
@@ -1400,6 +1411,7 @@ mod tests {
         dests.insert(
             [0x01u8; 16],
             KnownDestination {
+                packet_hash: None,
                 identity_hash: [0x11u8; 16],
                 public_key: [0xABu8; 64],
                 app_data: Some(vec![0x01, 0x02, 0x03]),
@@ -1417,6 +1429,7 @@ mod tests {
         dests.insert(
             [0x02u8; 16],
             KnownDestination {
+                packet_hash: None,
                 identity_hash: [0x22u8; 16],
                 public_key: [0xCDu8; 64],
                 app_data: None,
@@ -1476,6 +1489,7 @@ mod tests {
         dests.insert(
             [0x03u8; 16],
             KnownDestination {
+                packet_hash: None,
                 identity_hash: [0x33u8; 16],
                 public_key: [0xEFu8; 64],
                 app_data: None,
@@ -1522,6 +1536,7 @@ mod tests {
         dests.insert(
             [0x03u8; 16],
             KnownDestination {
+                packet_hash: None,
                 identity_hash: [0x33u8; 16],
                 public_key: [0xEFu8; 64],
                 app_data: None,

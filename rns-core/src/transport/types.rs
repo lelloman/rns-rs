@@ -267,6 +267,9 @@ pub struct InterfaceInfo {
 pub struct ReceivedAnnounce {
     /// Hash of the announced destination.
     pub destination_hash: [u8; 16],
+    /// Hash of the announce packet, which upstream keeps with the known
+    /// destination (`Identity.remember`'s `packet_hash`).
+    pub packet_hash: [u8; 32],
     /// Hash of the announcing identity.
     pub identity_hash: [u8; 16],
     /// Public key of the announcing identity (X25519 then Ed25519, 32 bytes each).

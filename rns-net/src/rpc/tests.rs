@@ -2265,3 +2265,172 @@ fn tcp_pair() -> (TcpStream, TcpStream) {
         .unwrap();
     (server, client)
 }
+
+/// Three known destinations as the driver reports them: never used and
+/// unstamped, used and stamped with a link cost, and retained.
+fn known_destination_fixtures() -> Vec<KnownDestinationEntry> {
+    let entry = |n: u8| KnownDestinationEntry {
+        dest_hash: [n; 16],
+        identity_hash: crate::storage::full_hash_prefix(&[n; 64]),
+        public_key: [n; 64],
+        packet_hash: Some([n; 32]),
+        app_data: None,
+        hops: 2,
+        received_at: 1_700_000_000.25,
+        receiving_interface: InterfaceId(3),
+        was_used: false,
+        last_used_at: None,
+        retained: false,
+        stamp: None,
+        stamp_value: rns_core::stamp::StampValue::ZERO,
+        lr_cost: None,
+    };
+    let never = entry(0x11);
+    let used = KnownDestinationEntry {
+        app_data: Some(b"app".to_vec()),
+        was_used: true,
+        last_used_at: Some(1_700_000_100.5),
+        stamp: Some([0x5a; rns_core::constants::STAMP_LENGTH]),
+        stamp_value: rns_core::stamp::StampValue::from_f64(9.5),
+        lr_cost: Some(rns_core::stamp::StampCost::from_f64(12.5)),
+        ..entry(0x22)
+    };
+    let retained = KnownDestinationEntry {
+        packet_hash: None,
+        was_used: true,
+        retained: true,
+        ..entry(0x33)
+    };
+    vec![never, used, retained]
+}
+
+/// Answer one `get` with a driver that reports the fixtures.
+fn known_destinations_answer(path: &str) -> PickleValue {
+    let (event_tx, event_rx) = crate::event::channel();
+    let driver = thread::spawn(move || {
+        let Ok(Event::Query(request, resp_tx)) =
+            event_rx.recv_timeout(std::time::Duration::from_secs(5))
+        else {
+            panic!("expected a query");
+        };
+        assert!(matches!(*request, QueryRequest::KnownDestinations));
+        let _ = resp_tx.send(QueryResponse::KnownDestinations(
+            known_destination_fixtures(),
+        ));
+    });
+    let request = PickleValue::Dict(vec![(
+        PickleValue::String("get".into()),
+        PickleValue::String(path.into()),
+    )]);
+    let answer = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
+    driver.join().unwrap();
+    answer
+}
+
+#[test]
+fn known_destinations_rpc_answers_upstreams_dict() {
+    // Upstream 48c77061's `get_known_destinations()`: a copy of
+    // `Identity.known_destinations`, `{destination_hash: [last_heard,
+    // packet_hash, public_key, app_data, used, stamp, stamp_value,
+    // lr_cost]}`, sent as msgpack.
+    let answer = known_destinations_answer("known_destinations");
+    let packed = encode_rpc_payload(&answer, RpcCodec::Msgpack);
+    use rns_core::msgpack::Value as V;
+    let entry = |n: u8, rest: [V; 6]| {
+        let [app_data, used, stamp, stamp_value, lr_cost, packet_hash] = rest;
+        (
+            V::Bin(vec![n; 16]),
+            V::Array(vec![
+                V::Float(1_700_000_000.25),
+                packet_hash,
+                V::Bin(vec![n; 64]),
+                app_data,
+                used,
+                stamp,
+                stamp_value,
+                lr_cost,
+            ]),
+        )
+    };
+    let expected = V::Map(vec![
+        // `Identity.remember`: `used` 0 and `stamp_value` 0, both ints.
+        entry(
+            0x11,
+            [
+                V::Nil,
+                V::UInt(0),
+                V::Nil,
+                V::UInt(0),
+                V::Nil,
+                V::Bin(vec![0x11; 32]),
+            ],
+        ),
+        entry(
+            0x22,
+            [
+                V::Bin(b"app".to_vec()),
+                V::Float(1_700_000_100.5),
+                V::Bin(vec![0x5a; rns_core::constants::STAMP_LENGTH]),
+                V::Float(9.5),
+                V::Float(12.5),
+                V::Bin(vec![0x22; 32]),
+            ],
+        ),
+        // `_retain_destination_data` sets `used` to -1; a packet hash this
+        // node does not know is all zeros, as its database holds it.
+        entry(
+            0x33,
+            [
+                V::Nil,
+                V::Int(-1),
+                V::Nil,
+                V::UInt(0),
+                V::Nil,
+                V::Bin(vec![0; 32]),
+            ],
+        ),
+    ]);
+    assert_eq!(rns_core::msgpack::unpack_exact(&packed).unwrap(), expected);
+    // Floats go out as float64, as Python packs them.
+    assert_eq!(
+        packed
+            .windows(9)
+            .filter(|w| w[0] == 0xcb && w[1..] == 1_700_000_000.25f64.to_be_bytes())
+            .count(),
+        3
+    );
+
+    // A client reads the same table back.
+    let parsed = parse_upstream_known_destinations(&answer).unwrap();
+    assert_eq!(parsed.len(), 3);
+    let (hash, used) = &parsed[1];
+    assert_eq!(*hash, [0x22; 16]);
+    assert_eq!(used.packet_hash, Some([0x22; 32]));
+    assert_eq!(
+        used.identity_hash,
+        crate::storage::full_hash_prefix(&[0x22; 64])
+    );
+    assert_eq!(used.app_data.as_deref(), Some(&b"app"[..]));
+    assert_eq!(used.last_used_at, Some(1_700_000_100.5));
+    assert!(used.was_used && !used.retained);
+    assert_eq!(used.stamp_value.as_f64(), 9.5);
+    assert_eq!(used.lr_cost.map(|cost| cost.as_f64()), Some(12.5));
+    assert!(parsed[2].1.retained);
+    assert_eq!(parsed[2].1.packet_hash, None);
+    assert!(!parsed[0].1.was_used);
+}
+
+#[test]
+fn known_destination_entries_rpc_keeps_the_native_list() {
+    let answer = known_destinations_answer("known_destination_entries");
+    assert_eq!(
+        parse_known_destination_list(&answer).unwrap(),
+        known_destination_fixtures()
+            .into_iter()
+            .map(|entry| KnownDestinationEntry {
+                packet_hash: None,
+                ..entry
+            })
+            .collect::<Vec<_>>()
+    );
+}
