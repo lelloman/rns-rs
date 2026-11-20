@@ -260,6 +260,7 @@ fn driver_reuses_invalid_discovery_stamp_cache_across_announces() {
 
     let announce =
         TransportAction::AnnounceReceived(Box::new(rns_core::transport::types::ReceivedAnnounce {
+            packet_hash: [0u8; 32],
             destination_hash: [0x31; 16],
             identity_hash: [0x32; 16],
             public_key: [0x33; 64],
@@ -304,6 +305,7 @@ fn discovery_announces_from_non_source_networks_are_ignored() {
     app_data.extend_from_slice(&[0; crate::discovery::STAMP_SIZE]);
     let announce = |identity_hash: [u8; 16]| {
         TransportAction::AnnounceReceived(Box::new(rns_core::transport::types::ReceivedAnnounce {
+            packet_hash: [0u8; 32],
             destination_hash: [0x31; 16],
             identity_hash,
             public_key: [0x33; 64],
@@ -455,6 +457,7 @@ fn dispatch_announce_received_persists_ratchet() {
     driver.dispatch_all(vec![
         rns_core::transport::types::TransportAction::AnnounceReceived(Box::new(
             rns_core::transport::types::ReceivedAnnounce {
+                packet_hash: [0u8; 32],
                 destination_hash: dest_hash,
                 identity_hash: [0x66; 16],
                 public_key: [0x77; 64],
@@ -519,6 +522,7 @@ fn make_known_destination_state(
     receiving_interface: InterfaceId,
 ) -> KnownDestinationState {
     KnownDestinationState {
+        packet_hash: None,
         announced: make_announced_identity(dest_hash, received_at, receiving_interface),
         was_used: false,
         last_used_at: None,
@@ -9515,6 +9519,7 @@ fn announce_stamp_is_stored_and_recalled() {
 
     driver.dispatch_all(vec![TransportAction::AnnounceReceived(Box::new(
         rns_core::transport::types::ReceivedAnnounce {
+            packet_hash: [0u8; 32],
             destination_hash: dest,
             identity_hash: [0x92; 16],
             public_key: [0x93; 64],
@@ -9590,6 +9595,7 @@ fn announce_received_populates_known_destinations() {
 
     let identity = Identity::new(&mut OsRng);
     let announce_raw = build_announce_packet(&identity);
+    let announce_hash = RawPacket::unpack(&announce_raw).unwrap().packet_hash;
 
     let dest_hash =
         rns_core::destination::destination_hash("test", &["app"], Some(identity.hash()));
@@ -9616,6 +9622,12 @@ fn announce_received_populates_known_destinations() {
     assert_eq!(recalled.announced.hops, 1);
     assert_eq!(recalled.announced.rssi, Some(-100));
     assert_eq!(recalled.announced.snr, Some(10.5));
+    // Upstream's `Identity.remember` keeps the announce's packet hash.
+    assert_eq!(recalled.packet_hash, Some(announce_hash));
+    assert_eq!(
+        Driver::known_destination_entry(dest_hash, recalled).packet_hash,
+        Some(announce_hash)
+    );
 }
 
 #[test]
@@ -9656,6 +9668,7 @@ fn known_destinations_cleanup_respects_ttl() {
     driver.known.entries.insert(
         stale_dest,
         KnownDestinationState {
+            packet_hash: None,
             announced: crate::destination::AnnouncedIdentity {
                 dest_hash: rns_core::types::DestHash(stale_dest),
                 identity_hash: rns_core::types::IdentityHash([0x33; 16]),
@@ -9678,6 +9691,7 @@ fn known_destinations_cleanup_respects_ttl() {
     driver.known.entries.insert(
         fresh_dest,
         KnownDestinationState {
+            packet_hash: None,
             announced: crate::destination::AnnouncedIdentity {
                 dest_hash: rns_core::types::DestHash(fresh_dest),
                 identity_hash: rns_core::types::IdentityHash([0x55; 16]),
@@ -10126,6 +10140,7 @@ fn used_known_destination_cleanup_uses_last_used_time() {
     driver.known.entries.insert(
         dest,
         KnownDestinationState {
+            packet_hash: None,
             announced: make_announced_identity(dest, time::now() - 50.0, InterfaceId(1)),
             was_used: true,
             last_used_at: Some(time::now() - 5.0),
@@ -11849,6 +11864,7 @@ fn inbound_proof_with_valid_signature_fires_callback() {
     driver.known.entries.insert(
         dest,
         KnownDestinationState {
+            packet_hash: None,
             announced: crate::destination::AnnouncedIdentity {
                 dest_hash: DestHash(dest),
                 identity_hash: IdentityHash(*identity.hash()),
@@ -11976,6 +11992,7 @@ fn inbound_proof_with_invalid_signature_rejected() {
     driver.known.entries.insert(
         dest,
         KnownDestinationState {
+            packet_hash: None,
             announced: crate::destination::AnnouncedIdentity {
                 dest_hash: DestHash(dest),
                 identity_hash: IdentityHash(*identity.hash()),

@@ -89,6 +89,7 @@ impl Driver {
                 TransportAction::AnnounceReceived(announce) => {
                     let ReceivedAnnounce {
                         destination_hash,
+                        packet_hash,
                         identity_hash,
                         public_key,
                         name_hash,
@@ -233,6 +234,7 @@ impl Driver {
                         snr: rx.snr,
                     };
                     self.upsert_known_destination(destination_hash, announced.clone());
+                    self.record_known_destination_packet_hash(destination_hash, packet_hash);
                     self.record_known_destination_stamp(
                         destination_hash,
                         stamp,

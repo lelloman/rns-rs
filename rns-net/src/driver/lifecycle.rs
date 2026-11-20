@@ -39,6 +39,7 @@ impl Driver {
         self.known.entries.insert(
             dest_hash,
             KnownDestinationState {
+                packet_hash: None,
                 announced,
                 was_used: false,
                 last_used_at: None,
@@ -48,6 +49,18 @@ impl Driver {
                 lr_cost: None,
             },
         );
+    }
+
+    /// Keep the hash of the announce a known destination was last heard
+    /// in, as upstream's `Identity.remember` does.
+    pub(crate) fn record_known_destination_packet_hash(
+        &mut self,
+        dest_hash: [u8; 16],
+        packet_hash: [u8; 32],
+    ) {
+        if let Some(state) = self.known.entries.get_mut(&dest_hash) {
+            state.packet_hash = Some(packet_hash);
+        }
     }
 
     pub(crate) fn record_known_destination_stamp(
@@ -87,6 +100,7 @@ impl Driver {
         state: &KnownDestinationState,
     ) -> KnownDestinationEntry {
         KnownDestinationEntry {
+            packet_hash: state.packet_hash,
             dest_hash,
             identity_hash: state.announced.identity_hash.0,
             public_key: state.announced.public_key,
@@ -118,6 +132,7 @@ impl Driver {
             state.stamp.as_ref().map(|stamp| &stamp[..]),
             state.stamp_value,
             state.lr_cost,
+            state.packet_hash.as_ref(),
         )
     }
 

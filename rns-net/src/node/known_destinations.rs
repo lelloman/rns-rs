@@ -10,6 +10,7 @@ pub(super) fn stored_known_destination(
     entry: &crate::event::KnownDestinationEntry,
 ) -> storage::KnownDestination {
     storage::KnownDestination {
+        packet_hash: entry.packet_hash,
         identity_hash: entry.identity_hash,
         public_key: entry.public_key,
         app_data: entry.app_data.clone(),
@@ -181,6 +182,7 @@ impl RnsNode {
         for (dest_hash, known) in known_destinations {
             let _ = self.query(QueryRequest::RestoreKnownDestination(
                 crate::event::KnownDestinationEntry {
+                    packet_hash: known.packet_hash,
                     dest_hash,
                     identity_hash: known.identity_hash,
                     public_key: known.public_key,

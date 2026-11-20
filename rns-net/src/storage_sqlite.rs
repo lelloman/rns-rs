@@ -105,14 +105,14 @@ impl KnownDestinationsStore {
             "SELECT k.destination_hash, k.last_heard, k.public_key, k.app_data,
                     k.used, k.identity_hash, COALESCE(m.hops, 0),
                     COALESCE(m.receiving_interface, 0), COALESCE(m.retained, 0),
-                    k.stamp, COALESCE(k.stamp_value, 0), k.lr_cost
+                    k.stamp, COALESCE(k.stamp_value, 0), k.lr_cost, k.packet_hash
              FROM known_destinations k
              LEFT JOIN known_destination_meta m
                ON m.destination_hash = k.destination_hash"
         } else {
             "SELECT k.destination_hash, k.last_heard, k.public_key, k.app_data,
                     k.used, k.identity_hash, 0, 0, 0,
-                    k.stamp, COALESCE(k.stamp_value, 0), k.lr_cost
+                    k.stamp, COALESCE(k.stamp_value, 0), k.lr_cost, k.packet_hash
              FROM known_destinations k"
         };
         let mut statement = conn.prepare(query).map_err(sql_error)?;
@@ -134,6 +134,7 @@ impl KnownDestinationsStore {
                     row.get::<_, f64>(10)?,
                     // REAL since fractional link costs (upstream 796ef2d4).
                     row.get::<_, Option<f64>>(11)?,
+                    row.get::<_, Option<Vec<u8>>>(12)?,
                 ))
             })
             .map_err(sql_error)?;
@@ -153,6 +154,7 @@ impl KnownDestinationsStore {
                 stamp,
                 stamp_value,
                 lr_cost,
+                packet_hash,
             ) = row.map_err(sql_error)?;
             let Ok(destination_hash) = fixed_16(&destination_hash) else {
                 continue;
@@ -168,6 +170,11 @@ impl KnownDestinationsStore {
             destinations.push((
                 destination_hash,
                 KnownDestination {
+                    // All zeros is what this store wrote for a hash it did
+                    // not know.
+                    packet_hash: packet_hash
+                        .and_then(|hash| <[u8; 32]>::try_from(hash.as_slice()).ok())
+                        .filter(|hash| *hash != [0u8; 32]),
                     identity_hash,
                     public_key,
                     app_data,
@@ -638,7 +645,9 @@ fn upsert_destination(
         params![
             destination_hash.to_vec(),
             destination.received_at,
-            vec![0u8; 32],
+            // Upstream's `Identity.remember` keeps the announce's packet
+            // hash; all zeros stands for one this node does not know.
+            destination.packet_hash.unwrap_or([0u8; 32]).to_vec(),
             destination.public_key.to_vec(),
             destination.app_data.clone(),
             used,
@@ -739,6 +748,8 @@ mod tests {
 
     fn destination(hash: u8, used: Option<f64>, retained: bool) -> KnownDestination {
         KnownDestination {
+            // Known for a used destination only, so both forms round trip.
+            packet_hash: used.map(|_| [hash; 32]),
             identity_hash: [hash.wrapping_add(1); 16],
             public_key: [hash; 64],
             app_data: Some(vec![hash]),
@@ -775,6 +786,8 @@ mod tests {
         assert_eq!(used.app_data.as_deref(), Some([0x11].as_slice()));
         assert_eq!(used.hops, 3);
         assert_eq!(used.receiving_interface, 7);
+        assert_eq!(used.packet_hash, Some([0x11; 32]));
+        assert_eq!(loaded[&[0x22; 16]].packet_hash, None);
         assert!(used.was_used);
         assert_eq!(used.last_used_at, Some(2_000.0));
         assert!(used.retained);

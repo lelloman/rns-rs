@@ -27,7 +27,13 @@ Known destinations and received ratchets are persisted in
 `storage/known_destinations.db`, and cached announces in `cache/announces.db`.
 Changes to known destinations are written every 10 seconds, as upstream does;
 programs attached to the shared instance read them from there when they
-start. Legacy msgpack and per-file storage is imported on first start; the
+start. A program that cannot open that database, because it runs with its own
+storage directory (split mode), asks the instance over RPC instead, as upstream
+does: `{"get": "known_destinations"}` answers upstream's dict, destination hash
+to `[last_heard, packet_hash, public_key, app_data, used, stamp, stamp_value,
+lr_cost]`. This implementation's own list, with hops, receiving interface and
+retention per entry, is `{"get": "known_destination_entries"}`
+(`RpcClient::known_destinations`). Legacy msgpack and per-file storage is imported on first start; the
 older file stores remain the fallback if SQLite cannot be opened.
 
 A node started without a `config` file writes upstream's default one (an

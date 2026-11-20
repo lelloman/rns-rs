@@ -3612,3 +3612,167 @@ while True:
         thread::sleep(Duration::from_millis(50));
     }
 }
+
+/// A Python shared instance client in its own storage path (split mode):
+/// it cannot open the instance's known destinations database, so since
+/// upstream 48c77061 it loads the instance's table over RPC, then waits
+/// for a destination it has not heard of yet to be announced.
+const SPLIT_MODE_KNOWN_DESTINATIONS: &str = r#"
+import json, os, sys, time
+import RNS
+configdir, known_hex, ready_path, later_path = sys.argv[1:5]
+reticulum = RNS.Reticulum(configdir=configdir, loglevel=RNS.LOG_DEBUG)
+table = RNS.Identity.known_destinations
+known = bytes.fromhex(known_hex)
+entry = table.get(known) if isinstance(table, dict) else None
+print("LOADED " + json.dumps({
+    "client": reticulum.is_connected_to_shared_instance,
+    "table": type(table).__name__,
+    "types": [type(e).__name__ for e in entry] if entry else None,
+    "used": entry[4] if entry else None,
+    "recalled": RNS.Identity.recall(known) is not None,
+}), flush=True)
+open(ready_path, "w").close()
+deadline = time.time() + 30
+while not os.path.exists(later_path) and time.time() < deadline: time.sleep(0.05)
+later = bytes.fromhex(open(later_path).read().strip())
+while time.time() < deadline and RNS.Identity.recall(later, _no_use=True) is None: time.sleep(0.05)
+remembered = RNS.Identity.known_destinations.get(later)
+print("LATER " + json.dumps({
+    "recalled": RNS.Identity.recall(later) is not None,
+    "types": [type(e).__name__ for e in remembered] if remembered else None,
+}), flush=True)
+"#;
+
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn python_split_mode_client_loads_rust_known_destinations_over_rpc() {
+    let harness = Harness::start("python-split-known");
+    let known_identity = harness.path("known.identity");
+    let receive = harness.path("receive");
+    fs::create_dir_all(&receive).unwrap();
+    let known = harness.destination(Implementation::Rust, "rncp", &known_identity);
+    let _known_listener = harness.listener(
+        Implementation::Rust,
+        "rncp",
+        &known_identity,
+        &known,
+        &[
+            "--no-auth".into(),
+            "--save".into(),
+            receive.to_string_lossy().into_owned(),
+        ],
+    );
+
+    // The client daemon's instance settings and RPC key, in a config
+    // directory of its own: nothing there holds known_destinations.db.
+    let split_config = harness.path("split-reticulum");
+    fs::create_dir_all(&split_config).unwrap();
+    let daemon_config = fs::read_to_string(harness.client_config.join("config")).unwrap();
+    let instance_lines: String = daemon_config
+        .lines()
+        .filter(|line| {
+            [
+                "instance_name",
+                "shared_instance_port",
+                "instance_control_port",
+            ]
+            .iter()
+            .any(|key| line.trim_start().starts_with(key))
+        })
+        .map(|line| format!("{}\n", line.trim()))
+        .collect();
+    let (_, auth_key) = harness.client_rpc();
+    let rpc_key: String = auth_key.iter().map(|b| format!("{b:02x}")).collect();
+    fs::write(
+        split_config.join("config"),
+        format!(
+            "{CHEAP_STAMPS}[reticulum]\nshare_instance = Yes\n{instance_lines}rpc_key = {rpc_key}\n\n[interfaces]\n"
+        ),
+    )
+    .unwrap();
+
+    let ready = harness.path("split.ready");
+    let later_path = harness.path("split.later");
+    let log = harness.path("split-client.log");
+    let mut command = Command::new("python3");
+    command.env("PYTHONUNBUFFERED", "1");
+    command.args(["-c", SPLIT_MODE_KNOWN_DESTINATIONS]);
+    command
+        .arg(&split_config)
+        .arg(&known)
+        .arg(&ready)
+        .arg(&later_path);
+    let mut split = spawn_logged(command, &log);
+    let deadline = Instant::now() + START_TIMEOUT;
+    while !ready.exists() {
+        split.assert_running("Python split mode client");
+        assert!(
+            Instant::now() < deadline,
+            "split mode client did not load:\n{}",
+            fs::read_to_string(&log).unwrap_or_default()
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    // A destination announced after the client loaded its table.
+    let later_identity = harness.path("later.identity");
+    let later = harness.destination(Implementation::Rust, "rnx", &later_identity);
+    let _later_listener = harness.listener(
+        Implementation::Rust,
+        "rnx",
+        &later_identity,
+        &later,
+        &["--noauth".into()],
+    );
+    fs::write(&later_path, &later).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(40);
+    while split.child.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "split mode client did not finish:\n{}",
+            fs::read_to_string(&log).unwrap_or_default()
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+    let text = fs::read_to_string(&log).unwrap();
+    let line = |prefix: &str| -> serde_json::Value {
+        let json = text
+            .lines()
+            .find_map(|line| line.strip_prefix(prefix))
+            .unwrap_or_else(|| panic!("no {prefix}line:\n{text}"));
+        serde_json::from_str(json).unwrap()
+    };
+    // Upstream's own log lines for the RPC path.
+    assert!(
+        text.contains(
+            "Potentially running in split mode, attempting to load known destinations over RPC..."
+        ),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Could not load known destinations from shared instance:")
+            && !text.contains("Shared instance RPC failed while getting known destinations"),
+        "{text}"
+    );
+    let loaded = line("LOADED ");
+    assert_eq!(loaded["client"], true, "{text}");
+    assert_eq!(loaded["table"], "dict", "{text}");
+    // [last_heard, packet_hash, public_key, app_data, used, stamp,
+    // stamp_value, lr_cost] of a stamped announce. `used` is the time of
+    // last use (a float) once the daemon has used the destination, 0
+    // before.
+    let mut types = loaded["types"].clone();
+    let used = types[4].take();
+    assert!(used == "float" || used == "int", "{text}");
+    assert_eq!(
+        types,
+        serde_json::json!(["float", "bytes", "bytes", "NoneType", null, "bytes", "float", "float"]),
+        "{text}"
+    );
+    assert_eq!(loaded["recalled"], true, "{text}");
+    let later = line("LATER ");
+    assert_eq!(later["recalled"], true, "{text}");
+    assert_eq!(later["types"].as_array().map(Vec::len), Some(8), "{text}");
+}
