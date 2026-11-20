@@ -137,17 +137,11 @@ impl Callbacks for DaemonCallbacks {
 }
 
 /// upstream rnsd's options, and the Rust-only `-c` for `--config`.
-pub const OPTIONS: OptionSpec = OptionSpec {
-    options: &[
-        Opt::value("", "config"),
-        Opt::count("v", "verbose"),
-        Opt::count("q", "quiet"),
-        Opt::flag("s", "service"),
-        Opt::flag("i", "interactive"),
-        Opt::flag("", "exampleconfig"),
-        Opt::value("c", ""),
-    ],
-};
+pub static OPTIONS: OptionSpec = OptionSpec::new(
+    Some(&crate::upstream_parsers::RNSD),
+    &[],
+    &[Opt::value("c", "")],
+);
 
 /// Runs `rnsd` on the process's command line; see [`main_entry_from`].
 pub fn main_entry() -> ExitCode {

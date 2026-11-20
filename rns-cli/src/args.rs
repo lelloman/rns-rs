@@ -1,36 +1,31 @@
-//! Simple command-line argument parser.
+//! The command-line parser.
 //!
-//! No external dependencies. Supports `--flag`, `--key value`, `-v` (count),
-//! and positional arguments.
+//! A tool's options are those of its argparse parser ([`crate::argparse`]:
+//! upstream's, as `upstream_parsers.rs` has them, or a native tool's own),
+//! plus any Rust-only ones; [`Args::parse_spec_from`] parses a command line
+//! as argparse would and records what it saw for [`crate::argparse::check`]
+//! to report. [`Args::parse_from`] is a looser parser for internal command
+//! lines.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
-/// How an option takes its value, as upstream's argparse declares it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
-    /// `store_true`: never takes a value.
-    Flag,
-    /// `store`: always takes one, attached (`-t5`, `--timeout=5`) or as the
-    /// next argument.
-    Value,
-    /// `nargs="?"` or `nargs="*"`: takes the next argument when it is not
-    /// an option itself.
-    Optional,
-    /// `count`; `verbose` and `quiet` feed [`Args::verbosity`] and
-    /// [`Args::quiet`].
-    Count,
-}
+use crate::argparse::{Action, Kind, Nargs, Parser};
 
 /// One option of a tool: its short name (one character), its long name
-/// (without `--`), either of which may be empty, and how it takes a value.
+/// (without `--`), either of which may be empty, and what argparse does with
+/// it.
 #[derive(Clone, Copy, Debug)]
 pub struct Opt {
     /// Short name, one character without `-`; empty when there is none.
     pub short: &'static str,
     /// Long name without `--`; empty when there is none.
     pub long: &'static str,
-    /// How the option takes its value.
+    /// What the option does.
     pub kind: Kind,
+    /// How many values it takes: none, one, or one when the next argument
+    /// is not an option (`"?"` and `"*"`).
+    pub nargs: Nargs,
     /// Whether the long name is upstream's. Only upstream's long names may
     /// be abbreviated, so a Rust-only option never makes an abbreviation
     /// upstream accepts ambiguous.
@@ -38,30 +33,32 @@ pub struct Opt {
 }
 
 impl Opt {
-    /// An upstream option of the given kind.
-    pub const fn new(short: &'static str, long: &'static str, kind: Kind) -> Self {
+    /// An upstream option.
+    pub const fn new(short: &'static str, long: &'static str, kind: Kind, nargs: Nargs) -> Self {
         Opt {
             short,
             long,
             kind,
+            nargs,
             upstream: true,
         }
     }
-    /// An upstream [`Kind::Flag`] option.
+    /// A `store_true` option.
     pub const fn flag(short: &'static str, long: &'static str) -> Self {
-        Self::new(short, long, Kind::Flag)
+        Self::new(short, long, Kind::StoreTrue, Nargs::Zero)
     }
-    /// An upstream [`Kind::Value`] option.
+    /// A `store` option, which always takes a value.
     pub const fn value(short: &'static str, long: &'static str) -> Self {
-        Self::new(short, long, Kind::Value)
+        Self::new(short, long, Kind::Store, Nargs::One)
     }
-    /// An upstream [`Kind::Optional`] option.
+    /// A `store` option with `nargs="?"`.
     pub const fn optional(short: &'static str, long: &'static str) -> Self {
-        Self::new(short, long, Kind::Optional)
+        Self::new(short, long, Kind::Store, Nargs::Optional)
     }
-    /// An upstream [`Kind::Count`] option.
+    /// A `count` option; `verbose` and `quiet` feed [`Args::verbosity`] and
+    /// [`Args::quiet`].
     pub const fn count(short: &'static str, long: &'static str) -> Self {
-        Self::new(short, long, Kind::Count)
+        Self::new(short, long, Kind::Count, Nargs::Zero)
     }
     /// The same option, with a long name upstream does not have.
     pub const fn rust_only(self) -> Self {
@@ -70,13 +67,39 @@ impl Opt {
             ..self
         }
     }
+
+    /// The option an argparse action declares; `None` for a positional.
+    fn from_action(action: &Action) -> Option<Self> {
+        if action.opts.is_empty() {
+            return None;
+        }
+        let short = action
+            .opts
+            .iter()
+            .find_map(|o| o.strip_prefix('-').filter(|s| !s.starts_with('-')))
+            .unwrap_or("");
+        let long = action
+            .opts
+            .iter()
+            .find_map(|o| o.strip_prefix("--"))
+            .unwrap_or("");
+        Some(Self::new(short, long, action.kind, action.nargs))
+    }
+
+    /// Whether the option never takes a value.
+    fn takes_no_value(&self) -> bool {
+        self.nargs == Nargs::Zero
+    }
 }
 
-/// A tool's options, mirroring its upstream argument parser (plus the
-/// Rust-only options it accepts). `-h`/`--help` and `--version` are implied.
+/// A tool's options: those of its upstream argument parser, declared once
+/// there, and the Rust-only ones it accepts too. `-h`/`--help` and
+/// `--version` are implied.
 pub struct OptionSpec {
-    /// The tool's options, without the implied ones.
-    pub options: &'static [Opt],
+    parser: Option<&'static Parser>,
+    long_names: &'static [(&'static str, &'static str)],
+    extra: &'static [Opt],
+    options: OnceLock<Vec<Opt>>,
 }
 
 const IMPLIED: &[Opt] = &[Opt::flag("h", "help"), Opt::flag("", "version")];
@@ -90,17 +113,55 @@ enum LongMatch {
 }
 
 impl OptionSpec {
-    fn all(&self) -> impl Iterator<Item = &'static Opt> {
-        let options: &'static [Opt] = self.options;
-        options.iter().chain(IMPLIED.iter())
+    /// The options of `parser` (its help and version actions aside), in its
+    /// order; then `extra`. `long_names` gives upstream options that only
+    /// have a short name a Rust-only long one: `(short, long)`.
+    pub const fn new(
+        parser: Option<&'static Parser>,
+        long_names: &'static [(&'static str, &'static str)],
+        extra: &'static [Opt],
+    ) -> Self {
+        OptionSpec {
+            parser,
+            long_names,
+            extra,
+            options: OnceLock::new(),
+        }
     }
 
-    fn short(&self, c: char) -> Option<&'static Opt> {
+    /// The tool's options, without the implied ones.
+    pub fn options(&'static self) -> &'static [Opt] {
+        self.options.get_or_init(|| {
+            let upstream = self
+                .parser
+                .into_iter()
+                .flat_map(|parser| parser.actions.iter())
+                .filter(|a| !matches!(a.kind, Kind::Help | Kind::Version))
+                .filter_map(Opt::from_action)
+                .map(|opt| {
+                    match self
+                        .long_names
+                        .iter()
+                        .find(|(short, _)| *short == opt.short)
+                    {
+                        Some((_, long)) if !opt.short.is_empty() => Opt { long, ..opt }.rust_only(),
+                        _ => opt,
+                    }
+                });
+            upstream.chain(self.extra.iter().copied()).collect()
+        })
+    }
+
+    fn all(&'static self) -> impl Iterator<Item = &'static Opt> {
+        self.options().iter().chain(IMPLIED.iter())
+    }
+
+    fn short(&'static self, c: char) -> Option<&'static Opt> {
         self.all().find(|o| o.short.chars().eq(std::iter::once(c)))
     }
 
     /// The upstream long options `name` abbreviates, as `--name`s.
-    pub fn abbreviated(&self, name: &str) -> Vec<String> {
+    pub fn abbreviated(&'static self, name: &str) -> Vec<String> {
         self.all()
             .filter(|o| o.upstream && !o.long.is_empty() && o.long.starts_with(name))
             .map(|o| format!("--{}", o.long))
@@ -109,7 +170,7 @@ impl OptionSpec {
 
     /// The option a long name stands for: an exact match, or as argparse
     /// does, the one upstream option it is an unambiguous prefix of.
-    fn long(&self, name: &str) -> LongMatch {
+    fn long(&'static self, name: &str) -> LongMatch {
         if name.is_empty() {
             return LongMatch::None;
         }
@@ -254,7 +315,7 @@ impl Args {
     }
 
     /// Parse with a tool's own option table.
-    pub fn parse_spec(spec: &OptionSpec) -> Self {
+    pub fn parse_spec(spec: &'static OptionSpec) -> Self {
         Self::parse_spec_from(std::env::args().skip(1).collect(), spec)
     }
 
@@ -264,7 +325,7 @@ impl Args {
     /// abbreviations are recorded in [`Args::unknown`], [`Args::missing`] and
     /// [`Args::trace`] for the caller (usually [`crate::argparse::check`]) to
     /// report.
-    pub fn parse_spec_from(args: Vec<String>, spec: &OptionSpec) -> Self {
+    pub fn parse_spec_from(args: Vec<String>, spec: &'static OptionSpec) -> Self {
         let mut parsed = Args {
             flags: HashMap::new(),
             positional: Vec::new(),
@@ -307,7 +368,7 @@ impl Args {
                         continue;
                     }
                 };
-                if matches!(opt.kind, Kind::Flag | Kind::Count) {
+                if opt.takes_no_value() {
                     if let Some(value) = inline {
                         // argparse: "ignored explicit argument".
                         parsed.unknown.push(arg.clone());
@@ -317,9 +378,9 @@ impl Args {
                 }
                 let value = match inline {
                     Some(value) => Some(value),
-                    None => Self::take(opt.kind, &mut iter),
+                    None => Self::take(opt, &mut iter),
                 };
-                if value.is_none() && opt.kind == Kind::Value {
+                if value.is_none() && opt.nargs == Nargs::One {
                     parsed.missing.push(format!("--{}", opt.long));
                     parsed.trace.push(Seen::Missing(opt));
                 } else {
@@ -345,7 +406,7 @@ impl Args {
                         Some(value) => (true, value.to_string()),
                         None => (false, rest.clone()),
                     };
-                    if matches!(opt.kind, Kind::Flag | Kind::Count) {
+                    if opt.takes_no_value() {
                         if rest.is_empty() {
                             parsed.trace.push(Seen::Option(opt, None));
                             parsed.store(opt, None);
@@ -370,11 +431,11 @@ impl Args {
                     // A value option ends a group, its value the rest of the
                     // argument (`-t5`, `-t=5`) or the next one: `-t 5`.
                     let value = if rest.is_empty() {
-                        Self::take(opt.kind, &mut iter)
+                        Self::take(opt, &mut iter)
                     } else {
                         Some(explicit)
                     };
-                    if value.is_none() && opt.kind == Kind::Value {
+                    if value.is_none() && opt.nargs == Nargs::One {
                         parsed.missing.push(format!("-{}", chars[i]));
                         parsed.trace.push(Seen::Missing(opt));
                     } else {
@@ -394,14 +455,14 @@ impl Args {
     /// The value an option without an attached one takes from the
     /// arguments that follow.
     fn take(
-        kind: Kind,
+        opt: &Opt,
         iter: &mut std::iter::Peekable<std::vec::IntoIter<String>>,
     ) -> Option<String> {
-        match kind {
-            Kind::Flag | Kind::Count => None,
+        match opt.nargs {
+            Nargs::Zero => None,
             // As argparse, an option-like argument is not a value.
-            Kind::Value => iter.next_if(is_value),
-            Kind::Optional => match iter.peek() {
+            Nargs::One => iter.next_if(is_value),
+            Nargs::Optional | Nargs::ZeroOrMore => match iter.peek() {
                 Some(next) if is_value(next) => iter.next(),
                 _ => None,
             },
@@ -582,8 +643,10 @@ mod tests {
         assert!(a.positional.is_empty());
     }
 
-    const SPEC: OptionSpec = OptionSpec {
-        options: &[
+    static SPEC: OptionSpec = OptionSpec::new(
+        None,
+        &[],
+        &[
             Opt::flag("x", "execute"),
             Opt::flag("p", "print"),
             Opt::optional("a", "announce"),
@@ -595,7 +658,7 @@ mod tests {
             Opt::count("q", "quiet"),
             Opt::value("", "allowed").rust_only(),
         ],
-    };
+    );
 
     fn spec(s: &[&str]) -> Args {
         Args::parse_spec_from(s.iter().map(|s| s.to_string()).collect(), &SPEC)
