@@ -349,14 +349,9 @@ impl RawPacket {
         if exceeds_mtu(&flags, len, max_mtu) {
             return Err(PacketError::ExceedsMtu);
         }
-        let mut shared = Arc::<[u8]>::new_uninit_slice(len);
+        // SAFETY: all-zero bytes are valid u8 values.
+        let mut shared = unsafe { Arc::<[u8]>::new_zeroed_slice(len).assume_init() };
         let out = Arc::get_mut(&mut shared).expect("a new Arc is unique");
-        // SAFETY: `out` is `len` writable bytes; zeroing initialises them all,
-        // and u8 and MaybeUninit<u8> share a layout.
-        let out: &mut [u8] = unsafe {
-            core::ptr::write_bytes(out.as_mut_ptr(), 0, len);
-            core::slice::from_raw_parts_mut(out.as_mut_ptr().cast::<u8>(), len)
-        };
         out[0] = flags.pack();
         out[1] = hops;
         let mut at = 2;
@@ -368,8 +363,7 @@ impl RawPacket {
         at += 16;
         out[at] = context;
         fill(&mut out[header_len..]);
-        // SAFETY: every byte was initialised by the zeroing above.
-        Ok(unsafe { shared.assume_init() })
+        Ok(shared)
     }
 
     /// [`RawPacket::pack_raw_with_max_mtu`] into shared bytes, allocated once
@@ -415,8 +409,9 @@ impl RawPacket {
         put(destination_hash);
         put(&[context]);
         put(data);
-        assert_eq!(at, len);
-        // SAFETY: every one of the `len` bytes was written above.
+        debug_assert_eq!(at, len);
+        // SAFETY: `len` is the sum of the lengths of the pieces `put` wrote
+        // above, each once and in order, so all `len` bytes were written.
         Ok(unsafe { shared.assume_init() })
     }
 
