@@ -134,24 +134,24 @@ impl Driver {
         let uptime = now - self.started;
 
         // Wait for initial delay
-        if !self.initial_announce_sent {
+        if !self.management.initial_announce_sent {
             if uptime < Self::MANAGEMENT_ANNOUNCE_DELAY {
                 return;
             }
-            self.initial_announce_sent = true;
+            self.management.initial_announce_sent = true;
             self.emit_management_announces(now);
             return;
         }
 
         // Periodic re-announce
-        if now - self.last_management_announce >= self.management_announce_interval_secs {
+        if now - self.management.last_announce >= self.management.announce_interval_secs {
             self.emit_management_announces(now);
         }
     }
 
     /// Emit management/blackhole announce packets through the engine outbound path.
     pub(crate) fn emit_management_announces(&mut self, now: f64) {
-        self.last_management_announce = now;
+        self.management.last_announce = now;
         for destination in crate::management::BuiltinDestination::ALL {
             if self.builtin_destination_enabled(destination) {
                 let raw = self.build_builtin_announce(destination, now, false);
@@ -167,9 +167,9 @@ impl Driver {
     ) -> bool {
         use crate::management::BuiltinDestination;
         match destination {
-            BuiltinDestination::RemoteManagement => self.management_config.enable_remote_management,
-            BuiltinDestination::Blackhole => self.management_config.publish_blackhole,
-            BuiltinDestination::Probe => self.probe_responder_hash.is_some(),
+            BuiltinDestination::RemoteManagement => self.management.config.enable_remote_management,
+            BuiltinDestination::Blackhole => self.management.config.publish_blackhole,
+            BuiltinDestination::Probe => self.builtin.probe_responder.is_some(),
             BuiltinDestination::NetworkInstance | BuiltinDestination::Network => {
                 self.network_destinations_enabled()
             }
@@ -212,7 +212,7 @@ impl Driver {
                     .register_destination(dest_hash, rns_core::constants::DESTINATION_SINGLE);
                 self.local_destinations
                     .insert(dest_hash, rns_core::constants::DESTINATION_SINGLE);
-                self.builtin_link_destinations.insert(dest_hash);
+                self.builtin.link_destinations.insert(dest_hash);
                 self.link_manager
                     .register_link_destination_without_requests(
                         dest_hash,
@@ -288,8 +288,8 @@ impl Driver {
         let identity_hash = *identity.hash();
         let dest_hash = destination.dest_hash(&identity_hash);
         let mut app_data = None;
-        if self.stamp_destinations.load(Ordering::Relaxed) {
-            let Some(store) = self.stamper.stamp_store() else {
+        if self.stamps.stamp_destinations.load(Ordering::Relaxed) {
+            let Some(store) = self.stamps.stamper.stamp_store() else {
                 log::debug!(
                     "No stamp store, {} announce emission cancelled",
                     destination.label()
@@ -303,6 +303,7 @@ impl Driver {
                 &destination.name_hash(&identity_hash),
             );
             let target = self
+                .stamps
                 .stamper
                 .targets()
                 .destination_target(&destination.destination(identity_hash));
@@ -317,7 +318,7 @@ impl Driver {
                         dest: destination.destination(identity_hash),
                         identity_prv_key,
                     };
-                    if self.stamper.enqueue_destination_stamp(job).is_err() {
+                    if self.stamps.stamper.enqueue_destination_stamp(job).is_err() {
                         log::debug!(
                             "Stamp queue full, dropping {} announce",
                             destination.label()
@@ -382,11 +383,12 @@ impl Driver {
         let is_restricted = path_hash == management::status_path_hash()
             || path_hash == management::path_path_hash();
 
-        if is_restricted && !self.management_config.remote_management_allowed.is_empty() {
+        if is_restricted && !self.management.config.remote_management_allowed.is_empty() {
             match remote_identity {
                 Some((identity_hash, _)) => {
                     if !self
-                        .management_config
+                        .management
+                        .config
                         .remote_management_allowed
                         .contains(&identity_hash)
                     {

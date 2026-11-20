@@ -162,7 +162,7 @@ impl Driver {
             rx_pps,
             tx_pps,
             traffic: total_traffic,
-            probe_responder: self.probe_responder_hash,
+            probe_responder: self.builtin.probe_responder,
             network_id: self
                 .network_identity
                 .as_ref()

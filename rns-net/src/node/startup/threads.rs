@@ -152,9 +152,9 @@ pub(super) fn spawn_node_threads(
     tx: &EventSender,
     transport_state_dir: Option<std::path::PathBuf>,
 ) -> io::Result<NodeThreads> {
-    let verify_shutdown = Arc::clone(&driver.announce_verify_signal);
+    let verify_shutdown = Arc::clone(&driver.announce_verify.signal);
     let verify_handle =
-        spawn_announce_verifier(&driver.announce_verify_queue, &verify_shutdown, tx.clone())?;
+        spawn_announce_verifier(&driver.announce_verify.queue, &verify_shutdown, tx.clone())?;
 
     // Spawn the driver after startup has registered local destinations and static interfaces.
     // Interface readers can enqueue frames before this point; the bounded event queue preserves

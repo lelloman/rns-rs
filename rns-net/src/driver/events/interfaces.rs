@@ -29,7 +29,12 @@ impl Driver {
             let coming_online = self.connected_to_shared_instance
                 && self.interfaces.get(&id).is_some_and(|entry| !entry.online);
             replay_shared_announces = is_local_client
-                && (self.shared_reconnect_pending.remove(&id).unwrap_or(false) || coming_online);
+                && (self
+                    .path_responses
+                    .shared_reconnect_pending
+                    .remove(&id)
+                    .unwrap_or(false)
+                    || coming_online);
             let interface_name = self
                 .interfaces
                 .get(&id)

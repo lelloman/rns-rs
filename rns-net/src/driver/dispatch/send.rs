@@ -118,7 +118,7 @@ impl Driver {
         };
 
         let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
-        let is_path_request = is_outbound_path_request(&raw, &self.path_request_dest);
+        let is_path_request = is_outbound_path_request(&raw, &self.builtin.path_request);
         if is_path_request {
             let now = time::now();
             let live_rate = self.interfaces.get(&interface).map(|entry| {
@@ -337,7 +337,7 @@ impl Driver {
         };
 
         let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
-        let is_path_request = is_outbound_path_request(&raw, &self.path_request_dest);
+        let is_path_request = is_outbound_path_request(&raw, &self.builtin.path_request);
         if ratchet_lease.is_some() && self.tracked_link_send.is_none() {
             let Ok(permit) = self.event_tx.link_send_pool().try_acquire() else {
                 return;

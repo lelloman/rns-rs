@@ -209,9 +209,9 @@ impl Driver {
                 (destination_hash, raw, packet_hash)
             };
 
-        if destination_hash == self.tunnel_synth_dest {
+        if destination_hash == self.builtin.tunnel_synth {
             self.handle_tunnel_synth_delivery(&raw, receiving_interface);
-        } else if destination_hash == self.path_request_dest {
+        } else if destination_hash == self.builtin.path_request {
             if let Ok(packet) = RawPacket::unpack(&raw) {
                 let now = time::now();
                 let Some(request) =

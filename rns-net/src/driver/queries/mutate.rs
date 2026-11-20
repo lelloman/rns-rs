@@ -615,7 +615,7 @@ impl Driver {
             },
             "global.management_announce_interval_secs" => match Self::expect_f64(value, key) {
                 Ok(value) => {
-                    self.management_announce_interval_secs = value;
+                    self.management.announce_interval_secs = value;
                     Ok(())
                 }
                 Err(err) => Err(err),
@@ -633,7 +633,9 @@ impl Driver {
         match key {
             "global.stamp_destinations" => match Self::expect_bool(value, key) {
                 Ok(value) => {
-                    self.stamp_destinations.store(value, Ordering::Relaxed);
+                    self.stamps
+                        .stamp_destinations
+                        .store(value, Ordering::Relaxed);
                     Ok(())
                 }
                 Err(err) => Err(err),
@@ -661,14 +663,14 @@ impl Driver {
             },
             "global.stamp_link_requests" => match Self::expect_bool(value, key) {
                 Ok(value) => {
-                    self.stamp_settings.stamp_lrs = value;
+                    self.stamps.settings.stamp_lrs = value;
                     Ok(())
                 }
                 Err(err) => Err(err),
             },
             "global.always_stamp_link_requests" => match Self::expect_bool(value, key) {
                 Ok(value) => {
-                    self.stamp_settings.always_stamp_lrs = value;
+                    self.stamps.settings.always_stamp_lrs = value;
                     Ok(())
                 }
                 Err(err) => Err(err),
@@ -758,10 +760,11 @@ impl Driver {
                 self.discovery.cleanup_interval_ticks = defaults.discovery_cleanup_interval_ticks;
             }
             "global.management_announce_interval_secs" => {
-                self.management_announce_interval_secs = defaults.management_announce_interval_secs;
+                self.management.announce_interval_secs = defaults.management_announce_interval_secs;
             }
             "global.stamp_destinations" => {
-                self.stamp_destinations
+                self.stamps
+                    .stamp_destinations
                     .store(defaults.stamp_destinations, Ordering::Relaxed);
             }
             "global.stamp_path_requests" => {
@@ -776,10 +779,10 @@ impl Driver {
                     .set_enforced(defaults.lr_stamps_enforced);
             }
             "global.stamp_link_requests" => {
-                self.stamp_settings.stamp_lrs = defaults.stamp_link_requests;
+                self.stamps.settings.stamp_lrs = defaults.stamp_link_requests;
             }
             "global.always_stamp_link_requests" => {
-                self.stamp_settings.always_stamp_lrs = defaults.always_stamp_link_requests;
+                self.stamps.settings.always_stamp_lrs = defaults.always_stamp_link_requests;
             }
             "global.direct_connect_policy" => {
                 self.holepunch_manager

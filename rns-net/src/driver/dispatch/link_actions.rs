@@ -180,8 +180,8 @@ impl Driver {
                     }
                     // Upstream keeps links to its built-in destinations
                     // inside Transport: the application never hears of them.
-                    if !is_initiator && self.builtin_link_destinations.contains(&dest_hash) {
-                        self.builtin_links.insert(link_id);
+                    if !is_initiator && self.builtin.link_destinations.contains(&dest_hash) {
+                        self.builtin.links.insert(link_id);
                         continue;
                     }
                     self.callbacks.on_link_established(
@@ -224,7 +224,7 @@ impl Driver {
                         self.blackhole_update_link_closed(&link_id);
                         continue;
                     }
-                    if self.builtin_links.remove(&link_id) {
+                    if self.builtin.links.remove(&link_id) {
                         continue;
                     }
                     self.callbacks
@@ -253,7 +253,7 @@ impl Driver {
                         &link_id[..4],
                         &identity_hash[..4],
                     );
-                    if self.builtin_links.contains(&link_id) {
+                    if self.builtin.links.contains(&link_id) {
                         continue;
                     }
                     self.callbacks.on_remote_identified(
@@ -291,7 +291,7 @@ impl Driver {
                     metadata,
                     app_flag,
                 } => {
-                    if self.builtin_links.contains(&link_id) {
+                    if self.builtin.links.contains(&link_id) {
                         continue;
                     }
                     self.callbacks.on_resource_received_with_app_flag(
@@ -302,7 +302,7 @@ impl Driver {
                     );
                 }
                 LinkManagerAction::ResourceFileReceived { link_id, resource } => {
-                    if self.builtin_links.contains(&link_id) {
+                    if self.builtin.links.contains(&link_id) {
                         continue;
                     }
                     self.callbacks
@@ -314,7 +314,7 @@ impl Driver {
                     offset,
                     data,
                 } => {
-                    if self.builtin_links.contains(&link_id) {
+                    if self.builtin.links.contains(&link_id) {
                         continue;
                     }
                     self.callbacks.on_resource_segment(
@@ -325,21 +325,21 @@ impl Driver {
                     );
                 }
                 LinkManagerAction::ResourceStreamReceived { link_id, resource } => {
-                    if self.builtin_links.contains(&link_id) {
+                    if self.builtin.links.contains(&link_id) {
                         continue;
                     }
                     self.callbacks
                         .on_resource_stream_received(rns_core::types::LinkId(link_id), resource);
                 }
                 LinkManagerAction::ResourceCompleted { link_id } => {
-                    if self.builtin_links.contains(&link_id) {
+                    if self.builtin.links.contains(&link_id) {
                         continue;
                     }
                     self.callbacks
                         .on_resource_completed(rns_core::types::LinkId(link_id));
                 }
                 LinkManagerAction::ResourceFailed { link_id, error } => {
-                    if self.builtin_links.contains(&link_id) {
+                    if self.builtin.links.contains(&link_id) {
                         continue;
                     }
                     log::debug!("Resource failed on link {:02x?}: {}", &link_id[..4], error);
@@ -351,7 +351,7 @@ impl Driver {
                     resource_hash,
                     data_size,
                 } => {
-                    if self.builtin_links.contains(&link_id) {
+                    if self.builtin.links.contains(&link_id) {
                         continue;
                     }
                     self.callbacks.on_resource_started(
@@ -365,7 +365,7 @@ impl Driver {
                     received,
                     total,
                 } => {
-                    if self.builtin_links.contains(&link_id) {
+                    if self.builtin.links.contains(&link_id) {
                         continue;
                     }
                     self.callbacks.on_resource_progress(
@@ -378,7 +378,7 @@ impl Driver {
                     link_id,
                     transfer_id,
                 } => {
-                    if self.builtin_links.contains(&link_id) {
+                    if self.builtin.links.contains(&link_id) {
                         continue;
                     }
                     self.callbacks.on_resource_stream_completed(
@@ -391,7 +391,7 @@ impl Driver {
                     transfer_id,
                     error,
                 } => {
-                    if self.builtin_links.contains(&link_id) {
+                    if self.builtin.links.contains(&link_id) {
                         continue;
                     }
                     self.callbacks.on_resource_stream_failed(
@@ -405,7 +405,7 @@ impl Driver {
                     segment_progress,
                     transfer_size,
                 } => {
-                    if self.builtin_links.contains(&link_id) {
+                    if self.builtin.links.contains(&link_id) {
                         continue;
                     }
                     self.callbacks.on_resource_segment_progress(
@@ -420,7 +420,7 @@ impl Driver {
                     transferred,
                     total,
                 } => {
-                    if self.builtin_links.contains(&link_id) {
+                    if self.builtin.links.contains(&link_id) {
                         continue;
                     }
                     self.callbacks.on_resource_stream_progress(
@@ -458,7 +458,7 @@ impl Driver {
                     msgtype,
                     payload,
                 } => {
-                    if self.builtin_links.contains(&link_id) {
+                    if self.builtin.links.contains(&link_id) {
                         continue;
                     }
                     self.callbacks.on_channel_message(
@@ -486,7 +486,7 @@ impl Driver {
                     context,
                     data,
                 } => {
-                    if self.builtin_links.contains(&link_id) {
+                    if self.builtin.links.contains(&link_id) {
                         continue;
                     }
                     self.callbacks

@@ -18,7 +18,11 @@ impl Driver {
         self.rng.fill_bytes(&mut tag);
 
         if self.engine.stamp_prs() {
-            match self.stamper.cached_path_request_stamp(&dest_hash, &tag) {
+            match self
+                .stamps
+                .stamper
+                .cached_path_request_stamp(&dest_hash, &tag)
+            {
                 Some(stamp) => {
                     let payload = rns_core::stamp::path_request_ext_payload(&stamp, 0);
                     let mut ext_payload = [0u8; rns_core::constants::PR_EXT_PAYLOAD_LENGTH];
@@ -96,7 +100,11 @@ impl Driver {
                 "Stamping discovery path request for {:02x?}",
                 &dest_hash[..4]
             );
-            match self.stamper.cached_path_request_stamp(&dest_hash, &tag) {
+            match self
+                .stamps
+                .stamper
+                .cached_path_request_stamp(&dest_hash, &tag)
+            {
                 Some(stamp) => {
                     let payload = rns_core::stamp::path_request_ext_payload(&stamp, 0);
                     let mut ext_payload = [0u8; rns_core::constants::PR_EXT_PAYLOAD_LENGTH];
@@ -126,7 +134,7 @@ impl Driver {
             tag,
             target,
         };
-        if self.stamper.enqueue_path_request(job).is_err() {
+        if self.stamps.stamper.enqueue_path_request(job).is_err() {
             log::debug!(
                 "Stamp queue full, dropping path request for {:02x?}",
                 &dest_hash[..4]
@@ -210,7 +218,7 @@ impl Driver {
         self.expire_local_path_responses(now);
 
         let key = (dest_hash, tag);
-        let raw = if let Some((_, raw)) = self.local_path_responses.get(&key) {
+        let raw = if let Some((_, raw)) = self.path_responses.local_cache.get(&key) {
             raw.clone()
         } else {
             let waiting = WaitingPathResponse::Answer {
@@ -220,17 +228,20 @@ impl Driver {
             let Some(raw) = self.build_local_path_response(&dest_hash, now, Some(waiting)) else {
                 return;
             };
-            if self.local_path_responses.len() >= Self::LOCAL_PATH_RESPONSE_MAX_ENTRIES {
+            if self.path_responses.local_cache.len() >= Self::LOCAL_PATH_RESPONSE_MAX_ENTRIES {
                 if let Some(oldest) = self
-                    .local_path_responses
+                    .path_responses
+                    .local_cache
                     .iter()
                     .min_by(|a, b| a.1 .0.total_cmp(&b.1 .0))
                     .map(|(key, _)| key.clone())
                 {
-                    self.local_path_responses.remove(&oldest);
+                    self.path_responses.local_cache.remove(&oldest);
                 }
             }
-            self.local_path_responses.insert(key, (now, raw.clone()));
+            self.path_responses
+                .local_cache
+                .insert(key, (now, raw.clone()));
             raw
         };
         self.send_local_path_response(dest_hash, &raw, interface, now);
@@ -274,12 +285,13 @@ impl Driver {
         dest_hash: &[u8; 16],
         waiting: Option<WaitingPathResponse>,
     ) -> Option<Vec<u8>> {
-        let responder = self.path_responders.get(dest_hash)?;
+        let responder = self.path_responses.responders.get(dest_hash)?;
         let mut record = responder.record.clone();
         let store = self
+            .stamps
             .stamper
             .stamp_store()
-            .filter(|_| self.stamp_destinations.load(Ordering::Relaxed));
+            .filter(|_| self.stamps.stamp_destinations.load(Ordering::Relaxed));
         if let Some(store) = store {
             let identity =
                 rns_crypto::identity::Identity::from_private_key(&record.identity_prv_key);
@@ -290,6 +302,7 @@ impl Driver {
                 &record.name_hash,
             );
             let target = self
+                .stamps
                 .stamper
                 .targets()
                 .destination_target(&responder.destination);
@@ -305,14 +318,20 @@ impl Driver {
                         dest: responder.destination.clone(),
                         identity_prv_key: record.identity_prv_key,
                     };
-                    if self.stamper.enqueue_path_response_stamp(job).is_err() {
+                    if self
+                        .stamps
+                        .stamper
+                        .enqueue_path_response_stamp(job)
+                        .is_err()
+                    {
                         log::debug!(
                             "Stamp queue full, dropping path response for {:02x?}",
                             &dest_hash[..4]
                         );
                         return None;
                     }
-                    self.stamp_waiting_path_responses
+                    self.path_responses
+                        .waiting_for_stamp
                         .entry(*dest_hash)
                         .or_default()
                         .push(waiting);
@@ -336,7 +355,7 @@ impl Driver {
     /// Send the path responses that waited for `dest_hash`'s stamp. One
     /// that still finds no stamp (it could not be persisted) is dropped.
     pub(super) fn send_stamp_waiting_path_responses(&mut self, dest_hash: [u8; 16]) {
-        let Some(waiting) = self.stamp_waiting_path_responses.remove(&dest_hash) else {
+        let Some(waiting) = self.path_responses.waiting_for_stamp.remove(&dest_hash) else {
             return;
         };
         let now = time::now();
@@ -349,7 +368,8 @@ impl Driver {
                     self.send_shared_path_response_raw(&dest_hash, &raw);
                 }
                 WaitingPathResponse::Answer { tag, interface } => {
-                    self.local_path_responses
+                    self.path_responses
+                        .local_cache
                         .insert((dest_hash, tag), (now, raw.clone()));
                     self.send_local_path_response(dest_hash, &raw, interface, now);
                 }
@@ -359,7 +379,8 @@ impl Driver {
 
     /// Drop path-response announces older than the replay window.
     pub(crate) fn expire_local_path_responses(&mut self, now: f64) {
-        self.local_path_responses
+        self.path_responses
+            .local_cache
             .retain(|_, (created, _)| now - *created <= Self::LOCAL_PATH_RESPONSE_WINDOW);
     }
 
@@ -378,13 +399,13 @@ impl Driver {
             return self.build_builtin_announce(destination, now, true);
         }
 
-        if let Some(record) = self.shared_announces.get(dest_hash).cloned() {
+        if let Some(record) = self.path_responses.shared_announces.get(dest_hash).cloned() {
             return self.build_shared_announce_raw(dest_hash, &record, true);
         }
 
         // Registered with its identity but never announced: announce it on
         // demand, as upstream does from the Destination object.
-        if self.path_responders.contains_key(dest_hash) {
+        if self.path_responses.responders.contains_key(dest_hash) {
             return self.build_path_responder_announce(dest_hash, waiting);
         }
 

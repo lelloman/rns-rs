@@ -35,13 +35,13 @@ impl Driver {
     ) {
         let stamp_cost = self
             .outbound_link_stamp_cost(&dest_hash)
-            .filter(|cost| *cost > StampCost::ZERO && self.stamp_settings.stamp_lrs);
+            .filter(|cost| *cost > StampCost::ZERO && self.stamps.settings.stamp_lrs);
         match stamp_cost {
             Some(cost) => self.spawn_stamped_link_keys(
                 dest_hash,
                 dest_sig_pub_bytes,
                 cost,
-                self.stamp_settings.link_stamp_timeout(),
+                self.stamps.settings.link_stamp_timeout(),
                 response_tx,
             ),
             None => self.complete_create_link(dest_hash, dest_sig_pub_bytes, None, response_tx),
@@ -59,7 +59,7 @@ impl Driver {
     pub(crate) fn outbound_link_stamp_cost(&self, dest_hash: &[u8; 16]) -> Option<StampCost> {
         match self.recall_link_cost(dest_hash) {
             Some(cost) => Some(cost),
-            None if self.stamp_settings.always_stamp_lrs => {
+            None if self.stamps.settings.always_stamp_lrs => {
                 Some(self.link_manager.link_request_costs().default_cost())
             }
             None => None,

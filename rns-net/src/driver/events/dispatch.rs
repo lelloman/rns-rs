@@ -93,7 +93,7 @@ impl Driver {
                 identity_prv_key,
                 app_data,
             } => {
-                self.shared_announces.insert(
+                self.path_responses.shared_announces.insert(
                     dest_hash,
                     SharedAnnounceRecord {
                         name_hash,
@@ -112,12 +112,12 @@ impl Driver {
                 }
             }
             Event::DeregisterDestination { dest_hash } => {
-                self.path_responders.remove(&dest_hash);
-                self.stamp_waiting_path_responses.remove(&dest_hash);
+                self.path_responses.responders.remove(&dest_hash);
+                self.path_responses.waiting_for_stamp.remove(&dest_hash);
                 self.decrypted_destinations.remove(&dest_hash);
                 self.engine.deregister_destination(&dest_hash);
                 self.local_destinations.remove(&dest_hash);
-                self.shared_announces.remove(&dest_hash);
+                self.path_responses.shared_announces.remove(&dest_hash);
             }
             Event::Query(request, response_tx) => {
                 let response = self.handle_query_mut(*request);

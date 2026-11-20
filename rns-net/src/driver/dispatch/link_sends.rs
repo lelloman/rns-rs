@@ -27,7 +27,7 @@ impl Driver {
                 identity_prv_key,
                 app_data,
             } = *replay;
-            self.shared_announces.insert(
+            self.path_responses.shared_announces.insert(
                 dest_hash,
                 SharedAnnounceRecord {
                     name_hash,

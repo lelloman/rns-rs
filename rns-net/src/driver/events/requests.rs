@@ -18,7 +18,7 @@ impl Driver {
             identity_prv_key,
             app_data: None,
         };
-        self.path_responders.insert(
+        self.path_responses.responders.insert(
             dest_hash,
             PathResponder {
                 record,

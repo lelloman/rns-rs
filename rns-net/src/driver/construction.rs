@@ -68,16 +68,17 @@ impl Driver {
             published_ingress_bursts: Default::default(),
             writers_to_wake: Vec::new(),
             announce_cache: None,
-            tunnel_synth_dest,
+            builtin: builtin_destinations::BuiltinDestinations::new(
+                tunnel_synth_dest,
+                path_request_dest,
+            ),
             transport_identity: None,
             link_manager: {
                 let mut link_manager = LinkManager::new();
                 link_manager.set_link_request_costs(tx.link_request_costs().clone());
                 link_manager
             },
-            management_config: Default::default(),
-            last_management_announce: 0.0,
-            initial_announce_sent: false,
+            management: management_state::ManagementState::new(&runtime_config_defaults),
             known: known_destinations::KnownDestinations::new(
                 runtime_config_defaults.known_destinations_cleanup_interval_ticks,
             ),
@@ -92,28 +93,19 @@ impl Driver {
             ratchet_store: None,
             ratchet_expiry_secs: rns_core::constants::RATCHET_EXPIRY as f64,
             rate_limiter_ttl_secs: DEFAULT_RATE_LIMITER_TTL_SECS,
-            path_request_dest,
             proofs: packet_proofs::PacketProofs::new(),
             decrypted_destinations: HashMap::new(),
             transport_actions: crate::action_pool::ActionPool::new(),
             link_actions: crate::action_pool::ActionPool::new(),
             local_destinations,
-            builtin_link_destinations: HashSet::new(),
-            builtin_links: HashSet::new(),
-            shared_announces: HashMap::new(),
-            path_responders: HashMap::new(),
-            stamp_waiting_path_responses: HashMap::new(),
-            shared_reconnect_pending: HashMap::new(),
-            local_path_responses: HashMap::new(),
+            path_responses: PathResponses::new(),
             holepunch_manager: {
                 let mut manager =
                     HolePunchManager::new(vec![], rns_core::holepunch::ProbeProtocol::Rnsp, None);
                 manager.set_event_sender(tx.clone());
                 manager
             },
-            stamper: Arc::new(crate::stamper::Stamper::new(tx.clone(), None)),
-            stamp_destinations: Arc::new(AtomicBool::new(rns_core::constants::STAMP_DESTINATIONS)),
-            stamp_settings: crate::config::StampsSection::default(),
+            stamps: stamps::Stamps::new(tx.clone()),
             hop_limiter: rns_core::constants::HOP_LIMITER,
             event_tx: tx,
             interface_writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
@@ -124,19 +116,14 @@ impl Driver {
             runtime_config: runtime_config::RuntimeConfigHandles::new(runtime_config_defaults),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
-            probe_responder_hash: None,
-            announce_verify_queue: Arc::new(Mutex::new(AnnounceVerifyQueue::new(
+            announce_verify: announce_verification::AnnounceVerification::new(
                 announce_queue_max_entries,
-            ))),
-            announce_verify_signal: Arc::default(),
-            async_announce_verification: false,
+            ),
             housekeeping: housekeeping::Housekeeping::new(&runtime_config_defaults),
             folded: FoldedTimers::new(),
             rpc_service: None,
             probe_server: None,
             resource_preparation: None,
-            management_announce_interval_secs: runtime_config_defaults
-                .management_announce_interval_secs,
             #[cfg(feature = "hooks")]
             hooks: Hooks::new(),
         }

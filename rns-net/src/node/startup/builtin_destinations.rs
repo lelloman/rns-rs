@@ -56,7 +56,7 @@ pub(super) fn register_builtin_link_destination(
     driver
         .local_destinations
         .insert(dest, rns_core::constants::DESTINATION_SINGLE);
-    driver.builtin_link_destinations.insert(dest);
+    driver.builtin.link_destinations.insert(dest);
     driver.link_manager.register_link_destination(
         dest,
         sig_prv,
@@ -151,7 +151,7 @@ pub(super) fn enable_probe_responder(driver: &mut Driver, transport_id: &Identit
         ),
     );
 
-    driver.probe_responder_hash = Some(probe_dest);
+    driver.builtin.probe_responder = Some(probe_dest);
 
     log::info!(
         target: crate::logging::NOTICE_TARGET,

@@ -12,7 +12,7 @@ impl Driver {
         max_stale_secs: f64,
         overflow_policy: OverflowPolicy,
     ) {
-        self.announce_verify_queue = Arc::new(Mutex::new(AnnounceVerifyQueue::with_limits(
+        self.announce_verify.queue = Arc::new(Mutex::new(AnnounceVerifyQueue::with_limits(
             max_entries,
             max_bytes,
             max_stale_secs,
@@ -159,7 +159,7 @@ impl Driver {
     /// Share the node's stamper, so announces and path requests wait in the
     /// same priority queues as upstream's single stamper thread.
     pub(crate) fn set_stamper(&mut self, stamper: Arc<crate::stamper::Stamper>) {
-        self.stamper = stamper;
+        self.stamps.stamper = stamper;
     }
 
     /// Apply the `[stamps]` config section and `[filter] hop_limiter`,
@@ -176,11 +176,14 @@ impl Driver {
     ) {
         self.engine.set_stamp_requirements(stamps.requirements());
         self.engine.set_stamp_prs(stamps.stamp_prs);
-        self.stamp_destinations
+        self.stamps
+            .stamp_destinations
             .store(stamps.stamp_destinations, Ordering::Relaxed);
-        self.stamper
+        self.stamps
+            .stamper
             .set_targets(crate::stamper::StampTargets::from(stamps));
-        self.stamper
+        self.stamps
+            .stamper
             .set_path_request_timeout(stamps.path_request_stamp_timeout());
         self.runtime_config.defaults.stamp_destinations = stamps.stamp_destinations;
         self.runtime_config.defaults.stamp_path_requests = stamps.stamp_prs;
@@ -194,7 +197,7 @@ impl Driver {
         let link_request_costs = self.link_manager.link_request_costs();
         link_request_costs.set_default_cost(stamps.lr_cost);
         link_request_costs.set_enforced(stamps.lr_stamps_enforced);
-        self.stamp_settings = stamps.clone();
+        self.stamps.settings = stamps.clone();
         self.hop_limiter = hop_limiter;
         self.engine.set_hop_limiter(hop_limiter);
         // Transport.start (Transport.py:521).
@@ -214,7 +217,7 @@ impl Driver {
     /// Share the node handle's `STAMP_DESTINATIONS` flag so runtime config
     /// changes made here are seen by the announce API.
     pub(crate) fn set_stamp_destinations_flag(&mut self, flag: Arc<AtomicBool>) {
-        self.stamp_destinations = flag;
+        self.stamps.stamp_destinations = flag;
     }
 
     /// The flag the node handle reads to refuse new work once draining starts.

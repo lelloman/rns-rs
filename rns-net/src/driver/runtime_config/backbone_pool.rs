@@ -293,7 +293,7 @@ impl Driver {
         &self,
         iface: &crate::discovery::DiscoveredInterface,
     ) -> bool {
-        let targets = self.stamper.targets();
+        let targets = self.stamps.stamper.targets();
         let dst_cost = iface.dst_cost.unwrap_or_default();
         let pr_cost = iface.pr_cost.unwrap_or_default();
         let dst_cost_ok = dst_cost <= targets.destination_value;
