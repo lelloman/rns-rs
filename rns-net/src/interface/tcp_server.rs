@@ -38,6 +38,8 @@ pub struct TcpServerConfig {
     pub interface_id: InterfaceId,
     /// Cap on simultaneous client connections (`max_connections`); `None` is unlimited.
     pub max_connections: Option<usize>,
+    /// Ingress control given to each accepted client; set from the start context.
+    pub ingress_control: IngressControlConfig,
     /// Bitrate of accepted clients; it also selects their hardware MTU tier.
     pub bitrate: Option<u64>,
     /// Hardware MTU of accepted clients, overriding the bitrate tier.
@@ -85,6 +87,7 @@ impl Default for TcpServerConfig {
             listen_port: 4242,
             interface_id: InterfaceId(0),
             max_connections: None,
+            ingress_control: IngressControlConfig::enabled(),
             bitrate: None,
             fixed_mtu: None,
             flush_after: super::DEFAULT_FLUSH_AFTER,
@@ -185,6 +188,7 @@ fn serve_listener(
         .map(|ifac| ifac.size)
         .unwrap_or(0);
     let runtime = Arc::clone(&config.runtime);
+    let ingress_control = config.ingress_control;
     let bitrate = Some(super::tcp_bitrate(config.bitrate));
     let mtu = super::tcp_hardware_mtu(config.bitrate, config.fixed_mtu);
     let active_connections = Arc::new(AtomicUsize::new(0));
@@ -198,6 +202,7 @@ fn serve_listener(
             tx: tx.clone(),
             next_id,
             runtime,
+            ingress_control,
             bitrate,
             mtu,
             flush_after: config.flush_after,
@@ -223,6 +228,7 @@ struct ListenerSource {
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     runtime: Arc<Mutex<TcpServerRuntime>>,
+    ingress_control: IngressControlConfig,
     bitrate: Option<u64>,
     mtu: u32,
     flush_after: Option<Duration>,
@@ -388,9 +394,7 @@ impl ListenerSource {
             op_freq: 0.0,
             op_samples: 0,
             started: 0.0,
-            // The driver gives a spawned client its parent's ingress
-            // control; this is the server type's default.
-            ingress_control: IngressControlConfig::enabled(),
+            ingress_control: self.ingress_control,
         };
 
         // Register the client with the driver before any of its frames: the
@@ -525,6 +529,7 @@ impl InterfaceFactory for TcpServerFactory {
             listen_port,
             interface_id: id,
             max_connections,
+            ingress_control: IngressControlConfig::enabled(),
             bitrate,
             fixed_mtu,
             flush_after,
@@ -542,10 +547,11 @@ impl InterfaceFactory for TcpServerFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> io::Result<StartResult> {
-        let cfg = *config
+        let mut cfg = *config
             .into_any()
             .downcast::<TcpServerConfig>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
+        cfg.ingress_control = ctx.ingress_control;
         let parent_id = cfg.interface_id;
         let control = start_with_template(
             cfg,
@@ -607,6 +613,7 @@ mod tests {
             bitrate: None,
             fixed_mtu: None,
             flush_after: None,
+            ingress_control: IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(TcpServerRuntime {
                 max_connections: None,
             })),
@@ -825,6 +832,43 @@ mod tests {
     }
 
     #[test]
+    fn spawned_client_inherits_ingress_control_config() {
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let next_id = Arc::new(AtomicU64::new(1100));
+
+        let mut config = make_server_config(port, 11, None);
+        config.ingress_control = IngressControlConfig::disabled();
+        config.ingress_control.max_held_announces = 17;
+        config.ingress_control.burst_hold = 1.5;
+        config.ingress_control.burst_freq_new = 2.5;
+        config.ingress_control.burst_freq = 3.5;
+        config.ingress_control.new_time = 4.5;
+        config.ingress_control.burst_penalty = 5.5;
+        config.ingress_control.held_release_interval = 6.5;
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        match event {
+            Event::InterfaceUp(_, _, Some(info)) => {
+                assert!(!info.ingress_control.enabled);
+                assert_eq!(info.ingress_control.max_held_announces, 17);
+                assert_eq!(info.ingress_control.burst_hold, 1.5);
+                assert_eq!(info.ingress_control.burst_freq_new, 2.5);
+                assert_eq!(info.ingress_control.burst_freq, 3.5);
+                assert_eq!(info.ingress_control.new_time, 4.5);
+                assert_eq!(info.ingress_control.burst_penalty, 5.5);
+                assert_eq!(info.ingress_control.held_release_interval, 6.5);
+            }
+            other => panic!("expected InterfaceUp with InterfaceInfo, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn listener_stop_prevents_new_accepts() {
         let port = find_free_port();
         let (tx, rx) = crate::event::channel();
@@ -1036,6 +1080,7 @@ mod tests {
             tx: tx.clone(),
             next_id: Arc::new(AtomicU64::new(8000)),
             runtime: Arc::clone(&config.runtime),
+            ingress_control: config.ingress_control,
             bitrate: None,
             mtu: crate::interface::tcp_hardware_mtu(None, None),
             flush_after: None,

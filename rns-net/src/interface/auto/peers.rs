@@ -248,6 +248,7 @@ pub(super) struct AddPeerContext<'a> {
     pub(super) name: &'a str,
     pub(super) ifname: &'a str,
     pub(super) configured_bitrate: u64,
+    pub(super) ingress_control: rns_core::transport::types::IngressControlConfig,
     pub(super) runtime: &'a Arc<Mutex<AutoRuntime>>,
     pub(super) dynamic_template: Option<&'a crate::interface::DynamicInterfaceTemplate>,
     pub(super) underlay_mark: Option<u32>,
@@ -263,6 +264,7 @@ pub(super) fn add_peer(context: AddPeerContext<'_>) -> Option<Event> {
         name,
         ifname,
         configured_bitrate,
+        ingress_control,
         runtime: _runtime,
         dynamic_template,
         underlay_mark,
@@ -388,9 +390,7 @@ pub(super) fn add_peer(context: AddPeerContext<'_>) -> Option<Event> {
         op_freq: 0.0,
         op_samples: 0,
         started: 0.0,
-        // The driver gives a spawned peer its parent's ingress control;
-        // this is the AutoInterface default.
-        ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
+        ingress_control,
     };
 
     let now = crate::time::now();

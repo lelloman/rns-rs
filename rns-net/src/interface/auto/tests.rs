@@ -707,6 +707,7 @@ fn peers_advertise_no_more_than_the_receive_buffer_takes() {
         name: "auto-test",
         ifname: "test0",
         configured_bitrate: BITRATE_GUESS,
+        ingress_control: rns_core::transport::types::IngressControlConfig::disabled(),
         runtime: &runtime,
         dynamic_template: None,
         underlay_mark: None,
