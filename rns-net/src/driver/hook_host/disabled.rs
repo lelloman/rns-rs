@@ -185,6 +185,30 @@ impl HookHost {
     #[inline]
     pub(crate) fn load_configured(&mut self, _hooks: &[ParsedHook]) {}
 
+    /// No provider bridge, and no runtime-config keys for it.
+    pub(crate) const PROVIDER_BRIDGE: bool = false;
+
+    #[inline]
+    pub(crate) fn default_provider_queue_limits() -> (usize, usize) {
+        (0, 0)
+    }
+
+    #[inline]
+    pub(crate) fn provider_queue_max_events(&self) -> Option<usize> {
+        None
+    }
+
+    #[inline]
+    pub(crate) fn provider_queue_max_bytes(&self) -> Option<usize> {
+        None
+    }
+
+    #[inline]
+    pub(crate) fn set_provider_queue_max_events(&self, _max: usize) {}
+
+    #[inline]
+    pub(crate) fn set_provider_queue_max_bytes(&self, _max: usize) {}
+
     #[inline]
     pub(crate) fn serve_provider_bridge(&self, _ready: &crate::poll::Events) {}
 

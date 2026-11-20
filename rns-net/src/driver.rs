@@ -208,9 +208,8 @@ pub(crate) struct RuntimeConfigDefaults {
     pub(crate) stamp_link_requests: bool,
     /// `Transport.ALWAYS_STAMP_LRS` default.
     pub(crate) always_stamp_link_requests: bool,
-    #[cfg(feature = "hooks")]
+    /// The provider bridge's queue limits; unused without hooks.
     pub(crate) provider_queue_max_events: usize,
-    #[cfg(feature = "hooks")]
     pub(crate) provider_queue_max_bytes: usize,
 }
 

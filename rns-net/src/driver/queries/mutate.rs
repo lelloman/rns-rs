@@ -530,8 +530,9 @@ impl Driver {
                 self.holepunch_manager.set_policy(policy);
                 Ok(())
             }
-            #[cfg(feature = "hooks")]
-            "provider.queue_max_events" | "provider.queue_max_bytes" => {
+            "provider.queue_max_events" | "provider.queue_max_bytes"
+                if HookHost::PROVIDER_BRIDGE =>
+            {
                 self.set_provider_queue_limit(key, value)
             }
             _ => match Self::runtime_config_family_for_key(key) {
@@ -687,7 +688,6 @@ impl Driver {
     }
 
     /// Set one of the provider bridge's queue limits.
-    #[cfg(feature = "hooks")]
     fn set_provider_queue_limit(
         &mut self,
         key: &str,
@@ -696,9 +696,7 @@ impl Driver {
         match key {
             "provider.queue_max_events" => match Self::expect_u64(value, key) {
                 Ok(v) if v > 0 => {
-                    if let Some(ref bridge) = self.hooks.provider_bridge {
-                        bridge.set_queue_max_events(v as usize);
-                    }
+                    self.hooks.set_provider_queue_max_events(v as usize);
                     Ok(())
                 }
                 Ok(_) => Err(RuntimeConfigError {
@@ -709,9 +707,7 @@ impl Driver {
             },
             "provider.queue_max_bytes" => match Self::expect_u64(value, key) {
                 Ok(v) if v > 0 => {
-                    if let Some(ref bridge) = self.hooks.provider_bridge {
-                        bridge.set_queue_max_bytes(v as usize);
-                    }
+                    self.hooks.set_provider_queue_max_bytes(v as usize);
                     Ok(())
                 }
                 Ok(_) => Err(RuntimeConfigError {
@@ -795,17 +791,13 @@ impl Driver {
                 self.holepunch_manager
                     .set_policy(defaults.direct_connect_policy);
             }
-            #[cfg(feature = "hooks")]
-            "provider.queue_max_events" => {
-                if let Some(ref bridge) = self.hooks.provider_bridge {
-                    bridge.set_queue_max_events(defaults.provider_queue_max_events);
-                }
+            "provider.queue_max_events" if HookHost::PROVIDER_BRIDGE => {
+                self.hooks
+                    .set_provider_queue_max_events(defaults.provider_queue_max_events);
             }
-            #[cfg(feature = "hooks")]
-            "provider.queue_max_bytes" => {
-                if let Some(ref bridge) = self.hooks.provider_bridge {
-                    bridge.set_queue_max_bytes(defaults.provider_queue_max_bytes);
-                }
+            "provider.queue_max_bytes" if HookHost::PROVIDER_BRIDGE => {
+                self.hooks
+                    .set_provider_queue_max_bytes(defaults.provider_queue_max_bytes);
             }
             _ => {
                 return match Self::runtime_config_family_for_key(key) {
