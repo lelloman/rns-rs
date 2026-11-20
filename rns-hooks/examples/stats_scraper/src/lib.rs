@@ -13,10 +13,6 @@ static mut RESULT: HookResult = HookResult {
     verdict: 0,
     modified_data_offset: 0,
     modified_data_len: 0,
-    inject_actions_offset: 0,
-    inject_actions_count: 0,
-    log_offset: 0,
-    log_len: 0,
 };
 
 /// Minimum announce data length: public_key(64) + name_hash(10) + random_hash(10) + signature(64)

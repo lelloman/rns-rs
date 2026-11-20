@@ -753,7 +753,7 @@ mod tests {
     const WAT_CONTINUE: &str = r#"
         (module
             (memory (export "memory") 1)
-            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "__rns_abi_version") (result i32) (i32.const 2))
             (func (export "on_hook") (param i32) (result i32)
                 ;; Write HookResult at offset 0x2000
                 ;; verdict = 0 (Continue)
@@ -762,14 +762,6 @@ mod tests {
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
                 ;; modified_data_len = 0
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
-                ;; inject_actions_offset = 0
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
-                ;; inject_actions_count = 0
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
-                ;; log_offset = 0
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
-                ;; log_len = 0
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
                 (i32.const 0x2000)
             )
         )
@@ -779,15 +771,11 @@ mod tests {
     const WAT_DROP: &str = r#"
         (module
             (memory (export "memory") 1)
-            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "__rns_abi_version") (result i32) (i32.const 2))
             (func (export "on_hook") (param i32) (result i32)
                 (i32.store (i32.const 0x2000) (i32.const 1))
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
                 (i32.const 0x2000)
             )
         )
@@ -797,7 +785,7 @@ mod tests {
     const WAT_TRAP: &str = r#"
         (module
             (memory (export "memory") 1)
-            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "__rns_abi_version") (result i32) (i32.const 2))
             (func (export "on_hook") (param i32) (result i32)
                 unreachable
             )
@@ -808,7 +796,7 @@ mod tests {
     const WAT_INFINITE: &str = r#"
         (module
             (memory (export "memory") 1)
-            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "__rns_abi_version") (result i32) (i32.const 2))
             (func (export "on_hook") (param i32) (result i32)
                 (loop $inf (br $inf))
                 (i32.const 0)
@@ -822,7 +810,7 @@ mod tests {
         (module
             (memory (export "memory") 1)
             (global $calls (mut i32) (i32.const 0))
-            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "__rns_abi_version") (result i32) (i32.const 2))
             (func (export "on_hook") (param i32) (result i32)
                 (global.set $calls (i32.add (global.get $calls) (i32.const 1)))
                 (if (i32.eq (global.get $calls) (i32.const 1))
@@ -843,7 +831,7 @@ mod tests {
     const WAT_BULK_MEMORY: &str = r#"
         (module
             (memory (export "memory") 2)
-            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "__rns_abi_version") (result i32) (i32.const 2))
             (func (export "on_hook") (param i32) (result i32)
                 (memory.fill (i32.const 0x10000) (i32.const 0x5a) (i32.const 0x4000))
                 (memory.copy (i32.const 0x14000) (i32.const 0x10000) (i32.const 0x4000))
@@ -863,7 +851,7 @@ mod tests {
         (module
             (import "env" "host_has_path" (func $has_path (param i32) (result i32)))
             (memory (export "memory") 1)
-            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "__rns_abi_version") (result i32) (i32.const 2))
             (func (export "on_hook") (param $ctx_ptr i32) (result i32)
                 ;; Check if path exists for a 16-byte dest at offset 0x3000
                 ;; (we'll write the dest hash there in the test)
@@ -879,10 +867,6 @@ mod tests {
                 )
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
                 (i32.const 0x2000)
             )
         )
@@ -1157,7 +1141,7 @@ mod tests {
         (module
             (import "env" "host_get_announce_rate" (func $get_rate (param i64) (result i32)))
             (memory (export "memory") 1)
-            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "__rns_abi_version") (result i32) (i32.const 2))
             (func (export "on_hook") (param $ctx_ptr i32) (result i32)
                 (if (i32.ge_s (call $get_rate (i64.const 42)) (i32.const 0))
                     (then
@@ -1169,10 +1153,6 @@ mod tests {
                 )
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
                 (i32.const 0x2000)
             )
         )
@@ -1220,7 +1200,7 @@ mod tests {
         (module
             (import "env" "host_get_link_state" (func $link_state (param i32) (result i32)))
             (memory (export "memory") 1)
-            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "__rns_abi_version") (result i32) (i32.const 2))
             (func (export "on_hook") (param $ctx_ptr i32) (result i32)
                 (if (i32.eq (call $link_state (i32.const 0x3000)) (i32.const 2))
                     (then
@@ -1232,10 +1212,6 @@ mod tests {
                 )
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
                 (i32.const 0x2000)
             )
         )
@@ -1285,7 +1261,7 @@ mod tests {
         (module
             (import "env" "host_inject_action" (func $inject (param i32 i32) (result i32)))
             (memory (export "memory") 1)
-            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "__rns_abi_version") (result i32) (i32.const 2))
             (func (export "on_hook") (param $ctx_ptr i32) (result i32)
                 ;; Write the data payload at 0x3100
                 (i32.store8 (i32.const 0x3100) (i32.const 0xDE))
@@ -1310,10 +1286,6 @@ mod tests {
                 (i32.store (i32.const 0x2000) (i32.const 0))
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
                 (i32.const 0x2000)
             )
         )
@@ -1344,7 +1316,7 @@ mod tests {
     const WAT_MODIFY: &str = r#"
         (module
             (memory (export "memory") 1)
-            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "__rns_abi_version") (result i32) (i32.const 2))
             (func (export "on_hook") (param $ctx_ptr i32) (result i32)
                 ;; Write modified data at 0x2100
                 (i32.store8 (i32.const 0x2100) (i32.const 0xAA))
@@ -1358,10 +1330,6 @@ mod tests {
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0x2100))
                 ;; modified_data_len = 4
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 4))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
                 (i32.const 0x2000)
             )
         )
@@ -1413,7 +1381,7 @@ mod tests {
     const WAT_COUNTER: &str = r#"
         (module
             (memory (export "memory") 1)
-            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "__rns_abi_version") (result i32) (i32.const 2))
             (global $counter (mut i32) (i32.const 0))
             (func (export "on_hook") (param i32) (result i32)
                 ;; Increment counter
@@ -1427,10 +1395,6 @@ mod tests {
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0x3000))
                 ;; modified_data_len = 4
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 4))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
                 (i32.const 0x2000)
             )
         )
@@ -1477,10 +1441,6 @@ mod tests {
                 (i32.store (i32.const 0x2000) (i32.const 0))
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
-                (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
                 (i32.const 0x2000)
             )
         )
@@ -1495,6 +1455,21 @@ mod tests {
                 (i32.store (i32.const 0x2000) (i32.const 0))
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
+                (i32.const 0x2000)
+            )
+        )
+    "#;
+
+    /// WAT module built against ABI version 1, whose result was 28 bytes:
+    /// the current fields followed by four reserved words.
+    const WAT_ABI_V1: &str = r#"
+        (module
+            (memory (export "memory") 1)
+            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "on_hook") (param i32) (result i32)
+                (i32.store (i32.const 0x2000) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
+                (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
                 (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
@@ -1503,6 +1478,27 @@ mod tests {
             )
         )
     "#;
+
+    #[test]
+    fn rejects_abi_v1_hook() {
+        let mgr = make_manager();
+        let result = mgr.compile("v1_hook".into(), WAT_ABI_V1.as_bytes(), 0);
+        match result {
+            Err(HookError::AbiVersionMismatch {
+                hook_name,
+                expected,
+                found,
+            }) => {
+                assert_eq!(hook_name, "v1_hook");
+                assert_eq!(expected, 2);
+                assert_eq!(found, Some(1));
+            }
+            other => panic!(
+                "expected AbiVersionMismatch with found=Some(1), got {:?}",
+                other.err()
+            ),
+        }
+    }
 
     #[test]
     fn rejects_missing_abi_version() {
@@ -1565,16 +1561,12 @@ mod tests {
                 (memory (export "memory") 1)
                 (data (i32.const 0x3000) "packet")
                 (data (i32.const 0x3010) "\01\02\03")
-                (func (export "__rns_abi_version") (result i32) (i32.const 1))
+                (func (export "__rns_abi_version") (result i32) (i32.const 2))
                 (func (export "on_hook") (param i32) (result i32)
                     (drop (call $emit (i32.const 0x3000) (i32.const 6) (i32.const 0x3010) (i32.const 3)))
                     (i32.store (i32.const 0x2000) (i32.const 0))
                     (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
                     (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
-                    (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
-                    (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
-                    (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
-                    (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
                     (i32.const 0x2000)
                 )
             )
@@ -1601,16 +1593,12 @@ mod tests {
                 (memory (export "memory") 1)
                 (data (i32.const 0x3000) "packet")
                 (data (i32.const 0x3010) "\01\02\03")
-                (func (export "__rns_abi_version") (result i32) (i32.const 1))
+                (func (export "__rns_abi_version") (result i32) (i32.const 2))
                 (func (export "on_hook") (param i32) (result i32)
                     (drop (call $emit (i32.const 0x3000) (i32.const 6) (i32.const 0x3010) (i32.const 3)))
                     (i32.store (i32.const 0x2000) (i32.const 0))
                     (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
                     (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
-                    (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
-                    (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
-                    (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
-                    (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
                     (i32.const 0x2000)
                 )
             )
@@ -1635,7 +1623,7 @@ mod tests {
                 (data (i32.const 4096) "\00\00\00\00")
                 (data (i32.const 8192) "packet")
                 (data (i32.const 8208) "\01\02\03")
-                (func (export "__rns_abi_version") (result i32) i32.const 1)
+                (func (export "__rns_abi_version") (result i32) i32.const 2)
                 (func (export "on_hook") (param i32) (result i32)
                     i32.const 8192
                     i32.const 6
@@ -1685,7 +1673,7 @@ mod tests {
                 {imports}
                 (memory (export "memory") {pages})
                 (global $calls (mut i32) (i32.const 0))
-                (func (export "__rns_abi_version") (result i32) (i32.const 1))
+                (func (export "__rns_abi_version") (result i32) (i32.const 2))
                 (func (export "on_hook") (param i32) (result i32)
                     (local $i i32)
                     (global.set $calls (i32.add (global.get $calls) (i32.const 1)))
@@ -1807,7 +1795,7 @@ mod tests {
         let mgr = make_manager();
         let wat = r#"(module
             (memory (export "memory") 1)
-            (func (export "__rns_abi_version") (result i32) (i32.const 1))
+            (func (export "__rns_abi_version") (result i32) (i32.const 2))
             (func (export "on_hook") (param i32) (result i32) (i32.const -4)))"#;
         let mut prog = mgr.compile("offset".into(), wat.as_bytes(), 0).unwrap();
         assert!(mgr
@@ -1913,7 +1901,7 @@ mod tests {
         let mgr = make_manager();
         let wat = r#"(module
             (memory (export "memory") i64 1)
-            (func (export "__rns_abi_version") (result i32) (i32.const 1)))"#;
+            (func (export "__rns_abi_version") (result i32) (i32.const 2)))"#;
         let err = mgr
             .compile("m64".into(), wat.as_bytes(), 0)
             .err()
@@ -1926,7 +1914,7 @@ mod tests {
         let mgr = make_manager();
         let exported = r#"(module
             (memory (export "memory") 1024)
-            (func (export "__rns_abi_version") (result i32) (i32.const 1)))"#;
+            (func (export "__rns_abi_version") (result i32) (i32.const 2)))"#;
         let err = mgr
             .compile("big".into(), exported.as_bytes(), 0)
             .err()
@@ -1935,7 +1923,7 @@ mod tests {
 
         let internal = r#"(module
             (memory 1024)
-            (func (export "__rns_abi_version") (result i32) (i32.const 1)))"#;
+            (func (export "__rns_abi_version") (result i32) (i32.const 2)))"#;
         assert!(mgr.compile("big".into(), internal.as_bytes(), 0).is_err());
     }
 

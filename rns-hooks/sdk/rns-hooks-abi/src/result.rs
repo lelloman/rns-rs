@@ -38,7 +38,10 @@ pub const VERDICT_HALT: u32 = Verdict::Halt as u32;
 
 /// Result returned from a hook invocation.
 ///
-/// Laid out as `#[repr(C)]` for direct reading across hook ABI boundaries.
+/// Laid out as `#[repr(C)]` for direct reading across hook ABI boundaries:
+/// three little-endian `u32`s, 12 bytes. Hooks inject actions and log
+/// through the `inject_action` and `log` host functions, not through the
+/// result.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct HookResult {
@@ -51,17 +54,9 @@ pub struct HookResult {
     pub modified_data_offset: u32,
     /// Length of modified data. 0 if no modification.
     pub modified_data_len: u32,
-    /// Reserved and ignored by the host: hooks inject actions through the
-    /// `inject_action` host function.
-    pub inject_actions_offset: u32,
-    /// Reserved and ignored by the host, like `inject_actions_offset`.
-    pub inject_actions_count: u32,
-    /// Reserved and ignored by the host: hooks log through the `log` host
-    /// function.
-    pub log_offset: u32,
-    /// Reserved and ignored by the host, like `log_offset`.
-    pub log_len: u32,
 }
+
+const _: () = assert!(core::mem::size_of::<HookResult>() == 12);
 
 impl HookResult {
     /// Whether this result drops the packet/action.
@@ -75,10 +70,6 @@ impl HookResult {
             verdict: Verdict::Continue as u32,
             modified_data_offset: 0,
             modified_data_len: 0,
-            inject_actions_offset: 0,
-            inject_actions_count: 0,
-            log_offset: 0,
-            log_len: 0,
         }
     }
 
@@ -88,10 +79,6 @@ impl HookResult {
             verdict: Verdict::Drop as u32,
             modified_data_offset: 0,
             modified_data_len: 0,
-            inject_actions_offset: 0,
-            inject_actions_count: 0,
-            log_offset: 0,
-            log_len: 0,
         }
     }
 
@@ -101,10 +88,6 @@ impl HookResult {
             verdict: Verdict::Modify as u32,
             modified_data_offset: data_offset,
             modified_data_len: data_len,
-            inject_actions_offset: 0,
-            inject_actions_count: 0,
-            log_offset: 0,
-            log_len: 0,
         }
     }
 }

@@ -74,6 +74,21 @@ int rns_hook_on_call(
 `HookResult`. Return `0` for success; any non-zero value is treated as a hook
 failure and the hook fails open.
 
+`HookResult` is three `uint32_t` fields, 12 bytes. `result` arrives filled as a
+`Continue` result; the hook overwrites the verdict to return another one:
+
+```c
+typedef struct HookResult {
+    uint32_t verdict;              /* 0 Continue, 1 Drop, 2 Modify, 3 Halt */
+    uint32_t modified_data_offset; /* WASM only; ignored for native hooks */
+    uint32_t modified_data_len;
+} HookResult;
+```
+
+Native hooks hand replacement bytes for a `Modify` verdict to the host through
+`set_modified_data`, and inject actions and log through the `inject_action` and
+`log` callbacks.
+
 Rust hooks should use the ABI definitions from `rns-hooks-abi::native`. See
 `rns-hooks/examples/native_noop` for a minimal `cdylib` hook.
 
