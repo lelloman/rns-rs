@@ -114,8 +114,10 @@ fn rust_command(home: &Path, args: &[&str]) -> Command {
 }
 
 /// Upstream's autoinstall wizard only takes a port pyserial lists, and a
-/// pseudo-terminal is not one: list `RNODECONF_EXTRA_PORT` too.
-const LIST_EXTRA_PORT: &str = "extra = os.environ.get('RNODECONF_EXTRA_PORT')\nif extra:\n    import serial.tools.list_ports as lp, serial.tools.list_ports_common as lc\n    real = lp.comports\n    lp.comports = lambda *a, **k: real(*a, **k) + [lc.ListPortInfo(extra)]";
+/// pseudo-terminal is not one: list `RNODECONF_EXTRA_PORT` too, first, so
+/// that it is the port upstream finds an NRF52 board on after a reset, as
+/// ours does for a port it does not list.
+const LIST_EXTRA_PORT: &str = "extra = os.environ.get('RNODECONF_EXTRA_PORT')\nif extra:\n    import serial.tools.list_ports as lp, serial.tools.list_ports_common as lc\n    real = lp.comports\n    lp.comports = lambda *a, **k: [lc.ListPortInfo(extra)] + real(*a, **k)";
 
 fn python_command(home: &Path, args: &[&str]) -> Command {
     let mut argv = vec!["rnodeconf".to_string()];
@@ -938,17 +940,72 @@ fn python_comparison_firmware_hashes() {
     compare_with_python(e, home.path(), &["-K", "-L"]);
 }
 
+const PLATFORM_NRF52: u8 = 0x70;
+const MCU_NRF52: u8 = 0x71;
+const BOARD_RAK4631: u8 = 0x51;
+
+/// A RAK4631: bootstrapping it closes the port across each NRF52 reset and
+/// finds the board again by its USB serial number.
+fn rak4631_device(eeprom: Vec<u8>) -> Device {
+    Device {
+        platform: PLATFORM_NRF52,
+        mcu: MCU_NRF52,
+        board: BOARD_RAK4631,
+        ..device(eeprom)
+    }
+}
+
 #[test]
-#[ignore = "requires Python Reticulum with pyserial and cryptography"]
-fn python_comparison_bootstrap() {
+fn bootstrap_finds_an_nrf52_board_again_after_each_reset() {
+    let home = keyed_home();
+    let fake = FakeRNode::start(rak4631_device(blank_eeprom()));
+    let out = rust_rnodeconf(
+        home.path(),
+        &[
+            "-r",
+            "--product",
+            "10",
+            "--model",
+            "12",
+            "--hwrev",
+            "1",
+            &fake.path,
+        ],
+    );
+    assert!(out.status.success());
+    let lines_out = lines(&out.stdout);
+    assert_eq!(
+        lines_out
+            .iter()
+            .filter(|l| *l == "Waiting for NRF52 reset...")
+            .count(),
+        2,
+        "{lines_out:#?}"
+    );
+    assert!(!lines_out
+        .iter()
+        .any(|l| l.contains("Could not detect new port")));
+    assert!(has_line(&lines_out, "EEPROM Bootstrapping successful!"));
+    let written = fake.device.lock().unwrap().eeprom.clone();
+    assert_eq!(&written[0..3], &[0x10, 0x12, 1]);
+    assert_eq!(written[0x9B], 0x73);
+    let out = rust_rnodeconf(home.path(), &["-i", &fake.path]);
+    assert!(has_line(
+        &lines(&out.stdout),
+        "\tProduct            : RAK4631 779 - 928 MHz (10:12:51)"
+    ));
+}
+
+/// Bootstrap `device` with `args` through upstream's `rnodeconf` and ours.
+fn compare_bootstrap(make: fn(Vec<u8>) -> Device, args: &[&str]) {
     let keys = keyed_home();
     let python_home = copy_home(keys.path());
     let rust_home = copy_home(keys.path());
     let (python, python_fake, rust, rust_fake) = run_both(
-        avr_device(blank_eeprom()),
+        make(blank_eeprom()),
         python_home.path(),
         rust_home.path(),
-        &["-r", "--model", "a9", "--hwrev", "3"],
+        args,
     );
     assert_eq!(rust, python);
 
@@ -968,8 +1025,8 @@ fn python_comparison_bootstrap() {
     assert_eq!(rust_written[0x9B..], python_written[0x9B..]);
 
     // Each tool accepts the EEPROM the other wrote.
-    compare_device_with_python(avr_device(rust_written), keys.path(), &["-i"]);
-    compare_device_with_python(avr_device(python_written), keys.path(), &["-i"]);
+    compare_device_with_python(make(rust_written), keys.path(), &["-i"]);
+    compare_device_with_python(make(python_written), keys.path(), &["-i"]);
     let out = rust_rnodeconf(keys.path(), &["-i", &python_fake.path]);
     assert!(has_line(
         &lines(&out.stdout),
@@ -983,6 +1040,28 @@ fn python_comparison_bootstrap() {
         );
         assert!(firmware(home).join("device_db/00000001").is_file());
     }
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_bootstrap() {
+    compare_bootstrap(avr_device, &["-r", "--model", "a9", "--hwrev", "3"]);
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_bootstrap_nrf52() {
+    compare_bootstrap(
+        rak4631_device,
+        &["-r", "--product", "10", "--model", "12", "--hwrev", "1"],
+    );
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_bootstrap_esp32() {
+    // A LilyGO LoRa T3S3, whose models get a longer wait for the reset.
+    compare_bootstrap(device, &["-r", "--model", "a1", "--hwrev", "2"]);
 }
 
 // Stage 3: display, NeoPixel, interference avoidance, Bluetooth and WiFi.
