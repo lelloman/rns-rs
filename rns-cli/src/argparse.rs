@@ -760,10 +760,10 @@ mod tests {
     fn spec(tool: &str) -> &'static OptionSpec {
         match tool {
             "rnsd" => &crate::rnsd::OPTIONS,
-            "rnstatus" => &crate::rnstatus_command::OPTIONS,
-            "rnpath" => &crate::rnpath_command::OPTIONS,
-            "rnprobe" => &crate::rnprobe_command::OPTIONS,
-            "rnid" => &crate::rnid_command::OPTIONS,
+            "rnstatus" => &crate::rnstatus::OPTIONS,
+            "rnpath" => &crate::rnpath::OPTIONS,
+            "rnprobe" => &crate::rnprobe::OPTIONS,
+            "rnid" => &crate::rnid::OPTIONS,
             "rncp" => &crate::rncp::OPTIONS,
             "rnx" => &crate::rnx::OPTIONS,
             "rnir" => &crate::placeholder::RNIR_OPTIONS,

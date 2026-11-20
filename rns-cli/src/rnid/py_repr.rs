@@ -18,9 +18,9 @@ pub(super) fn py_repr(value: &Value) -> String {
         Value::Bool(false) => "False".into(),
         Value::UInt(n) => n.to_string(),
         Value::Int(n) => n.to_string(),
-        Value::Float(f) => rns_cli::format::python_float(*f),
-        Value::Str(s) => rns_cli::argparse::repr(s),
-        Value::Bin(b) => rns_cli::pyfmt::str_of(&rns_net::pickle::PickleValue::Bytes(b.clone())),
+        Value::Float(f) => crate::format::python_float(*f),
+        Value::Str(s) => crate::argparse::repr(s),
+        Value::Bin(b) => crate::pyfmt::str_of(&rns_net::pickle::PickleValue::Bytes(b.clone())),
         Value::Array(items) => format!(
             "[{}]",
             items.iter().map(py_repr).collect::<Vec<_>>().join(", ")
