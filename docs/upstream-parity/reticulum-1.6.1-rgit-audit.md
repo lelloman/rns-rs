@@ -1127,7 +1127,9 @@ Comparison with Python: not added to the interop harness. Run by hand on
 the same config (an rns-rs instance with an `rncp -l` destination), Python
 rnpath at `1a71073c` printed all zeros where rns-rs's printed one unknown
 type, because a Python client opens `storage/cache/announces.db`, which an
-rns-rs instance does not write: the analysis is unit-tested instead.
+rns-rs instance does not write (since `rns-net: keep the announce cache
+where upstream keeps it`, an rns-rs instance keeps it there too, moving
+the old file at startup): the analysis is unit-tested instead.
 `analysis_counts_destination_types_as_upstream` feeds the same path table,
 known destinations, cached announces and type map to
 `analyze_path_table` that upstream's `analyze_tables` at `1a71073c`

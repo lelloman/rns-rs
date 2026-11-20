@@ -86,6 +86,12 @@ and the rebase.
 
 ## Caveats and Deferred Validation
 
+- The announce cache is kept in upstream's `storage/cache/announces.db`
+  (`Reticulum.cachepath`, as `Transport.init_announce_cache` opens it),
+  with the same `cached_announces` schema; rns-rs kept it in
+  `cache/announces.db` before, and moves that file (with its `-wal` and
+  `-shm` files, and any legacy per-file announces) at startup unless the
+  new one exists.
 - `unresponsive_path_recovery` defaults to `native`, which keeps rns-rs's
   own path updates (decision 8): for an unresponsive path an already-heard
   announce through a new next hop does not replace the path, it is taken

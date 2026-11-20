@@ -25,13 +25,157 @@ pub struct AnnounceCache {
     backend: Backend,
 }
 
+/// Where a node whose state directory is `storage_dir` keeps its announce
+/// cache: upstream's `<storagepath>/cache/announces`
+/// (`Reticulum.cachepath` is `<configdir>/storage/cache`), so the database
+/// is `storage/cache/announces.db`, as `Transport.init_announce_cache`
+/// opens it.
+pub fn announce_cache_base(storage_dir: &Path) -> PathBuf {
+    storage_dir.join("cache").join("announces")
+}
+
+/// SQLite files that belong with a database: the write-ahead log and its
+/// shared-memory index, and a rollback journal.
+const SQLITE_SIDECARS: [&str; 3] = ["-wal", "-shm", "-journal"];
+
+/// `path` with `suffix` appended to its file name.
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// Move an announce cache kept at `old_base` (rns-rs before this release
+/// kept it in `<configdir>/cache/announces`) to `new_base`, once, before it
+/// is opened.
+///
+/// When `<old_base>.db` exists and `<new_base>.db` does not, the database
+/// and its SQLite sidecar files are renamed, all or none: if one rename
+/// fails the moved files are put back and the old cache stays where it is.
+/// Legacy per-file announces in the `old_base` directory move into
+/// `new_base` unless one of the same name is there, to be imported when the
+/// cache opens. The old directory, and its parent, are then removed when
+/// empty. Every step is logged; a failure is logged and leaves the cache to
+/// start empty at the new location.
+pub fn migrate_announce_cache(old_base: &Path, new_base: &Path) {
+    if old_base == new_base {
+        return;
+    }
+    let old_db = old_base.with_extension("db");
+    let new_db = new_base.with_extension("db");
+    if old_db.exists() {
+        if new_db.exists() {
+            log::warn!(
+                "Announce cache {} is no longer used: {} already exists",
+                old_db.display(),
+                new_db.display()
+            );
+        } else {
+            match move_database(&old_db, &new_db) {
+                Ok(()) => log::info!(
+                    "Moved announce cache {} to {}",
+                    old_db.display(),
+                    new_db.display()
+                ),
+                Err(error) => log::warn!(
+                    "Could not move announce cache {} to {}, leaving it in place: {}",
+                    old_db.display(),
+                    new_db.display(),
+                    error
+                ),
+            }
+        }
+    }
+    if old_base.is_dir() {
+        match move_legacy_files(old_base, new_base) {
+            Ok(0) => {}
+            Ok(moved) => log::info!(
+                "Moved {} legacy cached announces from {} to {}",
+                moved,
+                old_base.display(),
+                new_base.display()
+            ),
+            Err(error) => log::warn!(
+                "Could not move legacy cached announces from {} to {}: {}",
+                old_base.display(),
+                new_base.display(),
+                error
+            ),
+        }
+        if fs::remove_dir(old_base).is_ok() {
+            log::info!("Removed empty directory {}", old_base.display());
+            if let Some(parent) = old_base.parent() {
+                if fs::remove_dir(parent).is_ok() {
+                    log::info!("Removed empty directory {}", parent.display());
+                }
+            }
+        }
+    }
+}
+
+/// Rename the database `old_db` and its sidecars to `new_db`, rolling back
+/// on failure.
+fn move_database(old_db: &Path, new_db: &Path) -> io::Result<()> {
+    if let Some(parent) = new_db.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut files = vec![(old_db.to_path_buf(), new_db.to_path_buf())];
+    for suffix in SQLITE_SIDECARS {
+        let (from, to) = (with_suffix(old_db, suffix), with_suffix(new_db, suffix));
+        if from.exists() {
+            if to.exists() {
+                fs::remove_file(&to)?;
+            }
+            files.push((from, to));
+        }
+    }
+    let mut moved: Vec<&(PathBuf, PathBuf)> = Vec::new();
+    for pair in &files {
+        if let Err(error) = fs::rename(&pair.0, &pair.1) {
+            for (from, to) in moved.into_iter().rev() {
+                if let Err(rollback) = fs::rename(to, from) {
+                    log::warn!(
+                        "Could not move {} back to {}: {}",
+                        to.display(),
+                        from.display(),
+                        rollback
+                    );
+                }
+            }
+            return Err(error);
+        }
+        moved.push(pair);
+    }
+    Ok(())
+}
+
+/// Move the files in `old_dir` into `new_dir`, keeping any already there.
+/// Returns how many moved.
+fn move_legacy_files(old_dir: &Path, new_dir: &Path) -> io::Result<usize> {
+    let mut moved = 0;
+    for entry in fs::read_dir(old_dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let target = new_dir.join(entry.file_name());
+        if target.exists() {
+            continue;
+        }
+        fs::create_dir_all(new_dir)?;
+        fs::rename(entry.path(), target)?;
+        moved += 1;
+    }
+    Ok(moved)
+}
+
 impl AnnounceCache {
     /// Create an announce cache rooted at `base_path`.
     ///
     /// The database is written next to the legacy directory as
-    /// `<base_path>.db` (for example `cache/announces.db` for
-    /// `cache/announces`). Legacy files already in `base_path` are imported
-    /// and removed.
+    /// `<base_path>.db` (for example `storage/cache/announces.db` for
+    /// `storage/cache/announces`, see [`announce_cache_base`]). Legacy files
+    /// already in `base_path` are imported and removed.
     pub fn new(base_path: PathBuf) -> Self {
         match SqliteAnnounceCache::open(&base_path) {
             Ok(cache) => {
@@ -412,6 +556,77 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// rns-rs kept the announce cache in `<config>/cache/announces.db`;
+    /// it moves, with its WAL sidecars and legacy files, to upstream's
+    /// `<config>/storage/cache/announces.db` and stays readable there.
+    #[test]
+    fn migrates_the_announce_cache_to_upstreams_location() {
+        let root = temp_dir();
+        let old_base = root.join("cache").join("announces");
+        let new_base = announce_cache_base(&root.join("storage"));
+        assert_eq!(new_base, root.join("storage/cache/announces"));
+        fs::create_dir_all(&old_base).unwrap();
+        AnnounceCache::new(old_base.clone())
+            .store(&[0x42; 32], &[1, 2, 3], Some("If"))
+            .unwrap();
+        // Closing folds the WAL into the database; a node that stopped
+        // without closing it leaves `-wal` and `-shm` beside it. Empty ones
+        // are valid for SQLite.
+        let old_db = root.join("cache/announces.db");
+        for suffix in ["-wal", "-shm"] {
+            fs::write(with_suffix(&old_db, suffix), b"").unwrap();
+        }
+        fs::write(old_base.join(hex(&[0x55; 32])), b"legacy").unwrap();
+
+        migrate_announce_cache(&old_base, &new_base);
+
+        let new_db = root.join("storage/cache/announces.db");
+        assert!(new_db.exists());
+        assert!(with_suffix(&new_db, "-wal").exists());
+        assert!(with_suffix(&new_db, "-shm").exists());
+        assert!(!old_db.exists());
+        assert!(!with_suffix(&old_db, "-wal").exists());
+        assert!(!with_suffix(&old_db, "-shm").exists());
+        assert!(new_base.join(hex(&[0x55; 32])).exists());
+        // The emptied old directory and its parent are gone.
+        assert!(!root.join("cache").exists());
+        let cache = AnnounceCache::new(new_base.clone());
+        let (raw, interface) = cache.get(&[0x42; 32]).unwrap().unwrap();
+        assert_eq!(raw, vec![1, 2, 3]);
+        assert_eq!(interface.as_deref(), Some("If"));
+        drop(cache);
+
+        // Once moved, migrating again changes nothing.
+        migrate_announce_cache(&old_base, &new_base);
+        assert!(new_db.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// An existing database at the new location is kept, and the old one
+    /// is left where it is.
+    #[test]
+    fn migration_keeps_an_existing_announce_cache() {
+        let root = temp_dir();
+        let old_base = root.join("cache").join("announces");
+        let new_base = announce_cache_base(&root.join("storage"));
+        fs::create_dir_all(&old_base).unwrap();
+        fs::create_dir_all(&new_base).unwrap();
+        AnnounceCache::new(old_base.clone())
+            .store(&[0x01; 32], &[1], None)
+            .unwrap();
+        AnnounceCache::new(new_base.clone())
+            .store(&[0x02; 32], &[2], None)
+            .unwrap();
+
+        migrate_announce_cache(&old_base, &new_base);
+
+        assert!(root.join("cache/announces.db").exists());
+        let cache = AnnounceCache::new(new_base);
+        assert!(cache.get(&[0x01; 32]).unwrap().is_none());
+        assert!(cache.get(&[0x02; 32]).unwrap().is_some());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
