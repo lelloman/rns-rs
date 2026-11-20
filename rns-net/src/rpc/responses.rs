@@ -708,7 +708,6 @@ pub(super) fn runtime_config_entry_to_pickle(entry: &RuntimeConfigEntry) -> Pick
                 RuntimeConfigApplyMode::Immediate => "immediate".into(),
                 RuntimeConfigApplyMode::NewConnectionsOnly => "new_connections_only".into(),
                 RuntimeConfigApplyMode::NextReconnect => "next_reconnect".into(),
-                RuntimeConfigApplyMode::RestartRequired => "restart_required".into(),
             }),
         ),
         (

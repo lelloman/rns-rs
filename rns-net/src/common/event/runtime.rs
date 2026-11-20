@@ -33,8 +33,6 @@ pub enum RuntimeConfigApplyMode {
     NewConnectionsOnly,
     /// Applies when the interface next reconnects.
     NextReconnect,
-    /// Applies only after a restart.
-    RestartRequired,
 }
 
 /// A runtime-config entry exposed by the daemon.
