@@ -23,6 +23,8 @@ lint -p rns-hooks --features wasm,native
 # The BLE RNode transport is not a default feature (it links libdbus).
 lint -p rns-net -p rns-cli -p rns-ctl \
   --features rns-net/iface-rnode-ble,rns-cli/iface-rnode-ble,rns-ctl/iface-rnode-ble
+# rns-ctl's HTTPS server is behind a feature.
+lint -p rns-ctl --features tls
 # rns-net's features together (its tests have code behind several).
 lint -p rns-net --all-features
 # rns-net with some of its interfaces only: none, and the set rns-tun-android

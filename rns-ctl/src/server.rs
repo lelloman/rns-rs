@@ -50,7 +50,8 @@ impl Drop for ConnectionSlot {
 pub(crate) enum ConnStream {
     Plain(TcpStream),
     #[cfg(feature = "tls")]
-    Tls(rustls::StreamOwned<rustls::ServerConnection, TcpStream>),
+    // Boxed: the TLS state is over a kilobyte, a plain stream a few bytes.
+    Tls(Box<rustls::StreamOwned<rustls::ServerConnection, TcpStream>>),
 }
 
 impl ConnStream {
@@ -196,11 +197,11 @@ fn wrap_stream(tcp_stream: TcpStream, ctx: &ServerContext) -> io::Result<ConnStr
     {
         if let Some(ref tls_config) = ctx.tls_config {
             let server_conn = rustls::ServerConnection::new(tls_config.clone())
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("TLS error: {}", e)))?;
-            return Ok(ConnStream::Tls(rustls::StreamOwned::new(
+                .map_err(|e| io::Error::other(format!("TLS error: {}", e)))?;
+            return Ok(ConnStream::Tls(Box::new(rustls::StreamOwned::new(
                 server_conn,
                 tcp_stream,
-            )));
+            ))));
         }
     }
     let _ = ctx; // suppress unused warning when tls feature is off
