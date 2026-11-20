@@ -126,6 +126,26 @@ pub fn run_linux_gateway(
             Instant::now() + Duration::from_secs(gateway.announce_interval_seconds);
         let mut next_policy_check = Instant::now() + Duration::from_secs(2);
 
+        // A session that breaks the protocol is rejected and dropped; the
+        // gateway keeps serving the others.
+        macro_rules! or_drop_session {
+            ($link_id:expr, $result:expr) => {
+                match $result {
+                    Ok(value) => value,
+                    Err(error) => {
+                        log::warn!(
+                            "rntun gateway dropped session after an error: link={} error={}",
+                            hex(&$link_id),
+                            error
+                        );
+                        reject(&private, $link_id, 2, "protocol error");
+                        sessions.remove(&$link_id);
+                        continue;
+                    }
+                }
+            };
+        }
+
         while !stop.load(Ordering::Relaxed) {
             if Instant::now() >= next_announce {
                 private.announce_gateway(&destination)?;
@@ -273,18 +293,22 @@ pub fn run_linux_gateway(
                     };
                     entry.identity = Some(identity);
                     entry.grant = Some(grant);
-                    if let Some(buffered) =
-                        entry.machine.identified(identity).map_err(session_error)?
-                    {
-                        process_hello(
-                            &private,
-                            &policy,
-                            gateway,
+                    if let Some(buffered) = or_drop_session!(
+                        link_id,
+                        entry.machine.identified(identity).map_err(session_error)
+                    ) {
+                        or_drop_session!(
                             link_id,
-                            entry,
-                            &buffered,
-                            started.elapsed(),
-                        )?;
+                            process_hello(
+                                &private,
+                                &policy,
+                                gateway,
+                                link_id,
+                                entry,
+                                &buffered,
+                                started.elapsed(),
+                            )
+                        );
                     }
                 }
                 Ok(NodeEvent::Control { link_id, payload }) => {
@@ -319,20 +343,26 @@ pub fn run_linux_gateway(
                     match message {
                         ControlMessage::ClientHello { .. } => {
                             if entry.machine.state() == GatewayState::PendingIdentity {
-                                entry
-                                    .machine
-                                    .receive_preidentify_hello(payload)
-                                    .map_err(session_error)?;
-                            } else {
-                                process_hello(
-                                    &private,
-                                    &policy,
-                                    gateway,
+                                or_drop_session!(
                                     link_id,
-                                    entry,
-                                    &payload,
-                                    started.elapsed(),
-                                )?;
+                                    entry
+                                        .machine
+                                        .receive_preidentify_hello(payload)
+                                        .map_err(session_error)
+                                );
+                            } else {
+                                or_drop_session!(
+                                    link_id,
+                                    process_hello(
+                                        &private,
+                                        &policy,
+                                        gateway,
+                                        link_id,
+                                        entry,
+                                        &payload,
+                                        started.elapsed(),
+                                    )
+                                );
                             }
                         }
                         ControlMessage::ClientReady {
@@ -359,15 +389,22 @@ pub fn run_linux_gateway(
                                 sessions.remove(&link_id);
                                 continue;
                             }
-                            let ready = entry
-                                .machine
-                                .client_ready(session_epoch)
-                                .map_err(session_error)?;
-                            let grant = entry
-                                .grant
-                                .as_ref()
-                                .ok_or_else(|| io::Error::other("grant missing"))?;
-                            entry.transport = Some(
+                            let ready = or_drop_session!(
+                                link_id,
+                                entry
+                                    .machine
+                                    .client_ready(session_epoch)
+                                    .map_err(session_error)
+                            );
+                            let grant = or_drop_session!(
+                                link_id,
+                                entry
+                                    .grant
+                                    .as_ref()
+                                    .ok_or_else(|| io::Error::other("grant missing"))
+                            );
+                            let transport = or_drop_session!(
+                                link_id,
                                 PacketTransport::new(
                                     session_epoch,
                                     grant.address,
@@ -376,9 +413,10 @@ pub fn run_linux_gateway(
                                     entry.mtu,
                                     random_nonzero(),
                                 )
-                                .map_err(io::Error::other)?,
+                                .map_err(io::Error::other)
                             );
-                            send_control(&private, link_id, ready)?;
+                            entry.transport = Some(transport);
+                            or_drop_session!(link_id, send_control(&private, link_id, ready));
                         }
                         ControlMessage::Close { session_epoch, .. } => {
                             log::info!(
