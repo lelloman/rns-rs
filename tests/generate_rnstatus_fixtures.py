@@ -9,7 +9,7 @@ Reticulum instance, with `time.time()` pinned, and stores the inputs
 upstream raises, `<case>.txt` holds what it printed first and `<case>.err`
 the exception, as the last line of its traceback. The Rust test
 `rnstatus_view_matches_upstream` renders the same inputs and compares byte
-for byte. The checkout must be RNS 1.6.1 (rgit ef3e8086).
+for byte. The checkout must be RNS 1.6.1 (rgit e8b3b14b).
 """
 import contextlib
 import copy
@@ -210,6 +210,10 @@ CASES = {
     # Announces and path requests are all of the received flow.
     "totals_links_control_only": (stats(rxs=3800.0), {"traffic_totals": True, "lstats": True,
                                                       "link_count": 1}),
+    # And all of the transmitted flow, beyond it, with the shares shown.
+    "totals_links_control_only_tx": (stats(txs=1000.0, ptxs=400.0, atxs=700.0, ltxs=900.0),
+                                     {"traffic_totals": True, "lstats": True, "astats": True,
+                                      "pstats": True, "link_count": 1}),
     "filtered": (stats(), {"fstats": True}),
     "queues": (stats(), {"queue_stats": True}),
     "links_transport": (stats(), {"lstats": True, "link_count": 1, "active_link_count": 0}),
