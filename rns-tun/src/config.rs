@@ -5,6 +5,7 @@ use std::fs;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
+use serde::de::IgnoredAny;
 use serde::Deserialize;
 
 use crate::policy::{is_forbidden_special, Cidr};
@@ -139,10 +140,6 @@ pub struct GatewayConfig {
     /// Gateway identity file; `state_dir/gateway_identity` when unset.
     /// Created on first use.
     pub identity_file: Option<PathBuf>,
-    /// Gateway address and subnet as a CIDR (`10.77.0.1/24`), prefix /1
-    /// through /30. Validated here; the address in use comes from the policy
-    /// file.
-    pub address: String,
     /// Path of the client policy TOML (see
     /// [`GatewayPolicy`](crate::policy::GatewayPolicy)). Reloaded when it
     /// changes on disk.
@@ -163,6 +160,10 @@ pub struct GatewayConfig {
     /// Sessions that may be active at once, 1..=256; defaults to 64.
     #[serde(default = "default_active")]
     pub max_active_sessions: usize,
+    /// The removed `address` key. Older configs carried it; the gateway
+    /// address comes from the policy file, so [`Config::load`] only warns.
+    #[serde(default, rename = "address")]
+    legacy_address: Option<IgnoredAny>,
 }
 
 impl Config {
@@ -175,6 +176,15 @@ impl Config {
         let base = path.parent().unwrap_or(Path::new("."));
         cfg.resolve_relative(base);
         cfg.validate()?;
+        if let Some(gateway) = &cfg.gateway {
+            if gateway.legacy_address.is_some() {
+                log::warn!(
+                    "{}: ignoring [gateway] address; the gateway address comes from the policy file {}",
+                    path.display(),
+                    gateway.policy_file.display()
+                );
+            }
+        }
         Ok(cfg)
     }
     fn resolve_relative(&mut self, base: &Path) {
@@ -260,15 +270,6 @@ impl Config {
             }
         }
         if let Some(g) = &self.gateway {
-            let cidr: Cidr = g
-                .address
-                .parse()
-                .map_err(|_| ConfigError::Invalid("invalid gateway address".into()))?;
-            if cidr.prefix_len() == 0 || cidr.prefix_len() > 30 {
-                return Err(ConfigError::Invalid(
-                    "gateway prefix must be /1 through /30".into(),
-                ));
-            }
             if g.max_pending_links == 0
                 || g.max_pending_links > 64
                 || g.max_active_sessions == 0
@@ -375,6 +376,17 @@ mod tests {
         let cfg: Config = toml::from_str("version=1\nstate_dir='state'\nnode_config_dir='node'\n[client]\nallow_default_route=true\nallowed_routes=['0.0.0.0/0']\nrequested_routes=['0.0.0.0/0']\nallowed_dns=['1.1.1.1']\n").unwrap();
         cfg.validate().unwrap();
         assert_eq!(cfg.underlay_mark, 0x5254);
+    }
+
+    #[test]
+    fn gateway_address_key_is_accepted_and_ignored() {
+        let base = "version=1\nstate_dir='state'\nnode_config_dir='node'\n[gateway]\npolicy_file='policy.toml'\n";
+        let cfg: Config = toml::from_str(base).unwrap();
+        cfg.validate().unwrap();
+        assert!(cfg.gateway.unwrap().legacy_address.is_none());
+        let cfg: Config = toml::from_str(&format!("{base}address='not a cidr'\n")).unwrap();
+        cfg.validate().unwrap();
+        assert!(cfg.gateway.unwrap().legacy_address.is_some());
     }
 
     #[test]

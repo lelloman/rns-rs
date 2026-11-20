@@ -18,8 +18,7 @@ tunnel_rule_priority = 110
 
 # A gateway uses the same top-level keys and this section instead:
 # [gateway]
-# address = "10.77.0.1/24"
-# policy_file = "/etc/rntun/policy.toml"
+# policy_file = "/etc/rntun/policy.toml" # holds the gateway address and subnet
 # dns_servers = ["9.9.9.9", "149.112.112.112"]
 # tun_name = "rntung0"
 # announce_interval_seconds = 1800

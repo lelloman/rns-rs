@@ -5,7 +5,6 @@ underlay_mark = 21076
 status_socket = "/run/rntun/gateway.sock"
 
 [gateway]
-address = "10.77.0.1/24"
 policy_file = "/data/gateway-policy.toml"
 dns_servers = ["198.18.0.53"]
 tun_name = "rntung0"
