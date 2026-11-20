@@ -92,6 +92,44 @@ fn create_link_with_stamped_keys_emits_stamped_link_request() {
 }
 
 #[test]
+fn every_outbound_link_request_signals_aes_256_cbc() {
+    let dest_hash = [0xDB; 16];
+    let sig_pub_bytes = [0xAA; 32];
+    let signalled_mode = |mgr: &mut LinkManager, keys| {
+        let (link_id, actions) = mgr.create_link_with_keys(
+            &dest_hash,
+            &sig_pub_bytes,
+            1,
+            constants::MTU as u32,
+            keys,
+            &mut OsRng,
+        );
+        let raw = extract_any_send_packet(&actions);
+        let packet = RawPacket::unpack(&raw).unwrap();
+        let (_, _, signalled_mtu, mode) =
+            rns_core::link::handshake::parse_linkrequest_data(packet.data()).unwrap();
+        assert_eq!(mgr.links.get(&link_id).unwrap().engine.mode(), mode);
+        (signalled_mtu.is_some(), mode)
+    };
+
+    let mut mgr = LinkManager::new();
+    assert_eq!(signalled_mode(&mut mgr, None), (true, LinkMode::Aes256Cbc));
+    let mut stamped = OsRng;
+    let keys = (
+        X25519PrivateKey::generate(&mut stamped),
+        Ed25519PrivateKey::generate(&mut stamped),
+    );
+    assert_eq!(
+        signalled_mode(&mut mgr, Some(keys)),
+        (true, LinkMode::Aes256Cbc)
+    );
+    // Without MTU signalling the request carries no mode, which both sides
+    // read as upstream's MODE_DEFAULT, AES-256-CBC.
+    mgr.set_link_mtu_discovery(false);
+    assert_eq!(signalled_mode(&mut mgr, None), (false, LinkMode::Aes256Cbc));
+}
+
+#[test]
 fn malformed_linkrequest_reports_protocol_violation() {
     let mut manager = LinkManager::new();
     let mut rng = make_rng(0x19);
