@@ -297,7 +297,7 @@ impl Driver {
                 return None;
             };
             let public_key = identity.get_public_key()?;
-            let material = crate::stamps::destination_stamp_material(
+            let material = rns_core::stamp::destination_stamp_material(
                 &dest_hash,
                 &public_key,
                 &destination.name_hash(&identity_hash),
@@ -309,7 +309,7 @@ impl Driver {
             match store.load(&dest_hash, &material, target) {
                 Some((stamp, _value)) => {
                     let link_cost = self.link_manager.link_request_costs().get(&dest_hash);
-                    app_data = Some(crate::stamps::announce_ext_payload(&stamp, 0, link_cost));
+                    app_data = Some(rns_core::stamp::announce_ext_payload(&stamp, 0, link_cost));
                 }
                 None => {
                     let identity_prv_key = identity.get_private_key()?;

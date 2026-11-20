@@ -108,9 +108,62 @@ pub fn link_cost_from_ext_bytes(fraction: u8, anchor: u8) -> Option<StampCost> {
     StampCost::from_fp_checked((u32::from(anchor) << 8) | u32::from(fraction))
 }
 
+/// Material covered by a destination announce stamp.
+pub fn destination_stamp_material(
+    destination_hash: &[u8; 16],
+    public_key: &[u8; 64],
+    name_hash: &[u8; 10],
+) -> Vec<u8> {
+    let mut material = Vec::with_capacity(16 + 64 + 10);
+    material.extend_from_slice(destination_hash);
+    material.extend_from_slice(public_key);
+    material.extend_from_slice(name_hash);
+    material
+}
+
+/// Build the announce extension payload: marker, flags, stamp, and the link
+/// cost as its fraction and whole part.
+pub fn announce_ext_payload(stamp: &[u8], flags: u8, lr_cost: StampCost) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(crate::constants::EXT_PAYLOAD_LENGTH);
+    payload.push(crate::constants::EXT_PAYLOAD_MARKER);
+    payload.push(flags);
+    payload.extend_from_slice(stamp);
+    payload.extend_from_slice(&link_cost_ext_bytes(lr_cost));
+    payload
+}
+
+/// Build the path request extension payload: marker, flags, stamp.
+pub fn path_request_ext_payload(stamp: &[u8], flags: u8) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(crate::constants::PR_EXT_PAYLOAD_LENGTH);
+    payload.push(crate::constants::EXT_PAYLOAD_MARKER);
+    payload.push(flags);
+    payload.extend_from_slice(stamp);
+    payload
+}
+
+/// Material covered by a link request stamp: `destination_hash || ed25519_pub`.
+pub fn link_request_stamp_material(
+    destination_hash: &[u8; 16],
+    sig_pub_bytes: &[u8; 32],
+) -> [u8; 48] {
+    let mut material = [0u8; 48];
+    material[..16].copy_from_slice(destination_hash);
+    material[16..].copy_from_slice(sig_pub_bytes);
+    material
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn destination_stamp_material_matches_upstream_layout() {
+        let material = destination_stamp_material(&[0x11; 16], &[0x22; 64], &[0x33; 10]);
+        assert_eq!(material.len(), 90);
+        assert_eq!(&material[..16], &[0x11; 16]);
+        assert_eq!(&material[16..80], &[0x22; 64]);
+        assert_eq!(&material[80..], &[0x33; 10]);
+    }
 
     #[test]
     fn link_cost_setter_clamps_like_upstream() {
@@ -271,5 +324,48 @@ mod tests {
         // The former behaviour hashed the stamp alone, which does not reach
         // the value Python computed.
         assert_ne!(stamp_value(&[], &stamp).whole(), 8);
+    }
+
+    #[test]
+    fn announce_ext_payload_has_marker_flags_stamp_and_link_cost() {
+        let cost = StampCost::from_f64(12.5);
+        let payload = announce_ext_payload(&[0x55; crate::constants::STAMP_LENGTH], 0, cost);
+        assert_eq!(payload.len(), crate::constants::EXT_PAYLOAD_LENGTH);
+        assert_eq!(payload[0], crate::constants::EXT_PAYLOAD_MARKER);
+        assert_eq!(payload[1], 0);
+        assert_eq!(
+            &payload[2..2 + crate::constants::STAMP_LENGTH],
+            &[0x55; crate::constants::STAMP_LENGTH]
+        );
+        assert_eq!(
+            &payload[crate::constants::EXT_PAYLOAD_LENGTH - 2..],
+            &[0x80, 12]
+        );
+    }
+
+    #[test]
+    fn path_request_ext_payload_has_marker_flags_and_stamp() {
+        let payload = path_request_ext_payload(&[0x55; crate::constants::STAMP_LENGTH], 0);
+        assert_eq!(payload.len(), crate::constants::PR_EXT_PAYLOAD_LENGTH);
+        assert_eq!(payload[0], crate::constants::EXT_PAYLOAD_MARKER);
+        assert_eq!(payload[1], 0);
+        assert_eq!(&payload[2..], &[0x55; crate::constants::STAMP_LENGTH]);
+    }
+
+    #[test]
+    fn stamped_key_public_half_validates_against_material() {
+        let material = b"identity stamp material";
+        let mut rng = rns_crypto::OsRng;
+        let (_, public, value) = rns_crypto::identity::generate_stamped_key(
+            &mut rng,
+            material,
+            StampCost::from_whole(4),
+        );
+        assert!(value.meets(StampCost::from_whole(4)));
+        assert!(stamp_valid(
+            &public.public_bytes(),
+            StampCost::from_whole(4),
+            material
+        ));
     }
 }
