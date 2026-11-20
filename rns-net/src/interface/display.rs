@@ -176,7 +176,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn names_match_upstream_str() {
+    #[cfg(feature = "iface-tcp")]
+    fn tcp_names_match_upstream_str() {
         assert_eq!(
             tcp_client("Peer", "10.0.0.1", 4242),
             "TCPInterface[Peer/10.0.0.1:4242]"
@@ -205,11 +206,22 @@ mod tests {
             tcp_server_client("Server", "::1".parse().unwrap(), 50000),
             "TCPInterface[Client on Server/[::1]:50000]"
         );
+        assert_eq!(spawned_client_name("Server"), "Client on Server");
+    }
+
+    #[test]
+    #[cfg(feature = "iface-udp")]
+    fn udp_names_match_upstream_str() {
         assert_eq!(
             udp("UDP", Some("0.0.0.0"), Some(4242)),
             "UDPInterface[UDP/0.0.0.0:4242]"
         );
         assert_eq!(udp("UDP", None, None), "UDPInterface[UDP/None:None]");
+    }
+
+    #[test]
+    #[cfg(feature = "iface-backbone")]
+    fn backbone_names_match_upstream_str() {
         assert_eq!(
             backbone("Backbone", "0.0.0.0", 4242),
             "BackboneInterface[Backbone/0.0.0.0:4242]"
@@ -218,16 +230,31 @@ mod tests {
             backbone_server_client("Backbone", "10.0.0.2".parse().unwrap(), 51000),
             "BackboneInterface[Client on Backbone/10.0.0.2:51000]"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "iface-local")]
+    fn local_names_match_upstream_str() {
         let unix = LocalEndpoint::Unix("default".into());
         let tcp = LocalEndpoint::Tcp(37428);
         assert_eq!(shared_instance(&unix), "Shared Instance[rns/default]");
         assert_eq!(shared_instance(&tcp), "Shared Instance[37428]");
         assert_eq!(local_client(&unix), "LocalInterface[rns/default]");
         assert_eq!(local_client(&tcp), "LocalInterface[37428]");
+    }
+
+    #[test]
+    #[cfg(feature = "iface-auto")]
+    fn auto_names_match_upstream_str() {
         assert_eq!(
             auto_peer("eth0", "fe80::1"),
             "AutoInterfacePeer[eth0/fe80::1]"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "iface-i2p")]
+    fn i2p_names_match_upstream_str() {
         assert_eq!(
             i2p_peer_name("I2P", "abc.b32.i2p", true),
             "I2P to abc.b32.i2p"
@@ -236,12 +263,20 @@ mod tests {
             i2p_peer_name("I2P", "abc.b32.i2p", false),
             "Connected peer on I2P"
         );
-        assert_eq!(spawned_client_name("Server"), "Client on Server");
-        assert_eq!(typed("KISSInterface", "Radio"), "KISSInterface[Radio]");
+    }
+
+    #[test]
+    #[cfg(all(feature = "iface-weave", target_os = "linux"))]
+    fn weave_names_match_upstream_str() {
         assert_eq!(
             weave_peer(&[0x01, 0xab, 0x00, 0xff]),
             "WeaveInterfacePeer[01:ab:00:ff]"
         );
+    }
+
+    #[test]
+    fn other_names_match_upstream_str() {
+        assert_eq!(typed("KISSInterface", "Radio"), "KISSInterface[Radio]");
         assert_eq!(rnode_multi_sub("Multi", "LoRa A"), "Multi[LoRa A]");
     }
 }

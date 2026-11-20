@@ -28,10 +28,13 @@ lint -p rns-ctl --features tls
 # rns-net's features together (its tests have code behind several).
 lint -p rns-net --all-features
 # rns-net with some of its interfaces only: none, and the set rns-tun-android
-# builds. Code only some interfaces use is gated on their features.
-cargo clippy -p rns-net --no-default-features --lib -- -D warnings
-cargo clippy -p rns-net --no-default-features --features iface-tcp,iface-udp,iface-auto --lib \
-  -- -D warnings
+# builds. Code only some interfaces use is gated on their features, and so are
+# the unit tests of that code (`--profile test` lints the lib's own tests).
+for features in "" iface-tcp,iface-udp,iface-auto; do
+  cargo clippy -p rns-net --no-default-features --features "$features" --lib -- -D warnings
+  cargo clippy -p rns-net --no-default-features --features "$features" --lib --profile test \
+    -- -D warnings "${test_exempt[@]}"
+done
 # The bench's counting allocator is behind a feature (scripts/hotpath).
 production_targets=--bins lint -p rns-bench --features allocation-profiler
 # The hooks' guest code exists only on wasm32, where rns-cli's build script

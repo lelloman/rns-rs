@@ -64,6 +64,7 @@ impl Callbacks for NoopCallbacks {
 }
 
 #[test]
+#[cfg(feature = "iface-udp")]
 fn managed_interface_attaches_disabled_section_and_reloads_from_disk() {
     use crate::event::InterfaceManagementOperation as Operation;
 
@@ -240,6 +241,7 @@ fn managed_tcp_listener_releases_port_on_detach() {
 }
 
 #[test]
+#[cfg(feature = "iface-udp")]
 fn shared_instance_rpc_manages_interface_by_name() {
     use crate::pickle::PickleValue;
     use crate::rpc::{derive_auth_key, RpcAddr, RpcClient};
@@ -283,6 +285,7 @@ fn shared_instance_rpc_manages_interface_by_name() {
 /// instead of serving a second instance (once on TCP, after the Unix
 /// bind failed) that opened every interface again.
 #[test]
+#[cfg(feature = "iface-local")]
 fn second_node_with_same_shared_instance_attaches_as_client() {
     for instance_type in ["", "shared_instance_type = tcp\n"] {
         let dir = tempdir().unwrap();
@@ -1117,6 +1120,7 @@ fn known_destinations_persist_across_restart() {
 }
 
 #[test]
+#[cfg(feature = "iface-udp")]
 fn transport_paths_hashes_and_detached_tunnels_restore_from_upstream_files() {
     use rns_core::packet::{PacketFlags, RawPacket};
     use rns_core::transport::persistence::{
@@ -1587,6 +1591,7 @@ fn from_config_loads_identity() {
 }
 
 #[test]
+#[cfg(feature = "iface-tcp")]
 fn from_config_tcp_server() {
     let dir = std::env::temp_dir().join(format!("rns-test-fts-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
@@ -2239,6 +2244,7 @@ enable_transport = False
 }
 
 #[test]
+#[cfg(feature = "iface-backbone")]
 fn to_node_config_backbone() {
     // Verify from_config parses BackboneInterface correctly.
     let dir = std::env::temp_dir().join(format!("rns-test-backbone-{}", std::process::id()));
@@ -2287,6 +2293,7 @@ enable_transport = False
 /// A Backbone listener's status row shows its configured mode and
 /// gravity, not the defaults its parsed config holds until it starts.
 #[test]
+#[cfg(feature = "iface-backbone")]
 fn backbone_listener_reports_its_configured_mode() {
     let dir = std::env::temp_dir().join(format!("rns-test-backbone-mode-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
@@ -2325,6 +2332,7 @@ enable_transport = False
 }
 
 #[test]
+#[cfg(feature = "iface-rnode")]
 fn rnode_config_defaults() {
     use crate::interface::rnode::{RNodeConfig, RNodeSubConfig};
 
@@ -3505,8 +3513,15 @@ fn single_packets_carry_the_signing_key_their_proof_is_checked_with() {
     assert_eq!(single_proof_key(&plain), None);
 }
 
-#[test]
-fn configured_interfaces_get_upstream_display_names() {
+/// The display names a configured interface gets, as
+/// `configured_*_interfaces_get_upstream_display_names` check them.
+#[cfg(any(
+    feature = "iface-tcp",
+    feature = "iface-udp",
+    feature = "iface-backbone",
+    feature = "iface-kiss"
+))]
+fn configured_display(name: &str, id: u64) -> ConfiguredDisplay {
     let parsed = config::parse(
             "[interfaces]\n\
              [[TCP Peer]]\n  type = TCPClientInterface\n  target_host = 10.0.0.1\n  target_port = 4242\n\
@@ -3518,31 +3533,33 @@ fn configured_interfaces_get_upstream_display_names() {
         )
         .unwrap();
     let registry = crate::interface::registry::InterfaceRegistry::with_builtins();
-    let display = |name: &str, id: u64| {
-        let iface = parsed
-            .interfaces
-            .iter()
-            .find(|iface| iface.name == name)
-            .unwrap();
-        let config = parse_managed_interface(
-            iface,
-            &parsed,
-            Path::new("/tmp"),
-            rns_core::transport::types::InterfaceId(id),
-            &registry,
-        )
+    let iface = parsed
+        .interfaces
+        .iter()
+        .find(|iface| iface.name == name)
         .unwrap();
-        ConfiguredDisplay::of(&config, None)
-    };
+    let config = parse_managed_interface(
+        iface,
+        &parsed,
+        Path::new("/tmp"),
+        rns_core::transport::types::InterfaceId(id),
+        &registry,
+    )
+    .unwrap();
+    ConfiguredDisplay::of(&config, None)
+}
 
-    let tcp = display("TCP Peer", 1);
+#[test]
+#[cfg(feature = "iface-tcp")]
+fn configured_tcp_interfaces_get_upstream_display_names() {
+    let tcp = configured_display("TCP Peer", 1);
     assert_eq!(
         tcp.interface.as_deref(),
         Some("TCPInterface[TCP Peer/10.0.0.1:4242]")
     );
     assert!(tcp.listener.is_none() && tcp.listener_stat.is_none());
 
-    let server = display("TCP Server", 2);
+    let server = configured_display("TCP Server", 2);
     assert!(server.interface.is_none());
     assert_eq!(
         server.listener,
@@ -3559,24 +3576,38 @@ fn configured_interfaces_get_upstream_display_names() {
         stat.clients,
         crate::driver::ListenerClients::Spawned
     ));
+}
 
+#[test]
+#[cfg(feature = "iface-udp")]
+fn configured_udp_interfaces_get_upstream_display_names() {
     assert_eq!(
-        display("UDP", 3).interface.as_deref(),
+        configured_display("UDP", 3).interface.as_deref(),
         Some("UDPInterface[UDP/0.0.0.0:4244]")
     );
+}
+
+#[test]
+#[cfg(feature = "iface-backbone")]
+fn configured_backbone_interfaces_get_upstream_display_names() {
     assert_eq!(
-        display("Backbone", 4)
+        configured_display("Backbone", 4)
             .listener
             .map(|(_, name)| name)
             .as_deref(),
         Some("BackboneInterface[Backbone/0.0.0.0:4245]")
     );
     assert_eq!(
-        display("Backbone Peer", 5).interface.as_deref(),
+        configured_display("Backbone Peer", 5).interface.as_deref(),
         Some("BackboneInterface[Backbone Peer/example.org:4246]")
     );
+}
+
+#[test]
+#[cfg(feature = "iface-kiss")]
+fn configured_kiss_interfaces_get_named_by_the_driver() {
     // Named `{type}[{name}]` by the driver.
-    let radio = display("Radio", 6);
+    let radio = configured_display("Radio", 6);
     assert!(radio.interface.is_none() && radio.listener.is_none());
 }
 

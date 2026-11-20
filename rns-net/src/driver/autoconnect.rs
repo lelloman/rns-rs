@@ -535,7 +535,7 @@ impl Driver {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "iface-backbone"))]
 mod tests {
     use super::*;
 
