@@ -81,7 +81,7 @@ pub use driver::{AnnounceRateDefaults, Callbacks};
 pub use event::{
     BackbonePeerHookEvent, BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus,
     BackbonePeerStateEntry, BlackholeInfo, DestinationStampInfo, Event, HookInfo, HookOpError,
-    InterfaceStatsResponse, LinkDatagramError, LinkInfoEntry, LocalDestinationEntry,
+    InterfaceStatsResponse, LinkDatagramError, LinkInfoEntry, LinkTraffic, LocalDestinationEntry,
     NextHopResponse, PacketSignal, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
     ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
     RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,

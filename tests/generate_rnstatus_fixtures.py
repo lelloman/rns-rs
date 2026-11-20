@@ -5,9 +5,11 @@ PYTHONPATH=/path/to/Reticulum python3 tests/generate_rnstatus_fixtures.py
 
 Each case feeds a stats dict to upstream's `program_setup` through a stand-in
 Reticulum instance, with `time.time()` pinned, and stores the inputs
-(`<case>.pickle`) next to upstream's exact output (`<case>.txt`). The Rust
-test `rnstatus_view_matches_upstream` renders the same inputs and compares
-byte for byte. The checkout must be RNS 1.6.1 (rgit f876ed8d).
+(`<case>.pickle`) next to upstream's exact output (`<case>.txt`). Where
+upstream raises, `<case>.txt` holds what it printed first and `<case>.err`
+the exception, as the last line of its traceback. The Rust test
+`rnstatus_view_matches_upstream` renders the same inputs and compares byte
+for byte. The checkout must be RNS 1.6.1 (rgit ef3e8086).
 """
 import contextlib
 import copy
@@ -59,6 +61,7 @@ def iface(name, **kw):
 def totals(**kw):
     s = {
         "rxb": 123456789, "txb": 98765, "rxs": 12345.678, "txs": 0,
+        "lrxb": 4321000, "ltxb": 5120, "lrxs": 2500.0, "ltxs": 128.0,
         "frxb": 4321, "ftxb": 0, "frxs": 12.5, "ftxs": 0.0,
         "prxb": 2048, "ptxb": 1024, "prxs": 800.0, "ptxs": 0.0,
         "arxb": 65536, "atxb": 512, "arxs": 3000.0, "atxs": 0.0,
@@ -196,6 +199,17 @@ CASES = {
                                     "astats": True, "pstats": True}),
     "totals_idle": (stats(rxs=0, txs=0.0, rxpps=0, txpps=0), {"traffic_totals": True,
                                                               "astats": True, "pps": True}),
+    "totals_links": (stats(), {"traffic_totals": True, "lstats": True, "link_count": 4,
+                               "active_link_count": 3}),
+    "totals_links_everything": (stats(txs=1000.0, ptxs=100.0, atxs=300.0, ltxs=900.0),
+                                {"traffic_totals": True, "lstats": True, "fstats": True,
+                                 "astats": True, "pstats": True, "pps": True,
+                                 "link_count": 4, "active_link_count": 3}),
+    "totals_links_idle": (stats(rxs=0, txs=0, lrxb=0, ltxb=0, lrxs=0, ltxs=0),
+                          {"traffic_totals": True, "lstats": True, "link_count": 0}),
+    # Announces and path requests are all of the received flow.
+    "totals_links_control_only": (stats(rxs=3800.0), {"traffic_totals": True, "lstats": True,
+                                                      "link_count": 1}),
     "filtered": (stats(), {"fstats": True}),
     "queues": (stats(), {"queue_stats": True}),
     "links_transport": (stats(), {"lstats": True, "link_count": 1, "active_link_count": 0}),
@@ -315,14 +329,20 @@ for case, (st, opts) in CASES.items():
               for k in OPTION_KEYS}
     fake = FakeReticulum(st, link_count, active_link_count, profiling)
     buffer = io.StringIO()
+    error = None
     with contextlib.redirect_stdout(buffer):
-        rnstatus.program_setup(configdir=None, json=False, remote=None, must_exit=False,
-                               rns_instance=fake, profiling=profiling is not None, **kwargs)
+        try:
+            rnstatus.program_setup(configdir=None, json=False, remote=None, must_exit=False,
+                                   rns_instance=fake, profiling=profiling is not None, **kwargs)
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
     inputs = {"stats": st, "options": kwargs, "link_count": link_count,
               "active_link_count": active_link_count, "profiling": profiling, "now": NOW}
     (OUT / f"{case}.pickle").write_bytes(pickle.dumps(inputs, protocol=2))
     (OUT / f"{case}.txt").write_text(buffer.getvalue())
-    print(f"{case}: {len(buffer.getvalue().splitlines())} lines")
+    if error:
+        (OUT / f"{case}.err").write_text(error + "\n")
+    print(f"{case}: {len(buffer.getvalue().splitlines())} lines" + (f", {error}" if error else ""))
 
 rnstatus.RNS.Discovery.InterfaceDiscovery = FakeDiscovery
 for case, opts in DISCOVERY_CASES.items():

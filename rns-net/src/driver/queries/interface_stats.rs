@@ -162,6 +162,14 @@ impl Driver {
             rx_pps,
             tx_pps,
             traffic: total_traffic,
+            link_traffic: {
+                let (rxb, txb) = self.engine.link_traffic();
+                crate::event::LinkTraffic {
+                    rxb,
+                    txb,
+                    speeds: self.registry.link_traffic.speeds,
+                }
+            },
             probe_responder: self.builtin.probe_responder,
             network_id: self
                 .network_identity

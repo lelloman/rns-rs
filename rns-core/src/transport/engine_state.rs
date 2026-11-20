@@ -18,6 +18,8 @@ impl TransportEngine {
             announce_table: BTreeMap::new(),
             reverse_table: tables::ReverseTable::default(),
             link_table: tables::LinkTable::new(),
+            link_rxb: 0,
+            link_txb: 0,
             held_announces: BTreeMap::new(),
             packet_hashlist: PacketHashlist::with_allocation(
                 packet_hashlist_max_entries,

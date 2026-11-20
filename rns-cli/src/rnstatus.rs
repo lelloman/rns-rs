@@ -345,11 +345,9 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             }
         };
 
-        if monitor_mode {
-            print!("\x1b[H\x1b[2J");
-        }
-
+        let frame_start = if monitor_mode { "\x1b[H\x1b[2J" } else { "" };
         if json_output {
+            print!("{frame_start}");
             print_json(&response);
         } else {
             show_status(
@@ -360,6 +358,8 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
                     active_link_count: active_link_count.map(Num::Int),
                     profiling_results: profiling_results.as_ref(),
                 },
+                frame_start,
+                monitor_mode,
             );
         }
 
@@ -406,9 +406,30 @@ fn upstream_json(stats: &PickleValue) -> String {
     crate::format::python_json(stats)
 }
 
-/// Print the status display as upstream does.
-fn show_status(stats: &PickleValue, view: &ViewOptions, extras: &Extras<'_>) {
-    print!("{}", render(stats, view, extras, rns_net::time::now()));
+/// Print the status display as upstream does, after `frame_start` (in
+/// monitor mode the screen clear and the frame's buffered progress, which
+/// upstream prints with the frame once it is complete). Where upstream's
+/// display raises, the exception ends rnstatus with exit status 1: what it
+/// printed first is shown, unless monitor mode buffered it, and the
+/// exception goes to stderr, as the last line of Python's traceback.
+fn show_status(
+    stats: &PickleValue,
+    view: &ViewOptions,
+    extras: &Extras<'_>,
+    frame_start: &str,
+    monitor_mode: bool,
+) {
+    match render(stats, view, extras, rns_net::time::now()) {
+        Ok(text) => print!("{frame_start}{text}"),
+        Err(crash) => {
+            if !monitor_mode {
+                print!("{frame_start}{}", crash.printed);
+            }
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+            eprintln!("{}", crash.error);
+            process::exit(1);
+        }
+    }
 }
 
 /// upstream's `"\r" + 58 spaces + "\r"`, which clears its progress line.
@@ -559,11 +580,13 @@ fn remote_status(
         match remote {
             Some(remote) => {
                 let frame = out.take();
-                if monitor_mode {
-                    print!("\x1b[H\x1b[2J");
-                }
-                print!("{frame}");
+                let frame_start = if monitor_mode {
+                    format!("\x1b[H\x1b[2J{frame}")
+                } else {
+                    frame
+                };
                 if json_output {
+                    print!("{frame_start}");
                     print_json(&remote.stats);
                 } else {
                     show_status(
@@ -574,6 +597,8 @@ fn remote_status(
                             active_link_count: None,
                             profiling_results: remote.profiling_results.as_ref(),
                         },
+                        &frame_start,
+                        monitor_mode,
                     );
                 }
             }

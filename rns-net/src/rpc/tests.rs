@@ -1096,6 +1096,40 @@ fn idle_stats_keep_upstreams_integer_zeros() {
     assert!(matches!(pickle.get("txpps"), Some(PickleValue::Int(0))));
 }
 
+/// Upstream ef3e8086's link traffic keys: right after `txs`, the byte
+/// totals ints, the speeds the integer 0 until its traffic loop first
+/// measures them and floats from then on, a measured 0 too.
+#[test]
+fn link_traffic_keys_follow_upstreams_position_and_types() {
+    let mut stats = InterfaceStatsResponse {
+        link_traffic: crate::event::LinkTraffic {
+            rxb: 1500,
+            txb: 700,
+            speeds: None,
+        },
+        ..Default::default()
+    };
+    let pickle = interface_stats_to_pickle(&stats);
+    let PickleValue::Dict(entries) = &pickle else {
+        panic!("expected a dict");
+    };
+    let keys: Vec<&str> = entries.iter().filter_map(|(k, _)| k.as_str()).collect();
+    let txs = keys.iter().position(|k| *k == "txs").unwrap();
+    assert_eq!(
+        keys[txs - 1..txs + 6],
+        ["rxs", "txs", "lrxb", "ltxb", "lrxs", "ltxs", "frxb"]
+    );
+    assert_eq!(pickle.get("lrxb"), Some(&PickleValue::Int(1500)));
+    assert_eq!(pickle.get("ltxb"), Some(&PickleValue::Int(700)));
+    assert_eq!(pickle.get("lrxs"), Some(&PickleValue::Int(0)));
+    assert_eq!(pickle.get("ltxs"), Some(&PickleValue::Int(0)));
+
+    stats.link_traffic.speeds = Some((0.0, 4096.5));
+    let pickle = interface_stats_to_pickle(&stats);
+    assert_eq!(pickle.get("lrxs"), Some(&PickleValue::Float(0.0)));
+    assert_eq!(pickle.get("ltxs"), Some(&PickleValue::Float(4096.5)));
+}
+
 #[test]
 fn interface_stats_pickle_format() {
     let traffic = TrafficDetail {

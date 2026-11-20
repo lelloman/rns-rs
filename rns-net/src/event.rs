@@ -17,7 +17,7 @@ pub use crate::common::event::{
     DirectPathStatus, DirectReupgradeConfig, DrainStatus, DynamicInterfaceRegistration,
     HolePunchPolicy, HookInfo, HookOpError, I2pEndpointStat, InterfaceManagementOperation,
     InterfaceStatsResponse, InterfaceTelemetry, KnownDestinationEntry, LifecycleState,
-    LinkDatagramError, LinkDistributionEntry, LinkInfoEntry, LocalDestinationEntry,
+    LinkDatagramError, LinkDistributionEntry, LinkInfoEntry, LinkTraffic, LocalDestinationEntry,
     NextHopResponse, PacketSignal, PathTableEntry, ProbeRateLimit, ProbeServerReport,
     ProviderBridgeConsumerStats, ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry,
     ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,

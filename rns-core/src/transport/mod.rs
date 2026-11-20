@@ -295,6 +295,14 @@ pub struct TransportEngine {
     announce_table: BTreeMap<[u8; 16], AnnounceEntry>,
     reverse_table: tables::ReverseTable,
     link_table: tables::LinkTable,
+    /// Bytes of link packets received for relaying through the link table
+    /// (upstream ef3e8086 `Transport.link_rxb`), not counting those from
+    /// local clients; read with [`TransportEngine::link_traffic`].
+    link_rxb: u64,
+    /// Bytes of link packets relayed through the link table (upstream
+    /// ef3e8086 `Transport.link_txb`), not counting those sent to local
+    /// clients.
+    link_txb: u64,
     held_announces: BTreeMap<[u8; 16], AnnounceEntry>,
     packet_hashlist: PacketHashlist,
     announce_sig_cache: AnnounceSignatureCache,
