@@ -81,9 +81,9 @@ evidence exist; until then nothing here is claimed as passed.
 | 22 | `3f55e9eb` | 2026-11-18 | Added flagged destination type map, added per-link traffic counter, added link distribution stats getter | Integrated | `73ff693b`; `forwarded_link_traffic_counts_raw_bytes`, `link_distribution_counts_per_destination`, `link_distribution_names_receiving_interfaces_by_hash`, `link_distribution_rpc_fails_as_upstreams_set_does`, `type_names_come_from_the_map_then_the_flagged_map_then_the_hash` (decision 2) |
 | 23 | `f7b54ccc` | 2026-11-18 | Added prettynamehash convenience function | Non-runtime | `ea62398b`; note in `rns-cli/src/pyfmt.rs` |
 | 24 | `1a71073c` | 2026-11-18 | Initial rnpath analysis stub | Integrated | `959bb94f`; `analysis_counts_destination_types_as_upstream`, `parses_upstream_invocations_as_argparse_does` (extended), argparse fixture and golden help regenerated at `1a71073c` (decision 3) |
-| 25 | `b9903c53` | 2026-11-18 | Analysis mode capture argument | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
-| 26 | `1f7cd145` | 2026-11-18 | Cleanup and fixes | Proposed: Needs coordinated port | Reviewed 2026-11-20; no mapping commit yet |
-| 27 | `41260ea1` | 2026-11-18 | Added path state info to path table getters | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
+| 25 | `b9903c53` | 2026-11-18 | Analysis mode capture argument | Integrated | `aa5b6c13`; `parses_upstream_invocations_as_argparse_does` (`--capture`, ambiguous `--c`), argparse fixture and golden help regenerated at `b9903c53` |
+| 26 | `1f7cd145` | 2026-11-18 | Cleanup and fixes | Integrated | `baa60b0a`; `link_distribution_follows_link_table_insertion_order`, `link_distribution_rpc_answer_keeps_upstreams_order`, `link_distribution_rpc_answers_with_from_ifs_lists`, argparse fixture and golden help regenerated at `1f7cd145` (decision 2) |
+| 27 | `41260ea1` | 2026-11-18 | Added path state info to path table getters | Integrated | `3b7651b4`; `test_path_state`, `query_path_table`, `path_and_rate_tables_follow_upstreams_keys_and_types`, `path_table_prints_as_upstream`, `path_state_marker_as_upstream`, `python_rnpath_lists_rust_path_table`, `python_rnpath_reads_rust_remote_path_table` |
 | 28 | `48ba76df` | 2026-11-18 | Catch announce unpack failure | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
 | 29 | `ef3e8086` | 2026-11-18 | Added link traffic stats | Proposed: Needs coordinated port | Reviewed 2026-11-20; no mapping commit yet |
 | 30 | `e8b3b14b` | 2026-11-18 | Classic | Proposed: Needs coordinated port | Reviewed 2026-11-20; no mapping commit yet |
@@ -1163,10 +1163,31 @@ and creates a new ambiguous `--c` prefix.
 
 **Rust applicability:** Missing from the parser.
 
-**Local handling:** Add the option, regenerate parser fixtures and golden help
-at `b9903c53`.
+**Local handling and evidence:** `aa5b6c13`. `rnpath` takes `--capture`
+(one value; metavar `hops` and help `path to capture file for analyze
+mode`, as at this commit) and passes it to `analyze_tables`, locally and
+with `-R` (`RemoteAction::Analyze(capture)`), where it is unused, as
+upstream's TODO leaves it. `--c` now abbreviates `--config` and
+`--capture`: argparse refuses it with `ambiguous option: --c could match
+--config, --capture` (exit 2), also as `--c=VALUE` (whose text it
+repeats), whatever follows; checked against Python at `b9903c53`, and
+rns-rs does the same. The Rust-only `-c` short option is unaffected. The
+parser table, `tests/fixtures/argparse/rnpath.pickle` (its error cases now
+include `--c`) and `tests/fixtures/cli_golden/rnpath.txt` were regenerated
+with `tests/generate_argparse_fixtures.py` and `RNS_GOLDEN_BLESS=1` from a
+disposable worktree at `b9903c53`; only rnpath's entries changed.
+`docs/cli-tools.md` mentions `--capture`.
 
-**Proposed disposition:** Needs port.
+Tests: `parses_upstream_invocations_as_argparse_does` (new `--capture`,
+`--capt=` and `--co` cases, and the `--c` ambiguity through
+`argparse::check`), `help_and_errors_match_upstreams_parsers` and
+`utilities_offline_output_matches_snapshot` on the regenerated fixtures;
+the first two fail with the option left out of the option table. Tests
+run: `cargo test -p rns-cli` passed (lib 135, `cli_golden` 1,
+`utility_interop.rs` 5 with 33 ignored), `cargo fmt --check` and `bash
+scripts/lint-host.sh` passed.
+
+**Final disposition:** Integrated.
 
 ### 26. `1f7cd145` — Cleanup and fixes
 
@@ -1177,11 +1198,65 @@ encode it.
 **Rust applicability:** Parser metavars differ; `from_ifs` follows commit 22's
 port.
 
-**Local handling:** Regenerate fixtures at `1f7cd145` and add a regression
-that `from_ifs` is a list of distinct interface hashes in first-seen order
-that round-trips through the msgpack RPC codec.
+**Local handling and evidence:** `baa60b0a`, per decision 2.
 
-**Proposed disposition:** Needs coordinated port.
+Metavars: `-M/--min-value value` (was `hops`), `--duration hours` and
+`--reason reason` (were argparse's `DURATION`/`REASON`), `--capture path`
+(was `hops`). Parser table, argparse fixture and golden help regenerated
+as for commit 25, from a disposable worktree at `1f7cd145`; only rnpath's
+entries changed.
+
+Link distribution: the answer is a map from destination hash to
+`{"active", "pending", "traffic", "from_ifs"}`, `from_ifs` a list of
+interface hashes in first-seen order, so it encodes and the client gets
+it. The failure commit 22's mapping reproduced is gone, and with it the
+`UpstreamRpcException` machinery that only it used (the logging in
+`answer_request` is back to its pre-`73ff693b` form).
+
+Order: upstream iterates its `link_table` dict, so destinations come in
+the order of their first link and `from_ifs` in the order first seen.
+rns-core's link table was a `BTreeMap` by link id (the order commit 22's
+mapping noted); it is now `tables::LinkTable`, which also keeps insertion
+order as a Python dict does. Upstream assigns
+`link_table[link_id] = link_entry` when it forwards a link request; for a
+link id already present that keeps the key's place, and a key deleted (by
+culling) and assigned again goes to the end. `LinkTable::insert` (the
+forwarded link request, `register_link`) keeps the place of a present
+link id, and `remove`/`retain` (culling, `remove_link`,
+`drop_links_for_interface`) drop it from the order. Only
+`link_distribution` walks the table in insertion order
+(`in_insertion_order`); lookups and the other walks (culling, link path
+rediscovery) are by link id as before.
+
+Comparison with Python: the answer bytes of the driver test below were
+compared by hand with what upstream's `Transport.link_distribution()` at
+`1f7cd145` (disposable worktree, Python 3.12) gives for the same link
+table (the same four entries in the same insertion order, interfaces
+returning the same `get_hash()`), packed with its `umsgpack.packb`: the
+bytes are identical, and `umsgpack.unpackb` of rns-rs's bytes (what
+`get_link_distribution` returns over RPC) equals Python's dict. Not added
+to the live interop harness: populating an rns-rs instance's link table
+with relayed links from Python peers is beyond the existing utility
+topologies.
+
+Tests: `link_distribution_follows_link_table_insertion_order` (rns-core:
+link ids inserted against their order, replacement in place, removal and
+reinsertion at the end, `drop_links_for_interface`),
+`link_distribution_rpc_answer_keeps_upstreams_order` (rns-net driver: two
+links to one destination over one interface, one over a second, and a
+second destination between them; through `answer_request`, `from_ifs`
+holds the two distinct hashes in first-seen order, destinations come in
+insertion order, and the msgpack answer unpacks and packs back to the
+same bytes), `link_distribution_rpc_answers_with_from_ifs_lists`
+(replaces `link_distribution_rpc_fails_as_upstreams_set_does`); the
+first two fail with the table walked by link id. Tests run: `cargo test
+-p rns-core` passed (lib 1172 and its other targets), `cargo test -p
+rns-net` passed (lib 1604, `e2e.rs` 74 with 1 ignored,
+`e2e_direct_connect.rs` 19, `python_interop.rs` 6 with 1 ignored),
+`cargo test -p rns-cli` passed (lib 135, `utility_interop.rs` 5 with 33
+ignored), `cargo fmt --check` and `bash scripts/lint-host.sh` passed.
+
+**Final disposition:** Integrated.
 
 ### 27. `41260ea1` — Added path state info to path table getters
 
@@ -1192,11 +1267,51 @@ that round-trips through the msgpack RPC codec.
 without a fallback, so Python rnpath at this commit fails against an rns-rs
 daemon. `path_states` exists in the engine but is not exposed in the table.
 
-**Local handling:** Add a `path_state` getter, the RPC field after
-`interface_hash`, and the rnpath marker; extend the key-order and render
-tests.
+**Local handling and evidence:** `3b7651b4`. `TransportEngine::path_state`
+is `get_path_state` (`STATE_UNKNOWN` when unmarked); `PathTableEntry`
+carries it, and `path_table_to_pickle` adds `state` (an int) after
+`interface_hash`, so the shared instance RPC, the remote management
+`/path` answer (`path_table_msgpack`) and `rnpath -j` have it. `rnpath -t`
+prints ` (R)`, ` (u)` or ` (?)` right after `{hops:>3}h`, before ` via`,
+compared as Python's `==` (`True` is unresponsive, `2.0` responsive).
+Deviation: upstream raises `KeyError` on an entry without `state` (an
+older daemon); rns-rs prints ` (?)`, as it prints `n` for a missing
+`value` or `lr_cost`. `docs/cli-tools.md` describes the marker and key.
 
-**Proposed disposition:** Needs port.
+Tests: `test_path_state`, `query_path_table` (driver entries follow the
+engine's marks), `path_and_rate_tables_follow_upstreams_keys_and_types`
+(key order, `state` an int), `path_table_prints_as_upstream` and
+`path_table_display_options_and_filters_as_upstream` (states 2, 0, 1, 7;
+their PLAIN, USAGE, NO_USED, VIAS_EXPIRY, VIAS, EXPIRY and JSON texts are
+byte for byte what upstream's `program_setup` at `41260ea1` printed for
+the same table and time, run by hand), `path_state_marker_as_upstream`
+(new); in `utility_interop.rs`, `python_rnpath_lists_rust_path_table`
+now checks Python's marker and that Rust's `rnpath -t` prints the same
+line, and `python_rnpath_reads_rust_remote_path_table` expects `state`
+where Python's entries have it. Tests run: `cargo test -p rns-core`
+passed (lib 1172), `cargo test -p rns-net` passed (lib 1604, `e2e.rs` 74
+with 1 ignored, `e2e_direct_connect.rs` 19, `python_interop.rs` 6 with 1
+ignored), `cargo test -p rns-cli` passed (lib 136, `utility_interop.rs` 5
+with 33 ignored), `cargo test -p rns-ctl` passed, `cargo fmt --check` and
+`bash scripts/lint-host.sh` passed. Live, with `PYTHONPATH` and
+`RETICULUM_UPSTREAM_DIR` on a disposable worktree at `41260ea1`: `cargo
+test -p rns-cli --test utility_interop -- --ignored --exact
+python_rns_is_available_for_utility_interop
+python_rnpath_lists_rust_path_table
+python_rnpath_reads_rust_remote_path_table
+rnpath_looks_up_a_destination_as_python_does
+python_rnpath_manages_rust_blackhole
+python_rnpath_manages_rust_instance_without_transport
+python_rnpath_manages_python_instance_without_transport
+rust_instance_fetches_python_blackhole_source
+python_instance_fetches_rust_blackhole_source
+rust_utilities_run_cleanly_against_python_instance
+python_utilities_run_cleanly_against_rust_instance` passed (11 passed).
+With the `state` key removed, `python_rnpath_lists_rust_path_table`
+failed with Python's `KeyError: 'state'` and
+`python_rnpath_reads_rust_remote_path_table` failed on the shape.
+
+**Final disposition:** Integrated.
 
 ### 28. `48ba76df` — Catch announce unpack failure
 
@@ -1299,7 +1414,9 @@ utilities included.
    commit (a set at 22, the de-duplicated list at 26); the native `total` key
    goes. Commit 22 implemented in `73ff693b`: the shape, and for a
    non-empty link table upstream's unencodable set (error logged, no
-   answer), see commit 22.
+   answer), see commit 22. Commit 26 implemented in `baa60b0a`: the
+   list, in upstream's order (the link table keeps insertion order), see
+   commit 26.
 3. **Commit 24:** the analysis statistics are ported as they are at that
    commit, then 28's guard, then 31's `Not yet implemented`. This brings in
    commit 21's destination-type files as well. Commit 24 implemented in
