@@ -226,13 +226,14 @@ impl TransportEngine {
             .and_then(|ps| ps.primary())
             .map_or(0.0, |path| path.used);
 
+        // Upstream 8c73e203: an announce accepted only because the path
+        // is unresponsive updates the path table but is not rebroadcast.
+        let table_insertion_only = mp_decision == MultiPathDecision::RecoverUnresponsive;
+
         // Store path via upsert into PathSet
         match mp_decision {
-            MultiPathDecision::ReplacePrimary => self.upsert_primary_path_destination(
-                ctx.packet.destination_hash,
-                path_entry,
-                ctx.now,
-            ),
+            MultiPathDecision::ReplacePrimary | MultiPathDecision::RecoverUnresponsive => self
+                .upsert_primary_path_destination(ctx.packet.destination_hash, path_entry, ctx.now),
             MultiPathDecision::AddAlternative => {
                 self.upsert_path_destination(ctx.packet.destination_hash, path_entry, ctx.now)
             }
@@ -280,7 +281,9 @@ impl TransportEngine {
 
         // Store announce for retransmission
         if let Some(ann) = announce_entry {
-            self.insert_announce_entry(ctx.packet.destination_hash, ann, ctx.now);
+            if !table_insertion_only {
+                self.insert_announce_entry(ctx.packet.destination_hash, ann, ctx.now);
+            }
         } else if is_path_response && self.serves_local_client(ctx.iface) {
             // As upstream, a local client's path response that answers a
             // pending request is retransmitted at once and once only. Since

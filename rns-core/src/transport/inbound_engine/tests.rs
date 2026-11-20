@@ -631,6 +631,74 @@ fn a_local_clients_path_response_marks_its_path_responsive() {
     }
 }
 
+/// An engine with a path through next hop `[0x29; 16]` on interface 1,
+/// `hops` away and learnt from an announce emitted at 1000, then the
+/// state of that path set to `state` if any.
+fn engine_with_known_path(dest: [u8; 16], hops: u8, state: Option<u8>) -> TransportEngine {
+    use crate::transport::tests::make_random_blob;
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+    let mut path = make_path_entry(900.0, hops, InterfaceId(1), [0x29; 16]);
+    path.random_blobs = vec![make_random_blob(1000)];
+    engine
+        .path_table
+        .insert(dest, PathSet::from_single(path, 1));
+    if let Some(state) = state {
+        engine.path_states.insert(dest, state);
+    }
+    engine
+}
+
+/// Upstream 8c73e203: an announce that replaces a path only because the
+/// path is unresponsive (the same emission, already heard, over more
+/// hops) updates the path table but is not rebroadcast. rns-rs also
+/// accepts it over the same or fewer hops, which upstream does not; that
+/// case is a table insertion only too. A newer announce over more hops is
+/// rebroadcast as before, and on a path not marked unresponsive the same
+/// announce is rejected.
+#[test]
+fn unresponsive_path_replacement_is_not_rebroadcast() {
+    use super::local_client_announce_tests::announce_with_random_blob;
+    use crate::transport::tests::make_random_blob;
+    let unresponsive = Some(constants::STATE_UNRESPONSIVE);
+    // (path hops, path state, announce emitted, announce hops on arrival,
+    //  path replaced, rebroadcast)
+    for (path_hops, state, emitted, hops, replaced, rebroadcast) in [
+        (2, unresponsive, 1000, 4, true, false),
+        (2, unresponsive, 1000, 2, true, false),
+        (2, None, 1000, 4, false, false),
+        (2, unresponsive, 1001, 4, true, true),
+    ] {
+        let announce = announce_with_random_blob(
+            13,
+            false,
+            constants::HEADER_2,
+            hops - 1,
+            constants::CONTEXT_NONE,
+            &make_random_blob(emitted),
+        );
+        let dest = announce.destination_hash;
+        let mut engine = engine_with_known_path(dest, path_hops, state);
+        receive(&mut engine, &announce, 2);
+        let case = format!("path {path_hops} {state:?} announce {emitted} hops {hops}");
+        let path = engine.path_table.get(&dest).unwrap().primary().unwrap();
+        assert_eq!(
+            path.receiving_interface == InterfaceId(2),
+            replaced,
+            "{case}"
+        );
+        if replaced {
+            assert_eq!(path.hops, hops, "{case}");
+        }
+        assert_eq!(
+            engine.announce_table.contains_key(&dest),
+            rebroadcast,
+            "{case}"
+        );
+    }
+}
+
 fn table_entry(hops: u8, retries: u8, retransmit_timeout: f64) -> AnnounceEntry {
     AnnounceEntry {
         timestamp: 1000.0,
