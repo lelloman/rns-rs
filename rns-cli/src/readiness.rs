@@ -1,9 +1,38 @@
 //! The readiness file a supervised sidecar writes once it is serving, so
 //! its supervisor (`rns-server`) knows when it is up and when it drains.
 
+use std::fmt;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// A readiness file operation that failed: what was done, on which path,
+/// and the I/O error.
+#[derive(Debug)]
+pub struct ReadyFileError {
+    action: &'static str,
+    path: PathBuf,
+    source: io::Error,
+}
+
+impl fmt::Display for ReadyFileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "failed to {} {}: {}",
+            self.action,
+            self.path.display(),
+            self.source
+        )
+    }
+}
+
+impl std::error::Error for ReadyFileError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
 
 /// A readiness file through which a sidecar process tells its supervisor it
 /// is up. The file is deleted when this is dropped.
@@ -15,7 +44,7 @@ impl ReadyFile {
     /// Starts with no readiness file when `path` is `None`. Otherwise removes
     /// any stale file at `path`, so the supervisor does not see an old status
     /// before this process reports one; fails when that removal fails.
-    pub fn new(path: Option<&str>) -> Result<Option<Self>, String> {
+    pub fn new(path: Option<&str>) -> Result<Option<Self>, ReadyFileError> {
         let Some(path) = path else {
             return Ok(None);
         };
@@ -29,24 +58,27 @@ impl ReadyFile {
     /// Writes the `ready` status for `process`, with a free-text `detail`.
     /// Creates missing parent directories. The error names the path and the
     /// I/O failure.
-    pub fn mark_ready(&self, process: &str, detail: &str) -> Result<(), String> {
+    pub fn mark_ready(&self, process: &str, detail: &str) -> Result<(), ReadyFileError> {
         self.write_status(process, "ready", detail)
     }
 
     /// Writes the `draining` status: the process is shutting down. Errors as
     /// [`ReadyFile::mark_ready`].
-    pub fn mark_draining(&self, process: &str, detail: &str) -> Result<(), String> {
+    pub fn mark_draining(&self, process: &str, detail: &str) -> Result<(), ReadyFileError> {
         self.write_status(process, "draining", detail)
     }
 
-    fn write_status(&self, process: &str, status: &str, detail: &str) -> Result<(), String> {
+    fn write_status(
+        &self,
+        process: &str,
+        status: &str,
+        detail: &str,
+    ) -> Result<(), ReadyFileError> {
         if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|err| {
-                format!(
-                    "failed to create readiness dir {}: {}",
-                    parent.display(),
-                    err
-                )
+            fs::create_dir_all(parent).map_err(|source| ReadyFileError {
+                action: "create readiness dir",
+                path: parent.to_path_buf(),
+                source,
             })?;
         }
 
@@ -58,25 +90,23 @@ impl ReadyFile {
             now_unix_ms(),
             escape_value(detail),
         );
-        fs::write(&self.path, body).map_err(|err| {
-            format!(
-                "failed to write readiness file {}: {}",
-                self.path.display(),
-                err
-            )
+        fs::write(&self.path, body).map_err(|source| ReadyFileError {
+            action: "write readiness file",
+            path: self.path.clone(),
+            source,
         })
     }
 
     /// Removes the file; a file that is already gone is not an error.
-    pub fn clear(&self) -> Result<(), String> {
+    pub fn clear(&self) -> Result<(), ReadyFileError> {
         match fs::remove_file(&self.path) {
             Ok(()) => Ok(()),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(format!(
-                "failed to remove readiness file {}: {}",
-                self.path.display(),
-                err
-            )),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(ReadyFileError {
+                action: "remove readiness file",
+                path: self.path.clone(),
+                source,
+            }),
         }
     }
 

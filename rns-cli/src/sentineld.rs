@@ -3,10 +3,10 @@
 //! reconnect too often.
 
 use std::collections::HashMap;
-use std::io::{self, Read};
+use std::io;
 use std::net::IpAddr;
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -14,17 +14,15 @@ use std::time::{Duration, Instant};
 
 use rns_hooks_abi::sentinel::{BackbonePeerPayload, BACKBONE_PEER_PAYLOAD_TYPE};
 use rns_net::pickle::PickleValue;
-use rns_net::provider_bridge::{
-    decode_provider_envelope, HookProviderEventEnvelope, ProviderEnvelope, ProviderMessage,
-};
-use rns_net::storage;
-use rns_net::{HookInfo, RpcClient, SharedInstanceRpc};
+use rns_net::provider_bridge::{HookProviderEventEnvelope, ProviderMessage};
 
 use crate::argparse::{Parser, Ty};
 use crate::args::Args;
 use crate::native_cli::{self, Cli};
 use crate::readiness::ReadyFile;
-use crate::shared_instance::LocalInstance;
+use crate::sidecar::{
+    read_provider_envelope, HookGuard, Hooks, RpcControl, RuntimeConfig, SidecarError,
+};
 
 const VERSION: &str = env!("FULL_VERSION");
 #[cfg(feature = "rns-hooks-wasm")]
@@ -36,6 +34,14 @@ const HOOK_SPECS: [(&str, &str); 5] = [
     ("rns_sentinel_peer_write_stall", "BackbonePeerWriteStall"),
     ("rns_sentinel_peer_penalty", "BackbonePeerPenalty"),
 ];
+/// The hooks this sidecar loads into rnsd.
+static HOOKS: Hooks = Hooks {
+    specs: &HOOK_SPECS,
+    #[cfg(feature = "rns-hooks-wasm")]
+    wasm: EMBEDDED_HOOK_WASM,
+    #[cfg(not(feature = "rns-hooks-wasm"))]
+    builtin_id: rns_sentinel_hook::BUILTIN_ID,
+};
 
 /// Default: penalize after 2 write stalls in 5 minutes.
 const DEFAULT_WRITE_STALL_THRESHOLD: u32 = 2;
@@ -216,7 +222,7 @@ pub fn main_entry_from(args: Args) -> ExitCode {
     crate::exit::code(exit_code)
 }
 
-fn run(args: Args) -> Result<(), String> {
+fn run(args: Args) -> Result<(), SidecarError> {
     if args.has("version") {
         println!("rns-sentineld {}", VERSION);
         return Ok(());
@@ -308,15 +314,10 @@ fn run(args: Args) -> Result<(), String> {
 
     let runtime = RuntimeConfig::load(args.config_path().map(Path::new), args.get("socket"))?;
 
-    let control = RpcControl {
-        rpc: runtime.rpc.clone(),
-    };
+    let control = RpcControl::new(runtime.rpc.clone(), &HOOKS);
     log::info!("rns-sentineld loading hooks");
     wait_for_loaded_hooks(&control, priority)?;
-    let hook_guard = HookGuard {
-        control: control.clone(),
-        armed: true,
-    };
+    let hook_guard = HookGuard(control.clone());
 
     log::info!(
         "rns-sentineld connecting provider bridge at {}",
@@ -379,10 +380,7 @@ fn run(args: Args) -> Result<(), String> {
                 );
                 log::info!("rns-sentineld reloading hooks after provider disconnect");
                 wait_for_loaded_hooks(&control, priority).map_err(|reload_err| {
-                    format!(
-                        "hook reload failed after provider disconnect: {}",
-                        reload_err
-                    )
+                    reload_err.context("hook reload failed after provider disconnect")
                 })?;
                 log::info!(
                     "rns-sentineld reconnecting provider bridge at {}",
@@ -390,7 +388,7 @@ fn run(args: Args) -> Result<(), String> {
                 );
                 stream =
                     wait_for_provider_bridge(&runtime.provider_socket).map_err(|conn_err| {
-                        format!("provider reconnect failed after disconnect: {}", conn_err)
+                        conn_err.context("provider reconnect failed after disconnect")
                     })?;
                 log::info!("rns-sentineld provider bridge reconnected");
             }
@@ -411,16 +409,14 @@ fn execute_blacklist(
     control: &RpcControl,
     interface_name: &str,
     action: &BlacklistAction,
-) -> Result<(), String> {
+) -> Result<(), SidecarError> {
     let interface_name = if interface_name.is_empty() {
-        control
-            .resolve_interface_name(action.server_interface_id)?
-            .ok_or_else(|| {
-                format!(
-                    "could not resolve backbone interface {} for {}",
-                    action.server_interface_id, action.peer_ip
-                )
-            })?
+        resolve_interface_name(control, action.server_interface_id)?.ok_or_else(|| {
+            SidecarError::Message(format!(
+                "could not resolve backbone interface {} for {}",
+                action.server_interface_id, action.peer_ip
+            ))
+        })?
     } else {
         interface_name.to_string()
     };
@@ -444,56 +440,14 @@ fn execute_blacklist(
     Ok(())
 }
 
-// --- RPC control (same pattern as statsd) ---
-
-#[derive(Clone)]
-struct RpcControl {
-    rpc: SharedInstanceRpc,
-}
-
-impl RpcControl {
-    fn with_client<T>(
-        &self,
-        op: impl FnOnce(&mut RpcClient) -> io::Result<T>,
-    ) -> Result<T, String> {
-        let mut client = self
-            .rpc
-            .connect()
-            .map_err(|e| format!("rpc connect failed: {}", e))?;
-        op(&mut client).map_err(|e| format!("rpc call failed: {}", e))
-    }
-
-    fn load_hook(&self, name: &str, attach_point: &str, priority: i32) -> Result<(), String> {
-        #[cfg(feature = "rns-hooks-wasm")]
-        {
-            self.with_client(|client| {
-                client.load_hook(name, attach_point, priority, EMBEDDED_HOOK_WASM)
-            })?
-        }
-
-        #[cfg(not(feature = "rns-hooks-wasm"))]
-        {
-            self.with_client(|client| {
-                client.load_builtin_hook(
-                    name,
-                    attach_point,
-                    priority,
-                    rns_sentinel_hook::BUILTIN_ID,
-                )
-            })?
-        }
-    }
-
-    fn unload_hook(&self, name: &str, attach_point: &str) -> Result<(), String> {
-        self.with_client(|client| client.unload_hook(name, attach_point))?
-    }
-
-    fn list_hooks(&self) -> Result<Vec<HookInfo>, String> {
-        self.with_client(|client| client.list_hooks())
-    }
-
-    fn resolve_interface_name(&self, interface_id: u64) -> Result<Option<String>, String> {
-        self.with_client(|client| {
+/// The name of the backbone interface with id `interface_id`, if the
+/// instance has one.
+fn resolve_interface_name(
+    control: &RpcControl,
+    interface_id: u64,
+) -> Result<Option<String>, SidecarError> {
+    control
+        .with_client(|client| {
             client.call(&PickleValue::Dict(vec![(
                 PickleValue::String("get".into()),
                 PickleValue::String("backbone_interfaces".into()),
@@ -512,52 +466,9 @@ impl RpcControl {
                 })
             })
         })
-    }
 }
 
-struct HookGuard {
-    control: RpcControl,
-    armed: bool,
-}
-
-impl Drop for HookGuard {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        for (name, attach_point) in HOOK_SPECS {
-            let _ = self.control.unload_hook(name, attach_point);
-        }
-    }
-}
-
-struct RuntimeConfig {
-    rpc: SharedInstanceRpc,
-    provider_socket: PathBuf,
-}
-
-impl RuntimeConfig {
-    fn load(config_path: Option<&Path>, socket_override: Option<&str>) -> Result<Self, String> {
-        let config_dir = storage::resolve_config_dir(config_path);
-        let LocalInstance { config, rpc, .. } =
-            LocalInstance::open(&config_dir).map_err(|e| e.cause().to_string())?;
-        let provider_socket = socket_override
-            .map(PathBuf::from)
-            .or_else(|| {
-                config
-                    .reticulum
-                    .provider_socket_path
-                    .as_ref()
-                    .map(PathBuf::from)
-            })
-            .ok_or_else(|| "provider bridge socket is not configured".to_string())?;
-
-        Ok(Self {
-            rpc,
-            provider_socket,
-        })
-    }
-}
+// --- RPC control (same pattern as statsd) ---
 
 // --- Peer tracking & detection ---
 
@@ -867,49 +778,12 @@ fn decode_ip(payload: &BackbonePeerPayload) -> Option<IpAddr> {
 
 // --- Hook management (same pattern as statsd) ---
 
-fn load_hooks(control: &RpcControl, priority: i32) -> Result<(), String> {
-    let mut loaded = Vec::new();
-    for (name, attach_point) in HOOK_SPECS {
-        if let Err(err) = control.load_hook(name, attach_point, priority) {
-            for (loaded_name, loaded_attach_point) in loaded.into_iter().rev() {
-                let _ = control.unload_hook(loaded_name, loaded_attach_point);
-            }
-            return Err(format!(
-                "failed to load {} at {}: {}",
-                name, attach_point, err
-            ));
-        }
-        loaded.push((name, attach_point));
-    }
-    Ok(())
-}
-
-fn unload_stale_hooks(control: &RpcControl) {
-    match control.list_hooks() {
-        Ok(hooks) => {
-            for hook in hooks {
-                if HOOK_SPECS.iter().any(|(name, attach_point)| {
-                    *name == hook.name && *attach_point == hook.attach_point
-                }) {
-                    let _ = control.unload_hook(&hook.name, &hook.attach_point);
-                }
-            }
-        }
-        Err(err) => {
-            log::debug!("could not list hooks for stale cleanup: {}", err);
-            for (name, attach_point) in HOOK_SPECS {
-                let _ = control.unload_hook(name, attach_point);
-            }
-        }
-    }
-}
-
-fn wait_for_loaded_hooks(control: &RpcControl, priority: i32) -> Result<(), String> {
+fn wait_for_loaded_hooks(control: &RpcControl, priority: i32) -> Result<(), SidecarError> {
     let mut attempts = 0u64;
     loop {
         attempts += 1;
-        unload_stale_hooks(control);
-        match load_hooks(control, priority) {
+        control.unload_stale_hooks();
+        match control.load_hooks(priority) {
             Ok(()) => {
                 if attempts > 1 {
                     log::info!("rns-sentineld hooks loaded after {} attempt(s)", attempts);
@@ -924,7 +798,7 @@ fn wait_for_loaded_hooks(control: &RpcControl, priority: i32) -> Result<(), Stri
     }
 }
 
-fn wait_for_provider_bridge(socket_path: &Path) -> Result<UnixStream, String> {
+fn wait_for_provider_bridge(socket_path: &Path) -> Result<UnixStream, SidecarError> {
     let mut attempts = 0u64;
     loop {
         attempts += 1;
@@ -932,7 +806,7 @@ fn wait_for_provider_bridge(socket_path: &Path) -> Result<UnixStream, String> {
             Ok(stream) => {
                 stream
                     .set_read_timeout(Some(Duration::from_secs(1)))
-                    .map_err(|e| format!("provider bridge timeout setup failed: {}", e))?;
+                    .map_err(SidecarError::BridgeTimeout)?;
                 if attempts > 1 {
                     log::info!(
                         "provider bridge connected after {} attempt(s): {}",
@@ -955,37 +829,15 @@ fn wait_for_provider_bridge(socket_path: &Path) -> Result<UnixStream, String> {
     }
 }
 
-fn sleep_or_interrupt(message: &str) -> Result<(), String> {
+fn sleep_or_interrupt(message: &'static str) -> Result<(), SidecarError> {
     for _ in 0..50 {
         if SHOULD_STOP.load(Ordering::Relaxed) {
             log::warn!("rns-sentineld stop requested: {}", message);
-            return Err(message.to_string());
+            return Err(SidecarError::Interrupted(message));
         }
         std::thread::sleep(Duration::from_millis(100));
     }
     Ok(())
-}
-
-fn read_provider_envelope(stream: &mut UnixStream) -> io::Result<Option<ProviderEnvelope>> {
-    let mut len_buf = [0u8; 4];
-    match stream.read_exact(&mut len_buf) {
-        Ok(()) => {}
-        Err(err)
-            if matches!(
-                err.kind(),
-                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-            ) =>
-        {
-            return Ok(None);
-        }
-        Err(err) => return Err(err),
-    }
-    let len = u32::from_be_bytes(len_buf) as usize;
-    let mut buf = vec![0u8; len];
-    stream.read_exact(&mut buf)?;
-    let envelope: ProviderEnvelope = decode_provider_envelope(&buf)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    Ok(Some(envelope))
 }
 
 fn install_signal_handlers() {
