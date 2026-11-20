@@ -8,6 +8,8 @@
 
 #[cfg(target_arch = "wasm32")]
 use rns_hooks_abi::context::{self, BackbonePeerContext, CTX_TYPE_BACKBONE_PEER};
+#[cfg(target_arch = "wasm32")]
+use rns_hooks_abi::sentinel::mapped_peer_ip;
 #[cfg(any(target_arch = "wasm32", feature = "builtin"))]
 use rns_hooks_abi::sentinel::{
     BackbonePeerPayload, BACKBONE_PEER_INTERFACE_NAME_MAX, BACKBONE_PEER_PAYLOAD_TYPE,
@@ -71,7 +73,7 @@ pub extern "C" fn on_hook(ctx_ptr: i32) -> i32 {
                 .unwrap_or(0) as u8;
         let payload = BackbonePeerPayload {
             peer_ip_family: ctx.peer_ip_family,
-            peer_ip: ctx.peer_ip,
+            peer_ip: mapped_peer_ip(ctx.peer_ip_family, ctx.peer_ip),
             peer_port: ctx.peer_port,
             server_interface_id: ctx.server_interface_id,
             peer_interface_id: ctx.peer_interface_id,
