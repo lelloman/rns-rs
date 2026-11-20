@@ -74,6 +74,7 @@ impl LinkManager {
         direct.resource_mtu = mtu.min(direct.fallback_mtu);
         link.engine.set_mtu(mtu);
         link.direct_route = Some(direct);
+        link.direct_peer = true;
         link.route_interface = Some(interface);
         link.route_transport_id = None;
         if let Some(channel) = link.channel.as_mut() {
@@ -103,8 +104,33 @@ impl LinkManager {
     }
 
     /// Return the link to the route and MTU it had before its direct path.
-    /// Returns the direct interface it stops using.
+    /// Returns the direct interface it stops using, and the channel's
+    /// outstanding messages resent on the original route: they may have
+    /// been lost with the direct path, and the retries spent there say
+    /// nothing about the original one, so each gets its full set again.
     pub fn detach_direct_route(
+        &mut self,
+        link_id: &LinkId,
+        rng: &mut dyn Rng,
+    ) -> Option<(
+        rns_core::transport::types::InterfaceId,
+        Vec<LinkManagerAction>,
+    )> {
+        let interface = self.restore_original_route(link_id)?;
+        let resends = self
+            .links
+            .get_mut(link_id)
+            .and_then(|link| link.channel.as_mut())
+            .map(|channel| channel.resend_outstanding(time::now()))
+            .unwrap_or_default();
+        Some((
+            interface,
+            self.process_channel_actions(link_id, resends, rng),
+        ))
+    }
+
+    /// The route and MTU part of [`LinkManager::detach_direct_route`].
+    pub(super) fn restore_original_route(
         &mut self,
         link_id: &LinkId,
     ) -> Option<rns_core::transport::types::InterfaceId> {

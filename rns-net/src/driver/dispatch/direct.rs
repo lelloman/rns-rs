@@ -185,13 +185,26 @@ impl Driver {
         notify_peer: bool,
     ) {
         let direct = self.holepunch_manager.take_direct(&link_id, cause);
-        let detached = self.link_manager.detach_direct_route(&link_id);
+        let detached = self.detach_direct_route(link_id);
         let Some(interface_id) = direct.map(|(interface, _)| interface).or(detached) else {
             return;
         };
         // Its mapping is gone, so removing it does not come back here.
         self.handle_interface_down_event(interface_id);
         self.direct_path_lost(link_id, interface_id, direct.map(|(_, s)| s), notify_peer);
+    }
+
+    /// Return the link to its original route, resending its channel's
+    /// outstanding messages there. Returns the direct interface it left.
+    fn detach_direct_route(
+        &mut self,
+        link_id: [u8; 16],
+    ) -> Option<rns_core::transport::types::InterfaceId> {
+        let (interface, resends) = self
+            .link_manager
+            .detach_direct_route(&link_id, &mut self.rng)?;
+        self.dispatch_link_actions(resends);
+        Some(interface)
     }
 
     /// After a link's direct interface is gone: the link back on its
@@ -203,7 +216,7 @@ impl Driver {
         session_id: Option<[u8; 16]>,
         notify_peer: bool,
     ) {
-        self.link_manager.detach_direct_route(&link_id);
+        self.detach_direct_route(link_id);
         if let (true, Some(session_id)) = (notify_peer, session_id) {
             self.send_fallback(link_id, session_id, true);
         }

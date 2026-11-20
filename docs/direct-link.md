@@ -107,7 +107,9 @@ it is the original one again, and larger sends are refused (see
 [Packet size](direct-link-protocol.md#packet-size)). If the direct path dies
 (no keepalive for 45 seconds, the link going stale, or the link's channel
 running out of retries), both sides move the link back to the transport path,
-report `direct_lost`, and the link carries on. The side that proposed the
+report `direct_lost`, and the link carries on: channel messages still
+unacknowledged are resent on the transport path, in parts if they no longer
+fit its packets. The side that proposed the
 upgrade then proposes again by itself, a minute later and then with
 exponential backoff, a bounded number of times while the link stays active
 (see [Re-upgrade](direct-link-protocol.md#re-upgrade)); turn it off with

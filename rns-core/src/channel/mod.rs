@@ -214,14 +214,7 @@ impl Channel {
         if envelope.tries >= self.max_tries && self.hold_on_exhaustion {
             self.hold_on_exhaustion = false;
             let mut actions = alloc::vec![ChannelAction::PathFailed];
-            for envelope in self.tx_ring.iter_mut().filter(|e| !e.delivered) {
-                envelope.tries = 1;
-                envelope.sent_at = now;
-                actions.push(ChannelAction::SendOnLink {
-                    raw: envelope.raw.clone(),
-                    sequence: envelope.sequence,
-                });
-            }
+            self.push_resends(now, &mut actions);
             return actions;
         }
         if envelope.tries >= self.max_tries {
@@ -245,6 +238,28 @@ impl Channel {
         }
 
         alloc::vec![ChannelAction::SendOnLink { raw, sequence }]
+    }
+
+    /// The link moved to another path (an rns-rs Direct Link fell back):
+    /// whatever went out on the old path may have been lost with it, and
+    /// the tries spent there say nothing about the new one. Every
+    /// outstanding envelope is resent now, with its tries reset, so each has
+    /// its full set of retries on the path that carries it from here on.
+    pub fn resend_outstanding(&mut self, now: f64) -> Vec<ChannelAction> {
+        let mut actions = Vec::new();
+        self.push_resends(now, &mut actions);
+        actions
+    }
+
+    fn push_resends(&mut self, now: f64, actions: &mut Vec<ChannelAction>) {
+        for envelope in self.tx_ring.iter_mut().filter(|e| !e.delivered) {
+            envelope.tries = 1;
+            envelope.sent_at = now;
+            actions.push(ChannelAction::SendOnLink {
+                raw: envelope.raw.clone(),
+                sequence: envelope.sequence,
+            });
+        }
     }
 
     /// Compute timeout duration for the given try count.
@@ -584,6 +599,58 @@ mod tests {
             ch.packet_timeout(0, 20.0),
             vec![ChannelAction::TeardownLink]
         );
+    }
+
+    #[test]
+    fn resending_after_a_path_change_restores_every_retry() {
+        let mut ch = Channel::new(0.1);
+        ch.send(0x01, b"a", 1.0, 500).unwrap();
+        ch.send(0x01, b"b", 1.0, 500).unwrap();
+        ch.packet_delivered(0);
+        ch.send(0x01, b"c", 1.0, 500).unwrap();
+        // Tries spent on a path that has since gone away.
+        for i in 0..4 {
+            ch.packet_timeout(1, 2.0 + i as f64);
+        }
+        assert_eq!(ch.get_tries(1), Some(5));
+
+        let actions = ch.resend_outstanding(10.0);
+        let resent: Vec<(Sequence, Vec<u8>)> = actions
+            .into_iter()
+            .map(|a| match a {
+                ChannelAction::SendOnLink { sequence, raw } => (sequence, raw),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            resent,
+            vec![
+                (1, pack_envelope(0x01, 1, b"b")),
+                (2, pack_envelope(0x01, 2, b"c"))
+            ]
+        );
+        assert_eq!(ch.get_tries(1), Some(1));
+        assert_eq!(ch.get_tries(2), Some(1));
+        // A full set of retries on the new path before the link closes.
+        for i in 0..4 {
+            assert!(matches!(
+                ch.packet_timeout(1, 11.0 + i as f64)[..],
+                [ChannelAction::SendOnLink { sequence: 1, .. }]
+            ));
+        }
+        assert_eq!(
+            ch.packet_timeout(1, 20.0),
+            vec![ChannelAction::TeardownLink]
+        );
+    }
+
+    #[test]
+    fn resending_with_nothing_outstanding_sends_nothing() {
+        let mut ch = Channel::new(0.1);
+        assert!(ch.resend_outstanding(1.0).is_empty());
+        ch.send(0x01, b"a", 1.0, 500).unwrap();
+        ch.packet_delivered(0);
+        assert!(ch.resend_outstanding(2.0).is_empty());
     }
 
     #[test]

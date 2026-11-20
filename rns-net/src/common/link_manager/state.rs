@@ -58,6 +58,12 @@ pub(super) struct ManagedLink {
     /// While the link runs over a Direct Link interface: that interface and
     /// the original route and MTU to return to.
     pub(super) direct_route: Option<DirectRoute>,
+    /// The link has run over a direct path, so its peer implements Direct
+    /// Link: a channel message too large for the link since it fell back
+    /// goes to it in parts.
+    pub(super) direct_peer: bool,
+    /// Channel messages the peer is sending in parts.
+    pub(super) channel_parts: rns_core::holepunch::channel_parts::ChannelPartAssembler,
 }
 
 /// A link's direct path, and the original route it falls back to.

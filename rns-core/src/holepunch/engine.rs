@@ -752,6 +752,8 @@ pub fn validate_signal(kind: u8, body: &[u8]) -> Result<(), HolePunchError> {
         UPGRADE_REJECT => decode_upgrade_reject(body).map(|_| ()),
         UPGRADE_READY => decode_upgrade_ready(body).map(|_| ()),
         FALLBACK => decode_fallback(body).map(|_| ()),
+        CHANNEL_PART => super::channel_parts::decode_channel_part(body).map(|_| ()),
+        CHANNEL_PART_ACK => super::channel_parts::decode_channel_part_ack(body).map(|_| ()),
         _ => Err(HolePunchError::InvalidPayload),
     }
 }
