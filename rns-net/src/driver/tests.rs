@@ -5505,6 +5505,56 @@ fn tunnel_synthesis_carries_the_interface_access_code() {
 }
 
 #[test]
+fn a_dynamic_interface_has_its_ifac_before_it_comes_up() {
+    // A spawned interface that is not reconnecting comes up as it is
+    // registered. Its IFAC, its own or its parent's, must be on the entry
+    // by then: a tunnel synthesis sent while it comes up goes out masked.
+    for own_ifac in [true, false] {
+        let ifac = crate::ifac::derive_ifac(Some("network"), Some("key"), 16).unwrap();
+        let mut driver = new_test_driver();
+        driver.transport_identity = Some(Identity::new(&mut OsRng));
+        let (writer, _) = MockWriter::new();
+        let mut parent = make_entry(10, Box::new(writer), true);
+        if !own_ifac {
+            parent.ifac = Some(ifac.clone());
+        }
+        driver.interfaces.insert(InterfaceId(10), parent);
+
+        let mut info = make_interface_info(11);
+        info.name = "TCPInterface[spawned]".into();
+        info.wants_tunnel = true;
+        let (writer, sent) = MockWriter::new();
+        driver.handle_dynamic_interface_up_event(
+            InterfaceId(11),
+            Box::new(writer),
+            event::DynamicInterfaceRegistration {
+                info,
+                interface_type: "TCPClientInterface".into(),
+                parent_id: InterfaceId(10),
+                telemetry: event::InterfaceTelemetry::default(),
+                ifac: own_ifac.then(|| ifac.clone()),
+                display_name: None,
+                short_name: None,
+                reconnecting: false,
+            },
+        );
+
+        // The entry's writer is asynchronous.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let synthesis = loop {
+            if let Some(frame) = sent.lock().unwrap().first().cloned() {
+                break frame;
+            }
+            assert!(std::time::Instant::now() < deadline, "no synthesis sent");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(synthesis[0] & 0x80, 0x80, "own IFAC {own_ifac}: masked");
+        assert!(crate::ifac::unmask_inbound(&synthesis, &ifac).is_some());
+        assert!(driver.interfaces[&InterfaceId(11)].online);
+    }
+}
+
+#[test]
 fn a_synthesis_without_an_extension_is_not_answered() {
     // A 1.6.0 synthesis: the tunnel is attached, nothing is reported and no
     // reverse synthesis is sent.
