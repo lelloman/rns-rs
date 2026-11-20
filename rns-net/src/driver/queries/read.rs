@@ -194,6 +194,9 @@ impl Driver {
                     })
                     .collect(),
             ),
+            QueryRequest::DestinationTypeNames => {
+                QueryResponse::DestinationTypeNames(self.destination_type_names.clone())
+            }
             QueryRequest::DropPath { .. } => {
                 // Mutating queries are handled by handle_query_mut
                 QueryResponse::DropPath(false)

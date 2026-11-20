@@ -395,6 +395,16 @@ pub const RNPATH: Parser = Parser {
             required: false,
         },
         Action {
+            opts: &["-A", "--analyze"],
+            dest: "analyze",
+            kind: Kind::StoreTrue,
+            nargs: Nargs::Zero,
+            metavar: None,
+            help: Some("Analyze tables"),
+            ty: Ty::Str,
+            required: false,
+        },
+        Action {
             opts: &[],
             dest: "destination",
             kind: Kind::Store,

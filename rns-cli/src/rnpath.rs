@@ -47,6 +47,7 @@ pub const OPTIONS: OptionSpec = OptionSpec {
         Opt::value("", "reason"),
         Opt::flag("p", "blackholed-list"),
         Opt::flag("j", "json"),
+        Opt::flag("A", "analyze"),
         Opt::count("v", "verbose"),
         Opt::value("c", ""),
         Opt::value("", "identity").rust_only(),
@@ -107,6 +108,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let drop_via = flag_target(&args, "x");
     let drop_queues = args.has("D");
     let json_output = args.has("j");
+    let analyze = args.has("A");
     let max_hops: Option<u8> = args.get("m").and_then(|s| s.parse().ok());
     let show_blackholed = args.has("blackholed") || args.has("b");
     let blackhole_hash = flag_target(&args, "B");
@@ -127,7 +129,8 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         || [&drop_hash, &drop_via, &blackhole_hash, &unblackhole_hash]
             .iter()
             .any(|target| target.as_deref().is_some_and(|t| !t.is_empty()));
-    let has_work = drop_queues || show_table || show_rates || has_destination || show_blackholed;
+    let has_work =
+        drop_queues || show_table || show_rates || has_destination || show_blackholed || analyze;
     if !has_work {
         println!();
         print_usage(usage_name);
@@ -146,6 +149,8 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             RemoteAction::Unsupported(
                 "Blackholing identity on remote instances not yet implemented",
             )
+        } else if analyze {
+            RemoteAction::Analyze
         } else if show_table {
             RemoteAction::Table(destination.clone())
         } else if show_rates {
@@ -200,56 +205,13 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         return;
     }
 
-    // Load config
-    let config_dir =
-        storage::resolve_config_dir(config_path.as_ref().map(|s| Path::new(s.as_str())));
-    let config_file = config_dir.join("config");
-    let rns_config = if config_file.exists() {
-        match config::parse_file(&config_file) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Error reading config: {}", e);
-                process::exit(1);
-            }
-        }
-    } else {
-        match config::parse("") {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                process::exit(1);
-            }
-        }
-    };
-
-    let paths = match storage::ensure_storage_dirs(&config_dir) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            process::exit(1);
-        }
-    };
-
-    let identity = match storage::load_rpc_identity(&paths) {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("Error loading identity: {}", e);
-            process::exit(1);
-        }
-    };
-
-    let auth_key = rns_config
-        .reticulum
-        .rpc_key
-        .unwrap_or_else(|| derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64])));
-
-    let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
-
-    // As upstream's rnpath, a Reticulum client for every local mode, which
-    // logs its startup: whether a path is known, and its hops, also come
-    // from its own path table when looking one up.
-    let node =
-        rns_net::RnsNode::connect_shared_from_config(Some(&config_dir), Box::new(NoCallbacks)).ok();
+    let LocalInstance {
+        rns_config,
+        paths,
+        rpc_addr,
+        auth_key,
+        node,
+    } = LocalInstance::open(config_path.as_deref());
 
     let mut client = match RpcClient::connect(&rpc_addr, &auth_key) {
         Ok(c) => c,
@@ -267,6 +229,17 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         do_blackhole(&mut client, &hash_str, duration_hours, reason);
     } else if let Some(hash_str) = unblackhole_hash {
         do_unblackhole(&mut client, &hash_str);
+    } else if analyze {
+        drop(client);
+        let status = analyze_tables(
+            &|| RpcClient::connect(&rpc_addr, &auth_key),
+            node.as_ref(),
+            &paths.cache,
+        );
+        if let Some(node) = node {
+            node.shutdown();
+        }
+        process::exit(status);
     } else if show_table {
         let destination = destination_filter(destination.as_deref());
         let filters = PathFilters {
@@ -312,6 +285,286 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     }
     if let Some(node) = node {
         node.shutdown();
+    }
+}
+
+/// One of the shared instance RPC calls `rnpath -A` makes, each on its own
+/// connection, as upstream's `Reticulum.get_*` make them: a failure is
+/// logged as `Shared instance RPC failed while getting <what>: <e>` and
+/// gives `None`.
+fn analysis_rpc(
+    connect: &dyn Fn() -> std::io::Result<RpcClient>,
+    request: Vec<(PickleValue, PickleValue)>,
+    what: &str,
+) -> Option<PickleValue> {
+    match connect().and_then(|mut client| client.call(&PickleValue::Dict(request))) {
+        Ok(response) => Some(response),
+        Err(e) => {
+            // A connection closed unanswered is Python's `EOFError()`,
+            // whose text is empty.
+            let text = if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                String::new()
+            } else {
+                e.to_string()
+            };
+            log::error!("Shared instance RPC failed while getting {what}: {text}");
+            None
+        }
+    }
+}
+
+/// upstream's `rnpath -A` at 1a71073c: fetch the path table, the rate
+/// table and the link distribution from the shared instance, then count
+/// the destination types of the paths. Returns the exit status.
+///
+/// The counts read this process's own state, as upstream's do from
+/// `Identity.known_destinations`, the announce cache and
+/// `Transport.destination_type_map`: the known destinations and the type
+/// names of `node` (loaded as a shared instance client loads them, plus
+/// the two types rnpath asks for) and the announce cache in `cache_dir`,
+/// which upstream's client opens for this (`init_announce_cache`).
+fn analyze_tables(
+    connect: &dyn Fn() -> std::io::Result<RpcClient>,
+    node: Option<&rns_net::RnsNode>,
+    cache_dir: &Path,
+) -> i32 {
+    let key = |k: &str| PickleValue::String(k.into());
+    // upstream's `get_path_table`, `get_rate_table` and
+    // `get_link_distribution`, evaluated in that order: a failed table is
+    // an empty list, a failed link distribution None.
+    let path_table = analysis_rpc(
+        connect,
+        vec![
+            (key("get"), key("path_table")),
+            (key("max_hops"), PickleValue::None),
+        ],
+        "path table",
+    )
+    .unwrap_or(PickleValue::List(Vec::new()));
+    // Fetched as upstream does; the stub only checks them for content.
+    let _rate_table = analysis_rpc(connect, vec![(key("get"), key("rate_table"))], "rate table")
+        .unwrap_or(PickleValue::List(Vec::new()));
+    let _link_distribution = analysis_rpc(
+        connect,
+        vec![(key("get"), key("link_distribution"))],
+        "link distribution",
+    );
+
+    if !truthy(&path_table) {
+        println!("No path table to analyze");
+        return 0;
+    }
+    println!("Analyzing tables...");
+    let _ = std::io::stdout().flush();
+
+    let known: std::collections::HashMap<[u8; 16], Option<[u8; 32]>> = node
+        .and_then(|node| node.known_destinations().ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| (entry.dest_hash, entry.packet_hash))
+        .collect();
+    let type_names = node
+        .and_then(|node| node.destination_type_names().ok())
+        .unwrap_or_default();
+    let cache = rns_net::announce_cache::AnnounceCache::new(cache_dir.join("announces"));
+    let analysis = analyze_path_table(
+        path_table.as_list().unwrap_or_default(),
+        |dest_hash| {
+            let dest_hash: [u8; 16] = dest_hash.try_into().ok()?;
+            known.get(&dest_hash).copied().flatten()
+        },
+        |packet_hash| match cache.get(packet_hash) {
+            Ok(cached) => cached.map(|(raw, _)| raw),
+            Err(e) => {
+                log::error!("Exception occurred while getting cached packet.");
+                log::error!("The contained exception was: {e}");
+                None
+            }
+        },
+        |name_hash| {
+            <[u8; 10]>::try_from(name_hash)
+                .is_ok_and(|name_hash| type_names.get(&name_hash).is_some())
+        },
+    );
+    match analysis {
+        Ok(analysis) => {
+            for line in analysis.lines() {
+                println!("{line}");
+            }
+            0
+        }
+        Err(exception) => {
+            let _ = std::io::stdout().flush();
+            eprintln!("{exception}");
+            1
+        }
+    }
+}
+
+/// What upstream's `rnpath -A` stub counts: the name hashes of the paths'
+/// destination types, known (in `Transport.destination_type_map`) or not,
+/// and the paths of each.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TypeAnalysis {
+    known_types: std::collections::BTreeSet<Vec<u8>>,
+    unknown_types: std::collections::BTreeSet<Vec<u8>>,
+    known_type_dsts: usize,
+    unknown_type_dsts: usize,
+}
+
+impl TypeAnalysis {
+    /// The lines upstream prints at 1a71073c.
+    fn lines(&self) -> Vec<String> {
+        let known = self.known_types.len();
+        let unknown = self.unknown_types.len();
+        vec![
+            format!("Known types        : {known}"),
+            format!("Unknown types      : {unknown}"),
+            format!("Total types        : {}", known + unknown),
+            format!("Known type dests   : {}", self.known_type_dsts),
+            format!("Unknown type dests : {}", self.unknown_type_dsts),
+            format!(
+                "Total type dests   : {}",
+                self.known_type_dsts + self.unknown_type_dsts
+            ),
+        ]
+    }
+}
+
+/// The name hash in a cached announce as upstream's analysis reads it:
+/// `Packet(None, raw).unpack()`, then `data[64:74]` (after the public key),
+/// cut short as Python slices are. `None` where `unpack` fails before it
+/// sets `data` (a frame too short for its header, or a hop count of
+/// `PATHFINDER_M` or more), so that reading `data` raises.
+fn cached_announce_name_hash(raw: &[u8]) -> Option<&[u8]> {
+    const KEYSIZE: usize = 64;
+    const NAME_HASH_LENGTH: usize = 10;
+    if raw.len() < 2 || usize::from(raw[1]) >= usize::from(rns_core::constants::PATHFINDER_M) {
+        return None;
+    }
+    let header_2 = raw[0] & 0b0100_0000 != 0;
+    let context = if header_2 { 2 + 2 * 16 } else { 2 + 16 };
+    let data = raw.get(context + 1..).filter(|_| raw.len() > context)?;
+    let start = KEYSIZE.min(data.len());
+    let end = (KEYSIZE + NAME_HASH_LENGTH).min(data.len());
+    Some(&data[start..end])
+}
+
+/// upstream's `analyze_tables` loop at 1a71073c over a non-empty path
+/// table. `known_packet_hash` gives the packet hash of a known
+/// destination's announce (`Identity.known_destinations[hash][1]`), None
+/// when it is not known; `cached_announce` the raw announce the announce
+/// cache keeps under a packet hash; `is_known_type` whether a name hash is
+/// in the destination type map. A path whose announce cannot be found is
+/// left out. `Err` is the exception upstream's analysis dies with.
+fn analyze_path_table(
+    path_table: &[PickleValue],
+    known_packet_hash: impl Fn(&[u8]) -> Option<[u8; 32]>,
+    mut cached_announce: impl FnMut(&[u8; 32]) -> Option<Vec<u8>>,
+    is_known_type: impl Fn(&[u8]) -> bool,
+) -> Result<TypeAnalysis, &'static str> {
+    let mut analysis = TypeAnalysis::default();
+    for path in path_table {
+        let Some(dest_hash) = path.get("hash").and_then(PickleValue::as_bytes) else {
+            continue;
+        };
+        let Some(packet_hash) = known_packet_hash(dest_hash) else {
+            continue;
+        };
+        let Some(raw) = cached_announce(&packet_hash) else {
+            continue;
+        };
+        let name_hash = cached_announce_name_hash(&raw)
+            .ok_or("AttributeError: 'Packet' object has no attribute 'data'")?
+            .to_vec();
+        if is_known_type(&name_hash) {
+            analysis.known_type_dsts += 1;
+            analysis.known_types.insert(name_hash);
+        } else {
+            analysis.unknown_type_dsts += 1;
+            analysis.unknown_types.insert(name_hash);
+        }
+    }
+    Ok(analysis)
+}
+
+/// What upstream's `RNS.Reticulum(configdir)` gives rnpath for the local
+/// instance: the config, the storage, the shared instance's RPC and a
+/// client of it.
+struct LocalInstance {
+    rns_config: config::RnsConfig,
+    paths: storage::StoragePaths,
+    rpc_addr: RpcAddr,
+    auth_key: [u8; 32],
+    node: Option<rns_net::RnsNode>,
+}
+
+impl LocalInstance {
+    /// Load the config in `config_path` and connect a client to the shared
+    /// instance; exits on an error.
+    fn open(config_path: Option<&str>) -> LocalInstance {
+        // Load config
+        let config_dir = storage::resolve_config_dir(config_path.map(Path::new));
+        let config_file = config_dir.join("config");
+        let rns_config = if config_file.exists() {
+            match config::parse_file(&config_file) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error reading config: {}", e);
+                    process::exit(1);
+                }
+            }
+        } else {
+            match config::parse("") {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    process::exit(1);
+                }
+            }
+        };
+
+        let paths = match storage::ensure_storage_dirs(&config_dir) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                process::exit(1);
+            }
+        };
+
+        let identity = match storage::load_rpc_identity(&paths) {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("Error loading identity: {}", e);
+                process::exit(1);
+            }
+        };
+
+        let auth_key = rns_config
+            .reticulum
+            .rpc_key
+            .unwrap_or_else(|| derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64])));
+
+        let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
+
+        // As upstream's rnpath, a Reticulum client for every local mode, which
+        // logs its startup: whether a path is known, and its hops, also come
+        // from its own path table when looking one up.
+        let node =
+            rns_net::RnsNode::connect_shared_from_config(Some(&config_dir), Box::new(NoCallbacks))
+                .ok();
+        // As upstream's rnpath, right after it starts.
+        if let Some(node) = &node {
+            node.wants_destination_type("rnstransport.remote.management");
+            node.wants_destination_type("rnstransport.info.blackhole");
+        }
+        LocalInstance {
+            rns_config,
+            paths,
+            rpc_addr,
+            auth_key,
+            node,
+        }
     }
 }
 
@@ -1239,6 +1492,9 @@ enum RemoteAction {
     Table(Option<String>),
     /// `-r [destination]`.
     Rates(Option<String>),
+    /// `-A`: upstream analyzes the local instance's tables once the link is
+    /// up, whatever the remote instance has.
+    Analyze,
     /// What upstream has no remote version of, with its message.
     Unsupported(&'static str),
 }
@@ -1470,6 +1726,18 @@ fn remote_path(
             };
             render_rate_table(&response, &view, rns_net::time::now()).print_and_exit();
         }
+        RemoteAction::Analyze => {
+            let local = LocalInstance::open(config_path);
+            let status = analyze_tables(
+                &|| RpcClient::connect(&local.rpc_addr, &local.auth_key),
+                local.node.as_ref(),
+                &local.paths.cache,
+            );
+            if let Some(node) = local.node {
+                node.shutdown();
+            }
+            process::exit(status);
+        }
         RemoteAction::Unsupported(message) => {
             println!("{RST}{message}");
             process::exit(255);
@@ -1486,6 +1754,117 @@ mod tests {
     use super::*;
 
     const HASH: &str = "0123456789abcdef0123456789abcdef";
+
+    // Upstream's `analyze_tables` at 1a71073c, run on the same tables,
+    // known destinations, announce cache and type map (Python 3.12, a
+    // disposable upstream worktree at 1a71073c), printed these lines.
+    #[test]
+    fn analysis_counts_destination_types_as_upstream() {
+        use rns_core::transport::destination_filter::destination_type;
+        let h1 = |data: &[u8], hops: u8| {
+            let mut raw = vec![0x01, hops];
+            raw.extend([0xd0; 16]);
+            raw.push(0);
+            raw.extend_from_slice(data);
+            raw
+        };
+        let h2 = |data: &[u8], hops: u8| {
+            let mut raw = vec![0x41, hops];
+            raw.extend([0x77; 16]);
+            raw.extend([0xd0; 16]);
+            raw.push(0);
+            raw.extend_from_slice(data);
+            raw
+        };
+        let announce = |name: &str| {
+            let mut data = vec![0x11; 64];
+            data.extend(destination_type(name));
+            data.extend([0x22; 10]);
+            data.extend([0x33; 64]);
+            data
+        };
+        let dest = |i: u8| [i; 16];
+        let packet_hash = |i: u8| [0x80 + i; 32];
+        let mut short = vec![0x11; 64];
+        short.extend([0x44; 6]);
+        let cache: std::collections::HashMap<[u8; 32], Vec<u8>> = [
+            (packet_hash(1), h1(&announce("lxmf.delivery"), 0)),
+            (packet_hash(2), h2(&announce("nomadnetwork.node"), 1)),
+            (packet_hash(3), h2(&announce("lxmf.delivery"), 3)),
+            // Cut short: the name hash is what is left.
+            (packet_hash(6), h1(&short, 0)),
+            (packet_hash(7), h1(&[], 0)),
+            (
+                packet_hash(8),
+                h1(&announce("rnstransport.info.blackhole"), 0),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        // 4 is not known; 5 has no cached announce.
+        let known: Vec<[u8; 16]> = [1, 2, 3, 5, 6, 7, 8].map(dest).to_vec();
+        let type_map = [
+            destination_type("lxmf.delivery"),
+            destination_type("rnstransport.info.blackhole"),
+        ];
+        let table: Vec<PickleValue> = (1..=8)
+            .map(|i| {
+                PickleValue::Dict(vec![
+                    (
+                        PickleValue::String("hash".into()),
+                        PickleValue::Bytes(dest(i).to_vec()),
+                    ),
+                    (PickleValue::String("hops".into()), PickleValue::Int(1)),
+                    (PickleValue::String("used".into()), PickleValue::Int(0)),
+                ])
+            })
+            .collect();
+        let analyze = |table: &[PickleValue],
+                       cache: &std::collections::HashMap<[u8; 32], Vec<u8>>| {
+            analyze_path_table(
+                table,
+                |hash| {
+                    known
+                        .iter()
+                        .find(|known| known.as_slice() == hash)
+                        .map(|known| packet_hash(known[0]))
+                },
+                |hash| cache.get(hash).cloned(),
+                |name_hash| type_map.iter().any(|t| t.as_slice() == name_hash),
+            )
+        };
+        assert_eq!(
+            analyze(&table, &cache).unwrap().lines(),
+            [
+                "Known types        : 2",
+                "Unknown types      : 3",
+                "Total types        : 5",
+                "Known type dests   : 3",
+                "Unknown type dests : 3",
+                "Total type dests   : 6",
+            ]
+        );
+
+        // Where upstream's Packet.unpack fails before it sets `data`, the
+        // analysis dies reading it.
+        let mut over_hops = h1(&[], 128);
+        over_hops.push(0);
+        for bad in [
+            over_hops,
+            h1(&[], 0)[..18].to_vec(),
+            h2(&[], 0)[..34].to_vec(),
+            vec![],
+            vec![0x01],
+        ] {
+            let mut cache = cache.clone();
+            cache.insert(packet_hash(1), bad);
+            assert_eq!(
+                analyze(&table[..1], &cache),
+                Err("AttributeError: 'Packet' object has no attribute 'data'")
+            );
+        }
+        assert_eq!(cached_announce_name_hash(&h2(&[], 0)), Some(&[][..]));
+    }
 
     #[test]
     fn parses_upstream_invocations_as_argparse_does() {
@@ -1531,6 +1910,10 @@ mod tests {
             ),
             (&["-U", HASH], &[("U", "true")], Some(HASH)),
             (&["-b"], &[("b", "true")], None),
+            (&["-A"], &[("A", "true")], None),
+            (&["--analyze", "-t"], &[("A", "true"), ("t", "true")], None),
+            (&["--an"], &[("A", "true")], None),
+            (&["-Aj"], &[("A", "true"), ("j", "true")], None),
             (&["-p", HASH, "filter"], &[("p", "true")], Some(HASH)),
             (
                 &["-R", HASH, "-i", "id", "-W5", "-t"],

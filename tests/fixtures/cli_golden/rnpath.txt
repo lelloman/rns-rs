@@ -4,7 +4,7 @@ exit: Some(0)
 usage: rnpath [-h] [--config CONFIG] [--version] [-t] [-a] [-u] [-V] [-E]
               [-m hops] [-M hops] [-r] [-d] [-D] [-x] [-w seconds] [-R hash]
               [-i path] [-W seconds] [-b] [-B] [-U] [--duration DURATION]
-              [--reason REASON] [-p] [-j] [-v]
+              [--reason REASON] [-p] [-j] [-A] [-v]
               [destination] [list_filter]
 
 Reticulum Path Management Utility
@@ -42,6 +42,7 @@ options:
                         view published blackhole list for remote transport
                         instance
   -j, --json            output in JSON format
+  -A, --analyze         Analyze tables
   -v, --verbose
 --- stderr
 --- end
@@ -60,7 +61,7 @@ exit: Some(2)
 usage: rnpath [-h] [--config CONFIG] [--version] [-t] [-a] [-u] [-V] [-E]
               [-m hops] [-M hops] [-r] [-d] [-D] [-x] [-w seconds] [-R hash]
               [-i path] [-W seconds] [-b] [-B] [-U] [--duration DURATION]
-              [--reason REASON] [-p] [-j] [-v]
+              [--reason REASON] [-p] [-j] [-A] [-v]
               [destination] [list_filter]
 rnpath: error: unrecognized arguments: --no-such-option
 --- end
