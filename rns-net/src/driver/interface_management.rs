@@ -83,6 +83,7 @@ impl Driver {
         self.interface_runtime_defaults.remove(name);
         self.interface_ifac_runtime.remove(name);
         self.interface_ifac_runtime_defaults.remove(name);
+        #[cfg(runtime_config_ifaces)]
         self.remove_managed_runtime(name);
         if let Some(announcer) = self.interface_announcer.as_mut() {
             announcer.remove_interface(name);
@@ -247,7 +248,12 @@ impl Driver {
         let mut ifac_state = derive_ifac_state(config.ifac.as_ref(), &config.name)?;
         let ifac_runtime =
             ifac_runtime_from_config(config.ifac.as_ref(), factory.default_ifac_size());
-        self.register_managed_runtime(&config, transport_enabled);
+        #[cfg(runtime_config_ifaces)]
+        self.register_managed_runtime(
+            &config,
+            #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
+            transport_enabled,
+        );
         self.set_interface_announce_limits(&config.name, config.announce_limits);
         let ctx = StartContext {
             tx: self.event_tx.clone(),
@@ -268,6 +274,7 @@ impl Driver {
         let result = match factory.start(config.config_data, ctx) {
             Ok(result) => result,
             Err(error) => {
+                #[cfg(runtime_config_ifaces)]
                 self.remove_managed_runtime(&config.name);
                 return Err(error);
             }
@@ -363,6 +370,7 @@ impl Driver {
         Ok(())
     }
 
+    #[cfg(runtime_config_ifaces)]
     fn remove_managed_runtime(&mut self, name: &str) {
         #[cfg(feature = "iface-backbone")]
         {
@@ -399,10 +407,11 @@ impl Driver {
         }
     }
 
+    #[cfg(runtime_config_ifaces)]
     fn register_managed_runtime(
         &mut self,
         config: &crate::node::InterfaceConfig,
-        transport_enabled: bool,
+        #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))] transport_enabled: bool,
     ) {
         #[cfg(feature = "iface-backbone")]
         if let Some(mode) = config

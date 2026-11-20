@@ -44,7 +44,7 @@ use crate::event::{Event, EventSender};
 use crate::event::{LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
 use crate::interface::loop_writer::LoopEgress;
-use crate::interface::tcp::{read_stream_frames, StreamRead};
+use crate::interface::stream_read::{read_stream_frames, StreamRead};
 use crate::interface::transmit_buffer::{
     EgressController, TransmitBuffer, EGRESS_DEAD_TIME, EGRESS_HIGH_WATERMARK,
 };

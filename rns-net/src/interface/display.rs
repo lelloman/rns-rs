@@ -6,10 +6,12 @@
 //! Instance[...]` specially. The config name stays the interface's
 //! `InterfaceInfo::name`; these names are only for reporting.
 
+#[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
 use std::net::IpAddr;
 
 /// An address as upstream formats it inside a display name: IPv6 in
 /// brackets.
+#[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
 fn host(ip: &str) -> String {
     if ip.contains(':') {
         format!("[{ip}]")
@@ -26,26 +28,34 @@ pub(crate) fn typed(interface_type: &str, name: &str) -> String {
 
 /// The `interface.name` of an upstream interface class that never sets
 /// one (`AutoInterfacePeer`, `WeaveInterfacePeer`): `str(None)`.
+#[cfg(any(
+    feature = "iface-auto",
+    all(feature = "iface-weave", target_os = "linux")
+))]
 pub(crate) const UNNAMED: &str = "None";
 
 /// The name upstream gives a client a TCP or Backbone listener accepted:
 /// `Client on {listener}`, the same for every client of the listener.
+#[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
 pub(crate) fn spawned_client_name(listener_name: &str) -> String {
     format!("Client on {listener_name}")
 }
 
 /// `TCPClientInterface`: `TCPInterface[{name}/{target_ip}:{target_port}]`.
+#[cfg(feature = "iface-tcp")]
 pub(crate) fn tcp_client(name: &str, target_host: &str, target_port: u16) -> String {
     format!("TCPInterface[{name}/{}:{target_port}]", host(target_host))
 }
 
 /// `TCPServerInterface`: `TCPServerInterface[{name}/{bind_ip}:{bind_port}]`.
+#[cfg(feature = "iface-tcp")]
 pub(crate) fn tcp_server(name: &str, bind_ip: &str, bind_port: u16) -> String {
     format!("TCPServerInterface[{name}/{}:{bind_port}]", host(bind_ip))
 }
 
 /// A client a TCP server accepted: upstream spawns a `TCPClientInterface`
 /// named `Client on {listener}` that targets the peer.
+#[cfg(feature = "iface-tcp")]
 pub(crate) fn tcp_server_client(listener_name: &str, peer_ip: IpAddr, peer_port: u16) -> String {
     tcp_client(
         &spawned_client_name(listener_name),
@@ -55,6 +65,7 @@ pub(crate) fn tcp_server_client(listener_name: &str, peer_ip: IpAddr, peer_port:
 }
 
 /// `UDPInterface`: `UDPInterface[{name}/{bind_ip}:{bind_port}]`.
+#[cfg(feature = "iface-udp")]
 pub(crate) fn udp(name: &str, bind_ip: Option<&str>, bind_port: Option<u16>) -> String {
     let bind_ip = bind_ip.unwrap_or("None");
     let bind_port = bind_port.map_or_else(|| "None".to_string(), |port| port.to_string());
@@ -63,12 +74,14 @@ pub(crate) fn udp(name: &str, bind_ip: Option<&str>, bind_port: Option<u16>) -> 
 
 /// A `BackboneInterface` listener or client: the listener shows its bind
 /// address, a client its target.
+#[cfg(feature = "iface-backbone")]
 pub(crate) fn backbone(name: &str, ip: &str, port: u16) -> String {
     format!("BackboneInterface[{name}/{}:{port}]", host(ip))
 }
 
 /// A client a `BackboneInterface` listener accepted: upstream names it
 /// `Client on {listener}`, targeting the peer.
+#[cfg(feature = "iface-backbone")]
 pub(crate) fn backbone_server_client(
     listener_name: &str,
     peer_ip: IpAddr,
@@ -84,6 +97,7 @@ pub(crate) fn backbone_server_client(
 /// The shared instance listener, upstream's `LocalServerInterface`:
 /// `Shared Instance[rns/{instance}]` on the abstract Unix socket, else
 /// `Shared Instance[{port}]`.
+#[cfg(feature = "iface-local")]
 pub(crate) fn shared_instance(endpoint: &LocalEndpoint) -> String {
     format!("Shared Instance[{}]", endpoint.label())
 }
@@ -91,11 +105,13 @@ pub(crate) fn shared_instance(endpoint: &LocalEndpoint) -> String {
 /// A local client interface, on either end of a shared instance
 /// connection: `LocalInterface[rns/{instance}]` on the abstract Unix
 /// socket, else `LocalInterface[{port}]`.
+#[cfg(feature = "iface-local")]
 pub(crate) fn local_client(endpoint: &LocalEndpoint) -> String {
     format!("LocalInterface[{}]", endpoint.label())
 }
 
 /// Where a shared instance is served, as its display names show it.
+#[cfg(feature = "iface-local")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LocalEndpoint {
     /// The abstract Unix socket `\0rns/{instance}`.
@@ -104,6 +120,7 @@ pub(crate) enum LocalEndpoint {
     Tcp(u16),
 }
 
+#[cfg(feature = "iface-local")]
 impl LocalEndpoint {
     /// Where a client connects: the abstract Unix socket of `instance`
     /// when it uses one (Linux only), else TCP `port`.
@@ -124,6 +141,7 @@ impl LocalEndpoint {
 }
 
 /// An `AutoInterface` peer: `AutoInterfacePeer[{ifname}/{addr}]`.
+#[cfg(feature = "iface-auto")]
 pub(crate) fn auto_peer(ifname: &str, addr: &str) -> String {
     format!("AutoInterfacePeer[{ifname}/{addr}]")
 }
@@ -131,6 +149,7 @@ pub(crate) fn auto_peer(ifname: &str, addr: &str) -> String {
 /// The `interface.name` of an `I2PInterface` peer: `{name} to {peer}` when
 /// this node connected out, `Connected peer on {name}` when it accepted the
 /// connection. Its display name is `I2PInterfacePeer[{that name}]`.
+#[cfg(feature = "iface-i2p")]
 pub(crate) fn i2p_peer_name(interface_name: &str, peer: &str, outbound: bool) -> String {
     if outbound {
         format!("{interface_name} to {peer}")
@@ -141,6 +160,7 @@ pub(crate) fn i2p_peer_name(interface_name: &str, peer: &str, outbound: bool) ->
 
 /// A `WeaveInterface` peer: `WeaveInterfacePeer[{RNS.hexrep(endpoint)}]`,
 /// colon-delimited.
+#[cfg(all(feature = "iface-weave", target_os = "linux"))]
 pub(crate) fn weave_peer(endpoint: &[u8]) -> String {
     let hexrep = endpoint
         .iter()

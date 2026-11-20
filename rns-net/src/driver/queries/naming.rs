@@ -11,6 +11,7 @@ impl Driver {
         // The shared instance's clients on its Unix socket, which its
         // listener spawns unnamed: upstream names them after the socket.
         // (On TCP the listener names them after their port.)
+        #[cfg(feature = "iface-local")]
         if entry.info.is_local_client && entry.dynamic {
             if let Some(ListenerStat {
                 clients: ListenerClients::Local(endpoint),
@@ -30,6 +31,7 @@ impl Driver {
     /// socket, before it is added, as upstream does: `{clients}@\0rns/{instance}`,
     /// after the number of clients the instance serves (on TCP the
     /// listener names its clients after their port).
+    #[cfg(feature = "iface-local")]
     pub(crate) fn name_local_client(&mut self, id: InterfaceId) {
         if self.interface_short_names.contains_key(&id) {
             return;

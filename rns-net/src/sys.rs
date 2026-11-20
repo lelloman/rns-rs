@@ -179,6 +179,7 @@ unsafe fn sockaddr_ip(sa: *const libc::sockaddr) -> Option<IpAddr> {
 }
 
 /// The index of the network interface named `name`, or 0 when there is none.
+#[cfg(feature = "iface-auto")]
 pub(crate) fn interface_index(name: &CStr) -> u32 {
     // SAFETY: `name` is a live NUL-terminated string.
     unsafe { libc::if_nametoindex(name.as_ptr()) }
@@ -186,6 +187,11 @@ pub(crate) fn interface_index(name: &CStr) -> u32 {
 
 /// `read(2)` into `buf`: the bytes read, 0 at end of file, or a negative
 /// value with the error in `errno` (`io::Error::last_os_error`).
+#[cfg(any(
+    stream_read_ifaces,
+    feature = "iface-rnode",
+    all(feature = "iface-weave", target_os = "linux")
+))]
 #[inline]
 pub(crate) fn read(fd: RawFd, buf: &mut [u8]) -> isize {
     // SAFETY: `buf` is valid for writes of `buf.len()` bytes for the call.
@@ -193,6 +199,7 @@ pub(crate) fn read(fd: RawFd, buf: &mut [u8]) -> isize {
 }
 
 /// `recv(2)` into `buf` with `flags`, returning as [`read`] does.
+#[cfg(stream_read_ifaces)]
 #[inline]
 pub(crate) fn recv(fd: RawFd, buf: &mut [u8], flags: libc::c_int) -> isize {
     // SAFETY: `buf` is valid for writes of `buf.len()` bytes for the call.
@@ -202,6 +209,12 @@ pub(crate) fn recv(fd: RawFd, buf: &mut [u8], flags: libc::c_int) -> isize {
 /// `poll(2)` for input on `fd`, waiting at most `timeout_ms` (negative:
 /// forever): the descriptor's `revents`, 0 on timeout. An invalid
 /// descriptor shows as `POLLNVAL`.
+#[cfg(any(
+    feature = "iface-serial",
+    feature = "iface-kiss",
+    feature = "iface-rnode",
+    all(feature = "iface-weave", target_os = "linux")
+))]
 pub(crate) fn poll_in(fd: RawFd, timeout_ms: libc::c_int) -> io::Result<libc::c_short> {
     let mut pfd = libc::pollfd {
         fd,

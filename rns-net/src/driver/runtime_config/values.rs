@@ -22,6 +22,7 @@ impl Driver {
 
     /// A discovery stamp cost, fractional since upstream 796ef2d4 and at most
     /// `STAMP_COST_CAP`.
+    #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
     pub(crate) fn expect_discovery_stamp_value(
         value: RuntimeConfigValue,
         key: &str,
@@ -57,6 +58,13 @@ impl Driver {
 
     /// Convert a number of seconds into a `Duration`, rejecting values that
     /// cannot be represented or that would overflow when added to `Instant::now()`.
+    #[cfg(any(
+        feature = "iface-tcp",
+        feature = "iface-auto",
+        feature = "iface-pipe",
+        feature = "iface-backbone",
+        feature = "iface-i2p"
+    ))]
     pub(crate) fn duration_from_secs(secs: f64, key: &str) -> Result<Duration, RuntimeConfigError> {
         Duration::try_from_secs_f64(secs)
             .ok()
@@ -67,6 +75,7 @@ impl Driver {
             })
     }
 
+    #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
     pub(crate) fn expect_duration_secs(
         value: RuntimeConfigValue,
         key: &str,
@@ -100,6 +109,7 @@ impl Driver {
         }
     }
 
+    #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
     pub(crate) fn expect_string(
         value: RuntimeConfigValue,
         key: &str,
@@ -113,6 +123,7 @@ impl Driver {
         }
     }
 
+    #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
     pub(crate) fn expect_optional_f64(
         value: RuntimeConfigValue,
         key: &str,
@@ -128,6 +139,11 @@ impl Driver {
         }
     }
 
+    #[cfg(any(
+        feature = "iface-tcp",
+        feature = "iface-udp",
+        feature = "iface-backbone"
+    ))]
     pub(crate) fn expect_optional_string(
         value: RuntimeConfigValue,
         key: &str,
@@ -143,6 +159,7 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-backbone")]
+    #[cfg(feature = "iface-backbone")]
     pub(crate) fn set_optional_duration(
         value: RuntimeConfigValue,
         key: &str,
@@ -155,6 +172,7 @@ impl Driver {
         }
     }
 
+    #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
     pub(crate) fn set_optional_usize(
         value: RuntimeConfigValue,
         key: &str,

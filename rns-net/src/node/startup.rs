@@ -683,6 +683,7 @@ impl RnsNode {
         let mut discoverable_interfaces = Vec::new();
         #[cfg(feature = "iface-backbone")]
         let mut backbone_peer_pool_candidates = Vec::new();
+        #[cfg(feature = "iface-backbone")]
         let mut configured_client_targets: Vec<(String, u16)> = Vec::new();
 
         let initial_managed_ids = interface_management
@@ -698,7 +699,14 @@ impl RnsNode {
         for iface_config in config.interfaces {
             driver.set_interface_announce_limits(&iface_config.name, iface_config.announce_limits);
             let managed_id = initial_managed_ids.get(&iface_config.name).copied();
-            register_interface_runtime(&mut driver, &iface_config, config.transport_enabled);
+            #[cfg(runtime_config_ifaces)]
+            register_interface_runtime(
+                &mut driver,
+                &iface_config,
+                #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
+                config.transport_enabled,
+            );
+            #[cfg(feature = "iface-backbone")]
             configured_client_targets.extend(configured_client_target(&iface_config));
 
             let factory = match registry.get(&iface_config.type_name) {
@@ -986,6 +994,7 @@ impl RnsNode {
             driver.enable_upstream_autoconnect(
                 config.discovery.autoconnect_discovered_interfaces,
                 config.discovery.bootstrap_interfaces.clone(),
+                #[cfg(feature = "iface-backbone")]
                 configured_client_targets,
             );
             driver.autoconnect_stored_discoveries();

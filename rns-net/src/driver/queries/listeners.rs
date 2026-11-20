@@ -3,17 +3,26 @@
 use super::*;
 
 impl Driver {
+    #[cfg(feature = "iface-local")]
     pub(super) fn shared_instance_listener(&self) -> Option<&ListenerStat> {
         self.listener_stats
             .iter()
             .find(|listener| matches!(listener.clients, ListenerClients::Local(_)))
     }
 
+    #[cfg(not(feature = "iface-local"))]
+    pub(super) fn shared_instance_listener(&self) -> Option<&ListenerStat> {
+        None
+    }
+
     /// Whether `entry` is one of the interfaces `listener` serves.
     pub(super) fn listener_serves(&self, listener: &ListenerStat, entry: &InterfaceEntry) -> bool {
         match &listener.clients {
+            #[cfg(feature = "iface-local")]
             ListenerClients::Local(_) => entry.info.is_local_client && entry.dynamic,
             ListenerClients::Subinterfaces(ids) => ids.contains(&entry.info.id),
+            // The others are registered as their interfaces' parent.
+            #[cfg(any(feature = "iface-tcp", feature = "iface-auto", feature = "iface-i2p"))]
             _ => self.dynamic_interface_parents.get(&entry.info.id) == Some(&listener.id),
         }
     }
@@ -57,18 +66,13 @@ impl Driver {
             .values()
             .filter(|entry| self.listener_serves(listener, entry))
             .collect();
-        let mut status = true;
-        let mut clients = Some(children.len() as u64);
-        let mut peers = None;
-        let mut i2p = None;
-        // Whether only accepted peers' transmitted bytes add up on it.
-        let mut accepted_tx_only = false;
-        match &listener.clients {
-            ListenerClients::Spawned | ListenerClients::Local(_) => {}
-            ListenerClients::AutoPeers => {
-                clients = None;
-                peers = Some(children.len());
-            }
+        let (status, clients, peers, i2p, accepted_tx_only) = match &listener.clients {
+            #[cfg(feature = "iface-tcp")]
+            ListenerClients::Spawned => (true, Some(children.len() as u64), None, None, false),
+            #[cfg(feature = "iface-local")]
+            ListenerClients::Local(_) => (true, Some(children.len() as u64), None, None, false),
+            #[cfg(feature = "iface-auto")]
+            ListenerClients::AutoPeers => (true, None, Some(children.len()), None, false),
             #[cfg(feature = "iface-i2p")]
             ListenerClients::I2pPeers(i2p_listener) => {
                 let (online, b32) = {
@@ -76,27 +80,38 @@ impl Driver {
                         crate::interface::lock_or_recover(&i2p_listener.endpoint, "i2p endpoint");
                     (endpoint.online, endpoint.b32.clone())
                 };
-                status = online;
-                clients = Some(
-                    children
-                        .iter()
-                        .filter(|child| self.i2p_peer_accepted(&child.info.id))
-                        .count() as u64,
-                );
-                peers = i2p_listener.configured_peers;
-                i2p = Some(crate::event::I2pEndpointStat {
+                let accepted = children
+                    .iter()
+                    .filter(|child| self.i2p_peer_accepted(&child.info.id))
+                    .count() as u64;
+                let i2p = crate::event::I2pEndpointStat {
                     connectable: i2p_listener.connectable,
                     b32,
-                });
-                accepted_tx_only = true;
+                };
+                // Only accepted peers' transmitted bytes add up on it.
+                (
+                    online,
+                    Some(accepted),
+                    i2p_listener.configured_peers,
+                    Some(i2p),
+                    true,
+                )
             }
             ListenerClients::Subinterfaces(_) => {
                 // Online while its device is. As upstream, its
                 // subinterfaces exist only while the device is configured.
-                status = children.iter().any(|child| child.online);
-                clients = Some(children.iter().filter(|child| child.online).count() as u64);
+                let status = children.iter().any(|child| child.online);
+                let clients = children.iter().filter(|child| child.online).count() as u64;
+                (status, Some(clients), None, None, false)
             }
-        }
+        };
+        #[cfg(feature = "iface-local")]
+        let bitrate = match listener.clients {
+            ListenerClients::Local(_) => self.forced_local_bitrate.or(listener.bitrate),
+            _ => listener.bitrate,
+        };
+        #[cfg(not(feature = "iface-local"))]
+        let bitrate = listener.bitrate;
         let mut stat = SingleInterfaceStat {
             id: listener.id.0,
             name: listener.name.clone(),
@@ -141,10 +156,7 @@ impl Driver {
             channel: None,
             modulation: None,
             radio: None,
-            bitrate: match listener.clients {
-                ListenerClients::Local(_) => self.forced_local_bitrate.or(listener.bitrate),
-                _ => listener.bitrate,
-            },
+            bitrate,
             bitrate_is_float: false,
             mtu: Some(listener.mtu),
             ifac_size: listener.ifac.as_ref().map(|ifac| ifac.size),

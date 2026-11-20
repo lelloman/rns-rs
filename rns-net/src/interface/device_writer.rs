@@ -19,6 +19,10 @@ const DRIVEN_BUFFER_LIMIT: usize = 128 * 1024;
 /// driver loop (see [`crate::engine::FOLD_IO`]) it is *driven*: writes are
 /// buffered and written without blocking, and the rest is written when the
 /// driver reports the transport writable (see [`DeviceWriter::drain`]).
+#[cfg_attr(
+    not(feature = "iface-rnode"),
+    allow(unreachable_pub, reason = "public only through rnode::DeviceWriter")
+)]
 pub struct DeviceWriter<T> {
     transport: T,
     driven: Option<Driven>,
@@ -48,6 +52,10 @@ impl<T: std::fmt::Debug> std::fmt::Debug for DeviceWriter<T> {
 
 impl<T: Write + AsRawFd> DeviceWriter<T> {
     /// A writer that writes straight to `transport`.
+    #[cfg_attr(
+        not(feature = "iface-rnode"),
+        allow(unreachable_pub, reason = "public only through rnode::DeviceWriter")
+    )]
     pub fn new(transport: T) -> Self {
         Self {
             transport,
@@ -110,6 +118,7 @@ impl<T: Write + AsRawFd> DeviceWriter<T> {
 
     /// Write to a reopened connection from now on, dropping whatever was
     /// left unwritten on the old one.
+    #[cfg(feature = "iface-rnode")]
     pub(crate) fn replace(&mut self, transport: T) {
         self.unregister();
         self.transport = transport;
@@ -133,6 +142,7 @@ impl<T: Write + AsRawFd> DeviceWriter<T> {
     }
 
     /// Whether a driven writer still holds bytes it has not written.
+    #[cfg(feature = "iface-rnode")]
     pub(crate) fn holds_unwritten(&self) -> bool {
         self.driven
             .as_ref()
@@ -230,6 +240,7 @@ impl<T: Write + AsRawFd> Write for DeviceWriter<T> {
 
 impl<T> DeviceWriter<T> {
     /// The connection written to.
+    #[cfg(feature = "iface-rnode")]
     pub(crate) fn transport(&self) -> &T {
         &self.transport
     }

@@ -117,10 +117,11 @@ pub(super) fn load_configured_hooks(driver: &mut Driver, hooks: &[config::Parsed
 
 /// Register the runtime settings of a configured interface with the driver,
 /// for the interface types that have them.
+#[cfg(runtime_config_ifaces)]
 pub(super) fn register_interface_runtime(
     driver: &mut Driver,
     iface_config: &InterfaceConfig,
-    transport_enabled: bool,
+    #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))] transport_enabled: bool,
 ) {
     #[cfg(feature = "iface-backbone")]
     if iface_config.type_name == "BackboneInterface" {
@@ -232,6 +233,7 @@ pub(super) fn register_interface_runtime(
 
 /// The host and port a configured TCP or Backbone client connects to, which
 /// an auto-connect must not duplicate.
+#[cfg(feature = "iface-backbone")]
 pub(super) fn configured_client_target(iface_config: &InterfaceConfig) -> Option<(String, u16)> {
     #[cfg(feature = "iface-tcp")]
     if let Some(tcp) = iface_config

@@ -84,6 +84,7 @@ struct StallWatch {
 
 impl LoopEgress {
     /// Admit frames within `control`'s budget, recording what is dropped.
+    #[cfg(feature = "iface-backbone")]
     pub(crate) fn budget(control: EgressControl) -> Self {
         Self {
             control,
@@ -94,6 +95,7 @@ impl LoopEgress {
     /// Also judge the peer stalled when it drains too slowly, and drop the
     /// connection, setting `flag`, when the peer makes no progress for
     /// `timeout` ([`EGRESS_DEAD_TIME`], upstream's 12 s, when it is `None`).
+    #[cfg(feature = "iface-backbone")]
     pub(crate) fn with_stall_watch(
         mut self,
         timeout: impl Fn() -> Option<Duration> + Send + 'static,

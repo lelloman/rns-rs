@@ -537,7 +537,7 @@ fn reopen_port(
         stop_bits: config.stop_bits,
     };
     // A 2-second init delay before the TNC is configured.
-    super::serial_iface::reopen_serial_port(
+    crate::serial::reopen_serial_port(
         &config.name,
         "KISS",
         &serial_config,

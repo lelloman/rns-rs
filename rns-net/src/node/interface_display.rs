@@ -20,6 +20,15 @@ pub(crate) struct ConfiguredDisplay {
 
 impl ConfiguredDisplay {
     pub(crate) fn of(config: &InterfaceConfig, ifac: Option<&ifac::IfacState>) -> Self {
+        #[cfg(any(
+            feature = "iface-tcp",
+            feature = "iface-udp",
+            feature = "iface-local",
+            feature = "iface-auto",
+            feature = "iface-rnode",
+            feature = "iface-backbone",
+            feature = "iface-i2p"
+        ))]
         use crate::interface::display;
         let data = config.config_data.as_any();
         let name = config.name.as_str();

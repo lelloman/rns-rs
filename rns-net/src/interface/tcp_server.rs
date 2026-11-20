@@ -17,7 +17,9 @@ use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInf
 
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
-use crate::interface::tcp::{read_stream_frames, StreamRead};
+use crate::interface::stream_read::{
+    accept_error_step, read_stream_frames, AcceptStep, StreamRead,
+};
 use crate::interface::{lock_or_recover, ListenerControl, Writer};
 
 /// Upstream `TCPInterface.HW_MTU` inherited by spawned server clients.
@@ -286,8 +288,6 @@ impl LoopSource for ListenerSource {
         SourceStatus::Rearm
     }
 }
-
-pub(crate) use super::stream_read::{accept_error_step, AcceptStep};
 
 enum Admitted {
     Client(InterfaceId, Box<dyn LoopSource>),

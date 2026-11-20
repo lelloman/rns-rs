@@ -1,18 +1,29 @@
 //! Reading stream sockets and accepting connections on the driver loop,
 //! shared by the interfaces whose I/O runs there.
 
+#[cfg(stream_read_ifaces)]
 use std::io;
 
+#[cfg(stream_read_ifaces)]
 use rns_core::transport::types::InterfaceId;
 
+#[cfg(stream_read_ifaces)]
 use crate::event::{Event, EventSender, LoopContext};
+#[cfg(stream_read_ifaces)]
 use crate::hdlc;
 
 /// Bytes read from one stream socket per readiness before other sources
 /// get a turn; the socket is re-armed and served again on the next pass.
+#[cfg(any(
+    stream_read_ifaces,
+    feature = "iface-kiss",
+    feature = "iface-rnode",
+    all(feature = "iface-weave", target_os = "linux")
+))]
 pub(crate) const STREAM_READ_BUDGET: usize = 256 * 1024;
 
 /// How a read pass over a stream socket ended.
+#[cfg(stream_read_ifaces)]
 pub(crate) enum StreamRead {
     /// The socket is drained or the read budget is spent: watch it again.
     Rearm,
@@ -31,6 +42,12 @@ pub(crate) enum StreamRead {
 /// reporting the bytes and frames of each read to `on_read`.
 /// Reads nothing while inbound data is full, so data queued past capacity
 /// is bounded by one read per socket.
+#[cfg(any(
+    feature = "iface-tcp",
+    feature = "iface-local",
+    feature = "iface-backbone",
+    feature = "iface-i2p"
+))]
 pub(crate) fn read_stream_frames(
     fd: std::os::fd::RawFd,
     decoder: &mut hdlc::Decoder,
@@ -45,7 +62,7 @@ pub(crate) fn read_stream_frames(
 
 /// [`read_stream_frames`] for a descriptor that is not a socket, such as a
 /// serial port. It must be non-blocking (see [`set_nonblocking`]).
-#[cfg_attr(not(feature = "iface-serial"), allow(dead_code))]
+#[cfg(any(feature = "iface-serial", feature = "iface-pipe"))]
 pub(crate) fn read_device_frames(
     fd: std::os::fd::RawFd,
     decoder: &mut hdlc::Decoder,
@@ -58,6 +75,7 @@ pub(crate) fn read_device_frames(
     read_frames(fd, true, decoder, cx, tx, id, name, on_read)
 }
 
+#[cfg(stream_read_ifaces)]
 #[allow(clippy::too_many_arguments)]
 fn read_frames(
     fd: std::os::fd::RawFd,
@@ -128,6 +146,7 @@ fn read_frames(
 /// Whether a socket's peer has closed it or it failed: the next `recv`
 /// would return end of stream or an error rather than data or EAGAIN.
 /// Consumes nothing.
+#[cfg(feature = "iface-backbone")]
 pub(crate) fn socket_hung_up(fd: std::os::fd::RawFd) -> bool {
     let mut byte = 0u8;
     loop {
@@ -151,6 +170,11 @@ pub(crate) fn socket_hung_up(fd: std::os::fd::RawFd) -> bool {
 }
 
 /// What the accept loop does after `accept` returns an error.
+#[cfg(any(
+    feature = "iface-tcp",
+    feature = "iface-local",
+    feature = "iface-backbone"
+))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AcceptStep {
     /// No connection is pending: wait for readiness.
@@ -162,6 +186,11 @@ pub(crate) enum AcceptStep {
     Pause,
 }
 
+#[cfg(any(
+    feature = "iface-tcp",
+    feature = "iface-local",
+    feature = "iface-backbone"
+))]
 pub(crate) fn accept_error_step(error: &io::Error) -> AcceptStep {
     match error.kind() {
         io::ErrorKind::WouldBlock => AcceptStep::Drained,
