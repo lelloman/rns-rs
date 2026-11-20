@@ -630,12 +630,16 @@ fn run(cmd: &mut Command) -> Result<String> {
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::process::{Child, Command, Stdio};
     use std::time::{Duration, Instant};
 
     /// A `git daemon` serving every repository under a directory over
     /// `git://127.0.0.1:<port>/`, stopped when dropped.
+    ///
+    /// `git-daemon` is started directly rather than through the `git`
+    /// wrapper: the wrapper runs it as a separate child, so killing the
+    /// wrapper on drop would leave the daemon orphaned and listening.
     pub(crate) struct GitDaemon {
         child: Child,
         port: u16,
@@ -643,14 +647,14 @@ pub(crate) mod test_support {
 
     impl GitDaemon {
         pub(crate) fn serve(base: &Path) -> Self {
+            let daemon = git_daemon_path();
             let mut last_error = String::new();
             for _ in 0..5 {
                 let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
                     .and_then(|listener| listener.local_addr())
                     .map(|addr| addr.port())
                     .expect("reserve local port");
-                let mut child = Command::new("git")
-                    .arg("daemon")
+                let mut child = Command::new(&daemon)
                     .arg("--reuseaddr")
                     .arg("--export-all")
                     .arg("--listen=127.0.0.1")
@@ -683,6 +687,16 @@ pub(crate) mod test_support {
         pub(crate) fn url(&self, name: &str) -> String {
             format!("git://127.0.0.1:{}/{name}", self.port)
         }
+    }
+
+    fn git_daemon_path() -> PathBuf {
+        let output = Command::new("git")
+            .arg("--exec-path")
+            .output()
+            .expect("run git --exec-path");
+        assert!(output.status.success(), "git --exec-path failed");
+        let exec_path = String::from_utf8(output.stdout).expect("utf-8 git exec path");
+        Path::new(exec_path.trim()).join("git-daemon")
     }
 
     impl Drop for GitDaemon {
