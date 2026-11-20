@@ -62,10 +62,10 @@ evidence exist; until then nothing here is claimed as passed.
 | 3 | `338df096` | 2026-11-16 | Updated docs | Non-runtime | `35cd3471`; `docs/interface-discovery.md` sizing guidance |
 | 4 | `2b1a984c` | 2026-11-17 | Fixed IFAC identity not being available at early tunnel synthesis | Structurally covered | `d8761e59`; `tunnel_synthesis_carries_the_interface_access_code` |
 | 5 | `25cce0a8` | 2026-11-17 | Ensure transport identity availability before early tunnel synthesis | Structurally covered | `a097a14e`; `a_dialing_tcp_client_first_sends_a_synthesis_signed_by_the_transport_identity` |
-| 6 | `cc5d6dd0` | 2026-11-17 | Logging | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
-| 7 | `12b2b8c0` | 2026-11-17 | Updated link tests | Proposed: Non-runtime | Reviewed 2026-11-20; no mapping commit yet |
-| 8 | `4916017a` | 2026-11-17 | Abort early on non-enabled link mode | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
-| 9 | `48c77061` | 2026-11-17 | Load known destinations over RPC in split mode | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
+| 6 | `cc5d6dd0` | 2026-11-17 | Logging | Structurally covered | `fa13858a`; invariant comment in `rns-cli/src/rnsh/initiator.rs` |
+| 7 | `12b2b8c0` | 2026-11-17 | Updated link tests | Non-runtime | `39b2b2dd`; doc comment on `wait_for_link_established` (`rns-net/tests/e2e.rs`) |
+| 8 | `4916017a` | 2026-11-17 | Abort early on non-enabled link mode | Structurally covered | `2309725b`; `every_outbound_link_request_signals_aes_256_cbc`; follow-up `59af6496` (decision 7) |
+| 9 | `48c77061` | 2026-11-17 | Load known destinations over RPC in split mode | Integrated | `55dc3aa5`; `known_destinations_rpc_answers_upstreams_dict`, `known_destination_entries_rpc_keeps_the_native_list`, `a_split_mode_client_loads_known_destinations_over_rpc`, `python_split_mode_client_loads_rust_known_destinations_over_rpc` |
 | 10 | `f876ed8d` | 2026-11-17 | Show remote transport status on tunnels | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
 | 11 | `0123133e` | 2026-11-17 | Fixed CPython process fork stdin close deadlock | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
 | 12 | `05ac4bba` | 2026-11-17 | Added ability to configure destination value and link cost to rngit | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
@@ -233,6 +233,20 @@ brought up later, so its synthesis is masked too. Caveat: in
 no current interface type takes that path with `wants_tunnel`, so this is
 latent, not a live difference, and was left unchanged.
 
+Related hardening (not part of this mapping, disposition unchanged):
+`46cdb689` (`driver: a dynamic interface has its IFAC before it comes up`,
+no `Upstream-Commit` trailer) closes that caveat.
+`handle_dynamic_interface_up_event` now registers the interface, completes
+its entry (IFAC, type, names, parent) and only then runs the up handling
+(tunnel synthesis, then the callback and `InterfaceUp` hooks), which moved
+into `finish_interface_up`. Test
+`a_dynamic_interface_has_its_ifac_before_it_comes_up` (a non-reconnecting
+spawned interface that wants a tunnel, with its own IFAC and with its
+parent's) failed before the change (`own IFAC true: masked`, flag byte `0`
+instead of `128`) and passes after it. `cargo test -p rns-net` passed (lib 1590, `e2e.rs` 74
+with 1 ignored, `e2e_direct_connect.rs` 19, no failures); `cargo fmt
+--check` and `bash scripts/lint-host.sh` passed.
+
 Tests run: `cargo test -p rns-net --lib --
 tunnel_synthesis_carries_the_interface_access_code`, 1 passed (the frame
 carries the IFAC flag, a peer with the same access code records the client's
@@ -279,9 +293,17 @@ log moves before link creation and a DEBUG "No link" line is removed.
 **Rust applicability:** `rns-cli/src/rnsh/initiator.rs:52` already logs before
 `create_link`; the debug line was never ported.
 
-**Local handling:** A comment at `initiator.rs:52` recording the match.
+**Local handling and evidence:** `fa13858a`. Verified as reviewed: the rnsh
+initiator logs "Establishing link with <hash>" at INFO (`pylog::INFO_TARGET`)
+before `create_link`, and has no "No link" line. A comment there records
+the match with upstream's order.
 
-**Proposed disposition:** Structurally covered.
+Tests run: no focused test (log ordering only; the comment is the mapping).
+`cargo test -p rns-cli` passed (lib 133, the integration suites with no
+failures; `utility_interop.rs` 5 passed with 32 ignored);
+`cargo fmt --check` and `bash scripts/lint-host.sh` passed.
+
+**Final disposition:** Structurally covered.
 
 ### 7. `12b2b8c0` — Updated link tests
 
@@ -291,9 +313,16 @@ deadline instead of fixed sleeps. Test-only.
 **Rust applicability:** No port of `tests/link.py`. Native link tests already
 wait with deadlines (`rns-net/tests/e2e.rs:425`, `wait_for_link_established`).
 
-**Local handling:** Doc comment on `wait_for_link_established`.
+**Local handling and evidence:** `39b2b2dd`. The doc comment on
+`wait_for_link_established` (`rns-net/tests/e2e.rs`) records that link tests
+wait for establishment against a deadline, upstream's `await_link`. Test-only.
 
-**Proposed disposition:** Non-runtime.
+Tests run: `cargo test -p rns-net` passed (lib 1584, `e2e.rs` 74 with 1
+ignored, `e2e_direct_connect.rs` 19, `python_interop.rs` 6 with 1 ignored
+against the host's Python RNS 1.1.3, no failures); `cargo fmt --check` and
+`bash scripts/lint-host.sh` passed.
+
+**Final disposition:** Non-runtime.
 
 ### 8. `4916017a` — Abort early on non-enabled link mode
 
@@ -305,13 +334,47 @@ later.
 `LinkManager::create_link_with_keys` (`link_manager/establishment.rs:36`),
 hard-codes `Aes256Cbc`; no public API takes a mode.
 
-**Local handling:** Doc comment at `establishment.rs:36` and a test that an
-outbound link request signals AES-256-CBC. Separately, rns-rs as a responder
-accepts AES-128 requests (documented in `docs/protocol-spec.md` §11.1) where
-upstream rejects them; that predates this range and is listed under Open
-decisions.
+**Local handling and evidence:** `2309725b`. A comment at the mode in
+`LinkManager::create_link_with_keys` records upstream's `ENABLED_MODES`, and
+`every_outbound_link_request_signals_aes_256_cbc` pins that every outbound
+request (generated keys, pre-stamped keys, and without MTU signalling, where
+no mode is carried and AES-256-CBC is the default) signals AES-256-CBC and
+the engine's mode matches. A pinning test of covered behaviour.
 
-**Proposed disposition:** Structurally covered.
+The pre-existing AES-128 divergence was resolved per decision 7 in the
+separate commit `59af6496` (`link: only AES-256-CBC is enabled, as
+upstream`, no `Upstream-Commit` trailer). Upstream at `cff4d03f` reads the
+signalled mode in `validate_request`, and for AES-128-CBC `handshake()`
+succeeds but `prove()` raises in `signalling_bytes`, so the request is
+dropped without a proof and logged at debug as "Validating incoming link
+request failed: Requested link mode AES_128_CBC not enabled" (modes 2-7 fail
+in `handshake()` instead). In rns-rs, `LinkMode` gains `ENABLED`,
+`is_enabled()` and upstream's mode descriptions, `LinkError` gains
+`ModeNotEnabled` with upstream's text, the three `LinkEngine` initiator
+constructors return a `Result` and refuse a non-enabled mode before any key or
+stamp work, and `new_responder` refuses an AES-128-CBC request. rns-net drops
+such a request with upstream's debug line, sends no proof and does not count
+a protocol violation (it is well formed). Modes 2-7 were already refused, as
+malformed requests (`ProtocolViolation`, log "LINKREQUEST rejected:
+Unsupported link mode"); their log text still differs from upstream's
+"Invalid link mode N on <link>". `docs/protocol-spec.md` 11.1 and 16 now say
+only AES-256-CBC is enabled. `test_aes128_mode_handshake` became
+`an_aes_128_link_is_refused_by_initiator_and_responder`, and rns-net gained
+`an_aes_128_link_request_is_dropped_without_a_proof`, which failed with the
+responder check removed and passes with it. The AES-128 wire codec, key
+derivation and crypto vectors stay, as upstream keeps the mode defined.
+
+Tests run, `2309725b`: `cargo test -p rns-net --lib --
+every_outbound_link_request_signals_aes_256_cbc`, 1 passed; `cargo test -p
+rns-net` passed (lib 1585, `e2e.rs` 74 with 1 ignored,
+`e2e_direct_connect.rs` 19, no failures); `cargo fmt --check` and
+`bash scripts/lint-host.sh` passed. `59af6496`: `cargo test -p rns-core -p
+rns-net` passed (rns-core lib 1155 and its integration suites, rns-net lib
+1586, `e2e.rs` 74 with 1 ignored, `e2e_direct_connect.rs` 19,
+`python_interop.rs` 6 with 1 ignored, no failures); `cargo fmt --check` and
+`bash scripts/lint-host.sh` passed.
+
+**Final disposition:** Structurally covered.
 
 ### 9. `48c77061` — Load known destinations over RPC in split mode
 
@@ -329,12 +392,73 @@ its table and then fail when it tries to remember a new destination (inferred
 from the code, not yet run). On the client side, `load_instance_known_destinations`
 (`shared_client.rs:939-964`) has no RPC fallback.
 
-**Local handling:** Serve upstream's dict shape under `known_destinations`
-and move the native list to a new name (decision pending), add the client RPC
-fallback, and add an interop test where Python 1.6.1 loads known destinations
-from an rns-rs instance and can still learn new ones.
+**Local handling and evidence:** `55dc3aa5`, per decision 1. The inferred
+hazard was confirmed by running it: with the old list answer, a Python
+client at `48c77061` loaded a `list` table, recalled nothing, and failed to
+remember the next announce ("list indices must be integers or slices, not
+bytes").
 
-**Proposed disposition:** Needs port.
+Instance side: `known_destinations` answers upstream's dict, destination hash
+to `[last_heard, packet_hash, public_key, app_data, used, stamp,
+stamp_value, lr_cost]` with upstream's element types: `last_heard` a float;
+the announce's packet hash; the public key; `app_data` or None; `used` the
+int `0` when never used, the float time of last use, or the int `-1` when
+retained (as `Identity.remember` and `_retain_destination_data` write it);
+the stamp or None; `stamp_value` the int `0` without a stamp, else a float;
+`lr_cost` a float or None. rns-rs did not keep the packet hash, so
+`ReceivedAnnounce` now carries it, the driver keeps it with the known
+destination, and the SQLite store writes it to `packet_hash` (it wrote 32
+zero bytes) and reads it back; it is part of the flush fingerprint. A hash
+this node does not know (an entry from the legacy file, a hook-injected
+announce) is still 32 zero bytes in the database and in the answer. The
+native list moved to `{"get": "known_destination_entries"}`, which
+`RpcClient::known_destinations` calls (it has no other callers);
+`docs/getting-started.md` documents both names.
+
+Client side: a Rust shared instance client loads the instance's known
+destinations after its RPC is set up (upstream moved the load after
+`rpc_key` for this). When the database cannot be read it asks over RPC with
+upstream's texts and levels: debug "Could not load known destinations from
+shared instance database: ...", debug "Potentially running in split mode,
+attempting to load known destinations over RPC...", error "Shared instance
+RPC failed while getting known destinations: ..." (then an empty table),
+error "Could not load known destinations from shared instance: ..." for an
+answer that is not a dict, and verbose "Loaded N known destinations from
+shared instance". It no longer falls back to the instance's legacy snapshot
+file, which upstream's client never read. Entries over RPC carry no hops or
+receiving interface (zero), and a negative `used` reads as retained.
+
+Tests run: `known_destinations_rpc_answers_upstreams_dict` (the msgpack
+answer element by element, floats as float64, and the client parse) and
+`a_split_mode_client_loads_known_destinations_over_rpc` (a client in its own
+config directory loads an injected, retained destination from a daemon over
+RPC) both failed with the port stubbed out (old handler, no RPC fallback)
+and pass with it; `known_destination_entries_rpc_keeps_the_native_list`,
+the packet hash in `announce_received_populates_known_destinations`,
+`sqlite_known_destinations_roundtrip` and
+`a_known_destination_fingerprint_follows_every_field` pass. Python interop,
+`cargo test -p rns-cli --test utility_interop -- --ignored
+python_split_mode_client_loads_rust_known_destinations_over_rpc` with
+`PYTHONPATH` and `RETICULUM_UPSTREAM_DIR` at a disposable upstream worktree
+at `48c77061`: a Python split mode client of the Rust client daemon logged
+upstream's RPC path lines, loaded a `dict` whose entry for the known
+destination is `[float, bytes, bytes, None, float|int, bytes, float, float]`,
+recalled it, and remembered a destination announced after it loaded (an
+8-element entry). Runs: the first draft's assertion expected `used` to be
+the int 0, but the daemon had already used the destination, so it is a
+float, and the assertion was relaxed to either; the next run failed earlier,
+in the shared harness step "client daemon did not learn listener path"; the
+final test then passed three runs in a row. Against the old list answer the
+same test failed as described above. `cargo test -p rns-core -p
+rns-net -p rns-cli` passed (rns-core lib 1155, rns-net lib 1598, `e2e.rs` 74
+with 1 ignored, `e2e_direct_connect.rs` 19, `python_interop.rs` 6 with 1
+ignored, rns-cli lib 133, `utility_interop.rs` 5 with 33 ignored, no
+failures; rns-net's lib count is with the features rns-cli enables);
+`cargo fmt --check` passed. `bash scripts/lint-host.sh` first
+failed (the client-side parser is dead code without `iface-local`); it is
+gated on that feature and the rerun passed.
+
+**Final disposition:** Integrated.
 
 ### 10. `f876ed8d` — Show remote transport status on tunnels
 
@@ -716,7 +840,8 @@ Reviewed with the maintainer. The rule is to do what upstream does,
 utilities included.
 
 1. **Commit 9:** `known_destinations` answers with upstream's dict exactly;
-   the native list moves to a separate RPC name.
+   the native list moves to a separate RPC name. Implemented in `55dc3aa5`;
+   the native list is `known_destination_entries`.
 2. **Commits 22 and 26:** `link_distribution` follows upstream's shape at each
    commit (a set at 22, the de-duplicated list at 26); the native `total` key
    goes.
@@ -732,7 +857,9 @@ utilities included.
    per-class values, unread, marked `#[allow(dead_code)]` with the reason.
 7. **AES-128 (found via commit 8, pre-existing):** match upstream. Only
    AES-256-CBC is enabled; a responder refuses any other signalled mode.
-   Separate commit without an `Upstream-Commit` trailer.
+   Separate commit without an `Upstream-Commit` trailer. Implemented in
+   `59af6496` (`link: only AES-256-CBC is enabled, as upstream`), see
+   commit 8.
 8. **New-next-hop recovery of an unresponsive path (found via commit 17,
    pre-existing):** rns-rs keeps its behaviour by default, the divergence is
    documented, and a runtime `[reticulum]` option selects upstream's
