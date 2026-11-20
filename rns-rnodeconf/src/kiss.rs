@@ -1,4 +1,7 @@
-#![allow(dead_code)] // The full table; later stages use the rest.
+#![allow(
+    dead_code,
+    reason = "the full KISS command set the firmware speaks; not every command is sent or matched yet"
+)]
 //! The KISS framing and command set RNode firmware speaks, as upstream
 //! `rnodeconf.py`'s `KISS` class defines it.
 

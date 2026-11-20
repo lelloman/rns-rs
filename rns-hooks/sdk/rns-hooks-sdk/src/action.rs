@@ -63,7 +63,10 @@ pub fn encode_deliver_local(
 /// Encode `AnnounceReceived` without app_data. Returns bytes written.
 /// Layout: tag(1) + dest_hash(16) + identity_hash(16) + public_key(64) + name_hash(10) +
 ///         random_hash(10) + hops(1) + receiving_interface(8) + has_app_data(1) = 127
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one argument per field of the fixed action layout above"
+)]
 pub fn encode_announce_received(
     buf: &mut [u8],
     destination_hash: &[u8; 16],
@@ -88,7 +91,10 @@ pub fn encode_announce_received(
 
 /// Encode `AnnounceReceived` with app_data. Returns bytes written.
 /// Layout: 127 base + app_data_offset(4) + app_data_len(4) = 135
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one argument per field of the fixed action layout above"
+)]
 pub fn encode_announce_received_with_app_data(
     buf: &mut [u8],
     destination_hash: &[u8; 16],
