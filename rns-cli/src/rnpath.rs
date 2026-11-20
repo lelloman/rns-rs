@@ -48,6 +48,7 @@ pub const OPTIONS: OptionSpec = OptionSpec {
         Opt::flag("p", "blackholed-list"),
         Opt::flag("j", "json"),
         Opt::flag("A", "analyze"),
+        Opt::value("", "capture"),
         Opt::count("v", "verbose"),
         Opt::value("c", ""),
         Opt::value("", "identity").rust_only(),
@@ -109,6 +110,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let drop_queues = args.has("D");
     let json_output = args.has("j");
     let analyze = args.has("A");
+    let capture = args.get("capture").map(str::to_string);
     let max_hops: Option<u8> = args.get("m").and_then(|s| s.parse().ok());
     let show_blackholed = args.has("blackholed") || args.has("b");
     let blackhole_hash = flag_target(&args, "B");
@@ -150,7 +152,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
                 "Blackholing identity on remote instances not yet implemented",
             )
         } else if analyze {
-            RemoteAction::Analyze
+            RemoteAction::Analyze(capture.clone())
         } else if show_table {
             RemoteAction::Table(destination.clone())
         } else if show_rates {
@@ -235,6 +237,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             &|| RpcClient::connect(&rpc_addr, &auth_key),
             node.as_ref(),
             &paths.cache,
+            capture.as_deref(),
         );
         if let Some(node) = node {
             node.shutdown();
@@ -323,11 +326,17 @@ fn analysis_rpc(
 /// names of `node` (loaded as a shared instance client loads them, plus
 /// the two types rnpath asks for) and the announce cache in `cache_dir`,
 /// which upstream's client opens for this (`init_announce_cache`).
+///
+/// `capture` is `--capture`'s path, which upstream (from b9903c53) passes
+/// here and does not use yet: its TODO is to save to and load from that
+/// file so that repeated runs collect data over time.
 fn analyze_tables(
     connect: &dyn Fn() -> std::io::Result<RpcClient>,
     node: Option<&rns_net::RnsNode>,
     cache_dir: &Path,
+    capture: Option<&str>,
 ) -> i32 {
+    let _ = capture;
     let key = |k: &str| PickleValue::String(k.into());
     // upstream's `get_path_table`, `get_rate_table` and
     // `get_link_distribution`, evaluated in that order: a failed table is
@@ -1493,8 +1502,8 @@ enum RemoteAction {
     /// `-r [destination]`.
     Rates(Option<String>),
     /// `-A`: upstream analyzes the local instance's tables once the link is
-    /// up, whatever the remote instance has.
-    Analyze,
+    /// up, whatever the remote instance has, with `--capture`'s path.
+    Analyze(Option<String>),
     /// What upstream has no remote version of, with its message.
     Unsupported(&'static str),
 }
@@ -1726,12 +1735,13 @@ fn remote_path(
             };
             render_rate_table(&response, &view, rns_net::time::now()).print_and_exit();
         }
-        RemoteAction::Analyze => {
+        RemoteAction::Analyze(capture) => {
             let local = LocalInstance::open(config_path);
             let status = analyze_tables(
                 &|| RpcClient::connect(&local.rpc_addr, &local.auth_key),
                 local.node.as_ref(),
                 &local.paths.cache,
+                capture.as_deref(),
             );
             if let Some(node) = local.node {
                 node.shutdown();
@@ -1914,6 +1924,13 @@ mod tests {
             (&["--analyze", "-t"], &[("A", "true"), ("t", "true")], None),
             (&["--an"], &[("A", "true")], None),
             (&["-Aj"], &[("A", "true"), ("j", "true")], None),
+            (
+                &["-A", "--capture", "cap.dat"],
+                &[("A", "true"), ("capture", "cap.dat")],
+                None,
+            ),
+            (&["-A", "--capt=x"], &[("capture", "x")], None),
+            (&["--co", "/c", "-A"], &[("config", "/c")], None),
             (&["-p", HASH, "filter"], &[("p", "true")], Some(HASH)),
             (
                 &["-R", HASH, "-i", "id", "-W5", "-t"],
@@ -1948,6 +1965,22 @@ mod tests {
         assert_eq!(flag_target(&parse(&["-t"]), "x"), None);
         let control = Args::parse_control_from(vec!["-d".into(), HASH.into()]);
         assert_eq!(flag_target(&control, "d").as_deref(), Some(HASH));
+        // Since b9903c53, `--c` abbreviates both --config and --capture,
+        // which argparse refuses as ambiguous, whatever follows.
+        let parser = crate::upstream_parsers::by_name("rnpath").unwrap();
+        for argv in [&["--c"][..], &["--c", "/c", "-t"], &["--c=/c", "-t"]] {
+            let exit = crate::argparse::check(&parse(argv), parser, "rnpath", 80)
+                .unwrap_or_else(|| panic!("{argv:?} accepted"));
+            assert_eq!(exit.code, 2, "{argv:?}");
+            assert!(
+                exit.stderr.ends_with(&format!(
+                    "rnpath: error: ambiguous option: {} could match --config, --capture\n",
+                    argv[0]
+                )),
+                "{argv:?}: {}",
+                exit.stderr
+            );
+        }
     }
 
     const PLAIN: &str = concat!(
