@@ -110,6 +110,7 @@ impl TransportEngine {
                 ctx.now,
                 current_gravity,
                 announce_gravity,
+                self.config.unresponsive_path_recovery,
             )
         });
         let mp_decision = pathfinder::decide_announce_multipath_with_gravity(

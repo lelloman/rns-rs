@@ -38,7 +38,10 @@ pub fn timebase_from_random_blobs(blobs: &[[u8; 10]]) -> u64 {
 ///
 /// One day comfortably covers ordinary clock skew between nodes while still
 /// rejecting such garbage values. **This deliberately deviates from the
-/// Python reference implementation**, which trusts any emission time.
+/// Python reference implementation**, which trusts any emission time, and
+/// only applies under `unresponsive_path_recovery = native`: `upstream`
+/// trusts any emission time as upstream does (see
+/// [`selection_emission_time`]).
 pub const MAX_EMISSION_TIME_SKEW_SECS: u64 = 86_400;
 
 /// Whether `emitted` (seconds since the epoch, from a random blob) is a
@@ -74,6 +77,30 @@ pub fn trusted_timebase_from_random_blobs(blobs: &[[u8; 10]], now: f64) -> u64 {
         .filter(|emitted| is_plausible_emission_time(*emitted, now))
         .max()
         .unwrap_or(0)
+}
+
+/// The emission time path selection compares under `recovery`: with
+/// `native`, [`trusted_emission_time`]; with `upstream`, `emitted` itself,
+/// as upstream has no plausibility filter.
+pub fn selection_emission_time(emitted: u64, now: f64, recovery: UnresponsivePathRecovery) -> u64 {
+    match recovery {
+        UnresponsivePathRecovery::Native => trusted_emission_time(emitted, now),
+        UnresponsivePathRecovery::Upstream => emitted,
+    }
+}
+
+/// A path's timebase as path selection compares it under `recovery`: with
+/// `native`, [`trusted_timebase_from_random_blobs`]; with `upstream`,
+/// [`timebase_from_random_blobs`], as upstream has no plausibility filter.
+pub fn selection_timebase_from_random_blobs(
+    blobs: &[[u8; 10]],
+    now: f64,
+    recovery: UnresponsivePathRecovery,
+) -> u64 {
+    match recovery {
+        UnresponsivePathRecovery::Native => trusted_timebase_from_random_blobs(blobs, now),
+        UnresponsivePathRecovery::Upstream => timebase_from_random_blobs(blobs),
+    }
 }
 
 /// Extract the random_blob from announce packet data.
@@ -112,8 +139,9 @@ pub enum PathDecision {
 /// gravity of the path's receiving interface, `None` when that interface is
 /// gone, which keeps the announce as upstream does for a path without one.
 ///
-/// Emission times are compared as [`should_update_path`] compares them, so
-/// an implausibly-future emission time counts as unknown.
+/// Emission times are compared as path selection compares them under
+/// `recovery` ([`selection_emission_time`]), so with `native` an
+/// implausibly-future emission time counts as unknown.
 pub fn announce_prefilter(
     existing: &PathEntry,
     announce_emitted_ts: u64,
@@ -121,12 +149,13 @@ pub fn announce_prefilter(
     path_gravity: Option<i64>,
     path_is_unresponsive: bool,
     now: f64,
+    recovery: UnresponsivePathRecovery,
 ) -> bool {
     let Some(path_gravity) = path_gravity else {
         return true;
     };
-    let path_timebase = trusted_timebase_from_random_blobs(&existing.random_blobs, now);
-    let announce_emitted_ts = trusted_emission_time(announce_emitted_ts, now);
+    let path_timebase = selection_timebase_from_random_blobs(&existing.random_blobs, now, recovery);
+    let announce_emitted_ts = selection_emission_time(announce_emitted_ts, now, recovery);
     if announce_emitted_ts > path_timebase {
         return true;
     }
@@ -225,9 +254,8 @@ pub fn should_update_path(
 /// scan of the path's random blobs, which stops at the first that reaches
 /// the announce's emission time) is upstream's lenient insertion for an
 /// unresponsive path, [`PathDecision::AddForUnresponsive`], whether or not
-/// it was heard before. Emission times implausibly far in the future count
-/// as unknown, as everywhere in path selection (see
-/// [`MAX_EMISSION_TIME_SKEW_SECS`]).
+/// it was heard before. Any emission time is trusted, as upstream trusts it
+/// (no [`MAX_EMISSION_TIME_SKEW_SECS`] filter).
 #[allow(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of upstream's announce acceptance decision"
@@ -245,8 +273,6 @@ pub fn upstream_path_decision(
     if announce_hops > constants::PATHFINDER_M {
         return PathDecision::Reject;
     }
-    let raw_announce_emitted_ts = announce_emitted_ts;
-    let announce_emitted_ts = trusted_emission_time(announce_emitted_ts, now);
     let blob_is_new = !existing.random_blobs.contains(random_blob);
     let new_blob = |accept: bool| {
         if accept && blob_is_new {
@@ -256,7 +282,7 @@ pub fn upstream_path_decision(
         }
     };
     if announce_hops <= existing.hops {
-        let path_timebase = trusted_timebase_from_random_blobs(&existing.random_blobs, now);
+        let path_timebase = timebase_from_random_blobs(&existing.random_blobs);
         if blob_is_new && announce_emitted_ts > path_timebase {
             return PathDecision::Add;
         }
@@ -264,15 +290,14 @@ pub fn upstream_path_decision(
             (path_gravity, announce_gravity),
             (Some(path), Some(announce)) if announce > path
         );
-        if higher_gravity && is_same_emission(existing, raw_announce_emitted_ts, now) {
+        if higher_gravity && announce_emitted_ts == path_timebase {
             return PathDecision::Add;
         }
         return PathDecision::Reject;
     }
     let mut path_announce_emitted = 0;
     for blob in &existing.random_blobs {
-        path_announce_emitted =
-            path_announce_emitted.max(trusted_emission_time(timebase_from_random_blob(blob), now));
+        path_announce_emitted = path_announce_emitted.max(timebase_from_random_blob(blob));
         if path_announce_emitted >= announce_emitted_ts {
             break;
         }
@@ -413,6 +438,7 @@ pub fn decide_announce_multipath_with_gravity(
         now,
         current_gravity,
         announce_gravity,
+        recovery,
     ) {
         return MultiPathDecision::ReplacePrimary;
     }
@@ -470,8 +496,10 @@ pub fn decide_announce_multipath_with_gravity(
 /// Whether a same-emission announce should replace the primary path solely
 /// because it arrived on an interface with higher gravity.
 ///
-/// Implausibly-future emission times (see [`MAX_EMISSION_TIME_SKEW_SECS`])
-/// only match an identical raw value, never a genuine timebase.
+/// With `recovery = native`, implausibly-future emission times (see
+/// [`MAX_EMISSION_TIME_SKEW_SECS`]) only match an identical raw value, never
+/// a genuine timebase; with `upstream` the emission time is compared with
+/// the path's newest random blob, as upstream compares it.
 pub fn is_higher_gravity_replacement(
     path_set: &PathSet,
     announce_hops: u8,
@@ -479,15 +507,20 @@ pub fn is_higher_gravity_replacement(
     now: f64,
     current_gravity: Option<i64>,
     announce_gravity: Option<i64>,
+    recovery: UnresponsivePathRecovery,
 ) -> bool {
     let (Some(primary), Some(current_gravity), Some(announce_gravity)) =
         (path_set.primary(), current_gravity, announce_gravity)
     else {
         return false;
     };
-    announce_hops <= primary.hops
-        && is_same_emission(primary, announce_emitted_ts, now)
-        && announce_gravity > current_gravity
+    let same_emission = match recovery {
+        UnresponsivePathRecovery::Native => is_same_emission(primary, announce_emitted_ts, now),
+        UnresponsivePathRecovery::Upstream => {
+            announce_emitted_ts == timebase_from_random_blobs(&primary.random_blobs)
+        }
+    };
+    announce_hops <= primary.hops && same_emission && announce_gravity > current_gravity
 }
 
 /// Whether an announce emitted at `announce_emitted_ts` carries the same
@@ -540,8 +573,9 @@ mod tests {
         // Upstream `Transport.announce_prefilter` (85d36979, 096e6726).
         let path = make_path_entry(2, &[make_blob(1000), make_blob(900)], 99_999.0);
         let now = 5000.0;
+        let native = UnresponsivePathRecovery::Native;
         let keeps = |emitted: u64, gravity: i64, unresponsive: bool| {
-            announce_prefilter(&path, emitted, gravity, Some(0), unresponsive, now)
+            announce_prefilter(&path, emitted, gravity, Some(0), unresponsive, now, native)
         };
         // Emitted after the path's newest random blob.
         assert!(keeps(1001, 0, false));
@@ -553,8 +587,9 @@ mod tests {
         assert!(keeps(1000, 1, false));
         assert!(keeps(1000, 0, true));
         // The path's receiving interface is gone.
-        assert!(announce_prefilter(&path, 999, 0, None, false, now));
-        // An implausibly-future emission time counts as unknown.
+        assert!(announce_prefilter(&path, 999, 0, None, false, now, native));
+        // An implausibly-future emission time counts as unknown, except
+        // under `upstream`, which trusts it as upstream does.
         let far_future = (now as u64) + MAX_EMISSION_TIME_SKEW_SECS + 1;
         assert!(!announce_prefilter(
             &path,
@@ -562,8 +597,27 @@ mod tests {
             0,
             Some(0),
             false,
-            now
+            now,
+            native
         ));
+        assert!(announce_prefilter(
+            &path,
+            far_future,
+            0,
+            Some(0),
+            false,
+            now,
+            UnresponsivePathRecovery::Upstream
+        ));
+        // ... and a path pinned by one keeps an announce only under `native`.
+        let pinned = make_path_entry(2, &[make_blob(far_future)], 99_999.0);
+        for (recovery, kept) in [(native, true), (UnresponsivePathRecovery::Upstream, false)] {
+            assert_eq!(
+                announce_prefilter(&pinned, 1001, 0, Some(0), false, now, recovery),
+                kept,
+                "{recovery:?}"
+            );
+        }
     }
 
     #[test]
@@ -1062,7 +1116,8 @@ mod tests {
             100,
             1000.0,
             Some(0),
-            Some(1)
+            Some(1),
+            UnresponsivePathRecovery::Native
         ));
         assert!(!is_higher_gravity_replacement(
             &ps,
@@ -1070,7 +1125,8 @@ mod tests {
             100,
             1000.0,
             Some(1),
-            Some(1)
+            Some(1),
+            UnresponsivePathRecovery::Native
         ));
         assert_eq!(crate::logging::GRAVITY_UPDATE_LOG_LEVEL, log::Level::Trace);
         assert_eq!(crate::logging::PATHING_LOG_TARGET, "rns::pathing");
@@ -1239,7 +1295,8 @@ mod tests {
                 GARBAGE_TS,
                 NOW,
                 Some(0),
-                Some(10)
+                Some(10),
+                UnresponsivePathRecovery::Native
             ));
         }
 

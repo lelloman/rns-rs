@@ -1178,6 +1178,63 @@ fn upstream_recovery_decides_every_path_update_as_upstream() {
     }
 }
 
+/// rns-rs distrusts announce emission times more than
+/// `MAX_EMISSION_TIME_SKEW_SECS` in the future; upstream has no such
+/// filter, and neither has `unresponsive_path_recovery = upstream`. A path
+/// two hops away through next hop `[0x30; 16]` on interface 1, then a new
+/// announce through `[0x29; 16]` on interface 2, at 1001.
+#[test]
+fn future_emission_time_filter_only_in_native_mode() {
+    use super::local_client_announce_tests::announce_with_random_blob;
+    use crate::transport::pathfinder::MAX_EMISSION_TIME_SKEW_SECS;
+    use crate::transport::tests::make_random_blob;
+    use crate::transport::types::UnresponsivePathRecovery::{Native, Upstream};
+    const A: [u8; 16] = [0x30; 16];
+    const B: [u8; 16] = [0x29; 16];
+    let far_future = 1001 + MAX_EMISSION_TIME_SKEW_SECS + 1;
+    let cases = [
+        // An announce emitted far in the future, over more hops: only
+        // upstream takes it as newer.
+        (Upstream, 1000, far_future, 4, (B, 4, 2), true),
+        (Native, 1000, far_future, 4, (A, 2, 1), false),
+        // A path pinned by such an announce, then a genuine newer one over
+        // as many hops: upstream keeps the pinned path.
+        (Upstream, far_future, 1001, 2, (A, 2, 1), false),
+        (Native, far_future, 1001, 2, (B, 2, 2), true),
+    ];
+    for (recovery, path_emitted, emitted, hops, primary, rebroadcast) in cases {
+        let announce = announce_with_random_blob(
+            14,
+            false,
+            constants::HEADER_2,
+            hops - 1,
+            constants::CONTEXT_NONE,
+            &make_random_blob(emitted),
+        );
+        let dest = announce.destination_hash;
+        let mut engine = engine_with_known_path(dest, 2, None);
+        engine.config.unresponsive_path_recovery = recovery;
+        let mut path = make_path_entry(900.0, 2, InterfaceId(1), A);
+        path.random_blobs = vec![make_random_blob(path_emitted)];
+        engine
+            .path_table
+            .insert(dest, PathSet::from_single(path, 1));
+        receive(&mut engine, &announce, 2);
+        let label = format!("{recovery:?} path {path_emitted} announce {emitted} hops {hops}");
+        let path = engine.path_table.get(&dest).unwrap().primary().unwrap();
+        assert_eq!(
+            (path.next_hop, path.hops, path.receiving_interface.0),
+            primary,
+            "{label}"
+        );
+        assert_eq!(
+            engine.announce_table.contains_key(&dest),
+            rebroadcast,
+            "{label}"
+        );
+    }
+}
+
 fn table_entry(hops: u8, retries: u8, retransmit_timeout: f64) -> AnnounceEntry {
     AnnounceEntry {
         timestamp: 1000.0,

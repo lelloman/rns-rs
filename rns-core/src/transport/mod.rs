@@ -55,7 +55,7 @@ use self::inbound::{
 use self::ingress_control::IngressControl;
 use self::outbound::{route_outbound_into, should_transmit_announce, OutboundRouteOptions};
 use self::pathfinder::{
-    extract_random_blob, timebase_from_random_blob, trusted_timebase_from_random_blobs,
+    extract_random_blob, selection_timebase_from_random_blobs, timebase_from_random_blob,
     MultiPathDecision,
 };
 use self::rate_limit::AnnounceRateLimiter;

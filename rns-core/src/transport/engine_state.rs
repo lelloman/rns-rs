@@ -558,13 +558,22 @@ impl TransportEngine {
                 Some(existing) => {
                     // Restore if fewer/equal hops or existing expired, but never
                     // overwrite a path learned from a more recent announce.
-                    // Implausibly-future emission times are ignored (deliberate
-                    // deviation from Python, see MAX_EMISSION_TIME_SKEW_SECS).
+                    // With `unresponsive_path_recovery = native`,
+                    // implausibly-future emission times are ignored
+                    // (deliberate deviation from Python, see
+                    // MAX_EMISSION_TIME_SKEW_SECS).
+                    let recovery = self.config.unresponsive_path_recovery;
                     if tunnel_path.hops <= existing.hops || existing.expires < now {
-                        let existing_timebase =
-                            trusted_timebase_from_random_blobs(&existing.random_blobs, now);
-                        let tunnel_timebase =
-                            trusted_timebase_from_random_blobs(&tunnel_path.random_blobs, now);
+                        let existing_timebase = selection_timebase_from_random_blobs(
+                            &existing.random_blobs,
+                            now,
+                            recovery,
+                        );
+                        let tunnel_timebase = selection_timebase_from_random_blobs(
+                            &tunnel_path.random_blobs,
+                            now,
+                            recovery,
+                        );
                         tunnel_timebase >= existing_timebase
                     } else {
                         false
@@ -1027,7 +1036,23 @@ mod tests {
         path: TunnelPath,
         now: f64,
     ) -> (Option<[u8; 16]>, bool) {
+        restore_with(
+            crate::transport::types::UnresponsivePathRecovery::Native,
+            existing,
+            path,
+            now,
+        )
+    }
+
+    /// [`restore`] under `unresponsive_path_recovery = recovery`.
+    fn restore_with(
+        recovery: crate::transport::types::UnresponsivePathRecovery,
+        existing: Option<PathEntry>,
+        path: TunnelPath,
+        now: f64,
+    ) -> (Option<[u8; 16]>, bool) {
         let mut engine = TransportEngine::new(make_config(true));
+        engine.config.unresponsive_path_recovery = recovery;
         engine.register_interface(make_tunnel_interface(1));
         let tunnel_id = [0xCC; 32];
         let dest = [0xDD; 16];
@@ -1092,6 +1117,42 @@ mod tests {
             (Some(TUNNEL_HOP), true)
         );
         assert_eq!(restore(None, tunnel_path(2, now, 100), now), (None, false));
+    }
+
+    /// An emission time implausibly far in the future: `native` ignores it
+    /// when comparing a tunnel path with the existing path
+    /// (`MAX_EMISSION_TIME_SKEW_SECS`), `upstream` trusts it as upstream does.
+    #[test]
+    fn tunnel_reattach_emission_time_filter_only_in_native_mode() {
+        use crate::transport::pathfinder::MAX_EMISSION_TIME_SKEW_SECS;
+        use crate::transport::types::UnresponsivePathRecovery::{Native, Upstream};
+        let now = 2000.0;
+        let far_future = now as u64 + MAX_EMISSION_TIME_SKEW_SECS + 1;
+        let existing = |blob_time: u64| PathEntry {
+            random_blobs: vec![make_random_blob(blob_time)],
+            expires: 5000.0,
+            ..make_path_entry(1500.0, 2, InterfaceId(3), EXISTING_HOP)
+        };
+        let cases = [
+            // An existing path pinned by a far-future emission time.
+            (Native, far_future, 100, TUNNEL_HOP),
+            (Upstream, far_future, 100, EXISTING_HOP),
+            // A tunnel path carrying one.
+            (Native, 100, far_future, EXISTING_HOP),
+            (Upstream, 100, far_future, TUNNEL_HOP),
+        ];
+        for (recovery, existing_time, tunnel_time, expected) in cases {
+            assert_eq!(
+                restore_with(
+                    recovery,
+                    Some(existing(existing_time)),
+                    tunnel_path(2, 5000.0, tunnel_time),
+                    now
+                ),
+                (Some(expected), expected == TUNNEL_HOP),
+                "{recovery:?} existing {existing_time} tunnel {tunnel_time}"
+            );
+        }
     }
 
     /// As upstream, a restored path keeps when it was last used and drops
