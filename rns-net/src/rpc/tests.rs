@@ -1031,12 +1031,19 @@ fn path_and_rate_tables_follow_upstreams_keys_and_types() {
             "value",
             "used",
             "lr_cost",
-            "interface"
+            "interface",
+            "interface_hash"
         ]
     );
     assert_eq!(fields[5].1, MsgpackValue::UInt(0));
     assert_eq!(fields[6].1, MsgpackValue::UInt(0));
     assert_eq!(fields[7].1, MsgpackValue::Nil);
+    // Upstream c90a5d58: `interface.get_hash()`, the full hash of the
+    // interface's str().
+    assert_eq!(
+        fields[9].1,
+        MsgpackValue::Bin(rns_core::hash::full_hash(b"iface").to_vec())
+    );
 
     // AnnounceRateTable.items()'s dict, with `hash` added last.
     let rates = rate_table_msgpack(&[RateTableEntry {

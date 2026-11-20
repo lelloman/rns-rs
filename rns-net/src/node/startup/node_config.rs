@@ -351,6 +351,7 @@ pub(super) fn queue_config_from(
         link_mtu_discovery,
         filter: rns_config.filter.clone(),
         hop_limiter: reticulum.hop_limiter,
+        destination_type_names: Default::default(),
     }
 }
 

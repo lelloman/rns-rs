@@ -294,6 +294,7 @@ impl RnsNode {
             &crate::config::StampsSection::default(),
             rns_core::constants::HOP_LIMITER,
             false,
+            Default::default(),
         )
     }
 
@@ -304,7 +305,10 @@ impl RnsNode {
     /// unstamped. `stamps` and `hop_limiter` are the client's own `[stamps]`
     /// and `[filter] hop_limiter`, which upstream applies in every instance.
     /// With `static_transport_identity` the client uses the stored transport
-    /// identity rather than an ephemeral one.
+    /// identity rather than an ephemeral one. `destination_type_names` are
+    /// the names of destination types the client read with its config, as
+    /// every upstream instance does.
+    #[allow(clippy::too_many_arguments)]
     fn connect_shared_with_reconnect_wait(
         config: SharedClientConfig,
         callbacks: Box<dyn Callbacks>,
@@ -313,6 +317,7 @@ impl RnsNode {
         stamps: &crate::config::StampsSection,
         hop_limiter: u8,
         static_transport_identity: bool,
+        destination_type_names: crate::destination_types::DestinationTypeNames,
     ) -> io::Result<Self> {
         let transport_config = TransportConfig {
             transport_enabled: false,
@@ -341,6 +346,7 @@ impl RnsNode {
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
         driver.connected_to_shared_instance = true;
+        driver.destination_type_names = destination_type_names;
         // A client stamps the announces and path requests it emits itself
         // (upstream 51fa8413), with the node handle and the driver sharing
         // one stamper and one STAMP_DESTINATIONS flag, as `RnsNode::start`.
@@ -557,6 +563,11 @@ impl RnsNode {
         if let Some(ref path) = rns_config.reticulum.network_identity {
             crate::node::load_network_identity(path)?;
         }
+        // Upstream c90a5d58: so are the names of destination types.
+        let destination_type_names = crate::destination_types::DestinationTypeNames::from_config(
+            &config_dir,
+            &rns_config.filter,
+        );
         log::info!("Configuration loaded from {}", config_file.display());
         let shared_config = SharedClientConfig::from_reticulum(&rns_config.reticulum);
         let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
@@ -569,6 +580,7 @@ impl RnsNode {
             &rns_config.stamps,
             rns_config.reticulum.hop_limiter,
             rns_config.reticulum.static_transport_identity,
+            destination_type_names,
         )?;
         node.use_shared_instance_rpc(&config_dir, rpc_addr, rns_config.reticulum.rpc_key);
         // After the RPC is set up, which the split mode fallback needs
@@ -1355,6 +1367,7 @@ mod tests {
                 &crate::config::StampsSection::default(),
                 rns_core::constants::HOP_LIMITER,
                 static_transport_identity,
+                Default::default(),
             )
             .unwrap();
             assert_eq!(
@@ -1401,6 +1414,7 @@ mod tests {
             &stamps,
             rns_core::constants::HOP_LIMITER,
             false,
+            Default::default(),
         )
         .unwrap();
 

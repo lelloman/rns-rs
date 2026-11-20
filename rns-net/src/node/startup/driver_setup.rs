@@ -170,6 +170,7 @@ pub(super) fn new_driver(
     driver.apply_stamp_config(&config.stamps, queue_config.hop_limiter);
     crate::stamps::set_worker_limits(config.stamps.max_workers, config.stamps.worker_niceness);
     *driver.engine.destination_filter_mut() = queue_config.filter.destination_filter();
+    driver.destination_type_names = queue_config.destination_type_names.clone();
     let stamp_targets = crate::stamper::StampTargets::from(&config.stamps);
     driver.interface_settings.underlay_mark = config.underlay_mark;
     driver.proofs.implicit = config.use_implicit_proof;

@@ -408,6 +408,16 @@ instance the same way. `RnsNode::required_announces_only` applies
 `required_only` to a single client's own transport; it does nothing on a node
 that is not a shared instance client.
 
+Log lines about these types name a type by its full name when the node has
+seen one for its hash: in `ignored_types` or `allowed_types`, from an
+application asking for it, or in a `known_destination_types` file in the
+configuration directory (next to `config`; upstream `c90a5d58`), read once at
+startup with one full name per line and lines starting with `#` skipped.
+Otherwise they show `<unknown>`. Upstream also reads a
+`flagged_destination_types` file in the same format; at `c90a5d58` it has
+nowhere to keep those names, so a file with any name in it logs an error, as
+there.
+
 The upstream manual describes these modes in the "Filtering & QoS" section of
 its "Protecting Open Networks" page (since `29e5a997`). It states that some
 1.6.x release will make `required_only` the default for non-transport

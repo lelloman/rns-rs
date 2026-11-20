@@ -68,6 +68,14 @@ pub(super) fn path_table_to_pickle(entries: &[PathTableEntry]) -> PickleValue {
                     key("interface"),
                     PickleValue::String(e.interface_display_name.clone()),
                 ),
+                // Upstream c90a5d58: the interface's `get_hash()`, the full
+                // hash of its `str()`.
+                (
+                    key("interface_hash"),
+                    PickleValue::Bytes(
+                        rns_core::hash::full_hash(e.interface_display_name.as_bytes()).to_vec(),
+                    ),
+                ),
             ])
         })
         .collect();

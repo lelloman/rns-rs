@@ -44,13 +44,17 @@ impl Driver {
     /// type.
     pub(crate) fn wants_destination_type(&mut self, full_name: &str, requester: &[u8]) -> bool {
         use rns_core::transport::destination_filter::destination_type;
+        let destination_type = destination_type(full_name);
         let registered = self
             .engine
             .destination_filter_mut()
-            .want(destination_type(full_name), requester);
+            .want(destination_type, requester);
         if registered {
+            self.destination_type_names
+                .insert(destination_type, full_name.to_string());
             log::debug!(
-                "Registered <{full_name}> destinations requirement for <{}>",
+                "Registered {} destinations requirement for <{}>",
+                self.destination_type_names.describe(&destination_type),
                 hex(requester)
             );
         }
@@ -65,17 +69,28 @@ impl Driver {
         let filter = self.engine.destination_filter_mut();
         let was_registered = filter.unwant(destination_type, requester);
         if was_registered {
-            log::debug!(
-                "Deregistered <{full_name}> destinations requirement for <{}>",
-                hex(requester)
-            );
-            if !filter.is_wanted(&destination_type) {
-                log::debug!(
-                    "No remaining requesters for <{full_name}> destinations, type deregistered"
-                );
-            }
+            let emptied = !filter.is_wanted(&destination_type);
+            self.log_withdrawn_destination_type(&destination_type, requester, emptied);
         }
         was_registered
+    }
+
+    /// `Transport._unwants_destination_type`'s log lines for a type the
+    /// requester had registered, naming it from the destination type map.
+    pub(crate) fn log_withdrawn_destination_type(
+        &self,
+        destination_type: &rns_core::transport::destination_filter::DestinationType,
+        requester: &[u8],
+        emptied: bool,
+    ) {
+        let described = self.destination_type_names.describe(destination_type);
+        log::debug!(
+            "Deregistered {described} destinations requirement for <{}>",
+            hex(requester)
+        );
+        if emptied {
+            log::debug!("No remaining requesters for {described} destinations, type deregistered");
+        }
     }
 
     #[cfg(feature = "iface-backbone")]
