@@ -53,7 +53,7 @@ pub use context::PacketContext;
 pub use engine_access::{EngineAccess, NullEngine};
 pub use error::HookError;
 pub use hooks::{create_hook_slots, hook_noop, HookContext, HookFn, HookPoint, HookSlot};
-pub use manager::{HookBackend, HookManager};
+pub use manager::{HookBackend, HookManager, UnknownHookBackend};
 pub use program::LoadedProgram;
 pub use result::{EmittedProviderEvent, ExecuteResult, HookResult, Verdict};
 pub use wire::ActionWire;

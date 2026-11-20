@@ -55,17 +55,34 @@ impl HookBackend {
 }
 
 impl std::str::FromStr for HookBackend {
-    type Err = String;
+    type Err = UnknownHookBackend;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.to_ascii_lowercase().as_str() {
             "wasm" => Ok(HookBackend::Wasm),
             "native" | "dylib" | "dynamic" => Ok(HookBackend::Native),
             "builtin" | "built-in" | "static" => Ok(HookBackend::Builtin),
-            other => Err(format!("unknown hook type '{}'", other)),
+            other => Err(UnknownHookBackend {
+                name: other.to_string(),
+            }),
         }
     }
 }
+
+/// A hook type that names no [`HookBackend`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownHookBackend {
+    /// The type as given, lowercased.
+    pub name: String,
+}
+
+impl std::fmt::Display for UnknownHookBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unknown hook type '{}'", self.name)
+    }
+}
+
+impl std::error::Error for UnknownHookBackend {}
 
 impl HookManager {
     /// Creates the manager, setting up the WASM engine and its host
