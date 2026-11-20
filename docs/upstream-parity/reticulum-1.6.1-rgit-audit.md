@@ -75,19 +75,19 @@ evidence exist; until then nothing here is claimed as passed.
 | 16 | `70eb417d` | 2026-11-17 | Fixed non path table resident shared local instance destination path response announces broadcasting on all interfaces instead of requestor only | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
 | 17 | `8c73e203` | 2026-11-18 | Don't rebroadcast on unresponsive path lenient table insertions | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
 | 18 | `4a058544` | 2026-11-18 | Well, yeah | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
-| 19 | `8e7dc8b7` | 2026-11-18 | Added medium reliability flag to interfaces | Proposed: Deferred | Reviewed 2026-11-20; no mapping commit yet |
+| 19 | `8e7dc8b7` | 2026-11-18 | Added medium reliability flag to interfaces | Proposed: Integrated | Reviewed 2026-11-20; no mapping commit yet |
 | 20 | `9568b704` | 2026-11-18 | Improved rnpath display and filtering options | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
 | 21 | `c90a5d58` | 2026-11-18 | Added destination type loading | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
 | 22 | `3f55e9eb` | 2026-11-18 | Added flagged destination type map, added per-link traffic counter, added link distribution stats getter | Proposed: Needs coordinated port | Reviewed 2026-11-20; no mapping commit yet |
 | 23 | `f7b54ccc` | 2026-11-18 | Added prettynamehash convenience function | Proposed: Non-runtime | Reviewed 2026-11-20; no mapping commit yet |
-| 24 | `1a71073c` | 2026-11-18 | Initial rnpath analysis stub | Proposed: Needs decision | Reviewed 2026-11-20; no mapping commit yet |
+| 24 | `1a71073c` | 2026-11-18 | Initial rnpath analysis stub | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
 | 25 | `b9903c53` | 2026-11-18 | Analysis mode capture argument | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
 | 26 | `1f7cd145` | 2026-11-18 | Cleanup and fixes | Proposed: Needs coordinated port | Reviewed 2026-11-20; no mapping commit yet |
 | 27 | `41260ea1` | 2026-11-18 | Added path state info to path table getters | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
-| 28 | `48ba76df` | 2026-11-18 | Catch announce unpack failure | Proposed: Non-runtime | Reviewed 2026-11-20; no mapping commit yet |
+| 28 | `48ba76df` | 2026-11-18 | Catch announce unpack failure | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
 | 29 | `ef3e8086` | 2026-11-18 | Added link traffic stats | Proposed: Needs coordinated port | Reviewed 2026-11-20; no mapping commit yet |
 | 30 | `e8b3b14b` | 2026-11-18 | Classic | Proposed: Needs coordinated port | Reviewed 2026-11-20; no mapping commit yet |
-| 31 | `eb00622f` | 2026-11-18 | Cleanup | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
+| 31 | `eb00622f` | 2026-11-18 | Cleanup | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
 | 32 | `01ffb98e` | 2026-11-18 | Local link traffic counting | Proposed: Needs coordinated port | Reviewed 2026-11-20; no mapping commit yet |
 | 33 | `52898683` | 2026-11-18 | Raised listener backlogs | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
 | 34 | `cff4d03f` | 2026-11-18 | Updated changelog | Proposed: Non-runtime | Reviewed 2026-11-20; no mapping commit yet |
@@ -429,7 +429,7 @@ behaviour.
 with a class-defaults test, documented as having no runtime reader yet, or
 record only the analysis (decision pending).
 
-**Proposed disposition:** Deferred.
+**Proposed disposition:** Integrated (decision 6).
 
 ### 20. `9568b704` — Improved rnpath display and filtering options
 
@@ -508,7 +508,7 @@ three RPC fetches, and print the final `Not yet implemented`; record the
 withdrawn statistics as deferred. Needs agreement because the commit then
 shows the tip's output rather than this commit's.
 
-**Proposed disposition:** Needs decision.
+**Proposed disposition:** Needs port (decision 3).
 
 ### 25. `b9903c53` — Analysis mode capture argument
 
@@ -561,8 +561,7 @@ withdraws.
 
 **Local handling:** Analysis, plus a comment at the native `-A` branch.
 
-**Proposed disposition:** Non-runtime (if commit 24 is handled as
-recommended).
+**Proposed disposition:** Needs port (decision 3).
 
 ### 29. `ef3e8086` — Added link traffic stats
 
@@ -600,7 +599,7 @@ exits 0; the analysis body is commented out.
 **Local handling:** A regression that `-A` prints exactly
 `Not yet implemented` and exits 0, even with an empty path table.
 
-**Proposed disposition:** Structurally covered (after 24).
+**Proposed disposition:** Needs port (decision 3).
 
 ### 32. `01ffb98e` — Local link traffic counting
 
@@ -642,26 +641,33 @@ against its source commit above, not taken as evidence.
 
 **Proposed disposition:** Non-runtime.
 
-## Open Decisions
+## Decisions (2026-11-20)
 
-1. **Commit 9, RPC name:** serve upstream's dict under `known_destinations`
-   and rename the native list (recommended), or change the native client to
-   read the upstream shape and lose the extra fields.
-2. **Commit 22, `from_ifs` and `total`:** encode `from_ifs` as a list of
-   interface hashes (recommended, matching commit 26) and drop the unused
-   native `total` key.
-3. **Commit 24:** port the option with the tip's `Not yet implemented` output
-   (recommended), or port the withdrawn statistics faithfully.
-4. **Commit 2:** honour the disable key regardless of position (recommended,
-   documented deviation).
-5. **Commit 12:** whether an invalid `link_cost` / `stamp_value` is a startup
-   error (upstream) or falls back to the default, and whether to keep the 18.0
-   default.
-6. **Commit 19:** add an unused `lossless_medium_hint`, or record only.
-7. **Pre-existing, outside the per-commit mapping:** rns-rs accepts AES-128
-   link requests as a responder where upstream refuses them (commit 8), and
-   rejects an already-known announce through a new next hop even when the path
-   is unresponsive (commit 17).
+Reviewed with the maintainer. The rule is to do what upstream does,
+utilities included.
+
+1. **Commit 9:** `known_destinations` answers with upstream's dict exactly;
+   the native list moves to a separate RPC name.
+2. **Commits 22 and 26:** `link_distribution` follows upstream's shape at each
+   commit (a set at 22, the de-duplicated list at 26); the native `total` key
+   goes.
+3. **Commit 24:** the analysis statistics are ported as they are at that
+   commit, then 28's guard, then 31's `Not yet implemented`. This brings in
+   commit 21's destination-type files as well.
+4. **Commit 2:** upstream's order dependence is reproduced: the disable key
+   only takes effect when it appears before the count. The parser records key
+   order for this.
+5. **Commit 12:** default link cost 18.0, and an invalid `link_cost` or
+   `stamp_value` is a startup error, as upstream.
+6. **Commit 19:** the `lossless_medium` flag is added with upstream's
+   per-class values, unread, marked `#[allow(dead_code)]` with the reason.
+7. **AES-128 (found via commit 8, pre-existing):** match upstream. Only
+   AES-256-CBC is enabled; a responder refuses any other signalled mode.
+   Separate commit without an `Upstream-Commit` trailer.
+8. **New-next-hop recovery of an unresponsive path (found via commit 17,
+   pre-existing):** rns-rs keeps its behaviour by default, the divergence is
+   documented, and a runtime `[reticulum]` option selects upstream's
+   behaviour. Separate commit without an `Upstream-Commit` trailer.
 
 ## Integration Plan
 
@@ -672,8 +678,8 @@ behaviour or CLI changes. Dependencies: 13 → 14 → 15; 21 → 27; 20 → 24 �
 regenerate their fixtures from a disposable upstream worktree at that exact
 commit.
 
-Summary of proposed dispositions: 13 Needs port, 5 Needs coordinated port,
-1 Needs decision, 1 Deferred, 9 Structurally covered, 5 Non-runtime.
+Summary of proposed dispositions: 16 Needs port, 5 Needs coordinated port,
+1 Integrated, 8 Structurally covered, 4 Non-runtime.
 
 ## Promotion Gates
 
