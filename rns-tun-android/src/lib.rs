@@ -7,6 +7,7 @@
     unsafe_code,
     reason = "the crate is the C and JNI boundary of the Android tunnel"
 )]
+#![warn(missing_docs)]
 #![allow(
     unreachable_pub,
     reason = "the JNI entry points are found by their exported names, not by Rust paths"
@@ -26,6 +27,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use rns_tun::{SocketProtector, SocketProtectorGuard};
 use session::{AndroidConfig, AndroidRuntime, AppliedTunConfig, TunAttachment};
 
+/// Host callback that applies `VpnService.protect` to the underlay socket
+/// `fd`, so its traffic bypasses the VPN. `user_data` is the pointer given
+/// to [`rntun_android_set_protector`]. Returns whether protection succeeded;
+/// false fails the socket setup it was called for.
 pub type ProtectCallback = unsafe extern "C" fn(fd: libc::c_int, user_data: *mut c_void) -> bool;
 
 struct HostProtector {
@@ -60,7 +65,7 @@ fn handles() -> &'static Mutex<HashMap<u64, Handle>> {
     HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub fn create_handle(config_json: String) -> io::Result<u64> {
+pub(crate) fn create_handle(config_json: String) -> io::Result<u64> {
     let config: AndroidConfig = serde_json::from_str(&config_json).map_err(io::Error::other)?;
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -77,7 +82,7 @@ pub fn create_handle(config_json: String) -> io::Result<u64> {
     Ok(id)
 }
 
-pub fn install_protector_object(
+pub(crate) fn install_protector_object(
     handle: u64,
     protector: Arc<dyn SocketProtector>,
 ) -> io::Result<()> {
@@ -102,7 +107,7 @@ pub fn install_protector_object(
 /// `callback` must be safe to call with `user_data` and any fd, from any
 /// thread, until the handle is destroyed: `user_data` must stay valid (and
 /// usable from other threads) for that long.
-pub unsafe fn install_protector(
+pub(crate) unsafe fn install_protector(
     handle: u64,
     callback: ProtectCallback,
     user_data: *mut c_void,
@@ -116,12 +121,12 @@ pub unsafe fn install_protector(
     )
 }
 
-pub fn ensure_identity(path: &std::path::Path) -> io::Result<String> {
+pub(crate) fn ensure_identity(path: &std::path::Path) -> io::Result<String> {
     let identity = rns_tun::identity::load_or_create(path)?;
     Ok(hex(identity.hash()))
 }
 
-pub fn export_identity(path: &std::path::Path) -> io::Result<Vec<u8>> {
+pub(crate) fn export_identity(path: &std::path::Path) -> io::Result<Vec<u8>> {
     let identity = rns_net::storage::load_identity(path)?;
     identity
         .get_private_key()
@@ -129,7 +134,7 @@ pub fn export_identity(path: &std::path::Path) -> io::Result<Vec<u8>> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "identity has no private key"))
 }
 
-pub fn import_identity(path: &std::path::Path, bytes: &[u8]) -> io::Result<String> {
+pub(crate) fn import_identity(path: &std::path::Path, bytes: &[u8]) -> io::Result<String> {
     if handles()
         .lock()
         .unwrap_or_else(|p| p.into_inner())
@@ -165,7 +170,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-pub fn validate_node_config_text(text: &str, full_tunnel: bool) -> io::Result<()> {
+pub(crate) fn validate_node_config_text(text: &str, full_tunnel: bool) -> io::Result<()> {
     let parsed = rns_net::config::parse(text)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
     let enabled: Vec<_> = parsed
@@ -200,7 +205,7 @@ pub fn validate_node_config_text(text: &str, full_tunnel: bool) -> io::Result<()
     Ok(())
 }
 
-pub fn attach_owned_tun(
+pub(crate) fn attach_owned_tun(
     handle: u64,
     fd: OwnedFd,
     applied: Option<AppliedTunConfig>,
@@ -219,7 +224,7 @@ pub fn attach_owned_tun(
         .map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "TUN is already attached"))
 }
 
-pub fn attach_duplicated_tun(
+pub(crate) fn attach_duplicated_tun(
     handle: u64,
     fd: RawFd,
     applied: Option<AppliedTunConfig>,
@@ -235,7 +240,7 @@ pub fn attach_duplicated_tun(
     attach_owned_tun(handle, unsafe { OwnedFd::from_raw_fd(duplicate) }, applied)
 }
 
-pub fn destroy_handle(handle: u64) -> bool {
+pub(crate) fn destroy_handle(handle: u64) -> bool {
     let removed = handles()
         .lock()
         .unwrap_or_else(|p| p.into_inner())
@@ -249,7 +254,7 @@ pub fn destroy_handle(handle: u64) -> bool {
     false
 }
 
-pub fn start_handle(handle: u64) -> io::Result<()> {
+pub(crate) fn start_handle(handle: u64) -> io::Result<()> {
     let mut map = handles().lock().unwrap_or_else(|p| p.into_inner());
     let entry = map
         .get_mut(&handle)
@@ -273,7 +278,7 @@ pub fn start_handle(handle: u64) -> io::Result<()> {
     Ok(())
 }
 
-pub fn poll_event(handle: u64) -> io::Result<Option<String>> {
+pub(crate) fn poll_event(handle: u64) -> io::Result<Option<String>> {
     let mut map = handles().lock().unwrap_or_else(|p| p.into_inner());
     let entry = map
         .get_mut(&handle)
@@ -287,7 +292,7 @@ pub fn poll_event(handle: u64) -> io::Result<Option<String>> {
     Ok(runtime.events.try_recv().ok())
 }
 
-pub fn status_json(handle: u64) -> io::Result<String> {
+pub(crate) fn status_json(handle: u64) -> io::Result<String> {
     let map = handles().lock().unwrap_or_else(|p| p.into_inner());
     let entry = map
         .get(&handle)
@@ -326,8 +331,9 @@ pub unsafe extern "C" fn rntun_android_create(config_json: *const c_char) -> u64
 ///
 /// # Safety
 ///
-/// As [`install_protector`]: `callback` must be safe to call with
-/// `user_data` and any fd, from any thread, until the handle is destroyed.
+/// `callback` must be safe to call with `user_data` and any fd, from any
+/// thread, until the handle is destroyed: `user_data` must stay valid (and
+/// usable from other threads) for that long.
 #[no_mangle]
 pub unsafe extern "C" fn rntun_android_set_protector(
     handle: u64,
@@ -445,6 +451,8 @@ pub unsafe extern "C" fn rntun_android_attach_tun_dup_v2(
     attach_duplicated_tun(handle, fd, Some(applied)).map_or_else(|_| libc::EINVAL, |_| 0)
 }
 
+/// Stop the handle's session, if started, and free the handle, closing
+/// its TUN descriptor. Returns false for an unknown handle.
 #[no_mangle]
 pub extern "C" fn rntun_android_destroy(handle: u64) -> bool {
     destroy_handle(handle)
