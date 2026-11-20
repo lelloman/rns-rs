@@ -209,6 +209,15 @@ impl TransportEngine {
             .insert(*dest_hash, constants::STATE_RESPONSIVE);
     }
 
+    /// Upstream's `Transport.get_path_state` (41260ea1): the state the path
+    /// to `dest_hash` is marked with, `STATE_UNKNOWN` when it has none.
+    pub fn path_state(&self, dest_hash: &[u8; 16]) -> u8 {
+        self.path_states
+            .get(dest_hash)
+            .copied()
+            .unwrap_or(constants::STATE_UNKNOWN)
+    }
+
     /// Whether the path to `dest_hash` is marked unresponsive.
     pub fn path_is_unresponsive(&self, dest_hash: &[u8; 16]) -> bool {
         self.path_states.get(dest_hash) == Some(&constants::STATE_UNRESPONSIVE)

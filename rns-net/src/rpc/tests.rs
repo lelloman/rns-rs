@@ -971,6 +971,7 @@ fn path_table_pickle_carries_stamp_value_and_lr_cost() {
         interface_display_name: "TCPInterface[test/127.0.0.1:4242]".into(),
         stamp_value,
         lr_cost,
+        state: rns_core::constants::STATE_UNKNOWN,
     };
     let pickle = path_table_to_pickle(&[
         entry(
@@ -1014,6 +1015,7 @@ fn path_and_rate_tables_follow_upstreams_keys_and_types() {
         interface_display_name: "iface".into(),
         stamp_value: Some(rns_core::stamp::StampValue::ZERO),
         lr_cost: None,
+        state: rns_core::constants::STATE_RESPONSIVE,
     };
     let table = path_table_msgpack(&[entry]);
     let MsgpackValue::Map(fields) = &table[0] else {
@@ -1032,7 +1034,8 @@ fn path_and_rate_tables_follow_upstreams_keys_and_types() {
             "used",
             "lr_cost",
             "interface",
-            "interface_hash"
+            "interface_hash",
+            "state"
         ]
     );
     assert_eq!(fields[5].1, MsgpackValue::UInt(0));
@@ -1044,6 +1047,8 @@ fn path_and_rate_tables_follow_upstreams_keys_and_types() {
         fields[9].1,
         MsgpackValue::Bin(rns_core::hash::full_hash(b"iface").to_vec())
     );
+    // Upstream 41260ea1: `Transport.get_path_state()`, an int.
+    assert_eq!(fields[10].1, MsgpackValue::UInt(2));
 
     // AnnounceRateTable.items()'s dict, with `hash` added last.
     let rates = rate_table_msgpack(&[RateTableEntry {

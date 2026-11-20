@@ -801,6 +801,7 @@ fn render_path_table(response: &PickleValue, view: &TableView, now: f64) -> Rend
             Some(PickleValue::Int(hops)) => hops.to_string(),
             other => python_str(other),
         };
+        let state = path_state_marker(path.get("state"));
         let via = path.get("via").and_then(|v| v.as_bytes()).unwrap_or(&[]);
         let expires = path.get("expires").and_then(number).unwrap_or(0.0);
         let usage = match path.get("used") {
@@ -824,7 +825,7 @@ fn render_path_table(response: &PickleValue, view: &TableView, now: f64) -> Rend
             String::new()
         };
         text.push_str(&format!(
-            "{} {hops:>3}h{via} on {}{expires} {}{usage}\n",
+            "{} {hops:>3}h{state}{via} on {}{expires} {}{usage}\n",
             pretty(hash),
             python_str(path.get("interface")),
             path_costs(path),
@@ -836,6 +837,20 @@ fn render_path_table(response: &PickleValue, view: &TableView, now: f64) -> Rend
         return Rendered { text, status: 1 };
     }
     Rendered { text, status: 0 }
+}
+
+/// upstream's `state_str` (41260ea1) for a path table entry's `state`:
+/// ` (R)` for a responsive path, ` (u)` for an unresponsive one, ` (?)`
+/// otherwise, compared as Python's `==` compares (so `True` is 1). Upstream
+/// reads `path["state"]` without a fallback and dies on an entry without
+/// it, from a daemon older than 41260ea1; this prints ` (?)` for it, as it
+/// prints `n` for a missing value or link request cost.
+fn path_state_marker(state: Option<&PickleValue>) -> &'static str {
+    match state.and_then(number) {
+        Some(state) if state == f64::from(rns_core::constants::STATE_RESPONSIVE) => " (R)",
+        Some(state) if state == f64::from(rns_core::constants::STATE_UNRESPONSIVE) => " (u)",
+        _ => " (?)",
+    }
 }
 
 /// The destination's stamp value and link request cost, in upstream's
@@ -1984,66 +1999,66 @@ mod tests {
     }
 
     const PLAIN: &str = concat!(
-        r#"<22222222222222222222222222222222>   3h on AutoInterface[Local] (dv:25.000/lc:19.199)"#,
+        r#"<22222222222222222222222222222222>   3h (?) on AutoInterface[Local] (dv:25.000/lc:19.199)"#,
         "\n",
-        r#"<44444444444444444444444444444444>  12h on AutoInterface[Local] (dv:n/lc:7.000)"#,
+        r#"<44444444444444444444444444444444>  12h (?) on AutoInterface[Local] (dv:n/lc:7.000)"#,
         "\n",
-        r#"<11111111111111111111111111111111>   1h on TCPInterface[B/127.0.0.1:4242] (dv:n/lc:n)"#,
+        r#"<11111111111111111111111111111111>   1h (R) on TCPInterface[B/127.0.0.1:4242] (dv:n/lc:n)"#,
         "\n",
-        r#"<33333333333333333333333333333333>   2h on TCPInterface[B/127.0.0.1:4242] (dv:0.000/lc:n)"#,
+        r#"<33333333333333333333333333333333>   2h (u) on TCPInterface[B/127.0.0.1:4242] (dv:0.000/lc:n)"#,
         "\n",
     );
     const USAGE: &str = concat!(
-        r#"<44444444444444444444444444444444>  12h on AutoInterface[Local] (dv:n/lc:7.000), last used 1.0s ago"#,
+        r#"<44444444444444444444444444444444>  12h (?) on AutoInterface[Local] (dv:n/lc:7.000), last used 1.0s ago"#,
         "\n",
-        r#"<11111111111111111111111111111111>   1h on TCPInterface[B/127.0.0.1:4242] (dv:n/lc:n), last used 1m and 5.5s ago"#,
+        r#"<11111111111111111111111111111111>   1h (R) on TCPInterface[B/127.0.0.1:4242] (dv:n/lc:n), last used 1m and 5.5s ago"#,
         "\n",
-        r#"<33333333333333333333333333333333>   2h on TCPInterface[B/127.0.0.1:4242] (dv:0.000/lc:n), last used 2h ago"#,
+        r#"<33333333333333333333333333333333>   2h (u) on TCPInterface[B/127.0.0.1:4242] (dv:0.000/lc:n), last used 2h ago"#,
         "\n",
-        r#"<22222222222222222222222222222222>   3h on AutoInterface[Local] (dv:25.000/lc:19.199), never used"#,
+        r#"<22222222222222222222222222222222>   3h (?) on AutoInterface[Local] (dv:25.000/lc:19.199), never used"#,
         "\n",
     );
     const NO_USED: &str = concat!(
-        r#"<22222222222222222222222222222222>   3h on AutoInterface[Local] (dv:25.000/lc:19.199)"#,
+        r#"<22222222222222222222222222222222>   3h (?) on AutoInterface[Local] (dv:25.000/lc:19.199)"#,
         "\n",
-        r#"<44444444444444444444444444444444>  12h on AutoInterface[Local] (dv:n/lc:7.000)"#,
+        r#"<44444444444444444444444444444444>  12h (?) on AutoInterface[Local] (dv:n/lc:7.000)"#,
         "\n",
-        r#"<11111111111111111111111111111111>   1h on TCPInterface[B/127.0.0.1:4242] (dv:n/lc:n), no usage info"#,
+        r#"<11111111111111111111111111111111>   1h (R) on TCPInterface[B/127.0.0.1:4242] (dv:n/lc:n), no usage info"#,
         "\n",
-        r#"<33333333333333333333333333333333>   2h on TCPInterface[B/127.0.0.1:4242] (dv:0.000/lc:n)"#,
+        r#"<33333333333333333333333333333333>   2h (u) on TCPInterface[B/127.0.0.1:4242] (dv:0.000/lc:n)"#,
         "\n",
     );
     const VIAS_EXPIRY: &str = concat!(
-        r#"<22222222222222222222222222222222>   3h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on AutoInterface[Local] expires in 1h and 1m (dv:25.000/lc:19.199)"#,
+        r#"<22222222222222222222222222222222>   3h (?) via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on AutoInterface[Local] expires in 1h and 1m (dv:25.000/lc:19.199)"#,
         "\n",
-        r#"<44444444444444444444444444444444>  12h via <cccccccccccccccccccccccccccccccc> on AutoInterface[Local] expires in 1d (dv:n/lc:7.000)"#,
+        r#"<44444444444444444444444444444444>  12h (?) via <cccccccccccccccccccccccccccccccc> on AutoInterface[Local] expires in 1d (dv:n/lc:7.000)"#,
         "\n",
-        r#"<11111111111111111111111111111111>   1h via <aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> on TCPInterface[B/127.0.0.1:4242] expires in 6d and 23h (dv:n/lc:n)"#,
+        r#"<11111111111111111111111111111111>   1h (R) via <aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> on TCPInterface[B/127.0.0.1:4242] expires in 6d and 23h (dv:n/lc:n)"#,
         "\n",
-        r#"<33333333333333333333333333333333>   2h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on TCPInterface[B/127.0.0.1:4242] expires in -30s (dv:0.000/lc:n)"#,
+        r#"<33333333333333333333333333333333>   2h (u) via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on TCPInterface[B/127.0.0.1:4242] expires in -30s (dv:0.000/lc:n)"#,
         "\n",
     );
     const VIAS: &str = concat!(
-        r#"<22222222222222222222222222222222>   3h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on AutoInterface[Local] (dv:25.000/lc:19.199)"#,
+        r#"<22222222222222222222222222222222>   3h (?) via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on AutoInterface[Local] (dv:25.000/lc:19.199)"#,
         "\n",
-        r#"<44444444444444444444444444444444>  12h via <cccccccccccccccccccccccccccccccc> on AutoInterface[Local] (dv:n/lc:7.000)"#,
+        r#"<44444444444444444444444444444444>  12h (?) via <cccccccccccccccccccccccccccccccc> on AutoInterface[Local] (dv:n/lc:7.000)"#,
         "\n",
-        r#"<11111111111111111111111111111111>   1h via <aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> on TCPInterface[B/127.0.0.1:4242] (dv:n/lc:n)"#,
+        r#"<11111111111111111111111111111111>   1h (R) via <aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> on TCPInterface[B/127.0.0.1:4242] (dv:n/lc:n)"#,
         "\n",
-        r#"<33333333333333333333333333333333>   2h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on TCPInterface[B/127.0.0.1:4242] (dv:0.000/lc:n)"#,
+        r#"<33333333333333333333333333333333>   2h (u) via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on TCPInterface[B/127.0.0.1:4242] (dv:0.000/lc:n)"#,
         "\n",
     );
     const EXPIRY: &str = concat!(
-        r#"<22222222222222222222222222222222>   3h on AutoInterface[Local] expires in 1h and 1m (dv:25.000/lc:19.199)"#,
+        r#"<22222222222222222222222222222222>   3h (?) on AutoInterface[Local] expires in 1h and 1m (dv:25.000/lc:19.199)"#,
         "\n",
-        r#"<44444444444444444444444444444444>  12h on AutoInterface[Local] expires in 1d (dv:n/lc:7.000)"#,
+        r#"<44444444444444444444444444444444>  12h (?) on AutoInterface[Local] expires in 1d (dv:n/lc:7.000)"#,
         "\n",
-        r#"<11111111111111111111111111111111>   1h on TCPInterface[B/127.0.0.1:4242] expires in 6d and 23h (dv:n/lc:n)"#,
+        r#"<11111111111111111111111111111111>   1h (R) on TCPInterface[B/127.0.0.1:4242] expires in 6d and 23h (dv:n/lc:n)"#,
         "\n",
-        r#"<33333333333333333333333333333333>   2h on TCPInterface[B/127.0.0.1:4242] expires in -30s (dv:0.000/lc:n)"#,
+        r#"<33333333333333333333333333333333>   2h (u) on TCPInterface[B/127.0.0.1:4242] expires in -30s (dv:0.000/lc:n)"#,
         "\n",
     );
-    const JSON: &str = r#"[{"hash": "22222222222222222222222222222222", "timestamp": 1763099900.25, "via": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "hops": 3, "expires": 1763103662.15, "value": 25.0, "used": 0, "lr_cost": 19.19921875, "interface": "AutoInterface[Local]", "interface_hash": "51df0d004bf9008a7ed9829a9ef2af0aac56decb7d221fd377210b44a2f3715a"}, {"hash": "44444444444444444444444444444444", "timestamp": 1763099900.25, "via": "cccccccccccccccccccccccccccccccc", "hops": 12, "expires": 1763186400.25, "value": null, "used": 1763099999.25, "lr_cost": 7, "interface": "AutoInterface[Local]", "interface_hash": "51df0d004bf9008a7ed9829a9ef2af0aac56decb7d221fd377210b44a2f3715a"}, {"hash": "11111111111111111111111111111111", "timestamp": 1763099900.25, "via": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "hops": 1, "expires": 1763704700.75, "value": null, "used": 1763099934.75, "lr_cost": null, "interface": "TCPInterface[B/127.0.0.1:4242]", "interface_hash": "a8c134a2aa7efa78d177030f40d536c5c954bfe14823018b4a7ff044ad591e5c"}, {"hash": "33333333333333333333333333333333", "timestamp": 1763099900.25, "via": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "hops": 2, "expires": 1763099970.25, "value": 0.0, "used": 1763092800.25, "lr_cost": null, "interface": "TCPInterface[B/127.0.0.1:4242]", "interface_hash": "a8c134a2aa7efa78d177030f40d536c5c954bfe14823018b4a7ff044ad591e5c"}]"#;
+    const JSON: &str = r#"[{"hash": "22222222222222222222222222222222", "timestamp": 1763099900.25, "via": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "hops": 3, "expires": 1763103662.15, "value": 25.0, "used": 0, "lr_cost": 19.19921875, "interface": "AutoInterface[Local]", "interface_hash": "51df0d004bf9008a7ed9829a9ef2af0aac56decb7d221fd377210b44a2f3715a", "state": 0}, {"hash": "44444444444444444444444444444444", "timestamp": 1763099900.25, "via": "cccccccccccccccccccccccccccccccc", "hops": 12, "expires": 1763186400.25, "value": null, "used": 1763099999.25, "lr_cost": 7, "interface": "AutoInterface[Local]", "interface_hash": "51df0d004bf9008a7ed9829a9ef2af0aac56decb7d221fd377210b44a2f3715a", "state": 7}, {"hash": "11111111111111111111111111111111", "timestamp": 1763099900.25, "via": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "hops": 1, "expires": 1763704700.75, "value": null, "used": 1763099934.75, "lr_cost": null, "interface": "TCPInterface[B/127.0.0.1:4242]", "interface_hash": "a8c134a2aa7efa78d177030f40d536c5c954bfe14823018b4a7ff044ad591e5c", "state": 2}, {"hash": "33333333333333333333333333333333", "timestamp": 1763099900.25, "via": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "hops": 2, "expires": 1763099970.25, "value": 0.0, "used": 1763092800.25, "lr_cost": null, "interface": "TCPInterface[B/127.0.0.1:4242]", "interface_hash": "a8c134a2aa7efa78d177030f40d536c5c954bfe14823018b4a7ff044ad591e5c", "state": 1}]"#;
     const RATES: &str = concat!(
         r#"<77777777777777777777777777777777> last heard 1 day ago, 0.028 announces/hour in the last 3 days, 1 active rate violation"#,
         "\n",
@@ -2081,6 +2096,7 @@ mod tests {
         used: Option<PickleValue>,
         lr_cost: PickleValue,
         interface: &str,
+        state: i64,
     ) -> PickleValue {
         let mut items = vec![
             ("hash", PickleValue::Bytes(vec![byte; 16])),
@@ -2100,6 +2116,8 @@ mod tests {
             "interface_hash",
             PickleValue::Bytes(rns_core::hash::full_hash(interface.as_bytes()).to_vec()),
         ));
+        // Upstream 41260ea1: `Transport.get_path_state()`.
+        items.push(("state", PickleValue::Int(state)));
         dict(items)
     }
 
@@ -2116,6 +2134,7 @@ mod tests {
                 first_used.then_some(PickleValue::Float(NOW - 65.5)),
                 PickleValue::None,
                 tcp,
+                2,
             ),
             path(
                 0x22,
@@ -2126,6 +2145,7 @@ mod tests {
                 Some(PickleValue::Int(0)),
                 PickleValue::Float(4915.0 / 256.0),
                 auto,
+                0,
             ),
             path(
                 0x33,
@@ -2136,6 +2156,7 @@ mod tests {
                 Some(PickleValue::Float(NOW - 7200.0)),
                 PickleValue::None,
                 tcp,
+                1,
             ),
             path(
                 0x44,
@@ -2146,6 +2167,7 @@ mod tests {
                 Some(PickleValue::Float(NOW - 1.0)),
                 PickleValue::Int(7),
                 auto,
+                7,
             ),
         ])
     }
@@ -2161,7 +2183,7 @@ mod tests {
     }
 
     // The expected texts are what upstream rnpath prints for the same
-    // tables, at 9568b704: its rendering code, run on them with the same
+    // tables, at 41260ea1: its rendering code, run on them with the same
     // time.
     #[test]
     fn path_table_prints_as_upstream() {
@@ -2187,6 +2209,25 @@ mod tests {
         assert_eq!(rendered.text, "");
         let rendered = render_path_table(&empty, &view(None, true, false), NOW);
         assert_eq!(rendered.text, "[]\n");
+    }
+
+    /// upstream 41260ea1's marker for each `state`: Python's `==` makes
+    /// `True` unresponsive and `2.0` responsive; any other value is ` (?)`,
+    /// and so (where upstream raises KeyError) is a missing state.
+    #[test]
+    fn path_state_marker_as_upstream() {
+        for (state, marker) in [
+            (Some(PickleValue::Int(2)), " (R)"),
+            (Some(PickleValue::Float(2.0)), " (R)"),
+            (Some(PickleValue::Int(1)), " (u)"),
+            (Some(PickleValue::Bool(true)), " (u)"),
+            (Some(PickleValue::Int(0)), " (?)"),
+            (Some(PickleValue::Int(3)), " (?)"),
+            (Some(PickleValue::None), " (?)"),
+            (None, " (?)"),
+        ] {
+            assert_eq!(path_state_marker(state.as_ref()), marker, "{state:?}");
+        }
     }
 
     /// Upstream 9568b704's `-V`, `-E`, `-a` and `-M`, and its quirks: a

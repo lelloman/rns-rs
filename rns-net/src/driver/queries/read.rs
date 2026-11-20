@@ -50,6 +50,7 @@ impl Driver {
                     interface_name: iface_name,
                     stamp_value: known.map(|known| known.stamp_value),
                     lr_cost: known.and_then(|known| known.lr_cost),
+                    state: self.engine.path_state(hash),
                 }
             })
             .collect();
