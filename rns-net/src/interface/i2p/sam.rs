@@ -8,6 +8,8 @@ use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
+use rns_core::encoding::{Base64Error, BASE64_I2P};
+
 /// SAM protocol version we speak.
 const SAM_VERSION: &str = "3.1";
 
@@ -19,96 +21,30 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 // --- I2P Base64 ---
 
-/// I2P uses a non-standard base64 alphabet: `A-Za-z0-9-~` instead of `+/`.
-const I2P_BASE64_ALPHABET: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-~";
-
-/// Decode table: maps ASCII byte to 6-bit value (255 = invalid).
-fn i2p_base64_decode_table() -> [u8; 256] {
-    let mut table = [255u8; 256];
-    for (i, &ch) in I2P_BASE64_ALPHABET.iter().enumerate() {
-        table[ch as usize] = i as u8;
-    }
-    // Also accept '=' as padding (value irrelevant, handled separately)
-    table[b'=' as usize] = 0;
-    table
-}
-
-/// Encode binary data to I2P base64.
+/// Encode binary data to I2P base64 (`-` and `~` for `+` and `/`).
 pub fn i2p_base64_encode(data: &[u8]) -> String {
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-
-        out.push(I2P_BASE64_ALPHABET[((triple >> 18) & 0x3F) as usize] as char);
-        out.push(I2P_BASE64_ALPHABET[((triple >> 12) & 0x3F) as usize] as char);
-
-        if chunk.len() > 1 {
-            out.push(I2P_BASE64_ALPHABET[((triple >> 6) & 0x3F) as usize] as char);
-        } else {
-            out.push('=');
-        }
-
-        if chunk.len() > 2 {
-            out.push(I2P_BASE64_ALPHABET[(triple & 0x3F) as usize] as char);
-        } else {
-            out.push('=');
-        }
-    }
-    out
+    BASE64_I2P.encode(data)
 }
 
-/// Decode I2P base64 string to binary data.
+/// Decode I2P base64, which must be padded to a multiple of four
+/// characters.
 pub fn i2p_base64_decode(s: &str) -> Result<Vec<u8>, SamError> {
-    let table = i2p_base64_decode_table();
-    let bytes = s.as_bytes();
-
-    if !bytes.len().is_multiple_of(4) {
+    if !s.len().is_multiple_of(4) {
         return Err(SamError::InvalidResponse(format!(
             "invalid I2P base64 length: {}",
-            bytes.len()
+            s.len()
         )));
     }
-
-    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-
-    for chunk in bytes.chunks(4) {
-        let mut vals = [0u8; 4];
-        let mut pad_count = 0;
-        for (i, &b) in chunk.iter().enumerate() {
-            if b == b'=' {
-                pad_count += 1;
-                vals[i] = 0;
-            } else {
-                let v = table[b as usize];
-                if v == 255 {
-                    return Err(SamError::InvalidResponse(format!(
-                        "invalid I2P base64 character: {:?}",
-                        b as char
-                    )));
-                }
-                vals[i] = v;
+    BASE64_I2P.decode(s.as_bytes()).map_err(|error| {
+        SamError::InvalidResponse(match error {
+            Base64Error::InvalidByte(byte) => {
+                format!("invalid I2P base64 character: {:?}", byte as char)
             }
-        }
-
-        let triple = (vals[0] as u32) << 18
-            | (vals[1] as u32) << 12
-            | (vals[2] as u32) << 6
-            | (vals[3] as u32);
-
-        out.push((triple >> 16) as u8);
-        if pad_count < 2 {
-            out.push((triple >> 8) as u8);
-        }
-        if pad_count < 1 {
-            out.push(triple as u8);
-        }
-    }
-
-    Ok(out)
+            Base64Error::InvalidLength | Base64Error::InvalidPadding => {
+                "invalid I2P base64 padding".into()
+            }
+        })
+    })
 }
 
 // --- Error type ---

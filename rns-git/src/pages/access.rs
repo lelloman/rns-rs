@@ -1,6 +1,7 @@
 //! Request variables, path validation and what a requester may see.
 
 use super::*;
+use rns_core::encoding::hex_digit;
 
 pub(super) fn accessible_groups(
     config: &ServerConfig,
@@ -90,7 +91,7 @@ pub(super) fn decode_url_component(value: &str) -> String {
                 i += 1;
             }
             b'%' if i + 2 < bytes.len() => {
-                if let (Some(high), Some(low)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2]))
+                if let (Some(high), Some(low)) = (hex_digit(bytes[i + 1]), hex_digit(bytes[i + 2]))
                 {
                     out.push((high << 4) | low);
                     i += 3;
@@ -106,15 +107,6 @@ pub(super) fn decode_url_component(value: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
-}
-
-pub(super) fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
 }
 
 pub(super) fn var<'a>(vars: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {

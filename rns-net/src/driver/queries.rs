@@ -8,4 +8,4 @@ mod naming;
 mod read;
 
 use super::*;
-use rns_core::display::hex;
+use rns_core::encoding::hex;

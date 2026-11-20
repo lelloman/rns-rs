@@ -353,14 +353,7 @@ pub(super) fn default_discovery_runtime_config(
 }
 
 pub(super) fn parse_discovery_lxmf_address(value: &str) -> Option<[u8; 16]> {
-    if value.len() != 32 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    let mut address = [0u8; 16];
-    for (index, byte) in address.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
-    }
-    Some(address)
+    rns_core::encoding::hex_decode_array(value)
 }
 
 #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]

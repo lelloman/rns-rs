@@ -317,15 +317,7 @@ pub fn canonicalize_routes(mut routes: Vec<Cidr>) -> Vec<Cidr> {
 }
 
 pub(crate) fn parse_identity_hash(value: &str) -> Result<[u8; 16], PolicyError> {
-    if value.len() != 32 {
-        return Err(PolicyError::InvalidIdentity);
-    }
-    let mut out = [0u8; 16];
-    for (i, b) in out.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&value[i * 2..i * 2 + 2], 16)
-            .map_err(|_| PolicyError::InvalidIdentity)?;
-    }
-    Ok(out)
+    rns_core::encoding::hex_decode_array(value).ok_or(PolicyError::InvalidIdentity)
 }
 
 /// Whether `address` is one that must never be tunnelled or assigned:

@@ -24,20 +24,7 @@ fn lock_response_data<'a>(
 
 /// Parse a 32-hex-char destination hash.
 pub fn parse_hex_hash(s: &str) -> Option<[u8; 16]> {
-    let s = s.trim();
-    if s.len() != 32 {
-        return None;
-    }
-    let bytes: Vec<u8> = (0..s.len())
-        .step_by(2)
-        .filter_map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
-        .collect();
-    if bytes.len() != 16 {
-        return None;
-    }
-    let mut result = [0u8; 16];
-    result.copy_from_slice(&bytes);
-    Some(result)
+    rns_core::encoding::hex_decode_array(s.trim())
 }
 
 /// Result from a remote management query.

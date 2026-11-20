@@ -644,14 +644,7 @@ fn oversize_probe_error(payload_size: usize) -> Option<String> {
 }
 
 fn parse_dest_hash(hex: &str) -> Option<[u8; 16]> {
-    if hex.len() != 32 || !hex.is_ascii() {
-        return None;
-    }
-    let mut result = [0u8; 16];
-    for (i, byte) in result.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
-    }
-    Some(result)
+    rns_core::encoding::hex_decode_array(hex)
 }
 
 fn print_usage(usage_name: &str) {

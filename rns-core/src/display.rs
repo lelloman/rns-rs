@@ -17,18 +17,6 @@ const B256: [&str; 256] = [
     "𐐇", "𐐈", "𐐉", "𐐊", "𐐋", "𐐌", "𐐍", "𐐎", "𐐏",
 ];
 
-/// `data` as lowercase hex digits, two per byte, as Python's `bytes.hex()`
-/// writes it.
-pub fn hex(data: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(data.len() * 2);
-    for &byte in data {
-        out.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        out.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
-    }
-    out
-}
-
 /// Return the upstream base256 display glyph for a byte.
 pub fn b256_rep(byte: u8) -> &'static str {
     B256[byte as usize]
@@ -73,15 +61,6 @@ mod tests {
     fn prettyb256rep_matches_upstream_map_edges() {
         assert_eq!(prettyb256rep(&[0x00, 0x1a, 0x1b, 0x3f]), "<aø09>");
         assert_eq!(prettyb256rep(&[0x40, 0x5f, 0xff]), "<αΩ𐐏>");
-    }
-
-    #[test]
-    fn hex_is_two_lowercase_digits_per_byte() {
-        assert_eq!(hex(&[]), "");
-        assert_eq!(hex(&[0x00, 0x0f, 0xa0, 0xff]), "000fa0ff");
-        let all: Vec<u8> = (0..=255).collect();
-        let expected: String = all.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex(&all), expected);
     }
 
     #[test]

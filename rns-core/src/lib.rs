@@ -18,8 +18,10 @@ pub mod channel;
 pub mod constants;
 /// Destination names and hashes.
 pub mod destination;
-/// Hex and base256 renderings of byte strings.
+/// Base256 renderings of byte strings.
 pub mod display;
+/// Hex and base64 encoding and decoding.
+pub mod encoding;
 /// SHA-256 based hashes: full, truncated, random and name hashes.
 pub mod hash;
 /// Direct Link signalling and the NAT hole-punch state machine.

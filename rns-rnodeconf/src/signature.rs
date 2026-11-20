@@ -240,14 +240,7 @@ pub(crate) fn verify_pss(key: &PublicKey, message: &[u8], signature: &[u8]) -> b
 }
 
 pub(crate) fn unhex(text: &str) -> Option<Vec<u8>> {
-    let text = text.trim();
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
-        .collect()
+    rns_core::encoding::hex_decode(text.trim())
 }
 
 #[cfg(test)]

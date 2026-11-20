@@ -631,18 +631,8 @@ fn parse_routes(routes: &[String]) -> io::Result<Vec<Cidr>> {
         .collect()
 }
 fn parse_hash(value: &str) -> io::Result<[u8; 16]> {
-    if value.len() != 32 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "invalid destination hash",
-        ));
-    }
-    let mut result = [0; 16];
-    for (index, byte) in result.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid destination hash"))?;
-    }
-    Ok(result)
+    rns_core::encoding::hex_decode_array(value)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid destination hash"))
 }
 fn node_error(error: rns_tun::RnsSendError) -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, error)

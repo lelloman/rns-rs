@@ -39,22 +39,14 @@ pub(crate) fn load_or_create_identity(path: &Path) -> Result<Identity> {
     storage::load_or_create_identity_file(path).map_err(Error::from)
 }
 
-pub use rns_core::display::hex;
+pub use rns_core::encoding::hex;
 
 pub(crate) fn parse_hex_16(s: &str) -> Result<[u8; 16]> {
     let clean = s.trim();
     if clean.len() != 32 {
         return Err(Error::msg("expected 32 hex characters"));
     }
-    let mut out = [0u8; 16];
-    for i in 0..16 {
-        out[i] = parse_hex_byte(&clean[i * 2..i * 2 + 2])?;
-    }
-    Ok(out)
-}
-
-fn parse_hex_byte(s: &str) -> Result<u8> {
-    u8::from_str_radix(s, 16).map_err(|_| Error::msg("invalid hex"))
+    rns_core::encoding::hex_decode_array(clean).ok_or_else(|| Error::msg("invalid hex"))
 }
 
 pub(crate) fn parse_rns_url(url: &str) -> Result<([u8; 16], String)> {

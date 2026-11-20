@@ -3,7 +3,7 @@
 //! `reload_blackhole` and `remove_blackholed_paths` do them.
 
 use super::*;
-use rns_core::display::hex;
+use rns_core::encoding::hex;
 
 impl Driver {
     /// Blackhole an identity on this node. Returns `false` when it already

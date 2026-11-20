@@ -335,7 +335,7 @@ impl Driver {
         Some((
             remote.clone(),
             iface.port.unwrap_or(4242),
-            crate::discovery::hex_encode(&iface.transport_id),
+            rns_core::encoding::hex(&iface.transport_id),
             BackbonePeerPoolDiscoveryCandidate {
                 discovery_hash: iface.discovery_hash,
                 status,
@@ -351,7 +351,7 @@ impl Driver {
     pub(super) fn discovered_pool_candidate_name(
         iface: &crate::discovery::DiscoveredInterface,
     ) -> String {
-        let hex = crate::discovery::hex_encode(&iface.discovery_hash);
+        let hex = rns_core::encoding::hex(&iface.discovery_hash);
         format!("{} ({})", iface.name, &hex[..8])
     }
 

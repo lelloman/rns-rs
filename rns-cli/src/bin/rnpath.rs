@@ -2,7 +2,7 @@
 //!
 //! Connects to a running rnsd via RPC to query/modify the path table.
 
-use rns_core::display::hex;
+use rns_core::encoding::hex;
 use std::io::Write;
 use std::path::Path;
 use std::process;
@@ -289,18 +289,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
 }
 
 fn parse_hex_hash(s: &str) -> Option<Vec<u8>> {
-    let s = s.trim();
-    if !s.len().is_multiple_of(2) {
-        return None;
-    }
-    let mut bytes = Vec::with_capacity(s.len() / 2);
-    for i in (0..s.len()).step_by(2) {
-        match u8::from_str_radix(&s[i..i + 2], 16) {
-            Ok(b) => bytes.push(b),
-            Err(_) => return None,
-        }
-    }
-    Some(bytes)
+    rns_core::encoding::hex_decode(s.trim())
 }
 
 /// `RNS.prettyhexrep`: the hash in hex, between angle brackets.

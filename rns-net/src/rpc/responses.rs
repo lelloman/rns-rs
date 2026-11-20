@@ -305,7 +305,7 @@ pub fn discovered_interfaces_to_pickle(
             if let Some(v) = iface.operator_lxmf_address {
                 dict.push((
                     PickleValue::String("operator_lxmf_address".into()),
-                    PickleValue::String(crate::discovery::hex_encode(&v)),
+                    PickleValue::String(rns_core::encoding::hex(&v)),
                 ));
             }
 

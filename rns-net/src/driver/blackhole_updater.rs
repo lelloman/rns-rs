@@ -10,7 +10,7 @@
 //! the next start. The links are the driver's own; applications never see
 //! them.
 
-use rns_core::display::hex;
+use rns_core::encoding::hex;
 use std::collections::HashMap;
 use std::sync::mpsc;
 

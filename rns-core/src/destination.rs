@@ -45,10 +45,7 @@ pub fn expand_name(
 
     if let Some(hash) = identity_hash {
         name.push('.');
-        for b in hash {
-            use core::fmt::Write;
-            let _ = write!(name, "{:02x}", b);
-        }
+        crate::encoding::push_hex(&mut name, hash);
     }
 
     Ok(name)

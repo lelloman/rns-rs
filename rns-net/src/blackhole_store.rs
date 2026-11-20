@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 
+use rns_core::encoding::{hex, hex_decode_array};
 use rns_core::msgpack::{self, Value};
 use rns_core::transport::types::BlackholeEntry;
 
@@ -39,7 +40,7 @@ pub(crate) fn load(
             files.push((None, item.path()));
             continue;
         }
-        let Some(source) = parse_hash_hex(&name) else {
+        let Some(source) = hex_decode_array::<16>(&name) else {
             log::debug!("Ignoring blackhole file {name}: not an identity hash");
             continue;
         };
@@ -116,7 +117,7 @@ pub(crate) fn list_entries(
 /// Write a source's list, as fetched, to `<dir>/<source identity hash>`, as
 /// upstream's `BlackholeUpdater` does.
 pub(crate) fn save_source(dir: &Path, source: &[u8; 16], list: &Value) -> io::Result<()> {
-    let name: String = source.iter().map(|b| format!("{b:02x}")).collect();
+    let name = hex(source);
     std::fs::create_dir_all(dir)?;
     let tmp = dir.join(format!("{name}.tmp"));
     std::fs::write(&tmp, msgpack::pack(list))?;
@@ -181,17 +182,6 @@ fn time_value(value: &Value) -> Option<f64> {
     value
         .as_float()
         .or_else(|| value.as_integer().map(|v| v as f64))
-}
-
-fn parse_hash_hex(name: &str) -> Option<[u8; 16]> {
-    if name.len() != 32 {
-        return None;
-    }
-    let mut hash = [0u8; 16];
-    for (i, byte) in hash.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(name.get(i * 2..i * 2 + 2)?, 16).ok()?;
-    }
-    Some(hash)
 }
 
 trait MapField {

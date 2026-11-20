@@ -13,6 +13,7 @@ name = "rnodeconf"
 path = "src/main.rs"
 
 [dependencies]
+rns-core.workspace = true
 rns-crypto = { workspace = true }
 rns-net = { version = "0.14.0", path = "../rns-net", default-features = false }
 libc = "0.2"
