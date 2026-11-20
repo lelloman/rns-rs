@@ -63,6 +63,16 @@ impl Driver {
             }
         }
 
+        self.finish_interface_up(id, wants_tunnel, came_up);
+        if replay_shared_announces {
+            self.replay_shared_announces();
+        }
+    }
+
+    /// What follows an interface coming up: its tunnel synthesis, then the
+    /// application callback and the `InterfaceUp` hook. Its entry, IFAC
+    /// included, must be complete by now.
+    fn finish_interface_up(&mut self, id: InterfaceId, wants_tunnel: bool, came_up: bool) {
         // Upstream f361a354 and ad6c709e synthesize on connect, before the
         // interface is online, so the synthesis is the first frame on the
         // connection. Here it is sent before anything else can use the
@@ -76,9 +86,6 @@ impl Driver {
         }
         if came_up {
             self.notify_interface_up(id);
-        }
-        if replay_shared_announces {
-            self.replay_shared_announces();
         }
     }
 
@@ -195,12 +202,12 @@ impl Driver {
         let display_name = registration.display_name;
         let short_name = registration.short_name;
         let reconnecting = registration.reconnecting;
-        if reconnecting {
-            // Offline until it connects, so not up yet.
-            self.register_dynamic_interface(id, Some(writer), registration.info, false);
-        } else {
-            self.handle_interface_up_event(id, Some(writer), Some(registration.info));
-        }
+        // A reconnecting interface is offline until it connects, so not up
+        // yet. Any other one is up once registered, but only after its entry
+        // has its IFAC: its tunnel synthesis and InterfaceUp hooks run as it
+        // comes up, and an unmasked frame is dropped by the peer.
+        let wants_tunnel =
+            self.register_dynamic_interface(id, Some(writer), registration.info, !reconnecting);
         if let Some(entry) = self.interfaces.get_mut(&id) {
             // Kept, offline, when it goes down.
             entry.dynamic = !reconnecting;
@@ -215,6 +222,9 @@ impl Driver {
             entry.interface_type = interface_type;
             entry.ifac = inherited_ifac;
             Self::apply_interface_telemetry(entry, telemetry);
+        }
+        if !reconnecting {
+            self.finish_interface_up(id, wants_tunnel, true);
         }
     }
 
