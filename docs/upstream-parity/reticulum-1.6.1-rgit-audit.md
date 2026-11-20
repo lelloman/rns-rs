@@ -84,9 +84,9 @@ evidence exist; until then nothing here is claimed as passed.
 | 25 | `b9903c53` | 2026-11-18 | Analysis mode capture argument | Integrated | `aa5b6c13`; `parses_upstream_invocations_as_argparse_does` (`--capture`, ambiguous `--c`), argparse fixture and golden help regenerated at `b9903c53` |
 | 26 | `1f7cd145` | 2026-11-18 | Cleanup and fixes | Integrated | `baa60b0a`; `link_distribution_follows_link_table_insertion_order`, `link_distribution_rpc_answer_keeps_upstreams_order`, `link_distribution_rpc_answers_with_from_ifs_lists`, argparse fixture and golden help regenerated at `1f7cd145` (decision 2) |
 | 27 | `41260ea1` | 2026-11-18 | Added path state info to path table getters | Integrated | `3b7651b4`; `test_path_state`, `query_path_table`, `path_and_rate_tables_follow_upstreams_keys_and_types`, `path_table_prints_as_upstream`, `path_state_marker_as_upstream`, `python_rnpath_lists_rust_path_table`, `python_rnpath_reads_rust_remote_path_table` |
-| 28 | `48ba76df` | 2026-11-18 | Catch announce unpack failure | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
-| 29 | `ef3e8086` | 2026-11-18 | Added link traffic stats | Proposed: Needs coordinated port | Reviewed 2026-11-20; no mapping commit yet |
-| 30 | `e8b3b14b` | 2026-11-18 | Classic | Proposed: Needs coordinated port | Reviewed 2026-11-20; no mapping commit yet |
+| 28 | `48ba76df` | 2026-11-18 | Catch announce unpack failure | Structurally covered | `dc8c5bf0`; `analysis_counts_destination_types_as_upstream` (extended; the guard never fires, checked against upstream at `48ba76df`) (decision 3) |
+| 29 | `ef3e8086` | 2026-11-18 | Added link traffic stats | Integrated | `c3661fa2`; `link_table_traffic_counts_relayed_bytes_but_local_clients`, `link_speeds_are_measured_as_upstreams_traffic_loop`, `link_traffic_speeds_are_reported_once_measured`, `link_traffic_keys_follow_upstreams_position_and_types`, `rnstatus_view_matches_upstream` (fixtures regenerated at `ef3e8086`, four new `totals_links*` cases), live idle-node comparison with Python at `ef3e8086` |
+| 30 | `e8b3b14b` | 2026-11-18 | Classic | Integrated | `22021dc1`; `rnstatus_view_matches_upstream` (fixtures regenerated at `e8b3b14b`; `totals_links_control_only` now prints, `totals_links_control_only_tx` new; both raise at `ef3e8086`) |
 | 31 | `eb00622f` | 2026-11-18 | Cleanup | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
 | 32 | `01ffb98e` | 2026-11-18 | Local link traffic counting | Proposed: Needs coordinated port | Reviewed 2026-11-20; no mapping commit yet |
 | 33 | `52898683` | 2026-11-18 | Raised listener backlogs | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
@@ -1316,13 +1316,34 @@ failed with Python's `KeyError: 'state'` and
 ### 28. `48ba76df` — Catch announce unpack failure
 
 **Upstream change:** A guard inside commit 24's analysis loop, which commit 31
-withdraws.
+withdraws: `try: announce_packet.unpack()` / `except: unresolvable +=1;
+continue`.
 
-**Rust applicability:** None under the recommended handling of commit 24.
+**Rust applicability:** Under decision 3 the analysis of commit 24 is
+ported, so the guard was to be ported too. It has no effect upstream:
+`Packet.unpack` catches every exception itself and returns False, so the
+`except` never runs, and an announce that `unpack` cannot read up to its
+data still raises `AttributeError: 'Packet' object has no attribute
+'data'` on the next line, `announce_packet.data[...]`, outside the guard.
+The review's expectation (and the batch brief's) that such an entry is
+now counted as unresolvable and the analysis continues does not match
+upstream.
 
-**Local handling:** Analysis, plus a comment at the native `-A` branch.
+**Local handling and evidence:** `dc8c5bf0`. No behaviour change: the
+doc comment of `analyze_path_table` and a comment at the `data` read say
+why the guard does not apply. Upstream's `analyze_tables` at `48ba76df`
+(Python 3.12, disposable worktree, a harness feeding it the inputs of
+`analysis_counts_destination_types_as_upstream` through
+`Identity.known_destinations`, `Transport.get_cached_packet` and
+`Transport.destination_type_map`) printed the same six counts (2, 3, 5,
+3, 3, 6) for the readable table, and raised the `AttributeError` for
+each of the five unreadable announces, both alone and among the readable
+ones in the whole table. The test now also checks the whole-table case.
+Tests run: `cargo test -p rns-cli` passed (lib 136, `cli_golden` 1,
+`utility_interop.rs` 5 with 33 ignored, the other targets), `cargo fmt
+--check` and `bash scripts/lint-host.sh` passed.
 
-**Proposed disposition:** Needs port (decision 3).
+**Final disposition:** Structurally covered (decision 3).
 
 ### 29. `ef3e8086` — Added link traffic stats
 
@@ -1332,11 +1353,92 @@ interface-stats RPC keys, and a `Links` section in `rnstatus -t -l`.
 
 **Rust applicability:** None of it exists.
 
-**Local handling:** Engine counters, driver rates, RPC keys in upstream's
-position and types, the rnstatus section, and fixtures regenerated at
-`ef3e8086`.
+**Local handling and evidence:** `c3661fa2`.
 
-**Proposed disposition:** Needs coordinated port.
+Counters: `TransportEngine` keeps `link_rxb`/`link_txb`
+(`link_traffic()`). In `handle_link_table_routing`, every link packet of a
+validated entry adds its raw length to `link_rxb` before the route is
+chosen, relayed or not, unless it came from a local client this instance
+serves (`serves_local_client`, upstream's `is_local_client_interface`);
+after the `SendOnInterface` of a relayed packet its relayed length goes to
+`link_txb` unless the outbound interface is a local client. Unvalidated
+entries, announces, link requests and LRPROOFs add nothing, as upstream
+returns or skips before its counters.
+
+Speeds: the driver's `LinkTrafficSampler` runs from the tick as
+upstream's traffic loop: the first pass a second after start, then about
+once a second, `(bytes - bytes at the previous pass) * 8` over the time
+since that pass on the monotonic clock (`time::monotonic`, new:
+`CLOCK_MONOTONIC` through libc on unix, as Python's `time.monotonic()`).
+Upstream's first pass measures from `Transport.start_time`, a
+`time.time()` reading, so its interval is negative and its speeds `-0.0`
+(or a tiny negative value for link traffic in the first second); the
+sampler does the same. Before the first pass the speeds are `None`,
+upstream's class attribute `0`.
+
+RPC: `lrxb`, `ltxb`, `lrxs`, `ltxs` come right after `txs`, as in
+upstream's dict; the totals are ints, the speeds the integer 0 before
+the first pass and floats after (`LinkTraffic` in
+`InterfaceStatsResponse`). The shared instance RPC, remote management
+`/status` and `rnstatus -j` carry them.
+
+rnstatus: `-t -l` prints the `Links` section after `Filtered`, with
+upstream's text, padding, `min(100.0, …)` share of the data flow (the
+totals less announces and path requests) and `int()` truncation, under
+this commit's guards (total speed and link speed nonzero). Where
+announces and path requests are all of a nonzero total while link
+traffic flows that way, upstream divides by zero: Python raises
+`ZeroDivisionError: float division by zero` with a traceback and exits 1.
+This was reproduced: `render` returned a `Crash` with what was printed
+first, `rnstatus` printed that, the exception line to stderr, and exited
+1; in monitor mode upstream buffers the frame and loses it, so nothing of
+it was printed (the screen clear and `-R` progress moved into the frame
+for this). Commit 30's mapping removes it again.
+
+Base class: `is_local_shared_instance` and `is_connected_to_shared_instance`
+now default to False and Transport tests their values instead of
+`hasattr`. Checked for a behaviour difference: the only interface that
+set one of them to False is the server side of a local client connection
+(`LocalClientInterface` with `connected_socket`), for which
+`interface_to_shared_instance` now answers False instead of True. Its two
+callers (the `required_destinations_only` announce check and the hops
+decrement in `inbound`) only reach it after `is_local_client_interface`
+or when there are no local client interfaces, so neither changes
+behaviour; rns-rs's `is_local_client` flags need nothing.
+
+Fixtures: `tests/generate_rnstatus_fixtures.py` run from a disposable
+worktree at `ef3e8086`. The stats gain the four keys (no existing output
+changed; only the `.pickle` inputs did), and `totals_links`,
+`totals_links_everything`, `totals_links_idle` and
+`totals_links_control_only` are new; the last raised, and the generator
+now records an exception's last line in `<case>.err`, which
+`rnstatus_view_matches_upstream` checked. Without the Links section the
+test fails on all four. `docs/rnstatus.md` describes the section.
+
+Live: an rns-rs `rnsd` and a Python `rnsd` at `ef3e8086` (transport
+enabled, no interfaces), each queried with `rnstatus -j`, both answered
+`"lrxs": 0, "ltxs": 0` (ints) right after start and `"lrxs": 0.0,
+"ltxs": 0.0` (floats) a few seconds later; Python's `rnstatus -j` and
+`-t -l` against the rns-rs instance read the same, and the `-t -l` texts
+of the two daemons matched but for the instance name, transport id and
+uptime (`Links        : ↑0 B  0 bps, 0% of data flow` both ways). The first-pass
+`-0.0` window was not caught live.
+
+Tests: `link_table_traffic_counts_relayed_bytes_but_local_clients`
+(rns-core), `link_speeds_are_measured_as_upstreams_traffic_loop`,
+`link_traffic_speeds_are_reported_once_measured`,
+`link_traffic_keys_follow_upstreams_position_and_types` (rns-net),
+`rnstatus_view_matches_upstream` (new cases). Tests run: `cargo test -p
+rns-core` passed (lib 1173 and its other targets), `cargo test -p
+rns-net` passed (lib 1607, `e2e.rs` 74 with 1 ignored,
+`e2e_direct_connect.rs` 19, `python_interop.rs` 6 with 1 ignored),
+`cargo test -p rns-cli` passed (lib 136, `utility_interop.rs` 5 with 33
+ignored), `cargo test -p rns-ctl` passed (69, `integration.rs` 59, `cli.rs`
+3), `cargo fmt --check` and `bash scripts/lint-host.sh` passed. Not
+covered by a test: `rnstatus`'s exit path for the crash (only `render`'s
+result was tested), now removed by commit 30.
+
+**Final disposition:** Integrated.
 
 ### 30. `e8b3b14b` — Classic
 
@@ -1345,10 +1447,23 @@ percentage; it now prints `0% of data flow`.
 
 **Rust applicability:** Follows commit 29.
 
-**Local handling:** Change the guard and add a fixture case generated at
-`e8b3b14b`.
+**Local handling and evidence:** `22021dc1`. The link shares are guarded
+by the data flow (`drxs`/`dtxs`) and the link speed, as upstream;
+nothing in the display raises any more, so the `Crash` plumbing of
+commit 29's mapping is gone and `rnstatus.rs` is back to its earlier
+form. Fixtures regenerated from a disposable worktree at `e8b3b14b`:
+`totals_links_control_only` now prints `0% of data flow` both ways, and
+`totals_links_control_only_tx` is new (a transmitted flow all announces
+and path requests, with `-A` and `-P`). Running the same generator at
+`ef3e8086` raised `ZeroDivisionError: float division by zero` for both;
+no other output changed. `rnstatus_view_matches_upstream` fails on any
+case where upstream raised, and fails on both cases with commit 29's
+mapping. `docs/rnstatus.md` updated. Tests run: `cargo test -p rns-cli`
+passed (lib 136, `cli_golden` 1, `utility_interop.rs` 5 with 33 ignored,
+the other targets), `cargo fmt --check` and `bash scripts/lint-host.sh`
+passed.
 
-**Proposed disposition:** Needs coordinated port.
+**Final disposition:** Integrated.
 
 ### 31. `eb00622f` — Cleanup
 
@@ -1420,7 +1535,9 @@ utilities included.
 3. **Commit 24:** the analysis statistics are ported as they are at that
    commit, then 28's guard, then 31's `Not yet implemented`. This brings in
    commit 21's destination-type files as well. Commit 24 implemented in
-   `959bb94f`, see commit 24.
+   `959bb94f`, see commit 24. Commit 28 mapped in `dc8c5bf0`: its guard
+   never fires upstream (`Packet.unpack` does not raise), so the analysis
+   is unchanged, see commit 28.
 4. **Commit 2:** upstream's order dependence is reproduced: the disable key
    only takes effect when it appears before the count. The parser records key
    order for this.
