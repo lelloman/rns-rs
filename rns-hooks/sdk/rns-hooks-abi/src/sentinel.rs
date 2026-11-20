@@ -23,6 +23,20 @@ pub const EVENT_WRITE_STALL: u8 = 3;
 /// [`BackbonePeerPayload::event_kind`] for a peer IP that was penalized.
 pub const EVENT_PENALTY: u8 = 4;
 
+/// The payload form of a hook context's `peer_ip` (see
+/// `BackbonePeerContext::peer_ip`): an IPv4 address (`family` 4, in the first
+/// 4 bytes) becomes IPv4-mapped; other addresses are kept.
+pub fn mapped_peer_ip(family: u8, context_ip: [u8; 16]) -> [u8; 16] {
+    if family != 4 {
+        return context_ip;
+    }
+    let mut mapped = [0u8; 16];
+    mapped[10] = 0xff;
+    mapped[11] = 0xff;
+    mapped[12..16].copy_from_slice(&context_ip[..4]);
+    mapped
+}
+
 /// A backbone peer event, as the sentinel hook reports it.
 ///
 /// The fields mirror [`BackbonePeerContext`](crate::context::BackbonePeerContext),
@@ -31,9 +45,10 @@ pub const EVENT_PENALTY: u8 = 4;
 pub struct BackbonePeerPayload {
     /// 4 = IPv4, 6 = IPv6
     pub peer_ip_family: u8,
-    /// The 16 bytes of an IPv6 address; for IPv4, either the IPv4-mapped
-    /// form (`::ffff:a.b.c.d`) or the 4 octets followed by zeroes, depending
-    /// on the producer.
+    /// The 16 bytes of an IPv6 address, or an IPv4 address in the
+    /// IPv4-mapped form (`::ffff:a.b.c.d`; see [`mapped_peer_ip`]). Payloads
+    /// from older hooks may hold the 4 octets followed by zeroes instead;
+    /// [`BackbonePeerPayload::ipv4_octets`] reads both.
     pub peer_ip: [u8; 16],
     /// The peer's TCP port; 0 for a penalty.
     pub peer_port: u16,
@@ -118,17 +133,20 @@ impl BackbonePeerPayload {
         })
     }
 
-    /// The IPv4 address from the last 4 bytes of `peer_ip` (the IPv4-mapped
-    /// form), or `None` unless `peer_ip_family` is 4. Gives zeroes for an
-    /// address stored in the first 4 bytes.
+    /// The IPv4 address in `peer_ip`, or `None` unless `peer_ip_family` is
+    /// 4. Reads the IPv4-mapped form, and the first 4 bytes of an address
+    /// stored the way older hooks did.
     pub fn ipv4_octets(&self) -> Option<[u8; 4]> {
-        if self.peer_ip_family == 4 {
-            let mut octets = [0u8; 4];
-            octets.copy_from_slice(&self.peer_ip[12..16]);
-            Some(octets)
-        } else {
-            None
+        if self.peer_ip_family != 4 {
+            return None;
         }
+        let mut octets = [0u8; 4];
+        if self.peer_ip[10..12] == [0xff, 0xff] {
+            octets.copy_from_slice(&self.peer_ip[12..16]);
+        } else {
+            octets.copy_from_slice(&self.peer_ip[..4]);
+        }
+        Some(octets)
     }
 
     /// The server interface's name, or `None` if its bytes are not UTF-8
@@ -142,6 +160,37 @@ impl BackbonePeerPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ipv4_is_mapped_and_read_in_either_layout() {
+        let mut context_ip = [0u8; 16];
+        context_ip[..4].copy_from_slice(&[172, 20, 0, 3]);
+        let mapped = mapped_peer_ip(4, context_ip);
+        assert_eq!(
+            mapped,
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 172, 20, 0, 3]
+        );
+        let v6 = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        assert_eq!(mapped_peer_ip(6, v6), v6);
+
+        let payload = |peer_ip_family, peer_ip| BackbonePeerPayload {
+            peer_ip_family,
+            peer_ip,
+            peer_port: 0,
+            server_interface_id: 0,
+            peer_interface_id: 0,
+            connected_for_secs: 0,
+            had_received_data: false,
+            penalty_level: 0,
+            blacklist_for_secs: 0,
+            event_kind: 0,
+            server_interface_name_len: 0,
+            server_interface_name: [0; BACKBONE_PEER_INTERFACE_NAME_MAX],
+        };
+        assert_eq!(payload(4, mapped).ipv4_octets(), Some([172, 20, 0, 3]));
+        assert_eq!(payload(4, context_ip).ipv4_octets(), Some([172, 20, 0, 3]));
+        assert_eq!(payload(6, v6).ipv4_octets(), None);
+    }
 
     #[test]
     fn backbone_peer_roundtrip() {

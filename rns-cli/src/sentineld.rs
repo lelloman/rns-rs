@@ -878,12 +878,7 @@ impl PeerTracker {
 }
 
 fn decode_ip(payload: &BackbonePeerPayload) -> Option<IpAddr> {
-    if payload.peer_ip_family == 4 {
-        let mut octets = [0u8; 4];
-        octets.copy_from_slice(&payload.peer_ip[12..16]);
-        if octets == [0u8; 4] {
-            octets.copy_from_slice(&payload.peer_ip[..4]);
-        }
+    if let Some(octets) = payload.ipv4_octets() {
         Some(IpAddr::V4(std::net::Ipv4Addr::from(octets)))
     } else if payload.peer_ip_family == 6 {
         Some(IpAddr::V6(std::net::Ipv6Addr::from(payload.peer_ip)))
