@@ -1029,8 +1029,13 @@ fn lookup_path(
         .ok()
         .and_then(|v| v.as_float().or_else(|| v.as_int().map(|i| i as f64)))
         .unwrap_or(0.0);
-    let limit = std::time::Instant::now()
-        + std::time::Duration::from_secs_f64(timeout.max(medium).max(0.0));
+    let wait = std::time::Duration::try_from_secs_f64(timeout.max(medium).max(0.0))
+        .unwrap_or(std::time::Duration::MAX);
+    let now = std::time::Instant::now();
+    // An unrepresentable limit (an infinite timeout) waits as long as it can.
+    let limit = now
+        .checked_add(wait)
+        .unwrap_or(now + std::time::Duration::from_secs(u32::MAX as u64));
     let syms: Vec<char> = "⢄⢂⢁⡁⡈⡐⡠".chars().collect();
     let mut i = 0;
     while !has_path() && std::time::Instant::now() < limit {
@@ -1195,7 +1200,7 @@ fn remote_client(
     management_identity: Option<rns_crypto::identity::Identity>,
     remote_timeout: f64,
 ) -> rns_net::remote_management::RemoteManagementClient {
-    let timeout = Duration::from_secs_f64(remote_timeout.max(0.2));
+    let timeout = Duration::try_from_secs_f64(remote_timeout.max(0.2)).unwrap_or(Duration::MAX);
     let mut client = match rns_net::remote_management::RemoteManagementClient::connect_with_identity(
         config_path.map(Path::new),
         management_identity,
@@ -1208,7 +1213,9 @@ fn remote_client(
         }
     };
     let medium = client.medium_path_timeout().unwrap_or(0.0);
-    client.set_timeout(Duration::from_secs_f64(remote_timeout.max(medium).max(0.2)));
+    client.set_timeout(
+        Duration::try_from_secs_f64(remote_timeout.max(medium).max(0.2)).unwrap_or(Duration::MAX),
+    );
     print_progress(&mut client);
     client
 }

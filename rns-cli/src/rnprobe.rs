@@ -362,7 +362,9 @@ impl Prober<'_> {
         let mut replies = 0u64;
         while probes != 0 {
             if sent > 0 {
-                std::thread::sleep(Duration::from_secs_f64(options.wait));
+                std::thread::sleep(
+                    Duration::try_from_secs_f64(options.wait).unwrap_or(Duration::MAX),
+                );
             }
             let Ok(size) = usize::try_from(options.size) else {
                 flush();
