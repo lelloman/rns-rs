@@ -3232,7 +3232,7 @@ fn test_resource_accept_app_reject() {
 /// With CPU work folded, a compressed resource is assembled on the driver
 /// loop without a receive worker, and an uncompressed resource completing
 /// after it on the same link is delivered after it.
-#[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-work")))]
+#[cfg(not(any(feature = "engine-parallel", feature = "compact-threads")))]
 #[test]
 fn folded_assembly_keeps_resource_order_on_the_link() {
     use std::collections::VecDeque;
@@ -4708,7 +4708,7 @@ fn test_channel_proof_reopens_send_window() {
         .expect("proof should free one channel slot");
 }
 
-#[cfg(feature = "proof-pool")]
+#[cfg(feature = "engine-parallel")]
 #[test]
 fn link_proofs_verified_on_the_pool_reopen_the_window_and_bad_ones_do_not() {
     let (mut init_mgr, resp_mgr, link_id) = setup_active_link();
@@ -4792,7 +4792,7 @@ fn link_proofs_verified_on_the_pool_reopen_the_window_and_bad_ones_do_not() {
         .expect("the verified proof frees one channel slot");
 }
 
-#[cfg(feature = "proof-pool")]
+#[cfg(feature = "engine-parallel")]
 #[test]
 fn link_proofs_signed_on_the_pool_go_out_once_signed_and_verify() {
     let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();

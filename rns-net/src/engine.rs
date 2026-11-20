@@ -8,30 +8,26 @@ pub const ENGINE: &str = if cfg!(feature = "engine-parallel") {
     "compact"
 };
 
-/// Whether timers and housekeeping (the tick, transport-state persistence,
-/// ratchet cleanup) run on the driver loop instead of their own threads: in
-/// the compact engine unless `compact-threads-timers` keeps the threads.
-pub(crate) const FOLD_TIMERS: bool =
-    !cfg!(feature = "engine-parallel") && !cfg!(feature = "compact-threads-timers");
+/// Whether the compact engine folds its helper threads into the driver
+/// loop: always, unless the `compact-threads` feature keeps the threads.
+/// The parallel engine keeps them.
+const FOLDED: bool = !cfg!(feature = "engine-parallel") && !cfg!(feature = "compact-threads");
 
-/// Whether CPU work (announce verification, so far) runs on the driver loop
-/// instead of its own threads: in the compact engine unless
-/// `compact-threads-work` keeps the threads.
-pub(crate) const FOLD_WORK: bool =
-    !cfg!(feature = "engine-parallel") && !cfg!(feature = "compact-threads-work");
+/// Whether timers and housekeeping (the tick, transport-state persistence,
+/// ratchet cleanup) run on the driver loop instead of their own threads.
+pub(crate) const FOLD_TIMERS: bool = FOLDED;
+
+/// Whether CPU work (announce verification, resource compression and
+/// assembly) runs on the driver loop instead of its own threads.
+pub(crate) const FOLD_WORK: bool = FOLDED;
 
 /// Whether services (the RPC servers, the provider bridge and the probe
-/// server) run on the driver loop instead of their own threads: in the
-/// compact engine unless `compact-threads-services` keeps the threads.
-pub(crate) const FOLD_SERVICES: bool =
-    !cfg!(feature = "engine-parallel") && !cfg!(feature = "compact-threads-services");
+/// server) run on the driver loop instead of their own threads.
+pub(crate) const FOLD_SERVICES: bool = FOLDED;
 
-/// Whether interface I/O (UDP, so far) runs on the driver loop instead of
-/// reader and writer threads: in the compact engine unless
-/// `compact-threads-io` keeps the threads. TCP runs on the driver loop in
-/// both engines.
-pub(crate) const FOLD_IO: bool =
-    !cfg!(feature = "engine-parallel") && !cfg!(feature = "compact-threads-io");
+/// Whether interface I/O runs on the driver loop instead of reader and
+/// writer threads. TCP runs on the driver loop in both engines.
+pub(crate) const FOLD_IO: bool = FOLDED;
 
 /// The driver poller's keys for folded services' sockets: above every
 /// interface's keys (an interface id shifted left by one) and below the

@@ -580,8 +580,8 @@ fn upgrade_carries_link_traffic_over_the_direct_path() {
     // link thread was needed.
     let folded = !cfg!(any(
         feature = "engine-parallel",
-        feature = "compact-threads-services",
-        feature = "compact-threads-io"
+        feature = "compact-threads",
+        feature = "compact-threads"
     ));
     if folded {
         let threads: Vec<String> = std::fs::read_dir("/proc/self/task")

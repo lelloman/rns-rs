@@ -798,7 +798,7 @@ mod tests {
     /// earlier Resource on the same link: polling the worker prunes the
     /// finished receiver, so the completing receiver must be found again
     /// rather than by its previous index.
-    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads"))]
     #[test]
     fn receive_worker_completion_pruned_during_part_handling_keeps_the_completing_receiver() {
         for compressed in [false, true] {
@@ -864,7 +864,7 @@ mod tests {
                 .all(|r| r.status >= ResourceStatus::Complete));
         }
     }
-    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads"))]
     fn deliver(
         manager: &mut LinkManager,
         actions: Vec<LinkManagerAction>,
@@ -884,7 +884,7 @@ mod tests {
         }
         out
     }
-    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads"))]
     fn resource_parts(
         sender: &mut LinkManager,
         receiver: &mut LinkManager,
@@ -903,7 +903,7 @@ mod tests {
         let requests = deliver(receiver, adv);
         deliver(sender, requests)
     }
-    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads"))]
     #[test]
     fn receive_worker_same_link_barrier_preserves_supported_and_fallback_order() {
         for compressed in [false, true] {
@@ -955,7 +955,7 @@ mod tests {
             thread.join().unwrap();
         }
     }
-    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads"))]
     #[test]
     fn receive_worker_pending_application_delivery_survives_request_response_conversion() {
         for response in [false, true] {
@@ -1037,7 +1037,7 @@ mod tests {
         }
     }
 
-    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads"))]
     #[test]
     fn receive_worker_other_link_saturation_assembles_synchronously_without_dropping() {
         let (mut sender, mut receiver, link) = super::super::tests::setup_active_link();

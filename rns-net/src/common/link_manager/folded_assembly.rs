@@ -1,5 +1,5 @@
 //! Assembly of incoming compressed resources on the compact engine's driver
-//! loop, in slices, when CPU work is folded (`compact-threads-work` keeps the
+//! loop, in slices, when CPU work is folded (`compact-threads` keeps the
 //! receive worker thread instead).
 
 use super::*;

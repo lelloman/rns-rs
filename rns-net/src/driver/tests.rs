@@ -15176,7 +15176,7 @@ fn plain_link_packets_are_proved_by_the_destination_strategy() {
 
 /// A compact driver with folded timers ticks by itself, with no timer thread
 /// sending `Tick` events.
-#[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-timers")))]
+#[cfg(not(any(feature = "engine-parallel", feature = "compact-threads")))]
 #[test]
 fn folded_timers_tick_without_a_timer_thread() {
     let mut driver = new_test_driver();
@@ -15200,7 +15200,7 @@ fn folded_timers_tick_without_a_timer_thread() {
 
 /// A compact driver with folded timers writes the transport-state snapshot
 /// itself when it is due, and finishes a pending write at shutdown.
-#[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-timers")))]
+#[cfg(not(any(feature = "engine-parallel", feature = "compact-threads")))]
 #[test]
 fn folded_timers_persist_transport_state() {
     let dir = std::env::temp_dir().join(format!(
@@ -15228,7 +15228,7 @@ fn folded_timers_persist_transport_state() {
 /// A compact driver with folded CPU work verifies queued announces itself,
 /// with no verification thread: a valid one is delivered and a tampered one
 /// counts as a protocol violation.
-#[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-work")))]
+#[cfg(not(any(feature = "engine-parallel", feature = "compact-threads")))]
 #[test]
 fn folded_work_verifies_queued_announces() {
     let (tx, rx) = event::channel();
@@ -15788,7 +15788,7 @@ fn network_destinations_need_a_network_identity_and_no_shared_instance() {
     }
 }
 
-#[cfg(feature = "proof-pool")]
+#[cfg(feature = "engine-parallel")]
 #[test]
 fn single_packet_proofs_are_signed_and_checked_on_the_proof_pool() {
     let (tx, rx) = event::channel();
@@ -15953,7 +15953,7 @@ fn deferred_send(
 fn a_deferred_send_reports_its_hash_before_it_is_written() {
     let identity = Identity::new(&mut OsRng);
     // No pool: encrypted on the driver.
-    let threads = if cfg!(feature = "proof-pool") {
+    let threads = if cfg!(feature = "engine-parallel") {
         [0, 2].as_slice()
     } else {
         &[0]
@@ -16048,7 +16048,7 @@ fn single_data_packet(dest: [u8; 16], payload: &[u8]) -> RawPacket {
 #[test]
 fn a_destination_that_delivers_decrypted_proves_only_what_decrypts() {
     let identity = Identity::new(&mut OsRng);
-    let threads = if cfg!(feature = "proof-pool") {
+    let threads = if cfg!(feature = "engine-parallel") {
         [0, 2].as_slice()
     } else {
         &[0]
@@ -16680,7 +16680,7 @@ fn single_packet_proof_to_an_unknown_identity_is_rejected() {
     );
 }
 
-#[cfg(feature = "proof-pool")]
+#[cfg(feature = "engine-parallel")]
 #[test]
 fn proofs_checked_on_the_pool_keep_the_receipt_until_one_is_valid() {
     let hash = [0x64; 32];
@@ -16718,7 +16718,7 @@ fn proofs_checked_on_the_pool_keep_the_receipt_until_one_is_valid() {
     assert!(!driver.sent_packets.contains_key(&hash));
 }
 
-#[cfg(feature = "proof-pool")]
+#[cfg(feature = "engine-parallel")]
 #[test]
 fn link_packet_proofs_checked_on_the_pool_complete_only_their_own_receipt() {
     let hash = [0x57; 32];
