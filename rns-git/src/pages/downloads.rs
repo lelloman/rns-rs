@@ -2,15 +2,15 @@
 
 use super::*;
 
+/// Whether `path` has one of the media module's supported image extensions,
+/// as upstream's `IMAGE_EXTS = SUPPORTED_IMAGE_EXTS`.
 pub(super) fn is_image_path(path: &str) -> bool {
     Path::new(path)
         .extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| {
-            matches!(
-                ext.to_ascii_lowercase().as_str(),
-                "webp" | "png" | "jpg" | "jpeg" | "gif" | "tiff" | "tif" | "bmp"
-            )
+            let ext = format!(".{}", ext.to_ascii_lowercase());
+            crate::media::SUPPORTED_IMAGE_EXTS.contains(&ext.as_str())
         })
 }
 
