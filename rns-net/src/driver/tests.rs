@@ -7528,6 +7528,7 @@ fn discovery_announces_come_from_the_network_identity() {
             rns_core::stamp::StampCost::ZERO,
             &mut crate::discovery::DiscoveryStampCache::default(),
             identity,
+            crate::time::now(),
         )
     };
     let discovered = parse(Some(&network_identity)).expect("decrypts with the network identity");

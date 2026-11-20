@@ -3,12 +3,13 @@
 //! Handles receiving, validating, and storing discovered interface announcements
 //! from other Reticulum nodes on the network.
 //!
-//! Pure types and parsing live in `common::discovery`; this module contains
+//! The protocol lives in `rns_core::discovery`; this module contains
 //! I/O storage and background-threaded stamp generation / announcing.
 //!
 //! Python reference: RNS/Discovery.py
 
-// Re-export everything from common::discovery so existing `crate::discovery::X` paths work.
+// Re-export common::discovery (and through it rns_core::discovery) so
+// `crate::discovery::X` paths work.
 pub use crate::common::discovery::*;
 
 use std::fs;
@@ -1228,6 +1229,7 @@ mod tests {
                 rns_core::stamp::StampCost::ZERO,
                 &mut DiscoveryStampCache::with_capacity(8),
                 identity,
+                time::now(),
             )
         };
         let discovered = parse(Some(&network)).expect("the network identity reads it");
@@ -1571,99 +1573,6 @@ mod tests {
                 ))
             );
         }
-    }
-
-    #[test]
-    fn test_hex() {
-        assert_eq!(hex(&[0x00, 0xff, 0x12]), "00ff12");
-        assert_eq!(hex(&[]), "");
-    }
-
-    #[test]
-    fn test_compute_discovery_hash() {
-        let transport_id = [0x42u8; 16];
-        let name = "TestInterface";
-        let hash = compute_discovery_hash(&transport_id, name);
-
-        // Should be deterministic
-        let hash2 = compute_discovery_hash(&transport_id, name);
-        assert_eq!(hash, hash2);
-
-        // Different name should give different hash
-        let hash3 = compute_discovery_hash(&transport_id, "OtherInterface");
-        assert_ne!(hash, hash3);
-    }
-
-    #[test]
-    fn test_is_ip_address() {
-        assert!(is_ip_address("192.168.1.1"));
-        assert!(is_ip_address("::1"));
-        assert!(is_ip_address("2001:db8::1"));
-        assert!(!is_ip_address("not-an-ip"));
-        assert!(!is_ip_address("hostname.example.com"));
-    }
-
-    #[test]
-    fn test_is_hostname() {
-        assert!(is_hostname("example.com"));
-        assert!(is_hostname("sub.example.com"));
-        assert!(is_hostname("my-node"));
-        assert!(is_hostname("my-node.example.com"));
-        assert!(!is_hostname(""));
-        assert!(!is_hostname("-invalid"));
-        assert!(!is_hostname("invalid-"));
-        assert!(!is_hostname("a".repeat(300).as_str()));
-    }
-
-    #[test]
-    fn test_discovered_status() {
-        let now = time::now();
-
-        let mut iface = DiscoveredInterface {
-            dst_cost: None,
-            pr_cost: None,
-            interface_type: "TestInterface".into(),
-            impl_name: None,
-            impl_version: None,
-            transport: true,
-            name: "Test".into(),
-            discovered: now,
-            last_heard: now,
-            heard_count: 0,
-            status: DiscoveredStatus::Available,
-            stamp: vec![],
-            stamp_value: rns_core::stamp::StampValue::from_whole(14),
-            transport_id: [0u8; 16],
-            network_id: [0u8; 16],
-            hops: 0,
-            latitude: None,
-            longitude: None,
-            height: None,
-            operator_lxmf_address: None,
-            reachable_on: None,
-            port: None,
-            frequency: None,
-            bandwidth: None,
-            spreading_factor: None,
-            coding_rate: None,
-            modulation: None,
-            channel: None,
-            ifac_netname: None,
-            ifac_netkey: None,
-            config_entry: None,
-            discovery_hash: [0u8; 32],
-        };
-
-        // Fresh interface should be available
-        assert_eq!(iface.compute_status(), DiscoveredStatus::Available);
-
-        // 25 hours old should be unknown
-        iface.last_heard = now - THRESHOLD_UNKNOWN - 3600.0;
-        assert_eq!(iface.compute_status(), DiscoveredStatus::Unknown);
-
-        // 4 days old should be stale
-        iface.last_heard = now - THRESHOLD_STALE - 3600.0;
-        assert_eq!(iface.compute_status(), DiscoveredStatus::Stale);
     }
 
     fn test_discovered_interface(name: &str) -> DiscoveredInterface {

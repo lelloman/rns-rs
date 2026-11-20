@@ -18,6 +18,7 @@ pub mod channel;
 pub mod constants;
 /// Destination names and hashes.
 pub mod destination;
+pub mod discovery;
 /// Base256 renderings of byte strings.
 pub mod display;
 /// Hex and base64 encoding and decoding.
