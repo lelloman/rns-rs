@@ -57,11 +57,11 @@ evidence exist; until then nothing here is claimed as passed.
 
 | # | Upstream commit | Date | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|---|
-| 1 | `da368e05` | 2026-11-16 | Deduplicate in-flight announce rebroadcasts | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
-| 2 | `aecc1547` | 2026-11-16 | Set sane autoconnect caps | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
-| 3 | `338df096` | 2026-11-16 | Updated docs | Proposed: Non-runtime | Reviewed 2026-11-20; no mapping commit yet |
-| 4 | `2b1a984c` | 2026-11-17 | Fixed IFAC identity not being available at early tunnel synthesis | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
-| 5 | `25cce0a8` | 2026-11-17 | Ensure transport identity availability before early tunnel synthesis | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
+| 1 | `da368e05` | 2026-11-16 | Deduplicate in-flight announce rebroadcasts | Integrated | `41b2817b`; `an_announce_heard_again_while_waiting_is_not_rebroadcast_to_that_interface`, `an_announce_heard_again_on_a_shared_medium_is_still_rebroadcast_there`, `a_newer_announce_replacing_the_waiting_one_starts_without_blocked_interfaces` |
+| 2 | `aecc1547` | 2026-11-16 | Set sane autoconnect caps | Integrated | `2d8dd594`; `autoconnect_count_is_capped_unless_caps_are_disabled`, `autoconnect_caps_are_disabled_only_by_a_key_before_the_count` |
+| 3 | `338df096` | 2026-11-16 | Updated docs | Non-runtime | `35cd3471`; `docs/interface-discovery.md` sizing guidance |
+| 4 | `2b1a984c` | 2026-11-17 | Fixed IFAC identity not being available at early tunnel synthesis | Structurally covered | `d8761e59`; `tunnel_synthesis_carries_the_interface_access_code` |
+| 5 | `25cce0a8` | 2026-11-17 | Ensure transport identity availability before early tunnel synthesis | Structurally covered | `a097a14e`; `a_dialing_tcp_client_first_sends_a_synthesis_signed_by_the_transport_identity` |
 | 6 | `cc5d6dd0` | 2026-11-17 | Logging | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
 | 7 | `12b2b8c0` | 2026-11-17 | Updated link tests | Proposed: Non-runtime | Reviewed 2026-11-20; no mapping commit yet |
 | 8 | `4916017a` | 2026-11-17 | Abort early on non-enabled link mode | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
@@ -120,14 +120,36 @@ already matches upstream's shared-medium classes but is only used for stats.
 Same-sender copies still in the verify queue are collapsed by
 `AnnounceVerifyQueue::enqueue`, a small existing deviation.
 
-**Local handling:** Add `shared_medium` to `InterfaceInfo` (from
-`shared_medium_hint`), `packet_hash` and `blocked_interfaces` to
-`AnnounceEntry`, record the interface on the reject branch, and carry the set
-into the broadcast action. Focused regression:
-`an_announce_heard_again_while_waiting_is_not_rebroadcast_to_that_interface`
-(sends on {1, 3}, not {1, 2, 3}), plus shared-medium and replacement cases.
+**Local handling and evidence:** `41b2817b`. As planned: `InterfaceInfo`
+gains `shared_medium`, `AnnounceEntry` gains `packet_hash` and
+`blocked_interfaces`, and the `MultiPathDecision::Reject` branch of
+`process_verified_announce` adds the receiving interface to the waiting
+entry's set when the packet hash matches and the interface is not a shared
+medium. Every constructor fills the packet hash (a cached path response
+uses the cached announce's). The set reaches the broadcast gating by
+destination: `jobs::process_pending_announces` reports it for a broadcast
+(never for an attached interface) and `gate_retransmit_actions` leaves those
+interfaces out, so the public `BroadcastOnAllInterfaces` action is
+unchanged. A replacing announce starts with an empty set. `shared_medium`
+is set in the factories that match `shared_medium_hint` (Pipe, Serial, UDP,
+RNode and its subinterfaces, KISS and AX25 KISS via the hint) and on the
+ESP32 LoRa interface; announce retention accounting counts the set.
 
-**Proposed disposition:** Needs port.
+Notes: the verify-queue collapse of same-sender copies remains (a copy from
+the same neighbour heard on a second interface while still queued is not
+recorded); with the native `prefer_shorter_path` on, a shorter same-emission
+copy replaces the entry instead of being recorded, as that option already
+deviates; `rns-esp32` is outside the workspace and was not built.
+
+Tests run: `cargo test -p rns-core --lib -- an_announce_heard_again
+a_newer_announce_replacing` failed before the change for the main test
+(`left: [1, 2, 3]`, `right: [1, 3]`), with 3 passed after it; `cargo test -p
+rns-core -p rns-net -p rns-bench` passed (rns-core lib 1154, rns-net lib
+1580, `e2e.rs` 74 with 1 ignored, `e2e_direct_connect.rs` 19, rns-bench 17
+with 1 ignored, no failures); `cargo fmt --check` and
+`bash scripts/lint-host.sh` passed.
+
+**Final disposition:** Integrated.
 
 ### 2. `aecc1547` — Set sane autoconnect caps
 
@@ -141,15 +163,30 @@ appears before the count.
 the count uncapped and does not know the disable key. Keys are held in a
 `HashMap`, so file order is not available.
 
-**Local handling:** Parse the disable key as a bool, apply the cap and
-upstream's warnings where the upstream-policy count is resolved
-(`node/startup.rs:237`), nothing under `Pool`. Honour the disable key wherever
-it appears and record that as a deliberate deviation. Regression:
-`autoconnect_count_is_capped_unless_caps_are_disabled` (20→12, 20 with
-disable→20, 7→7, invalid bool is an error). Note: `dev` has since rewritten
-config parsing (`19fc22e5`), so the port goes on top of that.
+**Local handling and evidence:** `2d8dd594`. Per decision 4 the planned
+"honour it wherever it appears" deviation was dropped: the parser records
+the `[reticulum]` key order (a repeated key takes its last position), and
+`autoconnect_discovered_interfaces_caps_disabled` is true only when the
+disable key is `yes` and comes before the count (or there is no count). An
+invalid boolean is a config error, as `as_bool`. The count stays as written
+in the config; under `autoconnect_policy = upstream` startup
+(`node_config.rs`, `upstream_autoconnect_target`) caps it at 12 and logs
+upstream's warning lines word for word, blank lines included, at warning
+level, for > 12 and > 6. Under `pool` the count is ignored as before, so
+nothing is capped. `docs/interface-discovery.md` and
+`docs/configuration.md` document the key and its order dependence.
 
-**Proposed disposition:** Needs port.
+Tests run: `cargo test -p rns-net --lib --
+autoconnect_count_is_capped_unless_caps_are_disabled
+autoconnect_caps_are_disabled_only_by_a_key_before_the_count`, 2 passed (20
+gives 12 with both warnings, disabled 20 stays 20 silently, 7 gives the
+second warning only, 6 and 0 nothing; key before / after / `no` / invalid).
+Both use the new field and function, so they had no pre-change run; before,
+the count was used uncapped. `cargo test -p rns-net` passed (lib 1582,
+`e2e.rs` 74 with 1 ignored, `e2e_direct_connect.rs` 19); `cargo fmt --check`
+and `bash scripts/lint-host.sh` passed.
+
+**Final disposition:** Integrated.
 
 ### 3. `338df096` — Updated docs
 
@@ -161,10 +198,16 @@ getting-started warning, and a reference entry for `get_instance_pid()`.
 documents the options without sizing guidance. There is no native
 `get_instance_pid`.
 
-**Local handling:** Add a short sizing paragraph to
-`docs/interface-discovery.md`, mentioning the cap from commit 2.
+**Local handling and evidence:** `35cd3471`. `docs/interface-discovery.md`
+gains a "How many to auto-connect" section with upstream's sizing guidance,
+pointing at the cap from commit 2. The `get_instance_pid()` reference entry
+has no native counterpart.
 
-**Proposed disposition:** Non-runtime.
+Tests run: no crate code changed. `cargo test -p rns-net --lib --
+documented_location_stanza`, which includes that document, 1 passed;
+`cargo fmt --check` passed.
+
+**Final disposition:** Non-runtime.
 
 ### 4. `2b1a984c` — Fixed IFAC identity not being available at early tunnel synthesis
 
@@ -180,11 +223,25 @@ when the entry is registered, before any connect event
 (`interface_management.rs:247-264`, `backbone_pool.rs:722-760`,
 `driver/events/interfaces.rs:209-210`). There is no unmasked early-write path.
 
-**Local handling:** Add `tunnel_synthesis_carries_the_interface_access_code`
-(driver tests) pinning that the synthesis frame is IFAC-masked and is accepted
-by a peer with the same IFAC.
+**Local handling and evidence:** `d8761e59`. Verified as reviewed: the
+synthesis is a `SendOnInterface` masked with the entry's IFAC, and static,
+managed and pool interfaces get their IFAC at registration. A dialing I2P
+peer is registered offline (`reconnecting`) with its inherited IFAC and
+brought up later, so its synthesis is masked too. Caveat: in
+`handle_dynamic_interface_up_event` a registration that is not
+`reconnecting` comes up (and would synthesize) before `entry.ifac` is set;
+no current interface type takes that path with `wants_tunnel`, so this is
+latent, not a live difference, and was left unchanged.
 
-**Proposed disposition:** Structurally covered.
+Tests run: `cargo test -p rns-net --lib --
+tunnel_synthesis_carries_the_interface_access_code`, 1 passed (the frame
+carries the IFAC flag, a peer with the same access code records the client's
+transport, the unmasked frame is dropped); a pinning test of covered
+behaviour, so it also passes without a code change. `cargo test -p rns-net`
+passed (lib 1583, `e2e.rs` 74 with 1 ignored, `e2e_direct_connect.rs` 19);
+`cargo fmt --check` and `bash scripts/lint-host.sh` passed.
+
+**Final disposition:** Structurally covered.
 
 ### 5. `25cce0a8` — Ensure transport identity availability before early tunnel synthesis
 
@@ -196,11 +253,23 @@ that connects during startup can sign its tunnel synthesis.
 assigned to the driver at `:655-656`, before the interface start loop and
 before the driver thread handles any interface event.
 
-**Local handling:** Comment the invariant at `startup.rs:655` and add a node
-test showing the first frame a dialing TCP client sends is a synthesis signed
-by the node's transport identity.
+**Local handling and evidence:** `a097a14e`. The invariant comment sits
+before `configure_driver_services` in `node/startup.rs`, which hands the
+driver the transport identity before `start_interfaces`; the driver thread
+only starts afterwards. Upstream's removal of the `hasattr` guards has no
+Rust counterpart.
 
-**Proposed disposition:** Structurally covered.
+Tests run: `cargo test -p rns-net --lib --
+a_dialing_tcp_client_first_sends_a_synthesis_signed_by_the_transport_identity`,
+1 passed (a node without transport, so an ephemeral identity; the first HDLC
+frame on the accepted socket validates as a synthesis whose signer is the
+identity `QueryRequest::TransportIdentity` reports); a pinning test.
+`cargo test -p rns-net`: the first run stopped on a rustc SIGSEGV while
+compiling rns-core (a compiler crash, no test ran); the rerun passed (lib
+1584, `e2e.rs` 74 with 1 ignored, `e2e_direct_connect.rs` 19).
+`cargo fmt --check` and `bash scripts/lint-host.sh` passed.
+
+**Final disposition:** Structurally covered.
 
 ### 6. `cc5d6dd0` — Logging
 
