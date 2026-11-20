@@ -3,22 +3,21 @@
 //! With interface I/O folded (see [`crate::engine::FOLD_IO`]) the port is a
 //! loop source read on the driver thread, and the driver writes it through
 //! [`KissLoopWriter`], which it calls directly. Both share the port's
-//! [`Port`] state: the bytes not yet written and, with flow control, the
-//! frames held until the TNC reports it is ready. The flow-control timeout
-//! and the beacon are checked on the driver's tick.
+//! [`Port`] state: the bytes not yet written and the port's [`FlowState`],
+//! which holds frames until the TNC reports it is ready. The flow-control
+//! timeout and the beacon are checked on the driver's tick.
 
 #![allow(
     unsafe_code,
     reason = "descriptors registered with the poller and OS calls through libc"
 )]
 
-use std::collections::VecDeque;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
 
+use super::flow::{self, Beacon, FlowState};
 use super::{reopen_port, Ax25Address, KissIfaceConfig};
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::interface::stream_read::{set_nonblocking, STREAM_READ_BUDGET};
@@ -32,13 +31,6 @@ use crate::poll::{Event as Interest, Poller};
 /// not wait minutes behind a backlog on a slow line.
 const BUFFER_LIMIT: usize = 128 * 1024;
 
-/// How long flow control waits for the TNC's ready report before sending
-/// the next frame anyway.
-const FLOW_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// A beacon is padded to at least this many bytes.
-const BEACON_MIN_LEN: usize = 15;
-
 /// What the writer and the reader of one open port share.
 struct Port {
     /// The port, written without blocking; registered for writable
@@ -51,16 +43,8 @@ struct Port {
     out: Vec<u8>,
     head: usize,
     failed: bool,
-    flow_control: bool,
-    /// Whether the TNC may take a frame now (always, without flow control).
-    ready: bool,
-    lock_time: Instant,
-    /// Framed data held until the TNC reports ready, and its size.
-    held: VecDeque<Vec<u8>>,
-    held_bytes: usize,
-    /// When data was first sent since the last beacon.
-    first_tx: Option<Instant>,
-    beacon: Option<(Duration, Vec<u8>)>,
+    flow: FlowState,
+    beacon: Option<Beacon>,
     name: String,
 }
 
@@ -79,14 +63,6 @@ impl Port {
                 false
             }
         };
-        let beacon = match (config.beacon_interval, &config.beacon_data) {
-            (Some(interval), Some(data)) => {
-                let mut frame = data.clone();
-                frame.resize(frame.len().max(BEACON_MIN_LEN), 0);
-                Some((Duration::from_secs(interval.into()), kiss::frame(&frame)))
-            }
-            _ => None,
-        };
         Self {
             file,
             poller,
@@ -96,19 +72,14 @@ impl Port {
             out: Vec::new(),
             head: 0,
             failed: false,
-            flow_control: config.flow_control,
-            ready: true,
-            lock_time: Instant::now(),
-            held: VecDeque::new(),
-            held_bytes: 0,
-            first_tx: None,
-            beacon,
+            flow: FlowState::new(config.flow_control),
+            beacon: Beacon::from_config(config),
             name: config.name.clone(),
         }
     }
 
     fn buffered(&self) -> usize {
-        self.out.len() - self.head + self.held_bytes
+        self.out.len() - self.head + self.flow.queue_bytes
     }
 
     fn check(&self) -> io::Result<()> {
@@ -127,30 +98,11 @@ impl Port {
         self.buffered() == 0 || self.buffered() + bytes <= BUFFER_LIMIT
     }
 
-    /// Whether a frame would be written now rather than held for the TNC.
-    fn sends_now(&self) -> bool {
-        !self.flow_control || (self.ready && self.held.is_empty())
-    }
-
     /// Send a framed data frame, or hold it until the TNC is ready.
     fn submit(&mut self, frame: Vec<u8>) {
-        if self.sends_now() {
-            self.transmit(&frame);
-        } else {
-            self.held_bytes += frame.len();
-            self.held.push_back(frame);
+        if let Some(frame) = self.flow.submit(frame) {
+            self.append(&frame);
         }
-    }
-
-    /// Write a framed data frame, locking flow control until the TNC
-    /// reports ready again.
-    fn transmit(&mut self, frame: &[u8]) {
-        if self.flow_control {
-            self.ready = false;
-            self.lock_time = Instant::now();
-        }
-        self.first_tx.get_or_insert_with(Instant::now);
-        self.append(frame);
     }
 
     fn append(&mut self, bytes: &[u8]) {
@@ -164,12 +116,8 @@ impl Port {
 
     /// The TNC is ready: send the next held frame, or note it is ready.
     fn tnc_ready(&mut self) {
-        match self.held.pop_front() {
-            Some(frame) => {
-                self.held_bytes -= frame.len();
-                self.transmit(&frame);
-            }
-            None => self.ready = true,
+        if let Some(frame) = self.flow.tnc_ready() {
+            self.append(&frame);
         }
     }
 
@@ -179,16 +127,14 @@ impl Port {
         if self.failed {
             return;
         }
-        if self.flow_control && !self.ready && self.lock_time.elapsed() > FLOW_TIMEOUT {
-            log::warn!("[{}] unlocking flow control due to timeout", self.name);
-            self.tnc_ready();
+        if let Some(frame) = self.flow.unlock_if_stuck(&self.name) {
+            self.append(&frame);
         }
-        let beacon = match (&self.beacon, self.first_tx) {
-            (Some((interval, frame)), Some(first)) if first.elapsed() > *interval => frame.clone(),
-            _ => return,
+        let Some(beacon) = self.flow.due_beacon(self.beacon.as_ref(), &self.name) else {
+            return;
         };
-        log::debug!("[{}] transmitting beacon data", self.name);
-        self.first_tx = None;
+        let beacon = beacon.to_vec();
+        self.flow.beacon_sent();
         self.append(&beacon);
     }
 
@@ -217,8 +163,7 @@ impl Port {
                         self.failed = true;
                         self.out.clear();
                         self.head = 0;
-                        self.held.clear();
-                        self.held_bytes = 0;
+                        self.flow.discard_queue();
                         break;
                     }
                 }
@@ -275,10 +220,7 @@ pub(super) struct KissLoopWriter {
 
 impl KissLoopWriter {
     fn frame(&self, data: &[u8]) -> Vec<u8> {
-        match &self.ax25_source {
-            Some(source) => kiss::frame(&super::super::ax25_kiss::encode_ui_frame(source, data)),
-            None => kiss::frame(data),
-        }
+        flow::frame(self.ax25_source.as_ref(), data)
     }
 
     fn port(&self) -> std::sync::MutexGuard<'_, Port> {
@@ -312,10 +254,11 @@ impl Writer for KissLoopWriter {
         let frame = self.frame(data);
         let mut port = self.port();
         port.check()?;
-        if !port.sends_now() || !port.fits(frame.len()) {
+        if !port.flow.sends_now() || !port.fits(frame.len()) {
             return Err(full());
         }
-        port.transmit(&frame);
+        port.flow.transmit();
+        port.append(&frame);
         drop(port);
         if let Some(completion) = completion.take() {
             completion.finish(Ok(()));
@@ -549,6 +492,7 @@ mod tests {
     use crate::serial::open_pty_pair;
     use std::io::Read;
     use std::os::unix::io::FromRawFd;
+    use std::time::Duration;
 
     fn port(config: &KissIfaceConfig) -> (Port, std::fs::File) {
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
@@ -595,10 +539,10 @@ mod tests {
         assert_eq!(read_frames(&mut master), vec![b"one".to_vec()]);
         port.tick();
         assert!(read_frames(&mut master).is_empty());
-        port.lock_time -= FLOW_TIMEOUT + Duration::from_secs(1);
+        port.flow.lock_time -= flow::FLOW_TIMEOUT + Duration::from_secs(1);
         port.tick();
         assert_eq!(read_frames(&mut master), vec![b"two".to_vec()]);
-        assert!(!port.ready);
+        assert!(!port.flow.ready);
     }
 
     #[test]
@@ -616,7 +560,7 @@ mod tests {
         port.tick();
         port.tick();
         let mut beacon = b"N0CALL".to_vec();
-        beacon.resize(BEACON_MIN_LEN, 0);
+        beacon.resize(flow::BEACON_MIN_LEN, 0);
         assert_eq!(read_frames(&mut master), vec![b"data".to_vec(), beacon]);
     }
 
