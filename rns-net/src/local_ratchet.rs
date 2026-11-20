@@ -101,14 +101,16 @@ impl FileRatchetStore {
                     "ratchet file already owned",
                 ));
             }
+            Ok(Self { path, _lock: lock })
         }
         #[cfg(not(unix))]
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "private ratchet file locking requires Unix; supply a store",
-        ));
-        #[allow(unreachable_code)]
-        Ok(Self { path, _lock: lock })
+        {
+            let _ = (path, lock);
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "private ratchet file locking requires Unix; supply a store",
+            ))
+        }
     }
 }
 fn private_options() -> OpenOptions {

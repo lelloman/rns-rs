@@ -680,7 +680,7 @@ fn single_payload_uses_stored_ratchet_key_material() {
         encrypt_deferred_inline: std::thread::available_parallelism()
             .map_or(true, |cpus| cpus.get() == 1),
         accepting_work: Arc::new(AtomicBool::new(true)),
-        probe_server: None,
+        _probe_server: None,
         known_destinations_path: None,
         known_destinations_store: None,
         stamp_store: None,
@@ -1326,7 +1326,6 @@ fn from_config_cleans_persistent_ratchets_after_loading_known_destinations() {
 
     let store = crate::storage_sqlite::KnownDestinationsStore::open_read_only(
         &crate::storage_sqlite::default_path(&paths.storage),
-        16,
     )
     .unwrap();
     assert_eq!(store.load_all().unwrap().len(), 3);

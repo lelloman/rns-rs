@@ -155,8 +155,9 @@ pub struct RnsNode {
     encrypt_deferred_inline: bool,
     /// Cleared by the driver when it stops accepting new work.
     accepting_work: Arc<AtomicBool>,
-    #[allow(dead_code)]
-    probe_server: Option<crate::holepunch::probe::ProbeServerHandle>,
+    /// Held only so the standalone probe server runs as long as the node:
+    /// dropping the handle stops its thread.
+    _probe_server: Option<crate::holepunch::probe::ProbeServerHandle>,
     known_destinations_path: Option<std::path::PathBuf>,
     known_destinations_store: Option<Arc<crate::storage_sqlite::KnownDestinationsStore>>,
     stamp_store: Option<crate::stamps::DestinationStampStore>,
@@ -204,7 +205,7 @@ impl RnsNode {
             encrypt_deferred_inline: std::thread::available_parallelism()
                 .map_or(true, |cpus| cpus.get() == 1),
             accepting_work,
-            probe_server: None,
+            _probe_server: None,
             known_destinations_path: None,
             known_destinations_store: None,
             stamp_store: None,

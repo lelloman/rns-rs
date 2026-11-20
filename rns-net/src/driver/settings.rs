@@ -252,11 +252,6 @@ impl Driver {
         Arc::clone(&self.lifecycle.accepting_work)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn set_packet_hashlist_max_entries(&mut self, max_entries: usize) {
-        self.engine.set_packet_hashlist_max_entries(max_entries);
-    }
-
     /// Set the probe addresses, protocol, and optional device for hole punching.
     pub fn set_probe_config(
         &mut self,

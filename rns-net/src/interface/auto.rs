@@ -126,7 +126,7 @@ const PEER_REFUSAL_LOG_INTERVAL: Duration = Duration::from_secs(10);
 /// Interfaces always ignored.
 pub const ALL_IGNORE_IFS: &[&str] = &["lo0"];
 
-#[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+#[cfg(any(target_os = "android", test))]
 const ANDROID_IGNORE_IFS: &[&str] = &[
     "dummy0", "lo", "tun0", "rmnet0", "rmnet1", "rmnet2", "rmnet3", "rmnet4", "rmnet5", "rmnet6",
     "rmnet7",

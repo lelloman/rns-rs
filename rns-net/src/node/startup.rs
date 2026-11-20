@@ -311,7 +311,7 @@ impl RnsNode {
             encrypt_deferred_inline: std::thread::available_parallelism()
                 .map_or(true, |cpus| cpus.get() == 1),
             accepting_work: handles.accepting_work,
-            probe_server,
+            _probe_server: probe_server,
             known_destinations_path: None,
             known_destinations_store: None,
             stamp_store: None,

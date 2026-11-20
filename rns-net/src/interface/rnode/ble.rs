@@ -22,11 +22,11 @@ use std::sync::{Arc, Mutex};
 const SCHEME: &str = "ble://";
 
 /// The Nordic UART service and its characteristics, as BlueZ writes them.
-#[cfg_attr(not(feature = "iface-rnode-ble"), allow(dead_code))]
+#[cfg(any(feature = "iface-rnode-ble", test))]
 pub(super) const UART_SERVICE_UUID: &str = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-#[cfg_attr(not(feature = "iface-rnode-ble"), allow(dead_code))]
+#[cfg(feature = "iface-rnode-ble")]
 pub(super) const UART_RX_CHAR_UUID: &str = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
-#[cfg_attr(not(feature = "iface-rnode-ble"), allow(dead_code))]
+#[cfg(feature = "iface-rnode-ble")]
 pub(super) const UART_TX_CHAR_UUID: &str = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 
 /// Whether `port` names a BLE device.
@@ -69,7 +69,7 @@ impl Target {
 }
 
 /// A device seen advertising while looking for the target.
-#[cfg_attr(not(feature = "iface-rnode-ble"), allow(dead_code))]
+#[cfg(any(feature = "iface-rnode-ble", test))]
 #[derive(Debug, Clone, Default)]
 pub(super) struct Seen {
     pub(super) address: String,
@@ -80,7 +80,7 @@ pub(super) struct Seen {
 }
 
 /// What looking at one device found.
-#[cfg_attr(not(feature = "iface-rnode-ble"), allow(dead_code))]
+#[cfg(any(feature = "iface-rnode-ble", test))]
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Verdict {
     /// The device to connect to.
@@ -92,7 +92,7 @@ pub(super) enum Verdict {
     Other,
 }
 
-#[cfg_attr(not(feature = "iface-rnode-ble"), allow(dead_code))]
+#[cfg(any(feature = "iface-rnode-ble", test))]
 impl Target {
     /// Judge `seen` as upstream's scan filter does.
     pub(super) fn judge(&self, seen: &Seen) -> Verdict {
@@ -149,7 +149,6 @@ pub struct LinkState {
     pub(super) address: Option<String>,
     /// Whether looking for the device failed outright, which ends
     /// upstream's connection job until the next attempt starts a new one.
-    #[cfg_attr(not(feature = "iface-rnode-ble"), allow(dead_code))]
     pub(super) ended: bool,
 }
 

@@ -435,7 +435,6 @@ mod tests {
                 },
                 super::super::AutoPeer {
                     interface_id: InterfaceId(321),
-                    link_local_addr: "::1".into(),
                     ifname: "test0".into(),
                     if_index: 7,
                     last_heard: 0.0,

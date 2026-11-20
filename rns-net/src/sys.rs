@@ -102,7 +102,7 @@ pub(crate) fn nice(increment: i32) {
 
 /// Set the calling thread's niceness. A thread may only raise its own, so
 /// a value below the current one fails harmlessly.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "engine-parallel"))]
 pub(crate) fn set_thread_niceness(niceness: i32) {
     // SAFETY: gettid and setpriority take no pointers.
     unsafe {

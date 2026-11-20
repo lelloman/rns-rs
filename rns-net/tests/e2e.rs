@@ -6,7 +6,12 @@
 //! Run:  cargo test --package rns-net --test e2e
 //! Debug: RUST_LOG=debug cargo test --package rns-net --test e2e -- --nocapture
 
-#![allow(unused_variables, unused_assignments, dead_code)]
+#![allow(
+    unused_variables,
+    unused_assignments,
+    dead_code,
+    reason = "scenario scaffolding: not every test reads every handle, event field or helper"
+)]
 
 use std::fs;
 use std::sync::mpsc;
@@ -25,7 +30,6 @@ use rns_net::{
 // ─── TestEvent ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 enum TestEvent {
     Announce(AnnouncedIdentity),
     PathUpdated {

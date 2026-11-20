@@ -140,7 +140,10 @@ impl Driver {
     /// `packet_hash` may be zeroed for a link resource part; the link
     /// manager's resource path does not read it, and every other consumer
     /// takes it from [`delivered_packet_hash`].
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the fields of the engine's DeliverLocal action, passed apart on the packet dispatch hot path"
+    )]
     pub(crate) fn dispatch_deliver_local_action(
         &mut self,
         destination_hash: [u8; 16],

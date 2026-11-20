@@ -13,11 +13,7 @@ pub(super) struct PeerKey {
 /// A discovered peer.
 pub(super) struct AutoPeer {
     pub(super) interface_id: InterfaceId,
-    #[allow(dead_code)]
-    pub(super) link_local_addr: String,
-    #[allow(dead_code)]
     pub(super) ifname: String,
-    #[allow(dead_code)]
     pub(super) if_index: u32,
     pub(super) last_heard: f64,
 }
@@ -402,7 +398,6 @@ pub(super) fn add_peer(context: AddPeerContext<'_>) -> Option<Event> {
         peer_key.clone(),
         AutoPeer {
             interface_id: peer_id,
-            link_local_addr: peer_key.link_local_addr.clone(),
             ifname: ifname.to_string(),
             if_index: peer_key.if_index,
             last_heard: now,

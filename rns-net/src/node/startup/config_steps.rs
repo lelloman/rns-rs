@@ -19,7 +19,7 @@ pub(super) fn open_known_destinations(
     ratchet_expiry: u64,
 ) -> KnownDestinationsStorage {
     let known_destinations_db = crate::storage_sqlite::default_path(&paths.storage);
-    match crate::storage_sqlite::KnownDestinationsStore::open(&known_destinations_db, 16) {
+    match crate::storage_sqlite::KnownDestinationsStore::open(&known_destinations_db) {
         Ok(store) => {
             let store = Arc::new(store);
             let started = std::time::Instant::now();
