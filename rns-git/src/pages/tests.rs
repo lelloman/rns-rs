@@ -18,6 +18,27 @@ fn media_preserves_original_for_disabled_webp_nonimage_and_failed_conversion() {
 }
 
 #[test]
+fn image_paths_are_the_media_modules_supported_image_extensions() {
+    for ext in crate::media::SUPPORTED_IMAGE_EXTS {
+        assert!(is_image_path(&format!("docs/image{ext}")), "{ext}");
+        assert!(
+            is_image_path(&format!("IMAGE{}", ext.to_uppercase())),
+            "{ext}"
+        );
+    }
+    for path in [
+        "image.svg",
+        "image.ppm",
+        "image.mvg",
+        "image.txt",
+        ".png",
+        "png",
+    ] {
+        assert!(!is_image_path(path), "{path}");
+    }
+}
+
+#[test]
 fn media_serves_decoded_blob_with_filename_and_checks_access() {
     let tmp = tempfile::tempdir().unwrap();
     let mut config = cfg(tmp.path());

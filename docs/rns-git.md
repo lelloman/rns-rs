@@ -91,14 +91,21 @@ Important config paths:
   `[pages] media_conversion` defaults to `yes`: PNG, JPEG, GIF, TIFF and BMP
   images are converted to WebP when a backend is installed. Backends are tried
   for availability in order: `magick`, `convert`, `gm`, `ffmpeg`, `avconv`.
-  `RNGIT_MEDIA_BACKEND` forces one of these names. Conversion has an eight-second
-  timeout; missing backends, failures and invalid output return the original
-  bytes and filename. WebP files pass through unchanged. Set
+  `RNGIT_MEDIA_BACKEND` forces one of these names. Only a file with an image
+  extension whose first 64 bytes carry a PNG, JPEG, GIF, TIFF, WebP or BMP
+  signature is handed to the backend, and ImageMagick and GraphicsMagick are
+  told that format (`png:-`, not `-`), so they never parse the input as any
+  other format they know. Files larger than 32 MiB are not converted.
+  Conversion has an eight-second timeout; missing backends, unrecognised or
+  oversized input, failures and invalid output return the original bytes and
+  filename. WebP files pass through unchanged. Set
   `media_conversion = no` to always serve the original file. Conversion
   temporary files are cleaned up before returning the response; output bytes
   remain owned by the Resource for the duration of the transfer.
   Library callers can use `rns_git::media::convert_file_to_webp` with
-  `ConversionOptions` to convert a local file. Defaults are quality 85 and an
+  `ConversionOptions` to convert a local file, under the same signature check
+  and size cap; `rns_git::media::detect_image_format` names the format a
+  file's leading bytes are recognised as. Defaults are quality 85 and an
   eight-second timeout; quality is clamped to 1–100. `max_dimension` shrinks
   images to fit while retaining aspect ratio and never upscales them. The
   returned `NamedTempFile` deletes its output when dropped; use `persist` to
