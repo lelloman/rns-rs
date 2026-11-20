@@ -9,6 +9,14 @@ pub struct RpcServer {
     thread: Option<thread::JoinHandle<()>>,
 }
 
+// Listener backlogs: upstream 52898683 raised the shared instance RPC
+// listener's from 1 (multiprocessing's default) to 128. Both listeners here
+// use std's `bind`: TcpListener listens with a backlog of 128, and
+// UnixListener::bind_addr on Linux with -1, which the kernel caps at
+// `net.core.somaxconn` (4096 by default since Linux 5.4, 128 before). That is
+// Rust 1.96.0 (`rust-toolchain.toml`), library/std/src/sys/net/connection/
+// socket/mod.rs and library/std/src/os/unix/net/listener.rs; the driver's
+// folded RPC service binds the same way (node/startup/services.rs).
 impl RpcServer {
     /// Start the RPC server on the given address.
     pub fn start(addr: &RpcAddr, auth_key: [u8; 32], event_tx: EventSender) -> io::Result<Self> {

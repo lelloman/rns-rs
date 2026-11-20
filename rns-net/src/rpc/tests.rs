@@ -2542,3 +2542,31 @@ fn link_distribution_rpc_answers_with_from_ifs_lists() {
         assert_eq!(rns_core::msgpack::unpack_exact(&answer).unwrap(), expected);
     }
 }
+
+// upstream 52898683: the shared instance RPC listener takes a backlog of
+// 128 (it had 1). The abstract socket rns-rs listens on queues as many
+// connections nobody has accepted yet.
+#[cfg(target_os = "linux")]
+#[test]
+fn abstract_rpc_listener_queues_upstreams_backlog() {
+    let instance = crate::test_support::instance_name("rpc-backlog");
+    let listener = bind_abstract_unix(&instance).unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let connector = thread::spawn(move || {
+        let addr =
+            std::os::unix::net::SocketAddr::from_abstract_name(format!("rns/{instance}/rpc"))
+                .unwrap();
+        let streams: Vec<_> = (0..128)
+            .map(|_| std::os::unix::net::UnixStream::connect_addr(&addr).unwrap())
+            .collect();
+        let _ = done_tx.send(streams.len());
+        streams
+    });
+    // A connection beyond the backlog would wait for an accept.
+    assert_eq!(
+        done_rx.recv_timeout(std::time::Duration::from_secs(10)),
+        Ok(128)
+    );
+    drop(connector.join().unwrap());
+    drop(listener);
+}
