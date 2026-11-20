@@ -13,7 +13,7 @@ const MAX_WINDOW_SECONDS: i64 = 30 * 24 * 60 * 60;
 const DEFAULT_LIMIT: usize = 10;
 const MAX_LIMIT: usize = 100;
 
-pub fn handle_summary(req: &HttpRequest, state: &SharedState) -> HttpResponse {
+pub(crate) fn handle_summary(req: &HttpRequest, state: &SharedState) -> HttpResponse {
     let params = parse_query(&req.query);
     let query = match StatsQuery::from_params(&params) {
         Ok(query) => query,
@@ -152,7 +152,7 @@ pub fn handle_summary(req: &HttpRequest, state: &SharedState) -> HttpResponse {
     })
 }
 
-pub fn handle_announces(req: &HttpRequest, state: &SharedState) -> HttpResponse {
+pub(crate) fn handle_announces(req: &HttpRequest, state: &SharedState) -> HttpResponse {
     let params = parse_query(&req.query);
     let query = match StatsQuery::from_params(&params) {
         Ok(query) => query,
@@ -217,7 +217,7 @@ pub fn handle_announces(req: &HttpRequest, state: &SharedState) -> HttpResponse 
     })
 }
 
-pub fn handle_interfaces(req: &HttpRequest, state: &SharedState) -> HttpResponse {
+pub(crate) fn handle_interfaces(req: &HttpRequest, state: &SharedState) -> HttpResponse {
     let params = parse_query(&req.query);
     let query = match StatsQuery::from_params(&params) {
         Ok(query) => query,
@@ -265,7 +265,7 @@ pub fn handle_interfaces(req: &HttpRequest, state: &SharedState) -> HttpResponse
     })
 }
 
-pub fn handle_destinations(req: &HttpRequest, state: &SharedState) -> HttpResponse {
+pub(crate) fn handle_destinations(req: &HttpRequest, state: &SharedState) -> HttpResponse {
     let params = parse_query(&req.query);
     let query = match StatsQuery::from_params(&params) {
         Ok(query) => query,
@@ -320,7 +320,7 @@ pub fn handle_destinations(req: &HttpRequest, state: &SharedState) -> HttpRespon
     })
 }
 
-pub fn handle_packets(req: &HttpRequest, state: &SharedState) -> HttpResponse {
+pub(crate) fn handle_packets(req: &HttpRequest, state: &SharedState) -> HttpResponse {
     let params = parse_query(&req.query);
     let query = match StatsQuery::from_params(&params) {
         Ok(query) => query,
@@ -362,7 +362,7 @@ pub fn handle_packets(req: &HttpRequest, state: &SharedState) -> HttpResponse {
     })
 }
 
-pub fn handle_packet_series(req: &HttpRequest, state: &SharedState) -> HttpResponse {
+pub(crate) fn handle_packet_series(req: &HttpRequest, state: &SharedState) -> HttpResponse {
     let params = parse_query(&req.query);
     let query = match StatsQuery::from_params(&params) {
         Ok(query) => query,
@@ -452,7 +452,7 @@ pub fn handle_packet_series(req: &HttpRequest, state: &SharedState) -> HttpRespo
     })
 }
 
-pub fn handle_links(req: &HttpRequest, state: &SharedState) -> HttpResponse {
+pub(crate) fn handle_links(req: &HttpRequest, state: &SharedState) -> HttpResponse {
     let params = parse_query(&req.query);
     let query = match StatsQuery::from_params(&params) {
         Ok(query) => query,
@@ -555,7 +555,7 @@ pub fn handle_links(req: &HttpRequest, state: &SharedState) -> HttpResponse {
     })
 }
 
-pub fn handle_system(req: &HttpRequest, state: &SharedState) -> HttpResponse {
+pub(crate) fn handle_system(req: &HttpRequest, state: &SharedState) -> HttpResponse {
     let params = parse_query(&req.query);
     let query = match StatsQuery::from_params(&params) {
         Ok(query) => query,

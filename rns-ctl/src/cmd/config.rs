@@ -11,6 +11,10 @@ use rns_net::storage;
 use rns_net::{RpcAddr, RpcClient};
 use serde_json::{json, Value};
 
+/// Run `rns-ctl config`: list, get, set or reset runtime configuration
+/// values over the RPC socket of the node using the config directory. Prints
+/// help without an action. Exits with status 1 when the node cannot be reached
+/// or the call fails.
 pub fn run(args: Args) {
     if args.has("version") {
         println!("rns-ctl {}", env!("FULL_VERSION"));

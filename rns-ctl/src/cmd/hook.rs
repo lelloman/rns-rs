@@ -17,6 +17,10 @@ const DEFAULT_HOOK_TYPE: &str = {
     }
 };
 
+/// Run `rns-ctl hook`: manage hooks through the HTTP API of a running
+/// `rns-ctl http` (`--url`, default `http://127.0.0.1:8080`, with the bearer
+/// token from `--token`). Prints help for an unknown or missing command;
+/// exits with status 1 when a request fails.
 pub fn run(args: Args) {
     if args.has("help") {
         crate::cli::HOOK.print_help("rns-ctl hook");

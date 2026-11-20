@@ -93,10 +93,15 @@ impl Write for ConnStream {
 
 /// All context needed by connection handlers.
 pub struct ServerContext {
+    /// The node the API acts on.
     pub node: NodeHandle,
+    /// State the API reports and the node callbacks fill.
     pub state: SharedState,
+    /// WebSocket subscribers that node events are pushed to.
     pub ws_broadcast: WsBroadcast,
+    /// Live HTTP control-plane configuration (auth token and the like).
     pub config: ControlPlaneConfigHandle,
+    /// TLS settings; `None` serves plain HTTP.
     #[cfg(feature = "tls")]
     pub tls_config: Option<std::sync::Arc<rustls::ServerConfig>>,
 }

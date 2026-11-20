@@ -23,6 +23,8 @@ commands:
 
 Run 'rns-ctl <command> --help' for more information on a command.";
 
+/// Top-level `rns-ctl` options; everything from the command name on goes to
+/// the subcommand's parser.
 pub static TOP: Cli = Cli::new(
     Parser {
         name: "rns-ctl",
@@ -51,6 +53,7 @@ pub const COMMAND_NAMES: &[&str] = &[
     "config", "backbone", "http", "status", "probe", "path", "id", "daemon", "hook",
 ];
 
+/// `rns-ctl config`.
 pub static CONFIG: Cli = Cli::new(
     Parser {
         name: "rns-ctl config",
@@ -96,6 +99,7 @@ commands:
     ),
 );
 
+/// `rns-ctl backbone`.
 pub static BACKBONE: Cli = Cli::new(
     Parser {
         name: "rns-ctl backbone",
@@ -127,6 +131,7 @@ commands:
     ),
 );
 
+/// `rns-ctl http`.
 pub static HTTP: Cli = Cli::new(
     Parser {
         name: "rns-ctl http",
@@ -241,6 +246,7 @@ const HOOK_EPILOG: &str = hook_epilog!("wasm");
 #[cfg(not(feature = "rns-hooks-wasm"))]
 const HOOK_EPILOG: &str = hook_epilog!("builtin");
 
+/// `rns-ctl hook`.
 pub static HOOK: Cli = Cli::new(
     Parser {
         name: "rns-ctl hook",

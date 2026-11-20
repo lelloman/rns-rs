@@ -16,6 +16,9 @@ use crate::api;
 use crate::args::Args;
 use crate::{bridge, config, encode, server, state};
 
+/// Run `rns-ctl http` in the foreground: start the node (or attach to
+/// `rnsd` in daemon mode) and serve the control plane until interrupted. Exits
+/// with status 1 if it cannot start.
 pub fn run(args: Args) {
     if let Err(err) = run_embedded(args, HttpRunOptions::standalone()) {
         eprintln!("rns-ctl http: {}", err);
@@ -23,20 +26,28 @@ pub fn run(args: Args) {
     }
 }
 
+/// Process-wide side effects the HTTP control plane may take on when it
+/// starts. A host process that sets these up itself (`rns-server`) turns them
+/// off.
 #[derive(Debug, Clone, Copy)]
 pub struct HttpRunOptions {
+    /// Initialise `env_logger` at the verbosity from the arguments; `RUST_LOG`
+    /// still wins when set.
     pub init_logging: bool,
+    /// Install a SIGINT/SIGTERM handler that shuts the node down and exits the
+    /// process.
     pub install_signal_handler: bool,
 }
 
 impl HttpRunOptions {
-    pub fn standalone() -> Self {
+    fn standalone() -> Self {
         Self {
             init_logging: true,
             install_signal_handler: true,
         }
     }
 
+    /// No logging setup and no signal handler, for a host process.
     pub fn embedded() -> Self {
         Self {
             init_logging: false,
@@ -45,7 +56,7 @@ impl HttpRunOptions {
     }
 }
 
-pub fn run_embedded(args: Args, options: HttpRunOptions) -> Result<(), String> {
+fn run_embedded(args: Args, options: HttpRunOptions) -> Result<(), String> {
     if args.has("help") {
         crate::cli::HTTP.print_help("rns-ctl http");
         return Ok(());
@@ -60,11 +71,30 @@ pub fn run_embedded(args: Args, options: HttpRunOptions) -> Result<(), String> {
     server::run_server(prepared.addr, prepared.ctx).map_err(|e| format!("server error: {}", e))
 }
 
+/// A control plane ready to serve: hand both parts to
+/// [`server::run_server`] or bind `addr` yourself and use
+/// [`server::run_server_with_listener`].
 pub struct PreparedHttpServer {
+    /// Address from the configured host and port.
     pub addr: SocketAddr,
+    /// Everything the connection handlers need.
     pub ctx: Arc<server::ServerContext>,
 }
 
+/// Set up the control plane from `rns-ctl http` arguments without serving it
+/// yet.
+///
+/// Generates an auth token when none is configured and auth is enabled, and
+/// writes it to [`token_file_path`]. Loads the node identity, then starts the
+/// node, or in daemon mode starts a background thread that keeps retrying,
+/// every 500 ms, to attach to `rnsd` as a shared-instance client (endpoints
+/// that need the node fail until it is attached). Pass
+/// `shared_state_override` to report into state the caller already holds;
+/// otherwise fresh state is made.
+///
+/// Fails when the node cannot start, the token file cannot be written while
+/// stdout is not a terminal, the TLS options are incomplete or unloadable (or
+/// given without the `tls` feature), or the bind address is invalid.
 pub fn prepare_embedded_with_state(
     args: Args,
     options: HttpRunOptions,
