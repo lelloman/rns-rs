@@ -522,6 +522,7 @@ fn start_rust_node_on(
             autoconnect_unverified_implementations: false,
             discovery_required_value: None,
             respond_to_probes: false,
+            use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
