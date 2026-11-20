@@ -719,11 +719,7 @@ mod tests {
     #[test]
     fn receive_worker_driver_drain_deadline_and_shutdown_join_before_returning() {
         struct Monitor;
-        impl crate::Callbacks for Monitor {
-            fn on_announce(&mut self, _: crate::common::destination::AnnouncedIdentity) {}
-            fn on_path_updated(&mut self, _: crate::DestHash, _: u8) {}
-            fn on_local_delivery(&mut self, _: crate::DestHash, _: Vec<u8>, _: crate::PacketHash) {}
-        }
+        impl crate::Callbacks for Monitor {}
         for shutdown in [false, true] {
             let (_, manager, link) = super::super::tests::setup_active_link();
             let (wake, rx) = crate::event::channel();

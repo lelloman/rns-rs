@@ -7,7 +7,7 @@ use rns_core::{constants, types::LinkId};
 use rns_crypto::{identity::Identity, OsRng};
 use rns_net::{
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig,
-    InterfaceId, NodeConfig, PacketHash, RnsNode, TcpClientConfig, TcpServerConfig,
+    InterfaceId, NodeConfig, RnsNode, TcpClientConfig, TcpServerConfig,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -45,8 +45,6 @@ impl Callbacks for Callback {
     fn on_announce(&mut self, a: AnnouncedIdentity) {
         self.emit(Event::Announce(a.dest_hash));
     }
-    fn on_path_updated(&mut self, _: DestHash, _: u8) {}
-    fn on_local_delivery(&mut self, _: DestHash, _: Vec<u8>, _: PacketHash) {}
     fn on_interface_up(&mut self, _: InterfaceId) {
         self.emit(Event::Up);
     }

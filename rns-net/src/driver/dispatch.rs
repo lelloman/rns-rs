@@ -115,17 +115,7 @@ mod hook_injection_tests {
 
     struct NoopCallbacks;
 
-    impl Callbacks for NoopCallbacks {
-        fn on_announce(&mut self, _: crate::common::destination::AnnouncedIdentity) {}
-        fn on_path_updated(&mut self, _: rns_core::types::DestHash, _: u8) {}
-        fn on_local_delivery(
-            &mut self,
-            _: rns_core::types::DestHash,
-            _: Vec<u8>,
-            _: rns_core::types::PacketHash,
-        ) {
-        }
-    }
+    impl Callbacks for NoopCallbacks {}
 
     struct RecordingWriter(Arc<Mutex<Vec<Vec<u8>>>>);
 

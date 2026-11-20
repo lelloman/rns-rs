@@ -792,11 +792,7 @@ mod tests {
     #[test]
     fn both_node_apis_report_the_same_invalid_link_error() {
         struct Callbacks;
-        impl crate::Callbacks for Callbacks {
-            fn on_announce(&mut self, _: crate::AnnouncedIdentity) {}
-            fn on_path_updated(&mut self, _: crate::DestHash, _: u8) {}
-            fn on_local_delivery(&mut self, _: crate::DestHash, _: Vec<u8>, _: crate::PacketHash) {}
-        }
+        impl crate::Callbacks for Callbacks {}
         let node =
             crate::RnsNode::start(crate::NodeConfig::default(), Box::new(Callbacks)).unwrap();
         let expected = Err(LinkSendError::InvalidPacket(

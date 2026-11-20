@@ -10,17 +10,7 @@ const VERSION: &str = env!("FULL_VERSION");
 
 struct NoCallbacks;
 
-impl rns_net::Callbacks for NoCallbacks {
-    fn on_announce(&mut self, _announced: rns_net::AnnouncedIdentity) {}
-    fn on_path_updated(&mut self, _dest_hash: rns_net::DestHash, _hops: u8) {}
-    fn on_local_delivery(
-        &mut self,
-        _dest_hash: rns_net::DestHash,
-        _raw: Vec<u8>,
-        _packet_hash: rns_net::PacketHash,
-    ) {
-    }
-}
+impl rns_net::Callbacks for NoCallbacks {}
 
 /// What one placeholder is called and what it may print.
 pub struct Placeholder {

@@ -2110,13 +2110,6 @@ struct ProofReplyCallbacks {
 }
 
 impl Callbacks for ProofReplyCallbacks {
-    fn on_announce(&mut self, _announced: crate::destination::AnnouncedIdentity) {}
-
-    fn on_path_updated(&mut self, _dest_hash: DestHash, _hops: u8) {}
-
-    fn on_local_delivery(&mut self, _dest_hash: DestHash, _raw: Vec<u8>, _packet_hash: PacketHash) {
-    }
-
     fn on_proof(&mut self, _dest_hash: DestHash, _packet_hash: PacketHash, _rtt: f64) {
         self.tx
             .send(Event::SendOutbound {
@@ -2129,13 +2122,6 @@ impl Callbacks for ProofReplyCallbacks {
 }
 
 impl Callbacks for DirectConnectCallbacks {
-    fn on_announce(&mut self, _announced: crate::destination::AnnouncedIdentity) {}
-
-    fn on_path_updated(&mut self, _dest_hash: DestHash, _hops: u8) {}
-
-    fn on_local_delivery(&mut self, _dest_hash: DestHash, _raw: Vec<u8>, _packet_hash: PacketHash) {
-    }
-
     fn on_direct_connect_proposed(
         &mut self,
         link_id: TypedLinkId,
@@ -5102,9 +5088,6 @@ struct SentAtInterfaceUp {
 }
 
 impl Callbacks for SentAtInterfaceUp {
-    fn on_announce(&mut self, _announced: crate::destination::AnnouncedIdentity) {}
-    fn on_path_updated(&mut self, _dest_hash: DestHash, _hops: u8) {}
-    fn on_local_delivery(&mut self, _dest_hash: DestHash, _raw: Vec<u8>, _hash: PacketHash) {}
     fn on_interface_up(&mut self, _id: InterfaceId) {
         let count = self.sent.lock().unwrap().len();
         self.seen.lock().unwrap().push(count);
@@ -15969,9 +15952,6 @@ struct DeferredSendCallbacks {
 }
 
 impl Callbacks for DeferredSendCallbacks {
-    fn on_announce(&mut self, _: crate::destination::AnnouncedIdentity) {}
-    fn on_path_updated(&mut self, _: DestHash, _: u8) {}
-    fn on_local_delivery(&mut self, _: DestHash, _: Vec<u8>, _: PacketHash) {}
     fn on_packet_sent(&mut self, ticket: crate::SendTicket, packet_hash: Option<PacketHash>) {
         let written = self.sent.lock().unwrap().len();
         self.reports
@@ -16095,8 +16075,6 @@ struct DeliveryRecord {
 }
 
 impl Callbacks for DeliveryRecord {
-    fn on_announce(&mut self, _: crate::destination::AnnouncedIdentity) {}
-    fn on_path_updated(&mut self, _: DestHash, _: u8) {}
     fn on_local_delivery(&mut self, dest: DestHash, _: Vec<u8>, _: PacketHash) {
         self.raw.lock().unwrap().push(dest);
     }

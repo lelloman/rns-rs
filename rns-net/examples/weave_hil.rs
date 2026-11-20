@@ -9,16 +9,12 @@ use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 use rns_net::interface::weave::{WeaveConfig, WeaveState};
 use rns_net::{
-    AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig,
-    InterfaceId, NodeConfig, PacketHash, QueryRequest, QueryResponse, RnsNode, MODE_FULL,
+    Callbacks, Destination, IdentityHash, InterfaceConfig, InterfaceId, NodeConfig, QueryRequest,
+    QueryResponse, RnsNode, MODE_FULL,
 };
 
 struct HilCallbacks;
-impl Callbacks for HilCallbacks {
-    fn on_announce(&mut self, _: AnnouncedIdentity) {}
-    fn on_path_updated(&mut self, _: DestHash, _: u8) {}
-    fn on_local_delivery(&mut self, _: DestHash, _: Vec<u8>, _: PacketHash) {}
-}
+impl Callbacks for HilCallbacks {}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();

@@ -735,9 +735,6 @@ mod tests {
     #[derive(Default)]
     struct Monitor(Arc<Mutex<Vec<String>>>);
     impl Callbacks for Monitor {
-        fn on_announce(&mut self, _: crate::common::destination::AnnouncedIdentity) {}
-        fn on_path_updated(&mut self, _: crate::DestHash, _: u8) {}
-        fn on_local_delivery(&mut self, _: crate::DestHash, _: Vec<u8>, _: crate::PacketHash) {}
         fn on_resource_failed(&mut self, _: rns_core::types::LinkId, error: String) {
             self.0.lock().unwrap().push(error);
         }

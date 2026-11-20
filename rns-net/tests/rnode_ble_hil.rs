@@ -19,18 +19,11 @@ use std::time::{Duration, Instant};
 
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
-use rns_net::{
-    AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, PacketHash, QueryRequest,
-    QueryResponse, RnsNode,
-};
+use rns_net::{Callbacks, Destination, IdentityHash, QueryRequest, QueryResponse, RnsNode};
 
 struct Quiet;
 
-impl Callbacks for Quiet {
-    fn on_announce(&mut self, _: AnnouncedIdentity) {}
-    fn on_path_updated(&mut self, _: DestHash, _: u8) {}
-    fn on_local_delivery(&mut self, _: DestHash, _: Vec<u8>, _: PacketHash) {}
-}
+impl Callbacks for Quiet {}
 
 /// Whether the RNode interface is up, and the bytes it has sent.
 fn rnode_status(node: &RnsNode) -> Option<(bool, u64)> {

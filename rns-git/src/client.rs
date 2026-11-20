@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use rns_core::msgpack::{self, Value};
 use rns_core::types::{DestHash, LinkId};
-use rns_net::{AnnouncedIdentity, Callbacks, PacketHash, RnsNode};
+use rns_net::{Callbacks, RnsNode};
 
 use crate::config::ClientConfig;
 use crate::logging;
@@ -428,13 +428,6 @@ pub(crate) struct Response {
 }
 
 impl Callbacks for SharedCallbacks {
-    fn on_announce(&mut self, _announced: AnnouncedIdentity) {}
-
-    fn on_path_updated(&mut self, _dest_hash: DestHash, _hops: u8) {}
-
-    fn on_local_delivery(&mut self, _dest_hash: DestHash, _raw: Vec<u8>, _packet_hash: PacketHash) {
-    }
-
     fn on_link_established(
         &mut self,
         link_id: LinkId,

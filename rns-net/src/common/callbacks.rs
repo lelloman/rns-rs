@@ -7,19 +7,23 @@ use crate::{DestHash, IdentityHash, InterfaceId, LinkId, PacketHash, TeardownRea
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SendTicket(pub u64);
 
-/// Receives the driver's events for the application. Methods with a
-/// default do nothing unless overridden.
+/// Receives the driver's events for the application. Every method has a
+/// default: notifications are ignored, and queries answer as their own
+/// documentation says. Override only the events the application uses.
 pub trait Callbacks: Send {
-    /// A validated announce was received.
-    fn on_announce(&mut self, announced: crate::common::destination::AnnouncedIdentity);
+    /// A validated announce was received. The default ignores it.
+    fn on_announce(&mut self, _announced: crate::common::destination::AnnouncedIdentity) {}
 
     /// The path to `dest_hash` was learned or changed; it is now `hops` hops
-    /// away.
-    fn on_path_updated(&mut self, dest_hash: DestHash, hops: u8);
+    /// away. The default ignores it.
+    fn on_path_updated(&mut self, _dest_hash: DestHash, _hops: u8) {}
 
     /// A packet for a local destination that is not handled by a link was
-    /// delivered, as raw packet bytes with its packet hash.
-    fn on_local_delivery(&mut self, dest_hash: DestHash, raw: Vec<u8>, packet_hash: PacketHash);
+    /// delivered, as raw packet bytes with its packet hash. The default
+    /// drops it, so an application that registers destinations to receive
+    /// single packets must override this.
+    fn on_local_delivery(&mut self, _dest_hash: DestHash, _raw: Vec<u8>, _packet_hash: PacketHash) {
+    }
 
     /// Called when an interface comes online.
     fn on_interface_up(&mut self, _id: InterfaceId) {}

@@ -18,8 +18,8 @@ use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 use rns_net::event::HolePunchPolicy;
 use rns_net::{
-    AnnouncedIdentity, Callbacks, DestHash, InterfaceConfig, InterfaceId, NodeConfig, PacketHash,
-    RnsNode, TcpClientConfig, MODE_FULL,
+    AnnouncedIdentity, Callbacks, DestHash, InterfaceConfig, InterfaceId, NodeConfig, RnsNode,
+    TcpClientConfig, MODE_FULL,
 };
 
 /// `REJECT_UNSUPPORTED` from `rns_core::holepunch`.
@@ -115,8 +115,6 @@ impl Callbacks for TestCallbacks {
     fn on_announce(&mut self, announced: AnnouncedIdentity) {
         let _ = self.0.send(RustEvent::Announce(announced.dest_hash));
     }
-    fn on_path_updated(&mut self, _: DestHash, _: u8) {}
-    fn on_local_delivery(&mut self, _: DestHash, _: Vec<u8>, _: PacketHash) {}
     fn on_link_established(&mut self, link_id: rns_net::LinkId, _: DestHash, _: f64, _: bool) {
         let _ = self.0.send(RustEvent::LinkEstablished(link_id.0));
     }
