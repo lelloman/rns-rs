@@ -1492,6 +1492,11 @@ fn filter_section_parses_every_option() {
             required_only: true,
             ignored_types: vec!["nomadnetwork.node".into(), "lxmf.propagation".into()],
             allowed_types: vec!["lxmf.delivery".into()],
+            key_order: vec![
+                "required_only".into(),
+                "ignored_types".into(),
+                "allowed_types".into(),
+            ],
         }
     );
 

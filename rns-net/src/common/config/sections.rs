@@ -10,8 +10,12 @@ pub(super) fn stamp_timeout_duration(seconds: f64) -> std::time::Duration {
 
 pub(super) fn build_filter_section(
     kvs: &HashMap<String, String>,
+    key_order: Vec<String>,
 ) -> Result<FilterSection, ConfigError> {
-    let mut section = FilterSection::default();
+    let mut section = FilterSection {
+        key_order,
+        ..FilterSection::default()
+    };
     Keys(kvs).set_bool("required_only", &mut section.required_only)?;
     let list = |key: &str| -> Vec<String> {
         kvs.get(key)
