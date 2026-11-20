@@ -4,22 +4,34 @@
 use crate::sys::home_of;
 use std::sync::atomic::{AtomicI32, Ordering};
 
+/// Level that silences all logging.
 pub const LOG_NONE: i32 = -1;
+/// Upstream's `LOG_CRITICAL`; levels are ordered, higher is more verbose.
 pub const LOG_CRITICAL: i32 = 0;
+/// Upstream's `LOG_ERROR`.
 pub const LOG_ERROR: i32 = 1;
+/// Upstream's `LOG_WARNING`.
 pub const LOG_WARNING: i32 = 2;
+/// Upstream's `LOG_NOTICE`, the default level.
 pub const LOG_NOTICE: i32 = 3;
+/// Upstream's `LOG_INFO`.
 pub const LOG_INFO: i32 = 4;
+/// Upstream's `LOG_VERBOSE`.
 pub const LOG_VERBOSE: i32 = 5;
+/// Upstream's `LOG_DEBUG`.
 pub const LOG_DEBUG: i32 = 6;
 
 /// `RNS.loglevel`: `LOG_NOTICE` until a Reticulum instance sets it.
 static LOGLEVEL: AtomicI32 = AtomicI32::new(LOG_NOTICE);
 
+/// Sets the process-wide level: [`log()`] prints a message only when its
+/// level is at most this one, and nothing at [`LOG_NONE`].
 pub fn set_loglevel(level: i32) {
     LOGLEVEL.store(level, Ordering::Relaxed);
 }
 
+/// The process-wide level [`set_loglevel`] last set; [`LOG_NOTICE`] before
+/// that.
 pub fn loglevel() -> i32 {
     LOGLEVEL.load(Ordering::Relaxed)
 }

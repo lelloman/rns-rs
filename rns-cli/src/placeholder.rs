@@ -24,7 +24,9 @@ impl rns_net::Callbacks for NoCallbacks {
 
 /// What one placeholder is called and what it may print.
 pub struct Placeholder {
+    /// The program name, used in usage, errors and `--version`.
     pub name: &'static str,
+    /// A one-line description of the program.
     pub description: &'static str,
     /// The `--exampleconfig` text, for a placeholder that has one.
     pub example_config: Option<&'static str>,
@@ -54,6 +56,11 @@ pub(crate) const RNIR_OPTIONS: OptionSpec = OptionSpec {
     ],
 };
 
+/// Runs the placeholder on the process's command line: handles `--help`,
+/// `--version` and `--exampleconfig`, otherwise starts Reticulum (attached
+/// to a shared instance when one runs) and shuts it down again. Returns the
+/// exit status: 0, or 1 when Reticulum could not start. An argument error
+/// exits the process with status 2.
 pub fn main(placeholder: &Placeholder) -> i32 {
     let spec = if placeholder.example_config.is_some() {
         &OPTIONS

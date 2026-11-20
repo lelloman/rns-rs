@@ -11,11 +11,15 @@ use crate::format::python_float;
 /// A Python number: `int` or `float` (`bool` reads as an int).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Num {
+    /// A Python `int`.
     Int(i64),
+    /// A Python `float`.
     Float(f64),
 }
 
 impl Num {
+    /// The number in a pickled value; `None` for anything but an int, a float
+    /// or a bool.
     pub fn of(value: &PickleValue) -> Option<Num> {
         match value {
             PickleValue::Int(n) => Some(Num::Int(*n)),
@@ -25,6 +29,7 @@ impl Num {
         }
     }
 
+    /// The value as an `f64`; large ints lose precision.
     pub fn f(self) -> f64 {
         match self {
             Num::Int(n) => n as f64,
@@ -40,6 +45,7 @@ impl Num {
         }
     }
 
+    /// Whether the value is zero, of either type.
     pub fn is_zero(self) -> bool {
         self.f() == 0.0
     }

@@ -1,12 +1,20 @@
+//! The readiness file a supervised sidecar writes once it is serving, so
+//! its supervisor (`rns-server`) knows when it is up and when it drains.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// A readiness file through which a sidecar process tells its supervisor it
+/// is up. The file is deleted when this is dropped.
 pub struct ReadyFile {
     path: PathBuf,
 }
 
 impl ReadyFile {
+    /// Starts with no readiness file when `path` is `None`. Otherwise removes
+    /// any stale file at `path`, so the supervisor does not see an old status
+    /// before this process reports one; fails when that removal fails.
     pub fn new(path: Option<&str>) -> Result<Option<Self>, String> {
         let Some(path) = path else {
             return Ok(None);
@@ -18,10 +26,15 @@ impl ReadyFile {
         Ok(Some(ready_file))
     }
 
+    /// Writes the `ready` status for `process`, with a free-text `detail`.
+    /// Creates missing parent directories. The error names the path and the
+    /// I/O failure.
     pub fn mark_ready(&self, process: &str, detail: &str) -> Result<(), String> {
         self.write_status(process, "ready", detail)
     }
 
+    /// Writes the `draining` status: the process is shutting down. Errors as
+    /// [`ReadyFile::mark_ready`].
     pub fn mark_draining(&self, process: &str, detail: &str) -> Result<(), String> {
         self.write_status(process, "draining", detail)
     }
@@ -54,6 +67,7 @@ impl ReadyFile {
         })
     }
 
+    /// Removes the file; a file that is already gone is not an error.
     pub fn clear(&self) -> Result<(), String> {
         match fs::remove_file(&self.path) {
             Ok(()) => Ok(()),
@@ -66,6 +80,7 @@ impl ReadyFile {
         }
     }
 
+    /// Where the file is written.
     pub fn path(&self) -> &Path {
         &self.path
     }

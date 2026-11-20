@@ -89,6 +89,12 @@ fn main() {
     run_with_args(Args::parse_spec(&OPTIONS), "rnid", "rnid");
 }
 
+/// Runs `rnid` on already parsed `args`. `usage_name` is the program name
+/// printed in usage and errors (e.g. `rns-ctl rnid`), `version_name` the one
+/// printed by `--version`.
+///
+/// Blocks until the command is done, and exits the process itself on an
+/// argument error or a failure, with upstream's exit status.
 pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     rns_cli::argparse::enforce(&args, "rnid", usage_name);
     if args.has("version") {

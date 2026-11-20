@@ -54,8 +54,11 @@ pub struct ViewOptions {
 /// What a status query returned besides the stats themselves.
 #[derive(Clone, Debug, Default)]
 pub struct Extras<'a> {
+    /// Entries in the link table, for `-l`.
     pub link_count: Option<Num>,
+    /// How many of those links are active; shown when nonzero.
     pub active_link_count: Option<Num>,
+    /// The instance's profiling results, shown when present and truthy.
     pub profiling_results: Option<&'a PickleValue>,
 }
 

@@ -6,11 +6,17 @@
 /// A ConfigObj value, as `ConfigObj.dict()` returns it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Entry {
+    /// A string scalar.
     Str(String),
+    /// A comma-separated list.
     List(Vec<Entry>),
+    /// An integer, after validation against an `integer` check.
     Int(i64),
+    /// A float, after validation against a `float` check.
     Float(f64),
+    /// A boolean, after validation against a `boolean` check.
     Bool(bool),
+    /// A `[section]`.
     Section(Section),
 }
 
@@ -18,7 +24,9 @@ pub enum Entry {
 /// iterates them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Section {
+    /// The `key = value` entries, in file order.
     pub scalars: Vec<(String, Entry)>,
+    /// The subsections, in file order.
     pub sections: Vec<(String, Section)>,
 }
 

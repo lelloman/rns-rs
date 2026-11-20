@@ -115,6 +115,9 @@ impl std::fmt::Display for RnshError {
 /// and returns its initial status.
 const SWALLOWED_EXIT: i32 = 1;
 
+/// Runs `rnsh` on the process's command line and returns the exit status
+/// for the binary to exit with. Blocks until the session ends, or for a
+/// listener until it is stopped. Never exits the process itself.
 pub fn main() -> i32 {
     let columns = crate::argparse::terminal_columns();
     match CliOptions::parse(std::env::args().skip(1).collect(), columns) {

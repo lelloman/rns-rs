@@ -25,8 +25,11 @@ pub enum Kind {
 /// (without `--`), either of which may be empty, and how it takes a value.
 #[derive(Clone, Copy, Debug)]
 pub struct Opt {
+    /// Short name, one character without `-`; empty when there is none.
     pub short: &'static str,
+    /// Long name without `--`; empty when there is none.
     pub long: &'static str,
+    /// How the option takes its value.
     pub kind: Kind,
     /// Whether the long name is upstream's. Only upstream's long names may
     /// be abbreviated, so a Rust-only option never makes an abbreviation
@@ -35,6 +38,7 @@ pub struct Opt {
 }
 
 impl Opt {
+    /// An upstream option of the given kind.
     pub const fn new(short: &'static str, long: &'static str, kind: Kind) -> Self {
         Opt {
             short,
@@ -43,15 +47,19 @@ impl Opt {
             upstream: true,
         }
     }
+    /// An upstream [`Kind::Flag`] option.
     pub const fn flag(short: &'static str, long: &'static str) -> Self {
         Self::new(short, long, Kind::Flag)
     }
+    /// An upstream [`Kind::Value`] option.
     pub const fn value(short: &'static str, long: &'static str) -> Self {
         Self::new(short, long, Kind::Value)
     }
+    /// An upstream [`Kind::Optional`] option.
     pub const fn optional(short: &'static str, long: &'static str) -> Self {
         Self::new(short, long, Kind::Optional)
     }
+    /// An upstream [`Kind::Count`] option.
     pub const fn count(short: &'static str, long: &'static str) -> Self {
         Self::new(short, long, Kind::Count)
     }
@@ -67,6 +75,7 @@ impl Opt {
 /// A tool's options, mirroring its upstream argument parser (plus the
 /// Rust-only options it accepts). `-h`/`--help` and `--version` are implied.
 pub struct OptionSpec {
+    /// The tool's options, without the implied ones.
     pub options: &'static [Opt],
 }
 
@@ -133,14 +142,24 @@ pub enum Seen {
     Ambiguous(String, Vec<String>),
     /// An option the tool does not have, as given.
     Unknown(String),
+    /// A positional argument, or anything after `--`.
     Positional(String),
 }
 
 /// Parsed command-line arguments.
+///
+/// Only [`Args::parse_spec`] and [`Args::parse_spec_from`] fill `values`,
+/// `unknown`, `missing` and `trace`; the other parsers leave them empty.
 pub struct Args {
+    /// The last value of each option, under each of its non-empty names
+    /// (short and long). Options given without a value hold `"true"`; count
+    /// options are not stored here.
     pub flags: HashMap<String, String>,
+    /// Positional arguments, in order.
     pub positional: Vec<String>,
+    /// How many times `-v`/`--verbose` was given.
     pub verbosity: u8,
+    /// How many times `-q`/`--quiet` was given.
     pub quiet: u8,
     /// Every value an option was given, in order, under each of its names:
     /// what [`Args::get_all`] reads for options given more than once.
@@ -213,7 +232,7 @@ fn looks_negative(arg: &str) -> bool {
 }
 
 impl Args {
-    /// Parse command-line arguments (skipping argv[0]).
+    /// Parse command-line arguments (skipping `argv[0]`).
     pub fn parse() -> Self {
         Self::parse_from(std::env::args().skip(1).collect())
     }
@@ -229,6 +248,7 @@ impl Args {
         Self::parse_profile(args, false)
     }
 
+    /// [`Args::parse_control`] on the given arguments (without `argv[0]`).
     pub fn parse_control_from(args: Vec<String>) -> Self {
         Self::parse_profile(args, true)
     }
@@ -238,6 +258,12 @@ impl Args {
         Self::parse_spec_from(std::env::args().skip(1).collect(), spec)
     }
 
+    /// [`Args::parse_spec`] on the given arguments (without `argv[0]`).
+    ///
+    /// Never fails: unknown options, missing values and ambiguous
+    /// abbreviations are recorded in [`Args::unknown`], [`Args::missing`] and
+    /// [`Args::trace`] for the caller (usually [`crate::argparse::check`]) to
+    /// report.
     pub fn parse_spec_from(args: Vec<String>, spec: &OptionSpec) -> Self {
         let mut parsed = Args {
             flags: HashMap::new(),
