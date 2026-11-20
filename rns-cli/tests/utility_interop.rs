@@ -1492,10 +1492,22 @@ fn rnsh_print_identity_starts_reticulum_as_upstream_does() {
             .collect::<Vec<_>>()
     };
     assert_eq!(mask_hashes(&rust_out), mask_hashes(&python_out));
-    assert_eq!(
-        fs::read(rust.path().join("rns/config")).unwrap(),
-        fs::read(python.path().join("rns/config")).unwrap()
-    );
+    // The default config written is the 1.6 one; older releases wrote other
+    // text.
+    let mut version = Command::new("python3");
+    version.args(["-c", "import RNS; print(RNS.__version__)"]);
+    let version = run(version);
+    let version: Vec<u32> = String::from_utf8_lossy(&version.stdout)
+        .trim()
+        .split('.')
+        .filter_map(|part| part.parse().ok())
+        .collect();
+    if version.as_slice() >= [1, 6].as_slice() {
+        assert_eq!(
+            fs::read(rust.path().join("rns/config")).unwrap(),
+            fs::read(python.path().join("rns/config")).unwrap()
+        );
+    }
 
     // Existing directories and the same identity: identical output.
     fs::copy(
