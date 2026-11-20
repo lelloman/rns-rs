@@ -277,7 +277,7 @@ pub fn eeprom(
     let mut summed = vec![product, model, hw_rev];
     summed.extend_from_slice(&serialno);
     summed.extend_from_slice(&made.to_be_bytes());
-    e[0x0B..0x1B].copy_from_slice(&rns_net::md5::md5(&summed));
+    e[0x0B..0x1B].copy_from_slice(&rns_crypto::md5::md5(&summed));
     e[0x9B] = 0x73;
     if let Some((sf, cr, txp, freq, bw)) = tnc {
         e[0x9C] = sf;
