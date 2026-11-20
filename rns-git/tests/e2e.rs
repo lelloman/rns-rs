@@ -8,7 +8,7 @@ use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 use rns_net::{AnnouncedIdentity, Callbacks, DestHash, Destination, LinkId, RnsNode};
 
-use rns_git::config::ServerConfig;
+use rns_git::config::{DestinationCosts, ServerConfig};
 use rns_git::git;
 use rns_git::pages;
 use rns_git::protocol::{self, RefUpdate};
@@ -99,6 +99,8 @@ impl E2eHarness {
             client_identity_path: tmp.path().join("client_identity"),
             node_name: "RNS Git Test Node".into(),
             announce_interval_secs: 300,
+            costs: Default::default(),
+            pages_costs: Ok(Default::default()),
             serve_nomadnet: true,
             templates_dir: tmp.path().join("rngit/templates"),
             unicode_icons: false,
@@ -170,6 +172,50 @@ impl E2eHarness {
         self.client_node.send_request(link_id, path, data).unwrap();
         wait_for_response(&self.rx, TIMEOUT)
     }
+}
+
+/// Upstream 05ac4bba: both destinations require a link cost of 18.0 unless
+/// configured, and a configured non-zero stamp value becomes the
+/// destination's announce stamp target, per section.
+#[test]
+fn rngit_destinations_carry_their_link_cost_and_stamp_value() {
+    let harness = E2eHarness::start(|_| {});
+    let nomadnet = harness.destinations.nomadnet.as_ref().unwrap();
+    for destination in [&harness.destinations.repositories, nomadnet] {
+        assert_eq!(harness.server_node.link_cost(&destination.hash.0), 18.0);
+        assert_eq!(destination.target_value, None);
+    }
+
+    let harness = E2eHarness::start(|config| {
+        config.costs = DestinationCosts {
+            link_cost: 18.5,
+            stamp_value: Some(27.5),
+        };
+        config.pages_costs = Ok(DestinationCosts {
+            link_cost: 0.0,
+            stamp_value: Some(0.0),
+        });
+    });
+    let repositories = &harness.destinations.repositories;
+    assert_eq!(harness.server_node.link_cost(&repositories.hash.0), 18.5);
+    assert_eq!(repositories.target_value.map(|v| v.as_f64()), Some(27.5));
+    let nomadnet = harness.destinations.nomadnet.as_ref().unwrap();
+    assert_eq!(harness.server_node.link_cost(&nomadnet.hash.0), 0.0);
+    assert_eq!(nomadnet.target_value, None);
+}
+
+/// An invalid `[pages]` cost fails starting the page node, as upstream's
+/// NomadNetworkNode raises reading it.
+#[test]
+fn rngit_invalid_page_cost_fails_the_page_destination() {
+    let harness = E2eHarness::start(|_| {});
+    let mut config = harness.server_config.clone();
+    config.pages_costs = Err("Invalid link_cost in [pages]: bad".into());
+    let error =
+        register_server_destinations(&harness.server_node, config, &harness.server_identity)
+            .unwrap_err()
+            .to_string();
+    assert_eq!(error, "Invalid link_cost in [pages]: bad");
 }
 
 #[test]

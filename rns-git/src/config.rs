@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::logging::DEFAULT_LOG_LEVEL;
 use crate::util::parse_hex_16;
-use crate::Result;
+use crate::{Error, Result};
 
 /// Server settings. Each field is filled from the `server_config` file in
 /// [`dir`](Self::dir); settings the file leaves out keep their defaults.
@@ -26,6 +26,14 @@ pub struct ServerConfig {
     pub node_name: String,
     /// Seconds between announces (default 300).
     pub announce_interval_secs: u64,
+    /// `[rngit] link_cost` and `stamp_value`: the costs of the repository
+    /// destination.
+    pub costs: DestinationCosts,
+    /// `[pages] link_cost` and `stamp_value`: the costs of the Nomad Network
+    /// page destination. Upstream reads these only when it starts the page
+    /// node, so an invalid value is kept here as the error message and only
+    /// fails startup when pages are served.
+    pub pages_costs: std::result::Result<DestinationCosts, String>,
     /// Whether to serve Nomad Network pages for browsing the repositories (default off).
     pub serve_nomadnet: bool,
     /// Directory of `<name>.mu` page templates that override the built-in ones
@@ -66,6 +74,51 @@ pub struct ServerConfig {
     pub allow_admin: Vec<String>,
     /// Numeric log level, 0-8 (default 4).
     pub log_level: u8,
+}
+
+/// A served destination's required link stamp cost and announce stamp
+/// target value, as upstream rngit's `link_cost` and `stamp_value` (05ac4bba).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DestinationCosts {
+    /// Required link request stamp cost, quantised as upstream's
+    /// `Stamps.quantize_cost` (default [`DEFAULT_LINK_COST`]). The node clamps
+    /// it to `0..=LINK_COST_CAP`.
+    pub link_cost: f64,
+    /// Announce stamp target value, quantised. Applied only when it is
+    /// above 0, as upstream's `if self.stamp_value:`; otherwise the node's
+    /// default target is used.
+    pub stamp_value: Option<f64>,
+}
+
+/// Upstream rngit's `DEFAULT_LINK_COST`, of both the repository and the page
+/// destination.
+pub const DEFAULT_LINK_COST: f64 = 18.0;
+
+impl Default for DestinationCosts {
+    fn default() -> Self {
+        Self {
+            link_cost: DEFAULT_LINK_COST,
+            stamp_value: None,
+        }
+    }
+}
+
+impl DestinationCosts {
+    /// Apply the costs to `destination` before it is announced, as upstream
+    /// does right after creating it: `set_value` only for a non-zero
+    /// `stamp_value`, then `set_link_cost`.
+    pub fn apply(&self, node: &rns_net::RnsNode, destination: &mut rns_net::Destination) {
+        if let Some(value) = self.applied_stamp_value() {
+            destination.set_value(value);
+        }
+        node.set_link_cost(destination.hash.0, self.link_cost);
+    }
+
+    /// The stamp value [`apply`](Self::apply) sets: a configured one other
+    /// than 0, which Python reads as false.
+    fn applied_stamp_value(&self) -> Option<f64> {
+        self.stamp_value.filter(|value| *value != 0.0)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +168,12 @@ impl ServerConfig {
         if let Some(v) = get(&ini, "rngit", "announce_interval") {
             cfg.announce_interval_secs = v.parse().unwrap_or(cfg.announce_interval_secs);
         }
+        // Upstream reads `stamp_value` before `link_cost` in [rngit], and the
+        // other way round in [pages].
+        cfg.costs = parse_costs(&ini, "rngit", &["stamp_value", "link_cost"])
+            .map_err(|e| Error::msg(format!("{e} in {}", path.display())))?;
+        cfg.pages_costs = parse_costs(&ini, "pages", &["link_cost", "stamp_value"])
+            .map_err(|e| format!("{e} in {}", path.display()));
         if let Some(v) = get(&ini, "rngit", "record_stats") {
             cfg.record_stats = parse_bool(v, cfg.record_stats);
         }
@@ -163,6 +222,8 @@ impl ServerConfig {
             dir: dir.clone(),
             reticulum_dir,
             announce_interval_secs: 300,
+            costs: DestinationCosts::default(),
+            pages_costs: Ok(DestinationCosts::default()),
             serve_nomadnet: false,
             templates_dir: dir.join("templates"),
             unicode_icons: false,
@@ -282,6 +343,62 @@ fn parse_aliases(ini: &Ini, section: &str) -> BTreeMap<String, [u8; 16]> {
         .collect()
 }
 
+/// The `link_cost` and `stamp_value` of `section`, read in `order`. Each is
+/// `RNS.Stamps.quantize_cost(section.as_float(key))`, and like upstream's
+/// `as_float` or `quantize_cost` raising, a value that is not a float, or is
+/// NaN or infinite, is an error.
+fn parse_costs(
+    ini: &Ini,
+    section: &str,
+    order: &[&str; 2],
+) -> std::result::Result<DestinationCosts, String> {
+    let mut costs = DestinationCosts::default();
+    for key in order {
+        let Some(value) = get(ini, section, key) else {
+            continue;
+        };
+        let cost =
+            quantize_cost(value).map_err(|e| format!("Invalid {key} in [{section}]: {e}"))?;
+        if *key == "link_cost" {
+            costs.link_cost = cost;
+        } else {
+            costs.stamp_value = Some(cost);
+        }
+    }
+    Ok(costs)
+}
+
+/// `quantize_cost(as_float(value))`: Python's `float()`, then rounded to the
+/// 1/256 grid and clamped to `0..=STAMP_COST_CAP` as `cost_to_fp` does, whose
+/// `math.floor` raises for NaN and infinity.
+fn quantize_cost(value: &str) -> std::result::Result<f64, String> {
+    let cost = python_float(value)
+        .ok_or_else(|| format!("could not convert string to float: '{value}'"))?;
+    if cost.is_nan() {
+        return Err("cannot convert float NaN to integer".into());
+    }
+    if cost.is_infinite() {
+        return Err("cannot convert float infinity to integer".into());
+    }
+    Ok(rns_core::stamp::StampCost::from_f64(cost).as_f64())
+}
+
+/// Python's `float(value)`: surrounding whitespace, a sign, `inf`, `nan`,
+/// and underscores between digits are accepted.
+fn python_float(value: &str) -> Option<f64> {
+    let value = value.trim();
+    let chars: Vec<char> = value.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
+        if *c == '_' {
+            let digit = |j: Option<&char>| j.is_some_and(|c| c.is_ascii_digit());
+            if i == 0 || !digit(chars.get(i - 1)) || !digit(chars.get(i + 1)) {
+                return None;
+            }
+        }
+    }
+    value.replace('_', "").parse().ok()
+}
+
 fn split_list(value: &str) -> Vec<String> {
     value
         .split(',')
@@ -325,7 +442,7 @@ fn resolve_path(base: &Path, value: &str) -> PathBuf {
 }
 
 fn default_server_config() -> &'static str {
-    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n# stats_push_ignore_identities = 0102030405060708090a0b0c0d0e0f10\n# blocked_identities = 00112233445566778899aabbccddeeff\n# To reject unidentified scrapers and crawlers, add the null identity hash:\n# blocked_identities = d7db22f63b453c23bb0688dde565b7c1\n\n[repositories]\npath = repositories\n\n[aliases]\n# alice = 00112233445566778899aabbccddeeff\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\nrelease = none\ninteract = none\npropose = none\nadmin = none\n\n[pages]\n# serve_nomadnet = no\n# templates_dir = templates\n# unicode_icons = no\n# media_conversion = yes\n\n[logging]\nloglevel = 4\n"
+    "[rngit]\nannounce_interval = 300\nidentity = repositories_identity\nclient_identity = client_identity\n# node_name = Anonymous Git Node\n\n# You can configure the required link stamp cost for\n# connecting to the repository node.\n\n# link_cost = 18.0\n\n# The target stamp value for the repositories destination\n# can also be configured.\n\n# stamp_value = 25.0\n\n# record_stats = no\n# stats_ignore_identities = 00112233445566778899aabbccddeeff\n# stats_push_ignore_identities = 0102030405060708090a0b0c0d0e0f10\n# blocked_identities = 00112233445566778899aabbccddeeff\n# To reject unidentified scrapers and crawlers, add the null identity hash:\n# blocked_identities = d7db22f63b453c23bb0688dde565b7c1\n\n[repositories]\npath = repositories\n\n[aliases]\n# alice = 00112233445566778899aabbccddeeff\n\n[access]\nread = all\nwrite = none\ncreate = none\nstats = none\nrelease = none\ninteract = none\npropose = none\nadmin = none\n\n[pages]\n# serve_nomadnet = no\n\n# You can configure the required link stamp cost for\n# connecting to the page node.\n\n# link_cost = 18.0\n\n# The target stamp value for the node destination can\n# also be configured.\n\n# stamp_value = 25.0\n\n# templates_dir = templates\n# unicode_icons = no\n# media_conversion = yes\n\n[logging]\nloglevel = 4\n"
 }
 
 fn default_client_config() -> &'static str {
@@ -496,6 +613,97 @@ mod tests {
         assert!(!created);
         assert_eq!(cfg.identity_aliases.len(), 1);
         assert_eq!(cfg.identity_aliases["alice"][15], 0xff);
+    }
+
+    /// Upstream 05ac4bba: both destinations default to a link cost of 18.0
+    /// and the node's own stamp target, and the generated config documents
+    /// both keys in both sections.
+    #[test]
+    fn destination_costs_default_to_upstreams() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (cfg, created) = ServerConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
+        assert!(created);
+        let defaults = DestinationCosts {
+            link_cost: 18.0,
+            stamp_value: None,
+        };
+        assert_eq!(cfg.costs, defaults);
+        assert_eq!(cfg.pages_costs, Ok(defaults));
+        let (cfg, created) = ServerConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
+        assert!(!created);
+        assert_eq!(cfg.costs, defaults);
+        assert_eq!(cfg.pages_costs, Ok(defaults));
+        let generated = fs::read_to_string(tmp.path().join("server_config")).unwrap();
+        for section in [
+            "# connecting to the repository node.\n\n# link_cost = 18.0\n\n# The target stamp value for the repositories destination\n# can also be configured.\n\n# stamp_value = 25.0\n",
+            "# connecting to the page node.\n\n# link_cost = 18.0\n\n# The target stamp value for the node destination can\n# also be configured.\n\n# stamp_value = 25.0\n",
+        ] {
+            assert!(generated.contains(section), "{generated}");
+        }
+    }
+
+    /// `quantize_cost(as_float(v))` per section: Python float syntax,
+    /// rounding to the 1/256 grid and clamping to 0..=100.
+    #[test]
+    fn parses_and_quantizes_destination_costs() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("server_config"),
+            "[rngit]\nlink_cost = 18.5\nstamp_value = 27.501\n[pages]\nlink_cost = 1_2.7\nstamp_value = -3\n",
+        )
+        .unwrap();
+        let (cfg, _) = ServerConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
+        assert_eq!(
+            cfg.costs,
+            DestinationCosts {
+                link_cost: 18.5,
+                stamp_value: Some(27.5)
+            }
+        );
+        let pages = cfg.pages_costs.unwrap();
+        assert_eq!(pages.link_cost, 3251.0 / 256.0);
+        // Clamped to 0, which upstream's `if self.stamp_value:` skips.
+        assert_eq!(pages.stamp_value, Some(0.0));
+        assert_eq!(pages.applied_stamp_value(), None);
+        assert_eq!(cfg.costs.applied_stamp_value(), Some(27.5));
+
+        for (value, quantized) in [(" 1e3 ", 100.0), ("+0.001", 0.0), ("0.002", 1.0 / 256.0)] {
+            assert_eq!(quantize_cost(value), Ok(quantized), "{value}");
+        }
+    }
+
+    /// As upstream, where `as_float` or `quantize_cost` raises: an invalid
+    /// `[rngit]` cost stops startup, and an invalid `[pages]` one stops
+    /// starting the page node.
+    #[test]
+    fn invalid_destination_costs_are_errors() {
+        for value in ["abc", "", "nan", "-inf", "Infinity", "1__0", "_1", "18,0"] {
+            assert!(quantize_cost(value).is_err(), "{value:?}");
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("server_config");
+        fs::write(&path, "[rngit]\nlink_cost = high\n").unwrap();
+        let error = ServerConfig::load_or_create(tmp.path().to_path_buf(), None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.starts_with(
+                "Invalid link_cost in [rngit]: could not convert string to float: 'high'"
+            ),
+            "{error}"
+        );
+        fs::write(&path, "[rngit]\nstamp_value = nan\n").unwrap();
+        assert!(ServerConfig::load_or_create(tmp.path().to_path_buf(), None).is_err());
+
+        fs::write(&path, "[pages]\nstamp_value = inf\n").unwrap();
+        let (cfg, _) = ServerConfig::load_or_create(tmp.path().to_path_buf(), None).unwrap();
+        let error = cfg.pages_costs.unwrap_err();
+        assert!(
+            error.starts_with(
+                "Invalid stamp_value in [pages]: cannot convert float infinity to integer"
+            ),
+            "{error}"
+        );
     }
 
     #[test]

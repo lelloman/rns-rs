@@ -122,11 +122,12 @@ pub(crate) fn register_repository_destination(
     )?
     .with_propose(&config.allow_propose)?
     .with_blocked_identities(config.blocked_identities.clone());
-    let destination = Destination::single_in(
+    let mut destination = Destination::single_in(
         protocol::APP_NAME,
         &[protocol::ASPECT_REPOSITORIES],
         IdentityHash(*identity.hash()),
     );
+    config.costs.apply(node, &mut destination);
     let public_key = identity
         .get_public_key()
         .ok_or_else(|| Error::msg("repository identity has no public key"))?;
@@ -1537,6 +1538,8 @@ mod tests {
             client_identity_path: root.join("client_identity"),
             node_name: "Anonymous Git Node".into(),
             announce_interval_secs: 300,
+            costs: Default::default(),
+            pages_costs: Ok(Default::default()),
             serve_nomadnet: false,
             templates_dir: root.join("templates"),
             unicode_icons: false,
