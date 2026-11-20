@@ -285,107 +285,107 @@ pub(crate) const TRANSPORT_STATE_PERSIST_INTERVAL: Duration = Duration::from_sec
 /// The node's event loop: owns the transport engine and the interfaces,
 /// handles each incoming event and carries out the resulting actions.
 pub struct Driver {
-    resource_preparation: Option<resource_preparation::Worker>,
-    pub(crate) tracked_link_send: Option<([u8; 32], crate::link_send::Completion)>,
-    pub(crate) pending_link_frames: std::collections::VecDeque<PendingLinkFrame>,
     pub(crate) engine: TransportEngine,
     pub(crate) interfaces: crate::interface::InterfaceMap<InterfaceEntry>,
-    /// Bookkeeping about the interfaces beyond their entries: naming,
-    /// listeners, management and statistics.
-    pub(crate) registry: interface_registry::InterfaceRegistry,
-    pub(crate) rng: OsRng,
+    /// Link manager: handles link lifecycle, request/response.
+    pub(crate) link_manager: LinkManager,
     pub(crate) rx: EventReceiver,
+    /// Event sender for worker threads to send results back to the driver loop.
+    pub(crate) event_tx: crate::event::EventSender,
     pub(crate) callbacks: Box<dyn Callbacks>,
+    pub(crate) rng: OsRng,
     pub(crate) started: f64,
-    /// Where the node is in its lifecycle, and its drain progress.
-    pub(crate) lifecycle: lifecycle::Lifecycle,
     /// This node is a client of a shared instance, which sends the path
     /// requests that rediscover paths for it
     /// (`Transport.owner.is_connected_to_shared_instance`).
     pub(crate) connected_to_shared_instance: bool,
-    /// Writers that may hold frames queued without a wakeup.
-    pub(crate) writers_to_wake: Vec<InterfaceId>,
-    /// Ingress burst state last published to the event queue, per interface.
-    pub(crate) published_ingress_bursts: crate::interface::InterfaceMap<(Option<f64>, Option<f64>)>,
-    pub(crate) announce_cache: Option<crate::announce_cache::AnnounceCache>,
-    /// The destinations transport itself serves, and links to them.
-    pub(crate) builtin: builtin_destinations::BuiltinDestinations,
     /// Transport identity (optional, needed for tunnel synthesis).
     pub(crate) transport_identity: Option<rns_crypto::identity::Identity>,
-    /// Link manager: handles link lifecycle, request/response.
-    pub(crate) link_manager: LinkManager,
-    /// Remote management: its access configuration and announce schedule.
-    pub(crate) management: management_state::ManagementState,
-    /// Known destinations: announced identities and their retention policy.
-    pub(crate) known: known_destinations::KnownDestinations,
-    /// RSSI, SNR and link quality of the latest packets received on
-    /// interfaces that report them (`Transport.local_client_rssi_cache` and
-    /// its SNR and Q siblings), oldest first.
-    pub(crate) packet_signals: std::collections::VecDeque<([u8; 32], crate::event::PacketSignal)>,
-    /// The blackhole lists' storage and remote sources.
-    pub(crate) blackhole: blackhole::BlackholeState,
-    /// Interface discovery: received discovered interfaces, this node's
-    /// discovery announces and auto-connecting.
-    pub(crate) discovery: interface_discovery::InterfaceDiscovery,
     /// The network identity, when one is configured, kept apart from the
     /// transport identity: it signs this node's discovery announces,
     /// decrypts `discovery_encrypt` announces and their own are encrypted
     /// to it. Unless this node is a shared instance client, it also owns
     /// the `rnstransport.network` management destinations.
     pub(crate) network_identity: Option<rns_crypto::identity::Identity>,
-    /// Settings applied to interfaces as they register.
-    pub(crate) interface_settings: InterfaceSettings,
-    /// Store for received remote ratchets, if persistence/use is enabled.
-    pub(crate) ratchet_store: Option<Arc<dyn crate::storage::RatchetStore>>,
-    /// TTL for received ratchets, in seconds.
-    pub(crate) ratchet_expiry_secs: f64,
-    /// TTL for announce rate-limiter entries without an active path, in seconds.
-    pub(crate) rate_limiter_ttl_secs: f64,
-    /// Packet proofs: tracked sent packets, the proofs they await and how
-    /// local destinations prove the packets they receive.
-    pub(crate) proofs: packet_proofs::PacketProofs,
-    /// Local destinations whose single packets are delivered decrypted, with
-    /// the identity they are decrypted with when they have no ratchets.
-    pub(crate) decrypted_destinations: HashMap<[u8; 16], Arc<rns_crypto::identity::Identity>>,
-    /// Reused transport action buffers (see [`crate::action_pool`]).
-    pub(crate) transport_actions: crate::action_pool::ActionPool<TransportAction>,
-    /// Reused link manager action buffers.
-    pub(crate) link_actions: crate::action_pool::ActionPool<LinkManagerAction>,
-    /// Locally registered destinations: hash → dest_type.
-    pub(crate) local_destinations: HashMap<[u8; 16], u8>,
-    /// Path responses for local destinations, and the announces a shared
-    /// client replays to its instance.
-    path_responses: PathResponses,
-    /// Hole-punch manager for direct P2P connections.
-    pub(crate) holepunch_manager: HolePunchManager,
-    /// Event sender for worker threads to send results back to the driver loop.
-    pub(crate) event_tx: crate::event::EventSender,
-    /// Stamping of this node's announces, path requests and link requests.
-    pub(crate) stamps: stamps::Stamps,
     /// Inbound packets whose hop count reaches this limit are dropped and
     /// counted as `hop_limiter_hits` (`Transport.HOP_LIMITER`, set from
     /// `[filter] hop_limiter`).
     pub(crate) hop_limiter: u8,
+    /// TTL for announce rate-limiter entries without an active path, in seconds.
+    pub(crate) rate_limiter_ttl_secs: f64,
     /// Shared timer interval used by the node timer thread.
     pub(crate) tick_interval_ms: Arc<AtomicU64>,
+    /// Reused transport action buffers (see [`crate::action_pool`]).
+    pub(crate) transport_actions: crate::action_pool::ActionPool<TransportAction>,
+    /// Reused link manager action buffers.
+    pub(crate) link_actions: crate::action_pool::ActionPool<LinkManagerAction>,
+    pub(crate) tracked_link_send: Option<([u8; 32], crate::link_send::Completion)>,
+    pub(crate) pending_link_frames: std::collections::VecDeque<PendingLinkFrame>,
+    /// Writers that may hold frames queued without a wakeup.
+    pub(crate) writers_to_wake: Vec<InterfaceId>,
+    /// Ingress burst state last published to the event queue, per interface.
+    pub(crate) published_ingress_bursts: crate::interface::InterfaceMap<(Option<f64>, Option<f64>)>,
+    /// RSSI, SNR and link quality of the latest packets received on
+    /// interfaces that report them (`Transport.local_client_rssi_cache` and
+    /// its SNR and Q siblings), oldest first.
+    pub(crate) packet_signals: std::collections::VecDeque<([u8; 32], crate::event::PacketSignal)>,
+    /// Locally registered destinations: hash → dest_type.
+    pub(crate) local_destinations: HashMap<[u8; 16], u8>,
+    /// Local destinations whose single packets are delivered decrypted, with
+    /// the identity they are decrypted with when they have no ratchets.
+    pub(crate) decrypted_destinations: HashMap<[u8; 16], Arc<rns_crypto::identity::Identity>>,
+    /// Store for received remote ratchets, if persistence/use is enabled.
+    pub(crate) ratchet_store: Option<Arc<dyn crate::storage::RatchetStore>>,
+    /// TTL for received ratchets, in seconds.
+    pub(crate) ratchet_expiry_secs: f64,
+    pub(crate) announce_cache: Option<crate::announce_cache::AnnounceCache>,
+    /// The destinations transport itself serves, and links to them.
+    pub(crate) builtin: builtin_destinations::BuiltinDestinations,
+    /// Packet proofs: tracked sent packets, the proofs they await and how
+    /// local destinations prove the packets they receive.
+    pub(crate) proofs: packet_proofs::PacketProofs,
+    /// Path responses for local destinations, and the announces a shared
+    /// client replays to its instance.
+    path_responses: PathResponses,
+    /// Known destinations: announced identities and their retention policy.
+    pub(crate) known: known_destinations::KnownDestinations,
+    /// Verification of inbound announce signatures off the driver thread.
+    pub(crate) announce_verify: announce_verification::AnnounceVerification,
+    /// Stamping of this node's announces, path requests and link requests.
+    pub(crate) stamps: stamps::Stamps,
+    /// Bookkeeping about the interfaces beyond their entries: naming,
+    /// listeners, management and statistics.
+    pub(crate) registry: interface_registry::InterfaceRegistry,
+    /// Settings applied to interfaces as they register.
+    pub(crate) interface_settings: InterfaceSettings,
     /// Runtime-config handles of the interfaces and the defaults they reset to.
     pub(crate) runtime_config: runtime_config::RuntimeConfigHandles,
+    /// Interface discovery: received discovered interfaces, this node's
+    /// discovery announces and auto-connecting.
+    pub(crate) discovery: interface_discovery::InterfaceDiscovery,
     /// Ordered outbound Backbone peer pool, if enabled.
     #[cfg(feature = "iface-backbone")]
     backbone_peer_pool: Option<BackbonePeerPool>,
-    /// Verification of inbound announce signatures off the driver thread.
-    pub(crate) announce_verify: announce_verification::AnnounceVerification,
+    /// Hole-punch manager for direct P2P connections.
+    pub(crate) holepunch_manager: HolePunchManager,
+    /// Where the node is in its lifecycle, and its drain progress.
+    pub(crate) lifecycle: lifecycle::Lifecycle,
     /// Schedules and progress of the periodic housekeeping jobs.
     pub(crate) housekeeping: housekeeping::Housekeeping,
     /// Timers and housekeeping the driver runs itself when they are folded
     /// (see [`crate::engine::FOLD_TIMERS`]).
     pub(crate) folded: FoldedTimers,
+    resource_preparation: Option<resource_preparation::Worker>,
     /// The RPC servers, when the driver serves them itself (see
     /// [`crate::engine::FOLD_SERVICES`]).
     pub(crate) rpc_service: Option<rpc_service::RpcService>,
     /// The probe server, when it runs on the driver loop (with services
     /// folded); otherwise the node runs it on a thread of its own.
     pub(crate) probe_server: Option<crate::holepunch::probe::FoldedProbeServer>,
+    /// Remote management: its access configuration and announce schedule.
+    pub(crate) management: management_state::ManagementState,
+    /// The blackhole lists' storage and remote sources.
+    pub(crate) blackhole: blackhole::BlackholeState,
     /// The programmable hook system: hook slots, their manager and the
     /// provider bridge.
     #[cfg(feature = "hooks")]
