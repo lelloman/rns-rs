@@ -179,6 +179,23 @@ impl LinkManager {
             }
         }
 
+        // `Link.validate_request` names the signalled mode (any of the
+        // eight, reserved ones included) before it builds the link.
+        let data = packet.data();
+        if data.len() == constants::LINK_ECPUBSIZE + constants::LINK_MTU_SIZE {
+            log::debug!(
+                "Incoming link request with mode {}",
+                rns_core::link::types::mode_description(
+                    (data[constants::LINK_ECPUBSIZE] & constants::LINK_MODE_BYTEMASK) >> 5
+                )
+            );
+        } else if data.len() == constants::LINK_ECPUBSIZE {
+            log::debug!(
+                "Incoming link request with mode {}",
+                LinkMode::Aes256Cbc.description()
+            );
+        }
+
         // Create responder engine
         let (mut engine, lrproof_data) = match LinkEngine::new_responder(
             &ld.sig_prv,
@@ -191,9 +208,14 @@ impl LinkManager {
             rng,
         ) {
             Ok(r) => r,
-            // A well-formed request for a mode that is not enabled: upstream's
-            // `validate_request` drops it without a proof and logs this.
-            Err(e @ rns_core::link::LinkError::ModeNotEnabled(_)) => {
+            // A well-formed request for a mode that is not enabled, or for a
+            // reserved one: upstream's `validate_request` drops it without a
+            // proof and logs this, as for any request it refuses. It is not
+            // a protocol violation there.
+            Err(
+                e @ (rns_core::link::LinkError::ModeNotEnabled(_)
+                | rns_core::link::LinkError::InvalidMode { .. }),
+            ) => {
                 log::debug!("Validating incoming link request failed: {}", e);
                 return Vec::new();
             }

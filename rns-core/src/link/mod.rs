@@ -17,8 +17,8 @@ use rns_crypto::x25519::X25519PrivateKey;
 use rns_crypto::Rng;
 
 use crate::constants::{
-    LINK_ECPUBSIZE, LINK_ESTABLISHMENT_TIMEOUT_PER_HOP, LINK_KEEPALIVE_MAX, LINK_MTU_MAX,
-    LINK_MTU_MIN, LINK_WATCHDOG_MAX_SLEEP, MTU, PATHFINDER_M,
+    LINK_ECPUBSIZE, LINK_ESTABLISHMENT_TIMEOUT_PER_HOP, LINK_KEEPALIVE_MAX, LINK_MODE_BYTEMASK,
+    LINK_MTU_MAX, LINK_MTU_MIN, LINK_MTU_SIZE, LINK_WATCHDOG_MAX_SLEEP, MTU, PATHFINDER_M,
 };
 
 pub use types::{LinkAction, LinkError, LinkId, LinkMode, LinkState, TeardownReason};
@@ -237,13 +237,23 @@ impl LinkEngine {
         now: f64,
         rng: &mut dyn Rng,
     ) -> Result<(Self, Vec<u8>), LinkError> {
+        let extra = linkrequest_data.len().saturating_sub(LINK_ECPUBSIZE);
+        // Upstream's `Link.validate_request` reads any mode. For a reserved
+        // one its `handshake()` raises "Invalid link mode N on <link>", and
+        // for a defined mode outside `ENABLED_MODES` its `prove()` raises.
+        // Either way the request is dropped and no proof is sent.
+        if linkrequest_data.len() == LINK_ECPUBSIZE + LINK_MTU_SIZE {
+            let mode = (linkrequest_data[LINK_ECPUBSIZE] & LINK_MODE_BYTEMASK) >> 5;
+            if LinkMode::from_byte(mode).is_err() {
+                return Err(LinkError::InvalidMode {
+                    mode,
+                    link_id: compute_link_id(hashable_part, extra),
+                });
+            }
+        }
         let (peer_pub, peer_sig_pub, peer_mtu, mode) = parse_linkrequest_data(linkrequest_data)?;
-        // Upstream's `Link.validate_request` reads any mode, but its
-        // `prove()` refuses one outside `ENABLED_MODES`, so the request is
-        // dropped and no proof is sent.
         check_mode_enabled(mode)?;
 
-        let extra = linkrequest_data.len().saturating_sub(LINK_ECPUBSIZE);
         let link_id = compute_link_id(hashable_part, extra);
 
         // Generate ephemeral keys for this end
@@ -1779,6 +1789,51 @@ mod tests {
             .map(|_| ()),
             refused
         );
+    }
+
+    /// A request signalling a reserved mode fails as upstream's
+    /// `Link.handshake()` does, naming the mode and the link, so the
+    /// request is dropped without a proof.
+    #[test]
+    fn a_reserved_link_mode_is_refused_by_the_responder() {
+        let mut rng_id = make_rng(0x01);
+        let dest_sig_prv = Ed25519PrivateKey::generate(&mut rng_id);
+        let dest_sig_pub_bytes = dest_sig_prv.public_key().public_bytes();
+        let dest_hash = [0xDD; 16];
+        let mut rng = make_rng(0x10);
+        for mode in 2u8..=7 {
+            let mut request_data = handshake::build_linkrequest_data(
+                &X25519PrivateKey::generate(&mut rng)
+                    .public_key()
+                    .public_bytes(),
+                &Ed25519PrivateKey::generate(&mut rng)
+                    .public_key()
+                    .public_bytes(),
+                Some(500),
+                LinkMode::Aes256Cbc,
+            );
+            request_data[LINK_ECPUBSIZE] =
+                (request_data[LINK_ECPUBSIZE] & !LINK_MODE_BYTEMASK) | (mode << 5);
+            let mut hashable = vec![0x00, 0x00];
+            hashable.extend_from_slice(&dest_hash);
+            hashable.push(0x00);
+            hashable.extend_from_slice(&request_data);
+            let link_id = handshake::compute_link_id(&hashable, LINK_MTU_SIZE);
+            assert_eq!(
+                LinkEngine::new_responder(
+                    &dest_sig_prv,
+                    &dest_sig_pub_bytes,
+                    &request_data,
+                    &hashable,
+                    &dest_hash,
+                    1,
+                    100.5,
+                    &mut rng,
+                )
+                .map(|_| ()),
+                Err(LinkError::InvalidMode { mode, link_id })
+            );
+        }
     }
 
     /// Run LINKREQUEST + LRPROOF with the given signalled MTU. Returns the

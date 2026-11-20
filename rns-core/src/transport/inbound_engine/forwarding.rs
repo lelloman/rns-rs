@@ -160,7 +160,7 @@ impl TransportEngine {
         }
 
         if ctx.packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST {
-            clamp_forwarded_link_request_mtu(
+            if let Err(mode) = clamp_forwarded_link_request_mtu(
                 &mut new_raw,
                 ctx.packet.data().len() == constants::LINK_ECPUBSIZE + constants::LINK_MTU_SIZE,
                 self.interfaces.get(&ctx.iface).map(|info| info.mtu),
@@ -168,7 +168,17 @@ impl TransportEngine {
                     .get(&outbound_interface)
                     .filter(|info| info.mtu_upgradable)
                     .map(|info| info.mtu),
-            );
+            ) {
+                // Transport.py: `Link.signalling_bytes` raises for a mode
+                // outside `ENABLED_MODES`, and the request is dropped before
+                // any link table entry, transmission or path use.
+                log::debug!(
+                    "Dropping link request packet. The contained exception was: Requested link mode {} not enabled",
+                    crate::link::types::mode_description(mode)
+                );
+                self.undecodable_mtu_signalling(ctx.iface, actions);
+                return;
+            }
             let extra_proof_timeout =
                 extra_link_proof_timeout(self.interfaces.get(&outbound_interface));
             let proof_timeout = ctx.now
@@ -281,6 +291,18 @@ impl TransportEngine {
         }
     }
 
+    /// Upstream's `protocol_violation("Undecodable path MTU signalling
+    /// bytes")` on the interface a dropped link request came in on.
+    fn undecodable_mtu_signalling(&self, iface: InterfaceId, actions: &mut Vec<TransportAction>) {
+        if let Some(info) = self.interfaces.get(&iface) {
+            log::debug!(
+                "Protocol violation on {}: Undecodable path MTU signalling bytes",
+                info.name
+            );
+        }
+        actions.push(TransportAction::ProtocolViolation { interface: iface });
+    }
+
     pub(super) fn handle_inbound_local_delivery(
         &self,
         ctx: &InboundPacketCtx,
@@ -309,12 +331,21 @@ impl TransportEngine {
             {
                 let receiving = self.interfaces.get(&ctx.iface);
                 let mut raw = ctx.packet.raw.to_vec();
-                crate::transport::inbound::clamp_local_link_request_mtu(
+                if let Err(mode) = crate::transport::inbound::clamp_local_link_request_mtu(
                     &mut raw,
                     true,
                     receiving.map(|info| info.mtu),
                     receiving.is_some_and(|info| info.mtu_upgradable),
-                );
+                ) {
+                    // Transport.py, as for a forwarded request, but logged
+                    // as a warning.
+                    log::warn!(
+                        "Dropping link request packet to local destination. The contained exception was: Requested link mode {} not enabled",
+                        crate::link::types::mode_description(mode)
+                    );
+                    self.undecodable_mtu_signalling(ctx.iface, actions);
+                    return;
+                }
                 PacketBytes::from(raw)
             } else {
                 // The received bytes themselves, shared.

@@ -787,3 +787,108 @@ fn shared_instance_routes_proofs_for_its_local_clients() {
         assert!(sent_on(&actions, relayed).is_some(), "arrives on {arrives}");
     }
 }
+
+/// A LINKREQUEST with signalling for `mode` (any three-bit value) and
+/// `mtu`, after a 64-byte key pair.
+fn link_request_payload(mtu: u32, mode: u8) -> Vec<u8> {
+    let mut payload = vec![0x5C; constants::LINK_ECPUBSIZE];
+    let value = (mtu & constants::LINK_MTU_BYTEMASK) | ((mode as u32) << 21);
+    payload.extend_from_slice(&value.to_be_bytes()[1..]);
+    payload
+}
+
+fn protocol_violation_on(actions: &[TransportAction], iface: u64) -> bool {
+    actions.iter().any(|action| {
+        matches!(action, TransportAction::ProtocolViolation { interface } if *interface == InterfaceId(iface))
+    })
+}
+
+/// Transport.py rebuilds the signalling of a forwarded LINKREQUEST whose
+/// MTU it lowers with `Link.signalling_bytes`, which raises for a mode
+/// outside `ENABLED_MODES`: the request is dropped as undecodable, with a
+/// protocol violation on the receiving interface and no link table entry.
+#[test]
+fn forwarded_link_request_needing_a_clamp_in_a_mode_not_enabled_is_dropped() {
+    for mode in 0u8..=7 {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(InterfaceInfo {
+            mtu: 262_144,
+            mtu_upgradable: true,
+            ..make_interface(1, constants::MODE_FULL)
+        });
+        engine.register_interface(InterfaceInfo {
+            mtu: 8_192,
+            mtu_upgradable: true,
+            ..make_interface(2, constants::MODE_FULL)
+        });
+        let dest = [0xC4; 16];
+        engine.upsert_path_destination(
+            dest,
+            make_path_entry(1000.0, 2, InterfaceId(2), [0x29; 16]),
+            1000.0,
+        );
+        let request = RawPacket::pack(
+            flags(
+                constants::HEADER_2,
+                constants::DESTINATION_SINGLE,
+                constants::PACKET_TYPE_LINKREQUEST,
+            ),
+            0,
+            &dest,
+            Some(&OUR_ID),
+            constants::CONTEXT_NONE,
+            &link_request_payload(262_144, mode),
+        )
+        .unwrap();
+        let actions = receive(&mut engine, &request, 1);
+        if mode == 0x01 {
+            assert!(sent_on(&actions, 2).is_some());
+            assert_eq!(engine.link_table.len(), 1);
+            assert!(!protocol_violation_on(&actions, 1));
+        } else {
+            assert!(sent_on(&actions, 2).is_none(), "mode {mode}");
+            assert!(engine.link_table.is_empty(), "mode {mode}");
+            assert!(protocol_violation_on(&actions, 1), "mode {mode}");
+        }
+    }
+}
+
+/// The same for a LINKREQUEST to a local destination: its MTU is lowered
+/// to what the receiving interface carries, and for a mode that is not
+/// enabled the request is dropped as undecodable instead of delivered.
+/// Signalling that needs no clamp is delivered whatever its mode.
+#[test]
+fn local_link_request_needing_a_clamp_in_a_mode_not_enabled_is_dropped() {
+    for mode in 0u8..=7 {
+        for (mtu, clamped) in [(262_144, true), (500, false)] {
+            let mut engine = TransportEngine::new(make_config(false));
+            engine.register_interface(make_interface(1, constants::MODE_FULL));
+            let dest = [0xC5; 16];
+            engine.register_destination(dest, constants::DESTINATION_SINGLE);
+            let request = RawPacket::pack(
+                flags(
+                    constants::HEADER_1,
+                    constants::DESTINATION_SINGLE,
+                    constants::PACKET_TYPE_LINKREQUEST,
+                ),
+                0,
+                &dest,
+                None,
+                constants::CONTEXT_NONE,
+                &link_request_payload(mtu, mode),
+            )
+            .unwrap();
+            let actions = receive(&mut engine, &request, 1);
+            let delivered = actions
+                .iter()
+                .any(|action| matches!(action, TransportAction::DeliverLocal { .. }));
+            let dropped = clamped && mode != 0x01;
+            assert_eq!(delivered, !dropped, "mode {mode} mtu {mtu}");
+            assert_eq!(
+                protocol_violation_on(&actions, 1),
+                dropped,
+                "mode {mode} mtu {mtu}"
+            );
+        }
+    }
+}

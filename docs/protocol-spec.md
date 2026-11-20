@@ -332,8 +332,17 @@ The current interoperable profile enables only `AES256_CBC`, as upstream's
 `Link.ENABLED_MODES`. A LINKREQUEST without signalling bytes uses it.
 
 An initiator MUST NOT create a link in any other mode. A responder MUST drop a
-LINKREQUEST that signals any other mode, `AES128_CBC` included, without sending
-an LRPROOF, and receivers MUST reject unknown mode values.
+LINKREQUEST that signals any other mode, `AES128_CBC` and the reserved values
+included, without sending an LRPROOF. As upstream, such a request is refused
+like any other request the responder cannot accept, not as a protocol
+violation.
+
+A transport node that has to lower the MTU signalled by a LINKREQUEST, whether
+forwarding it or delivering it to a local destination, re-encodes the
+signalling only for an enabled mode. For any other mode it drops the request
+and counts a protocol violation on the receiving interface ("Undecodable path
+MTU signalling bytes"), as upstream's `Link.signalling_bytes` raises there.
+Signalling that fits, or that is stripped, is passed on whatever its mode.
 
 ### 11.2 LINKREQUEST
 
