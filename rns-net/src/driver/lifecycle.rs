@@ -228,7 +228,8 @@ impl Driver {
         // Frames deferred in this pass count as queued: get them moving.
         self.wake_writers();
         let now = Instant::now();
-        let deadline = now + timeout;
+        // A timeout too long to represent as an instant means no deadline.
+        let deadline = now.checked_add(timeout);
         match self.lifecycle.state {
             LifecycleState::Active => {
                 self.lifecycle.state = LifecycleState::Draining;
@@ -236,7 +237,7 @@ impl Driver {
                     .accepting_work
                     .store(false, Ordering::Release);
                 self.lifecycle.drain_started_at = Some(now);
-                self.lifecycle.drain_deadline = Some(deadline);
+                self.lifecycle.drain_deadline = deadline;
                 log::info!(
                     "driver entering drain mode with {:.3}s timeout",
                     timeout.as_secs_f64()
@@ -244,7 +245,7 @@ impl Driver {
                 self.stop_listener_accepts();
             }
             LifecycleState::Draining => {
-                self.lifecycle.drain_deadline = Some(deadline);
+                self.lifecycle.drain_deadline = deadline;
                 log::info!(
                     "driver drain deadline updated to {:.3}s from now",
                     timeout.as_secs_f64()

@@ -136,7 +136,8 @@ fn handle_begin_drain(
         .or_else(|| begin_val.as_int().map(|value| value as f64))
         .unwrap_or(0.0)
         .max(0.0);
-    let timeout = Duration::from_secs_f64(timeout_secs);
+    // Too large (or infinite) for a Duration: drain without a deadline.
+    let timeout = Duration::try_from_secs_f64(timeout_secs).unwrap_or(Duration::MAX);
     try_send_event(event_tx, Event::BeginDrain { timeout })?;
     Ok(Some(PickleValue::Bool(true)))
 }

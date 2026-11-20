@@ -3029,6 +3029,14 @@ fn begin_drain_updates_driver_status() {
     assert!(status.drain_complete);
     assert!(status.drain_age_seconds.is_some());
     assert!(status.deadline_remaining_seconds.is_some());
+
+    // A timeout too long for an instant keeps draining with no deadline.
+    driver.begin_drain(Duration::MAX);
+    let QueryResponse::DrainStatus(status) = driver.handle_query(QueryRequest::DrainStatus) else {
+        panic!("expected drain status response");
+    };
+    assert_eq!(status.state, LifecycleState::Draining);
+    assert!(status.deadline_remaining_seconds.is_none());
     assert_eq!(
             status.detail.as_deref(),
             Some("node is draining existing work; no active links, resource transfers, hole-punch sessions, or queued writer/provider work remain")
