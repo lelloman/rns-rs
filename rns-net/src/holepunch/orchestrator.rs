@@ -54,6 +54,9 @@ pub use crate::common::event::{DirectReupgradeConfig, HolePunchPolicy};
 /// closing packets still leave on it.
 const DIRECT_INTERFACE_RETIRE_DELAY: f64 = 1.0;
 
+/// Seconds before a re-upgrade that found its link stale looks again.
+const REUPGRADE_STALE_RETRY: f64 = 1.0;
+
 /// A single hole-punch session's networking state.
 struct HolePunchSession {
     engine: HolePunchEngine,
