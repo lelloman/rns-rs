@@ -2350,10 +2350,13 @@ fn python_rnpath_reads_rust_remote_path_table() {
     }
     let (python_table, python_rates) = remote_path_tables(Daemon::Python);
     let (rust_table, rust_rates) = remote_path_tables(Daemon::Rust);
-    assert_eq!(
-        first_entry_shape(&rust_table),
-        first_entry_shape(&python_table)
-    );
+    let mut rust_shape = first_entry_shape(&rust_table);
+    // Upstream c90a5d58 added `interface_hash` after `interface`; the
+    // entries of an older Python Reticulum end before it.
+    if !python_module_source_contains("RNS.Reticulum", "\"interface_hash\"") {
+        rust_shape.retain(|(key, _)| key != "interface_hash");
+    }
+    assert_eq!(rust_shape, first_entry_shape(&python_table));
     assert_eq!(
         first_entry_shape(&rust_rates),
         first_entry_shape(&python_rates)
@@ -3235,13 +3238,16 @@ fn python_rnpath_source_contains(needle: &str) -> bool {
 /// Whether the source of the Python utility `RNS.Utilities.<utility>`
 /// contains `needle`.
 fn python_utility_source_contains(utility: &str, needle: &str) -> bool {
+    python_module_source_contains(&format!("RNS.Utilities.{utility}"), needle)
+}
+
+/// Whether the source of the Python module `module` contains `needle`.
+fn python_module_source_contains(module: &str, needle: &str) -> bool {
     let mut probe = Command::new("python3");
     probe.env("PYTHONUNBUFFERED", "1");
     probe.args([
         "-c",
-        &format!(
-            "import inspect, RNS.Utilities.{utility} as m; print({needle:?} in inspect.getsource(m))"
-        ),
+        &format!("import inspect, {module} as m; print({needle:?} in inspect.getsource(m))"),
     ]);
     let probe = run(probe);
     String::from_utf8_lossy(&probe.stdout).trim() == "True"

@@ -346,7 +346,13 @@ impl Driver {
 
     /// Drop every destination type requirement of `requester`.
     fn unwant_all_destination_types(&mut self, requester: &[u8]) -> QueryResponse {
-        self.engine.destination_filter_mut().unwant_all(requester);
+        // Upstream withdraws each type with `_unwants_destination_type`,
+        // which logs it.
+        for (destination_type, emptied) in
+            self.engine.destination_filter_mut().unwant_all(requester)
+        {
+            self.log_withdrawn_destination_type(&destination_type, requester, emptied);
+        }
         log::debug!(
             "Deregistered all destination requirements for <{}>",
             hex(requester)

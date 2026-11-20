@@ -38,6 +38,13 @@ pub fn destination_type(full_name: &str) -> DestinationType {
 /// as a name here and gives upstream a short key that matches nothing. An
 /// empty name, which upstream ignores, yields `None`.
 pub fn configured_destination_type(full_name: &str) -> Option<DestinationType> {
+    configured_destination_type_name(full_name).map(|(destination_type, _)| destination_type)
+}
+
+/// [`configured_destination_type`], with the name upstream records for it in
+/// `Transport.destination_type_map`: the configured name, or for the
+/// bracketed form the characters it kept. `None` where it yields `None`.
+pub fn configured_destination_type_name(full_name: &str) -> Option<(DestinationType, String)> {
     if full_name.is_empty() {
         return None;
     }
@@ -46,13 +53,14 @@ pub fn configured_destination_type(full_name: &str) -> Option<DestinationType> {
         .strip_prefix('<')
         .filter(|_| full_name.ends_with('>'))
     else {
-        return Some(destination_type(full_name));
+        return Some((destination_type(full_name), full_name.into()));
     };
     let kept: String = inner.chars().take(hex_len).collect();
-    match crate::encoding::hex_decode(&kept) {
-        Some(bytes) => DestinationType::try_from(bytes.as_slice()).ok(),
-        None => Some(destination_type(&kept)),
-    }
+    let destination_type = match crate::encoding::hex_decode(&kept) {
+        Some(bytes) => DestinationType::try_from(bytes.as_slice()).ok()?,
+        None => destination_type(&kept),
+    };
+    Some((destination_type, kept))
 }
 
 /// The `Transport` destination type tables: `blocked_destination_types`,
@@ -63,8 +71,11 @@ pub struct DestinationTypeFilter {
     required_only: bool,
     blocked: BTreeSet<DestinationType>,
     allowed: BTreeSet<DestinationType>,
-    /// Types local applications asked for, with the requesters asking.
-    wanted: BTreeMap<DestinationType, BTreeSet<Vec<u8>>>,
+    /// Types local applications asked for, with the requesters asking and
+    /// when the type was first asked for since it was last withdrawn: the
+    /// order of upstream's `client_destination_types` dict.
+    wanted: BTreeMap<DestinationType, (u64, BTreeSet<Vec<u8>>)>,
+    next_wanted: u64,
 }
 
 impl DestinationTypeFilter {
@@ -97,17 +108,20 @@ impl DestinationTypeFilter {
         if self.blocked.contains(&destination_type) {
             return false;
         }
-        self.wanted
+        let order = self.next_wanted;
+        let (_, requesters) = self
+            .wanted
             .entry(destination_type)
-            .or_default()
-            .insert(requester.to_vec());
+            .or_insert_with(|| (order, BTreeSet::new()));
+        requesters.insert(requester.to_vec());
+        self.next_wanted += 1;
         true
     }
 
     /// `Transport._unwants_destination_type`: withdraw one requester's need
     /// for this type. Returns whether that requester had registered it.
     pub fn unwant(&mut self, destination_type: DestinationType, requester: &[u8]) -> bool {
-        let Some(requesters) = self.wanted.get_mut(&destination_type) else {
+        let Some((_, requesters)) = self.wanted.get_mut(&destination_type) else {
             return false;
         };
         let was_registered = requesters.remove(requester);
@@ -118,12 +132,21 @@ impl DestinationTypeFilter {
     }
 
     /// `Transport._unwants_all_destination_types`: withdraw every type this
-    /// requester registered.
-    pub fn unwant_all(&mut self, requester: &[u8]) {
-        self.wanted.retain(|_, requesters| {
-            requesters.remove(requester);
+    /// requester registered. Returns those types in upstream's order, each
+    /// with whether it no longer has any requester.
+    pub fn unwant_all(&mut self, requester: &[u8]) -> Vec<(DestinationType, bool)> {
+        let mut withdrawn: Vec<(u64, DestinationType, bool)> = Vec::new();
+        self.wanted.retain(|destination_type, (order, requesters)| {
+            if requesters.remove(requester) {
+                withdrawn.push((*order, *destination_type, requesters.is_empty()));
+            }
             !requesters.is_empty()
         });
+        withdrawn.sort_by_key(|(order, _, _)| *order);
+        withdrawn
+            .into_iter()
+            .map(|(_, destination_type, emptied)| (destination_type, emptied))
+            .collect()
     }
 
     /// Whether some requester registered this type.
@@ -306,9 +329,49 @@ mod tests {
         filter.want(rnx, b"first");
         filter.want(rnx, b"second");
 
-        filter.unwant_all(b"first");
+        assert_eq!(filter.unwant_all(b"first"), [(rncp, true), (rnx, false)]);
         assert!(!filter.is_wanted(&rncp));
         assert!(filter.is_wanted(&rnx));
+        assert!(filter.unwant_all(b"first").is_empty());
+    }
+
+    #[test]
+    fn unwant_all_reports_types_in_the_order_they_were_first_wanted() {
+        // Upstream iterates its client_destination_types dict: a type keeps
+        // its place while wanted, and goes last when wanted again after
+        // its last requester withdrew.
+        let mut filter = DestinationTypeFilter::default();
+        let [a, b, c] = ["zz.last", "aa.first", "mm.middle"].map(destination_type);
+        filter.want(a, b"r");
+        filter.want(b, b"r");
+        filter.want(c, b"other");
+        filter.want(a, b"other");
+        filter.unwant(c, b"other");
+        filter.want(c, b"r");
+        assert_eq!(filter.unwant_all(b"r"), [(a, false), (b, true), (c, true)]);
+        filter.want(b, b"r");
+        filter.want(a, b"r");
+        assert_eq!(filter.unwant_all(b"r"), [(a, false), (b, true)]);
+    }
+
+    #[test]
+    fn configured_destination_types_name_as_upstreams_type_map() {
+        let lxmf = destination_type("lxmf.delivery");
+        let hex = crate::encoding::hex(&lxmf);
+        assert_eq!(
+            configured_destination_type_name("lxmf.delivery"),
+            Some((lxmf, "lxmf.delivery".into()))
+        );
+        // The bracketed form records the characters it kept.
+        assert_eq!(
+            configured_destination_type_name(&alloc::format!("<{hex}0011>")),
+            Some((lxmf, hex.clone()))
+        );
+        assert_eq!(
+            configured_destination_type_name("<abcd>"),
+            Some((destination_type("abcd>"), "abcd>".into()))
+        );
+        assert_eq!(configured_destination_type_name(""), None);
     }
 
     #[test]

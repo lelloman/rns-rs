@@ -32,6 +32,8 @@ pub(super) struct NodeQueueConfig {
     filter: config::FilterSection,
     /// `[filter] hop_limiter`.
     hop_limiter: u8,
+    /// Names of destination types read with the config.
+    destination_type_names: crate::destination_types::DestinationTypeNames,
 }
 
 impl Default for NodeQueueConfig {
@@ -47,6 +49,7 @@ impl Default for NodeQueueConfig {
             link_mtu_discovery: true,
             filter: config::FilterSection::default(),
             hop_limiter: rns_core::constants::HOP_LIMITER,
+            destination_type_names: Default::default(),
         }
     }
 }
@@ -103,6 +106,12 @@ impl RnsNode {
         // (upstream 5f2dbc16).
         #[cfg(feature = "iface-backbone")]
         crate::interface::backbone::load_blocked_ips_file(config_dir);
+        // Upstream c90a5d58: the names of destination types, from the
+        // `[filter]` section and <config dir>/known_destination_types.
+        let destination_type_names = crate::destination_types::DestinationTypeNames::from_config(
+            config_dir,
+            &rns_config.filter,
+        );
 
         // Upstream loads the configured network identity while it reads the
         // config, creating it when the file is missing. It is kept apart
@@ -171,10 +180,14 @@ impl RnsNode {
             },
         );
 
+        let queue_config = NodeQueueConfig {
+            destination_type_names,
+            ..queue_config_from(&rns_config, rpc_auth_key, link_mtu_discovery)
+        };
         let mut node = Self::start_with_queue_config(
             node_config,
             callbacks,
-            queue_config_from(&rns_config, rpc_auth_key, link_mtu_discovery),
+            queue_config,
             interface_management,
         )?;
         node.adopt_known_destinations(

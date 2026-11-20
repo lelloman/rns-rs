@@ -65,6 +65,7 @@ impl Driver {
             started: time::now(),
             lifecycle: lifecycle::Lifecycle::new(),
             connected_to_shared_instance: false,
+            destination_type_names: Default::default(),
             published_ingress_bursts: Default::default(),
             writers_to_wake: Vec::new(),
             announce_cache: None,

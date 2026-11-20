@@ -30,6 +30,7 @@ pub mod node;
 pub use common::config;
 pub mod announce_cache;
 pub(crate) mod blackhole_store;
+pub mod destination_types;
 pub mod ifac;
 pub mod local_ratchet;
 pub mod md5;

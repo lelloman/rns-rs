@@ -301,6 +301,9 @@ pub struct Driver {
     /// requests that rediscover paths for it
     /// (`Transport.owner.is_connected_to_shared_instance`).
     pub(crate) connected_to_shared_instance: bool,
+    /// Names of destination types, for log lines
+    /// (`Transport.destination_type_map`).
+    pub(crate) destination_type_names: crate::destination_types::DestinationTypeNames,
     /// Transport identity (optional, needed for tunnel synthesis).
     pub(crate) transport_identity: Option<rns_crypto::identity::Identity>,
     /// The network identity, when one is configured, kept apart from the

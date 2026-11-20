@@ -15457,6 +15457,38 @@ fn destination_type_queries_register_and_withdraw_requirements() {
 }
 
 #[test]
+fn wanted_destination_types_are_named_in_the_type_map() {
+    // Upstream's `_wants_destination_type` records the name it registers
+    // in `Transport.destination_type_map`, replacing the one a type file
+    // gave; a blocked type is not recorded.
+    use rns_core::transport::destination_filter::destination_type;
+    let mut driver = new_test_driver();
+    let rncp = destination_type("rncp.receive");
+    let blocked = destination_type("nomadnetwork.node");
+    driver.engine.destination_filter_mut().block(blocked);
+    driver
+        .destination_type_names
+        .insert(rncp, "from the file".into());
+    driver.handle_query_mut(QueryRequest::WantsDestinationType {
+        full_name: "rncp.receive".into(),
+        requester: b"a".to_vec(),
+    });
+    driver.handle_query_mut(QueryRequest::WantsDestinationType {
+        full_name: "nomadnetwork.node".into(),
+        requester: b"a".to_vec(),
+    });
+    assert_eq!(
+        driver.destination_type_names.get(&rncp),
+        Some("rncp.receive")
+    );
+    assert_eq!(driver.destination_type_names.get(&blocked), None);
+    assert_eq!(
+        driver.destination_type_names.describe(&blocked),
+        format!("<unknown> <{}>", rns_core::encoding::hex(&blocked))
+    );
+}
+
+#[test]
 fn plain_link_packets_are_proved_by_the_destination_strategy() {
     use rns_core::types::ProofStrategy;
     let dest = [0x6D; 16];

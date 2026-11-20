@@ -1627,7 +1627,7 @@ mod tests {
         r#"<33333333333333333333333333333333>   2h on TCPInterface[B/127.0.0.1:4242] expires in -30s (dv:0.000/lc:n)"#,
         "\n",
     );
-    const JSON: &str = r#"[{"hash": "22222222222222222222222222222222", "timestamp": 1763099900.25, "via": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "hops": 3, "expires": 1763103662.15, "value": 25.0, "used": 0, "lr_cost": 19.19921875, "interface": "AutoInterface[Local]"}, {"hash": "44444444444444444444444444444444", "timestamp": 1763099900.25, "via": "cccccccccccccccccccccccccccccccc", "hops": 12, "expires": 1763186400.25, "value": null, "used": 1763099999.25, "lr_cost": 7, "interface": "AutoInterface[Local]"}, {"hash": "11111111111111111111111111111111", "timestamp": 1763099900.25, "via": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "hops": 1, "expires": 1763704700.75, "value": null, "used": 1763099934.75, "lr_cost": null, "interface": "TCPInterface[B/127.0.0.1:4242]"}, {"hash": "33333333333333333333333333333333", "timestamp": 1763099900.25, "via": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "hops": 2, "expires": 1763099970.25, "value": 0.0, "used": 1763092800.25, "lr_cost": null, "interface": "TCPInterface[B/127.0.0.1:4242]"}]"#;
+    const JSON: &str = r#"[{"hash": "22222222222222222222222222222222", "timestamp": 1763099900.25, "via": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "hops": 3, "expires": 1763103662.15, "value": 25.0, "used": 0, "lr_cost": 19.19921875, "interface": "AutoInterface[Local]", "interface_hash": "51df0d004bf9008a7ed9829a9ef2af0aac56decb7d221fd377210b44a2f3715a"}, {"hash": "44444444444444444444444444444444", "timestamp": 1763099900.25, "via": "cccccccccccccccccccccccccccccccc", "hops": 12, "expires": 1763186400.25, "value": null, "used": 1763099999.25, "lr_cost": 7, "interface": "AutoInterface[Local]", "interface_hash": "51df0d004bf9008a7ed9829a9ef2af0aac56decb7d221fd377210b44a2f3715a"}, {"hash": "11111111111111111111111111111111", "timestamp": 1763099900.25, "via": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "hops": 1, "expires": 1763704700.75, "value": null, "used": 1763099934.75, "lr_cost": null, "interface": "TCPInterface[B/127.0.0.1:4242]", "interface_hash": "a8c134a2aa7efa78d177030f40d536c5c954bfe14823018b4a7ff044ad591e5c"}, {"hash": "33333333333333333333333333333333", "timestamp": 1763099900.25, "via": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "hops": 2, "expires": 1763099970.25, "value": 0.0, "used": 1763092800.25, "lr_cost": null, "interface": "TCPInterface[B/127.0.0.1:4242]", "interface_hash": "a8c134a2aa7efa78d177030f40d536c5c954bfe14823018b4a7ff044ad591e5c"}]"#;
     const RATES: &str = concat!(
         r#"<77777777777777777777777777777777> last heard 1 day ago, 0.028 announces/hour in the last 3 days, 1 active rate violation"#,
         "\n",
@@ -1679,6 +1679,11 @@ mod tests {
         }
         items.push(("lr_cost", lr_cost));
         items.push(("interface", PickleValue::String(interface.into())));
+        // Upstream c90a5d58: `interface.get_hash()`.
+        items.push((
+            "interface_hash",
+            PickleValue::Bytes(rns_core::hash::full_hash(interface.as_bytes()).to_vec()),
+        ));
         dict(items)
     }
 
