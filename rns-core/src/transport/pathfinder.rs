@@ -94,6 +94,10 @@ pub fn extract_random_blob(packet_data: &[u8]) -> Option<[u8; 10]> {
 pub enum PathDecision {
     /// Store the announced path.
     Add,
+    /// Store the announced path, accepted only because the current path is
+    /// unresponsive: a table insertion that is not rebroadcast (upstream
+    /// 8c73e203).
+    AddForUnresponsive,
     /// Keep the existing path.
     Reject,
 }
@@ -178,9 +182,11 @@ pub fn should_update_path(
         if blob_is_new && announce_emitted_ts > path_timebase {
             return PathDecision::Add;
         }
-        // Same emission + unresponsive path: accept for path recovery
+        // Same emission + unresponsive path: accept for path recovery.
+        // Upstream has no such case for an equal or lower hop count; like
+        // its lenient case for more hops it only updates the table.
         if announce_emitted_ts == path_timebase && path_is_unresponsive {
-            return PathDecision::Add;
+            return PathDecision::AddForUnresponsive;
         }
         PathDecision::Reject
     } else {
@@ -195,8 +201,9 @@ pub fn should_update_path(
             return PathDecision::Add;
         }
 
+        // Upstream's lenient insertion: only updates the table.
         if announce_emitted_ts == path_timebase && path_is_unresponsive {
-            return PathDecision::Add;
+            return PathDecision::AddForUnresponsive;
         }
 
         PathDecision::Reject
@@ -210,6 +217,10 @@ pub enum MultiPathDecision {
     ReplacePrimary,
     /// Accept as an alternative path via a new next_hop.
     AddAlternative,
+    /// Replace the primary path as [`MultiPathDecision::ReplacePrimary`]
+    /// does, accepted only because the path is unresponsive: a table
+    /// insertion that is not rebroadcast (upstream 8c73e203).
+    RecoverUnresponsive,
     /// Reject this announce.
     Reject,
 }
@@ -304,6 +315,7 @@ pub fn decide_announce_multipath_with_gravity(
         );
         match decision {
             PathDecision::Add => MultiPathDecision::ReplacePrimary,
+            PathDecision::AddForUnresponsive => MultiPathDecision::RecoverUnresponsive,
             PathDecision::Reject => MultiPathDecision::Reject,
         }
     } else {
@@ -506,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fewer_hops_same_emission_unresponsive_add() {
+    fn test_fewer_hops_same_emission_unresponsive_is_a_table_insertion() {
         let old_blob = make_blob(100);
         let mut different_blob = [0u8; 10];
         different_blob[0] = 0xFF;
@@ -515,7 +527,7 @@ mod tests {
         let entry = make_path_entry(5, &[old_blob], 9999.0);
         assert_eq!(
             should_update_path(Some(&entry), 3, 100, &different_blob, true, 1000.0, false),
-            PathDecision::Add
+            PathDecision::AddForUnresponsive
         );
     }
 
@@ -570,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    fn test_more_hops_same_emission_unresponsive_add() {
+    fn test_more_hops_same_emission_unresponsive_is_a_table_insertion() {
         let old_blob = make_blob(100);
         let mut different_blob = [0u8; 10];
         different_blob[0] = 0xFF;
@@ -580,7 +592,7 @@ mod tests {
 
         assert_eq!(
             should_update_path(Some(&entry), 5, 100, &different_blob, true, 1000.0, false),
-            PathDecision::Add
+            PathDecision::AddForUnresponsive
         );
     }
 
@@ -934,7 +946,9 @@ mod tests {
             match decision {
                 MultiPathDecision::ReplacePrimary => ps.upsert_primary(entry),
                 MultiPathDecision::AddAlternative => ps.upsert(entry),
-                MultiPathDecision::Reject => unreachable!(),
+                MultiPathDecision::RecoverUnresponsive | MultiPathDecision::Reject => {
+                    unreachable!()
+                }
             }
             let primary = ps.primary().unwrap();
             assert_eq!(primary.next_hop, direct);
