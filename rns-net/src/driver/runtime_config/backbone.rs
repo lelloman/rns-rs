@@ -40,10 +40,14 @@ impl Driver {
         ) {
             return self.set_backbone_discovery_runtime_config(key, value);
         }
-        let handle = self.backbone_runtime.get(name).ok_or(RuntimeConfigError {
-            code: RuntimeConfigErrorCode::NotFound,
-            message: format!("backbone interface '{}' not found", name),
-        })?;
+        let handle = self
+            .runtime_config
+            .backbone
+            .get(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("backbone interface '{}' not found", name),
+            })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "backbone runtime");
         match setting {
             "idle_timeout_secs" => {
@@ -91,13 +95,14 @@ impl Driver {
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_backbone_discovery_runtime_key(key)?;
-        let handle = self
-            .backbone_discovery_runtime
-            .get_mut(name)
-            .ok_or(RuntimeConfigError {
-                code: RuntimeConfigErrorCode::NotFound,
-                message: format!("backbone interface '{}' not found", name),
-            })?;
+        let handle =
+            self.runtime_config
+                .backbone_discovery
+                .get_mut(name)
+                .ok_or(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::NotFound,
+                    message: format!("backbone interface '{}' not found", name),
+                })?;
         match setting {
             "discoverable" => {
                 handle.current.discoverable = Self::expect_bool(value, key)?;
@@ -149,13 +154,14 @@ impl Driver {
         key: &str,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_backbone_discovery_runtime_key(key)?;
-        let handle = self
-            .backbone_discovery_runtime
-            .get_mut(name)
-            .ok_or(RuntimeConfigError {
-                code: RuntimeConfigErrorCode::NotFound,
-                message: format!("backbone interface '{}' not found", name),
-            })?;
+        let handle =
+            self.runtime_config
+                .backbone_discovery
+                .get_mut(name)
+                .ok_or(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::NotFound,
+                    message: format!("backbone interface '{}' not found", name),
+                })?;
         match setting {
             "discoverable" => handle.current.discoverable = handle.startup.discoverable,
             "discovery_name" => {
@@ -204,10 +210,14 @@ impl Driver {
         ) {
             return self.reset_backbone_discovery_runtime_config(key);
         }
-        let handle = self.backbone_runtime.get(name).ok_or(RuntimeConfigError {
-            code: RuntimeConfigErrorCode::NotFound,
-            message: format!("backbone interface '{}' not found", name),
-        })?;
+        let handle = self
+            .runtime_config
+            .backbone
+            .get(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("backbone interface '{}' not found", name),
+            })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "backbone runtime");
         let startup = handle.startup.clone();
         match setting {
@@ -230,7 +240,7 @@ impl Driver {
     #[cfg(feature = "iface-backbone")]
     pub(crate) fn list_backbone_client_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
-        let mut names: Vec<&String> = self.backbone_client_runtime.keys().collect();
+        let mut names: Vec<&String> = self.runtime_config.backbone_client.keys().collect();
         names.sort();
         for name in names {
             for suffix in [
@@ -251,7 +261,7 @@ impl Driver {
     pub(crate) fn backbone_client_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("backbone_client.")?;
         let (name, setting) = rest.split_once('.')?;
-        let handle = self.backbone_client_runtime.get(name)?;
+        let handle = self.runtime_config.backbone_client.get(name)?;
         let current = recover_mutex_guard(&handle.runtime, "backbone client runtime").clone();
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
@@ -316,7 +326,8 @@ impl Driver {
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_backbone_client_runtime_key(key)?;
         let handle = self
-            .backbone_client_runtime
+            .runtime_config
+            .backbone_client
             .get(name)
             .ok_or(RuntimeConfigError {
                 code: RuntimeConfigErrorCode::NotFound,
@@ -353,7 +364,8 @@ impl Driver {
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_backbone_client_runtime_key(key)?;
         let handle = self
-            .backbone_client_runtime
+            .runtime_config
+            .backbone_client
             .get(name)
             .ok_or(RuntimeConfigError {
                 code: RuntimeConfigErrorCode::NotFound,
@@ -378,7 +390,7 @@ impl Driver {
     #[cfg(feature = "iface-backbone")]
     pub(crate) fn list_backbone_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
-        let mut names: Vec<&String> = self.backbone_runtime.keys().collect();
+        let mut names: Vec<&String> = self.runtime_config.backbone.keys().collect();
         names.sort();
         for name in names {
             for suffix in [
@@ -434,7 +446,7 @@ impl Driver {
         };
 
         if Self::is_discovery_runtime_setting(setting) {
-            let handle = self.backbone_discovery_runtime.get(name)?;
+            let handle = self.runtime_config.backbone_discovery.get(name)?;
             return Self::discovery_runtime_entry(
                 key,
                 setting,
@@ -446,7 +458,7 @@ impl Driver {
             );
         }
 
-        if let Some(handle) = self.backbone_runtime.get(name) {
+        if let Some(handle) = self.runtime_config.backbone.get(name) {
             let current = recover_mutex_guard(&handle.runtime, "backbone runtime").clone();
             let startup = handle.startup.clone();
             return match setting {

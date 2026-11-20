@@ -729,7 +729,7 @@ impl Driver {
 
     /// Put runtime-config `key` back to its default.
     fn reset_runtime_config_value(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
-        let defaults = self.runtime_config_defaults;
+        let defaults = self.runtime_config.defaults;
         match key {
             "global.tick_interval_ms" => {
                 self.tick_interval_ms

@@ -6,7 +6,7 @@ impl Driver {
     #[cfg(feature = "iface-auto")]
     pub(crate) fn list_auto_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
-        let mut names: Vec<&String> = self.auto_runtime.keys().collect();
+        let mut names: Vec<&String> = self.runtime_config.auto.keys().collect();
         names.sort();
         for name in names {
             for suffix in [
@@ -27,7 +27,7 @@ impl Driver {
     pub(crate) fn auto_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("auto.")?;
         let (name, setting) = rest.split_once('.')?;
-        let handle = self.auto_runtime.get(name)?;
+        let handle = self.runtime_config.auto.get(name)?;
         let current = recover_mutex_guard(&handle.runtime, "auto runtime").clone();
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
@@ -89,10 +89,14 @@ impl Driver {
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_auto_runtime_key(key)?;
-        let handle = self.auto_runtime.get(name).ok_or(RuntimeConfigError {
-            code: RuntimeConfigErrorCode::NotFound,
-            message: format!("auto interface '{}' not found", name),
-        })?;
+        let handle = self
+            .runtime_config
+            .auto
+            .get(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("auto interface '{}' not found", name),
+            })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "auto runtime");
         match setting {
             "announce_interval_secs" => {
@@ -128,10 +132,14 @@ impl Driver {
         key: &str,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_auto_runtime_key(key)?;
-        let handle = self.auto_runtime.get(name).ok_or(RuntimeConfigError {
-            code: RuntimeConfigErrorCode::NotFound,
-            message: format!("auto interface '{}' not found", name),
-        })?;
+        let handle = self
+            .runtime_config
+            .auto
+            .get(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("auto interface '{}' not found", name),
+            })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "auto runtime");
         let startup = handle.startup.clone();
         match setting {

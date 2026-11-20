@@ -181,12 +181,12 @@ impl Driver {
             .set_targets(crate::stamper::StampTargets::from(stamps));
         self.stamper
             .set_path_request_timeout(stamps.path_request_stamp_timeout());
-        self.runtime_config_defaults.stamp_destinations = stamps.stamp_destinations;
-        self.runtime_config_defaults.stamp_path_requests = stamps.stamp_prs;
-        self.runtime_config_defaults.stamp_link_requests = stamps.stamp_lrs;
-        self.runtime_config_defaults.always_stamp_link_requests = stamps.always_stamp_lrs;
-        self.runtime_config_defaults.stamps_enforced = stamps.stamps_enforced;
-        self.runtime_config_defaults.lr_stamps_enforced = stamps.lr_stamps_enforced;
+        self.runtime_config.defaults.stamp_destinations = stamps.stamp_destinations;
+        self.runtime_config.defaults.stamp_path_requests = stamps.stamp_prs;
+        self.runtime_config.defaults.stamp_link_requests = stamps.stamp_lrs;
+        self.runtime_config.defaults.always_stamp_link_requests = stamps.always_stamp_lrs;
+        self.runtime_config.defaults.stamps_enforced = stamps.stamps_enforced;
+        self.runtime_config.defaults.lr_stamps_enforced = stamps.lr_stamps_enforced;
         // The per-destination cost table shared with the node API and the
         // announce builder: `lr_cost` is `Transport.LR_COST`, the cost of
         // destinations that call no `set_link_cost`.

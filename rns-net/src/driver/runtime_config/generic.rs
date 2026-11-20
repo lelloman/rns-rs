@@ -40,7 +40,7 @@ impl Driver {
                     entries.push(entry);
                 }
             }
-            if self.interface_ifac_runtime.contains_key(&name) {
+            if self.runtime_config.ifac.contains_key(&name) {
                 for suffix in ["ifac_netname", "ifac_passphrase", "ifac_size_bytes"] {
                     let key = format!("interface.{}.{}", name, suffix);
                     if let Some(entry) = self.generic_interface_runtime_entry(&key) {
@@ -87,8 +87,8 @@ impl Driver {
                 ))
             }
             "ifac_netname" => {
-                let current = self.interface_ifac_runtime.get(name)?;
-                let startup = self.interface_ifac_runtime_defaults.get(name)?;
+                let current = self.runtime_config.ifac.get(name)?;
+                let startup = self.runtime_config.ifac_defaults.get(name)?;
                 Some(make_entry(
                     current
                         .netname
@@ -105,8 +105,8 @@ impl Driver {
                 ))
             }
             "ifac_passphrase" => {
-                let current = self.interface_ifac_runtime.get(name)?;
-                let startup = self.interface_ifac_runtime_defaults.get(name)?;
+                let current = self.runtime_config.ifac.get(name)?;
+                let startup = self.runtime_config.ifac_defaults.get(name)?;
                 let current_value = current
                     .netkey
                     .as_ref()
@@ -134,8 +134,8 @@ impl Driver {
                 })
             }
             "ifac_size_bytes" => {
-                let current = self.interface_ifac_runtime.get(name)?;
-                let startup = self.interface_ifac_runtime_defaults.get(name)?;
+                let current = self.runtime_config.ifac.get(name)?;
+                let startup = self.runtime_config.ifac_defaults.get(name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Int(current.size as i64),
                     RuntimeConfigValue::Int(startup.size as i64),
@@ -341,7 +341,7 @@ impl Driver {
             .interfaces
             .iter()
             .find(|(_, entry)| entry.info.name == name)?;
-        let startup = self.interface_runtime_defaults.get(name)?;
+        let startup = self.runtime_config.interface_defaults.get(name)?;
         Some((*id, &entry.info, startup))
     }
 
@@ -428,13 +428,14 @@ impl Driver {
                 entry.enabled = Self::expect_bool(value, key)?;
             }
             "ifac_netname" => {
-                let runtime =
-                    self.interface_ifac_runtime
-                        .get_mut(name)
-                        .ok_or(RuntimeConfigError {
-                            code: RuntimeConfigErrorCode::UnknownKey,
-                            message: format!("unknown runtime-config key '{}'", key),
-                        })?;
+                let runtime = self
+                    .runtime_config
+                    .ifac
+                    .get_mut(name)
+                    .ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    })?;
                 runtime.netname = match value {
                     RuntimeConfigValue::Null => None,
                     RuntimeConfigValue::String(value) => Some(value),
@@ -448,13 +449,14 @@ impl Driver {
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "ifac_passphrase" => {
-                let runtime =
-                    self.interface_ifac_runtime
-                        .get_mut(name)
-                        .ok_or(RuntimeConfigError {
-                            code: RuntimeConfigErrorCode::UnknownKey,
-                            message: format!("unknown runtime-config key '{}'", key),
-                        })?;
+                let runtime = self
+                    .runtime_config
+                    .ifac
+                    .get_mut(name)
+                    .ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    })?;
                 runtime.netkey = match value {
                     RuntimeConfigValue::Null => None,
                     RuntimeConfigValue::String(value) => Some(value),
@@ -468,13 +470,14 @@ impl Driver {
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "ifac_size_bytes" => {
-                let runtime =
-                    self.interface_ifac_runtime
-                        .get_mut(name)
-                        .ok_or(RuntimeConfigError {
-                            code: RuntimeConfigErrorCode::UnknownKey,
-                            message: format!("unknown runtime-config key '{}'", key),
-                        })?;
+                let runtime = self
+                    .runtime_config
+                    .ifac
+                    .get_mut(name)
+                    .ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    })?;
                 runtime.size =
                     (Self::expect_u64(value, key)? as usize).max(crate::ifac::IFAC_MIN_SIZE);
                 Self::apply_interface_ifac_runtime(entry, runtime);
@@ -564,14 +567,15 @@ impl Driver {
         key: &str,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_generic_interface_runtime_key(key)?;
-        let startup =
-            self.interface_runtime_defaults
-                .get(name)
-                .cloned()
-                .ok_or(RuntimeConfigError {
-                    code: RuntimeConfigErrorCode::NotFound,
-                    message: format!("interface '{}' not found", name),
-                })?;
+        let startup = self
+            .runtime_config
+            .interface_defaults
+            .get(name)
+            .cloned()
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("interface '{}' not found", name),
+            })?;
         let entry = self
             .interfaces
             .values_mut()
@@ -584,55 +588,61 @@ impl Driver {
             "enabled" => entry.enabled = true,
             "ifac_netname" => {
                 let startup_ifac =
-                    self.interface_ifac_runtime_defaults
+                    self.runtime_config
+                        .ifac_defaults
                         .get(name)
                         .ok_or(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
                             message: format!("unknown runtime-config key '{}'", key),
                         })?;
-                let runtime =
-                    self.interface_ifac_runtime
-                        .get_mut(name)
-                        .ok_or(RuntimeConfigError {
-                            code: RuntimeConfigErrorCode::UnknownKey,
-                            message: format!("unknown runtime-config key '{}'", key),
-                        })?;
+                let runtime = self
+                    .runtime_config
+                    .ifac
+                    .get_mut(name)
+                    .ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    })?;
                 runtime.netname = startup_ifac.netname.clone();
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "ifac_passphrase" => {
                 let startup_ifac =
-                    self.interface_ifac_runtime_defaults
+                    self.runtime_config
+                        .ifac_defaults
                         .get(name)
                         .ok_or(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
                             message: format!("unknown runtime-config key '{}'", key),
                         })?;
-                let runtime =
-                    self.interface_ifac_runtime
-                        .get_mut(name)
-                        .ok_or(RuntimeConfigError {
-                            code: RuntimeConfigErrorCode::UnknownKey,
-                            message: format!("unknown runtime-config key '{}'", key),
-                        })?;
+                let runtime = self
+                    .runtime_config
+                    .ifac
+                    .get_mut(name)
+                    .ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    })?;
                 runtime.netkey = startup_ifac.netkey.clone();
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "ifac_size_bytes" => {
                 let startup_ifac =
-                    self.interface_ifac_runtime_defaults
+                    self.runtime_config
+                        .ifac_defaults
                         .get(name)
                         .ok_or(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
                             message: format!("unknown runtime-config key '{}'", key),
                         })?;
-                let runtime =
-                    self.interface_ifac_runtime
-                        .get_mut(name)
-                        .ok_or(RuntimeConfigError {
-                            code: RuntimeConfigErrorCode::UnknownKey,
-                            message: format!("unknown runtime-config key '{}'", key),
-                        })?;
+                let runtime = self
+                    .runtime_config
+                    .ifac
+                    .get_mut(name)
+                    .ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    })?;
                 runtime.size = startup_ifac.size;
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }

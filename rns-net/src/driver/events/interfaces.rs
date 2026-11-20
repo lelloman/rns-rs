@@ -292,7 +292,9 @@ impl Driver {
             let interface_name = entry.info.name.clone();
             if is_dynamic {
                 log::info!("[{}] dynamic interface removed", id.0);
-                self.interface_runtime_defaults.remove(&interface_name);
+                self.runtime_config
+                    .interface_defaults
+                    .remove(&interface_name);
                 self.engine.deregister_interface(id);
                 self.interfaces.remove(&id);
                 self.dynamic_interface_parents.remove(&id);

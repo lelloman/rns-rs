@@ -143,36 +143,10 @@ impl Driver {
             interface_announce_limits: HashMap::new(),
             ingress_control_defaults: rns_core::transport::types::IngressControlConfig::enabled(),
             tick_interval_ms: Arc::new(AtomicU64::new(DEFAULT_TICK_INTERVAL_MS)),
-            #[cfg(feature = "iface-backbone")]
-            backbone_runtime: HashMap::new(),
-            #[cfg(feature = "iface-backbone")]
-            backbone_peer_state: HashMap::new(),
-            #[cfg(feature = "iface-backbone")]
-            backbone_client_runtime: HashMap::new(),
-            #[cfg(feature = "iface-backbone")]
-            backbone_discovery_runtime: HashMap::new(),
+            runtime_config: runtime_config::RuntimeConfigHandles::new(runtime_config_defaults),
             #[cfg(feature = "iface-backbone")]
             backbone_peer_pool: None,
             next_dynamic_interface_id: Arc::new(AtomicU64::new(10000)),
-            #[cfg(feature = "iface-tcp")]
-            tcp_server_runtime: HashMap::new(),
-            #[cfg(feature = "iface-tcp")]
-            tcp_client_runtime: HashMap::new(),
-            #[cfg(feature = "iface-tcp")]
-            tcp_server_discovery_runtime: HashMap::new(),
-            #[cfg(feature = "iface-udp")]
-            udp_runtime: HashMap::new(),
-            #[cfg(feature = "iface-auto")]
-            auto_runtime: HashMap::new(),
-            #[cfg(feature = "iface-i2p")]
-            i2p_runtime: HashMap::new(),
-            #[cfg(feature = "iface-pipe")]
-            pipe_runtime: HashMap::new(),
-            #[cfg(feature = "iface-rnode")]
-            rnode_runtime: HashMap::new(),
-            interface_runtime_defaults: HashMap::new(),
-            interface_ifac_runtime: HashMap::new(),
-            interface_ifac_runtime_defaults: HashMap::new(),
             discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage::new(
                 std::env::temp_dir().join("rns-discovered-interfaces"),
             ),
@@ -213,7 +187,6 @@ impl Driver {
                 .announce_cache_cleanup_batch_size,
             management_announce_interval_secs: runtime_config_defaults
                 .management_announce_interval_secs,
-            runtime_config_defaults,
             #[cfg(feature = "hooks")]
             hook_slots: create_hook_slots(),
             #[cfg(feature = "hooks")]

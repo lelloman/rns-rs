@@ -109,7 +109,8 @@ impl Driver {
         interface_name: &str,
     ) -> Result<(), RuntimeConfigError> {
         let handle = self
-            .backbone_discovery_runtime
+            .runtime_config
+            .backbone_discovery
             .get(interface_name)
             .ok_or(RuntimeConfigError {
                 code: RuntimeConfigErrorCode::NotFound,
@@ -154,7 +155,8 @@ impl Driver {
         interface_name: &str,
     ) -> Result<(), RuntimeConfigError> {
         let handle = self
-            .tcp_server_discovery_runtime
+            .runtime_config
+            .tcp_server_discovery
             .get(interface_name)
             .ok_or(RuntimeConfigError {
                 code: RuntimeConfigErrorCode::NotFound,

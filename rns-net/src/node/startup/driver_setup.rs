@@ -193,7 +193,7 @@ pub(super) fn new_driver(
     driver.interface_writer_queue_capacity = config.interface_writer_queue_capacity;
     driver.set_announce_rate_defaults(config.announce_rate_defaults);
     driver.set_ingress_control_defaults(config.ingress_control_defaults);
-    driver.runtime_config_defaults.known_destinations_ttl =
+    driver.runtime_config.defaults.known_destinations_ttl =
         config.known_destinations_ttl.as_secs_f64();
     driver
         .holepunch_manager
@@ -207,7 +207,7 @@ pub(super) fn new_driver(
     driver
         .holepunch_manager
         .set_reupgrade_config(config.direct_connect_reupgrade);
-    driver.runtime_config_defaults.direct_connect_policy = config.direct_connect_policy;
+    driver.runtime_config.defaults.direct_connect_policy = config.direct_connect_policy;
     (
         driver,
         DriverHandles {
@@ -260,8 +260,8 @@ fn start_provider_bridge(
     tx: &EventSender,
 ) {
     if let Some(provider_config) = provider_config {
-        driver.runtime_config_defaults.provider_queue_max_events = provider_config.queue_max_events;
-        driver.runtime_config_defaults.provider_queue_max_bytes = provider_config.queue_max_bytes;
+        driver.runtime_config.defaults.provider_queue_max_events = provider_config.queue_max_events;
+        driver.runtime_config.defaults.provider_queue_max_bytes = provider_config.queue_max_bytes;
         if provider_config.enabled {
             let started = if crate::engine::FOLD_SERVICES {
                 crate::provider_bridge::ProviderBridge::start_folded(

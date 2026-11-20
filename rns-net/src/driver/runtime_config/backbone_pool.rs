@@ -604,10 +604,10 @@ impl Driver {
         } else {
             fallback_name
         };
-        self.interface_runtime_defaults.remove(&name);
-        self.interface_ifac_runtime.remove(&name);
-        self.interface_ifac_runtime_defaults.remove(&name);
-        self.backbone_client_runtime.remove(&name);
+        self.runtime_config.interface_defaults.remove(&name);
+        self.runtime_config.ifac.remove(&name);
+        self.runtime_config.ifac_defaults.remove(&name);
+        self.runtime_config.backbone_client.remove(&name);
         self.interface_display_names.remove(&id);
         if self.engine.interface_info(&id).is_some() {
             self.engine.deregister_interface(id);
@@ -895,17 +895,18 @@ impl Driver {
     ) -> Vec<BackbonePeerStateEntry> {
         let mut names: Vec<&String> = match interface_name {
             Some(name) => self
+                .runtime_config
                 .backbone_peer_state
                 .keys()
                 .filter(|candidate| candidate.as_str() == name)
                 .collect(),
-            None => self.backbone_peer_state.keys().collect(),
+            None => self.runtime_config.backbone_peer_state.keys().collect(),
         };
         names.sort();
 
         let mut entries = Vec::new();
         for name in names {
-            if let Some(handle) = self.backbone_peer_state.get(name) {
+            if let Some(handle) = self.runtime_config.backbone_peer_state.get(name) {
                 entries.extend(
                     recover_mutex_guard(&handle.peer_state, "backbone peer state").list(name),
                 );
@@ -930,6 +931,7 @@ impl Driver {
     #[cfg(feature = "iface-backbone")]
     pub(crate) fn list_backbone_interfaces(&self) -> Vec<crate::event::BackboneInterfaceEntry> {
         let mut entries: Vec<_> = self
+            .runtime_config
             .backbone_peer_state
             .values()
             .map(|handle| crate::event::BackboneInterfaceEntry {
@@ -952,7 +954,8 @@ impl Driver {
         interface_name: &str,
         peer_ip: std::net::IpAddr,
     ) -> bool {
-        self.backbone_peer_state
+        self.runtime_config
+            .backbone_peer_state
             .get(interface_name)
             .map(|handle| {
                 let peer_cleared =
@@ -984,7 +987,8 @@ impl Driver {
         penalty_level: u8,
     ) -> bool {
         let capped_duration = self
-            .backbone_runtime
+            .runtime_config
+            .backbone
             .get(interface_name)
             .and_then(|handle| {
                 handle
@@ -996,7 +1000,7 @@ impl Driver {
             .flatten()
             .map(|max| duration.min(max))
             .unwrap_or(duration);
-        let Some(handle) = self.backbone_peer_state.get(interface_name) else {
+        let Some(handle) = self.runtime_config.backbone_peer_state.get(interface_name) else {
             return false;
         };
         let ok = recover_mutex_guard(&handle.peer_state, "backbone peer state").blacklist(

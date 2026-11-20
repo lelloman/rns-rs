@@ -118,7 +118,7 @@ impl Driver {
             interfaces.push(self.single_interface_stat(entry, traffic, now));
         }
         #[cfg(feature = "iface-backbone")]
-        for handle in self.backbone_peer_state.values() {
+        for handle in self.runtime_config.backbone_peer_state.values() {
             interfaces.push(self.backbone_listener_stat(handle, now));
         }
         for listener in &self.listener_stats {

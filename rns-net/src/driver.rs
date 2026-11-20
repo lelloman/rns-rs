@@ -474,54 +474,13 @@ pub struct Driver {
     pub(crate) ingress_control_defaults: rns_core::transport::types::IngressControlConfig,
     /// Shared timer interval used by the node timer thread.
     pub(crate) tick_interval_ms: Arc<AtomicU64>,
-    /// Runtime-config handles for backbone server interfaces, keyed by config name.
-    #[cfg(feature = "iface-backbone")]
-    pub(crate) backbone_runtime: HashMap<String, BackboneRuntimeConfigHandle>,
-    /// Live peer-state handles for backbone server interfaces, keyed by config name.
-    #[cfg(feature = "iface-backbone")]
-    pub(crate) backbone_peer_state: HashMap<String, BackbonePeerStateHandle>,
-    /// Runtime-config handles for backbone client interfaces, keyed by config name.
-    #[cfg(feature = "iface-backbone")]
-    pub(crate) backbone_client_runtime: HashMap<String, BackboneClientRuntimeConfigHandle>,
-    /// Runtime-config state for backbone discovery metadata, keyed by config name.
-    #[cfg(feature = "iface-backbone")]
-    pub(crate) backbone_discovery_runtime: HashMap<String, BackboneDiscoveryRuntimeHandle>,
+    /// Runtime-config handles of the interfaces and the defaults they reset to.
+    pub(crate) runtime_config: runtime_config::RuntimeConfigHandles,
     /// Ordered outbound Backbone peer pool, if enabled.
     #[cfg(feature = "iface-backbone")]
     backbone_peer_pool: Option<BackbonePeerPool>,
     /// Shared allocator for listener-created and discovery-created dynamic interfaces.
     pub(crate) next_dynamic_interface_id: Arc<AtomicU64>,
-    /// Runtime-config handles for TCP server interfaces, keyed by config name.
-    #[cfg(feature = "iface-tcp")]
-    pub(crate) tcp_server_runtime: HashMap<String, TcpServerRuntimeConfigHandle>,
-    /// Runtime-config handles for TCP client interfaces, keyed by config name.
-    #[cfg(feature = "iface-tcp")]
-    pub(crate) tcp_client_runtime: HashMap<String, TcpClientRuntimeConfigHandle>,
-    /// Runtime-config state for TCP server discovery metadata, keyed by config name.
-    #[cfg(feature = "iface-tcp")]
-    pub(crate) tcp_server_discovery_runtime: HashMap<String, TcpServerDiscoveryRuntimeHandle>,
-    /// Runtime-config handles for UDP interfaces, keyed by config name.
-    #[cfg(feature = "iface-udp")]
-    pub(crate) udp_runtime: HashMap<String, UdpRuntimeConfigHandle>,
-    /// Runtime-config handles for Auto interfaces, keyed by config name.
-    #[cfg(feature = "iface-auto")]
-    pub(crate) auto_runtime: HashMap<String, AutoRuntimeConfigHandle>,
-    /// Runtime-config handles for I2P interfaces, keyed by config name.
-    #[cfg(feature = "iface-i2p")]
-    pub(crate) i2p_runtime: HashMap<String, I2pRuntimeConfigHandle>,
-    /// Runtime-config handles for Pipe interfaces, keyed by config name.
-    #[cfg(feature = "iface-pipe")]
-    pub(crate) pipe_runtime: HashMap<String, PipeRuntimeConfigHandle>,
-    /// Runtime-config handles for RNode interfaces, keyed by config name.
-    #[cfg(feature = "iface-rnode")]
-    pub(crate) rnode_runtime: HashMap<String, RNodeRuntimeConfigHandle>,
-    /// Startup/default interface metadata for generic cross-cutting runtime config.
-    pub(crate) interface_runtime_defaults:
-        HashMap<String, rns_core::transport::types::InterfaceInfo>,
-    /// Current IFAC runtime config for static interfaces that support IFAC mutation.
-    pub(crate) interface_ifac_runtime: HashMap<String, IfacRuntimeConfig>,
-    /// Startup/default IFAC runtime config for static interfaces.
-    pub(crate) interface_ifac_runtime_defaults: HashMap<String, IfacRuntimeConfig>,
     /// Storage for discovered interfaces.
     pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
     /// Required stamp value for accepting discovered interfaces.
@@ -588,8 +547,6 @@ pub struct Driver {
     pub(crate) announce_cache_cleanup_batch_size: usize,
     /// Runtime-configurable management announce interval.
     pub(crate) management_announce_interval_secs: f64,
-    /// Startup/default runtime-config values.
-    pub(crate) runtime_config_defaults: RuntimeConfigDefaults,
     /// Hook slots for the programmable hook system (one per HookPoint).
     #[cfg(feature = "hooks")]
     pub(crate) hook_slots: [HookSlot; HookPoint::COUNT],
