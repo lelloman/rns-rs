@@ -118,7 +118,11 @@ pub(crate) fn register_nomadnet_destination(
     config: &ServerConfig,
     identity: &Identity,
 ) -> Result<Destination> {
-    let destination = destination_for_identity(identity);
+    // Upstream's NomadNetworkNode reads `[pages] link_cost` and
+    // `stamp_value` as it starts, so an invalid one fails here.
+    let costs = config.pages_costs.clone().map_err(Error::msg)?;
+    let mut destination = destination_for_identity(identity);
+    costs.apply(node, &mut destination);
     let public_key = identity
         .get_public_key()
         .ok_or_else(|| Error::msg("repository identity has no public key"))?;

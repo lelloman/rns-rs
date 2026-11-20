@@ -50,6 +50,27 @@ Important config paths:
   `.allowed` files. In `client_config`, aliases name destination hashes used in
   `rns://<destination>/<repository>` URLs. Aliases are resolved locally before a
   request is sent; fork and mirror upstream metadata stores the canonical hash.
+- `link_cost` and `stamp_value` in `[rngit]` and in `[pages]`: the required
+  link establishment stamp cost and the announce stamp target value of the
+  repositories destination and of the Nomad Network node destination. Both
+  are quantised to 1/256 and clamped to 0-100 as upstream's
+  `RNS.Stamps.quantize_cost`, then the node clamps the link cost to
+  `LINK_COST_CAP` and the stamp value to at least its default destination
+  value. The link cost defaults to `18.0` for both destinations; a
+  `stamp_value` of 0 (or below) leaves the node's default target. A value
+  that is not a number, or is NaN or infinite, is a startup error, as
+  upstream: in `[rngit]` always, in `[pages]` when pages are served.
+
+  ```text
+  [rngit]
+    stamp_value = 27.5
+    link_cost = 18.5
+
+  [pages]
+    serve_nomadnet = yes
+    stamp_value = 25.0
+    link_cost = 18.0
+  ```
 - `node_name` and `[pages] serve_nomadnet`: optional Nomad Network page node
   with built-in Micron repository browser pages. Repository `README.md` files
   are rendered to Micron, and `README.mu` files are served as Micron content.

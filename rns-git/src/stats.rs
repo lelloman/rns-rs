@@ -687,6 +687,8 @@ mod tests {
             client_identity_path: root.join("client_identity"),
             node_name: "Anonymous Git Node".into(),
             announce_interval_secs: 300,
+            costs: Default::default(),
+            pages_costs: Ok(Default::default()),
             serve_nomadnet: false,
             templates_dir: root.join("templates"),
             unicode_icons: false,

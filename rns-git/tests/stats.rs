@@ -472,6 +472,8 @@ fn cfg(root: &Path) -> ServerConfig {
         client_identity_path: root.join("client_identity"),
         node_name: "Stats Test Node".into(),
         announce_interval_secs: 300,
+        costs: Default::default(),
+        pages_costs: Ok(Default::default()),
         serve_nomadnet: true,
         templates_dir: root.join("templates"),
         unicode_icons: false,
