@@ -9,7 +9,7 @@ impl Driver {
         new_writer: Option<Box<dyn crate::interface::Writer>>,
         info: Option<rns_core::transport::types::InterfaceInfo>,
     ) {
-        self.state_snapshot_schedule.mark_dirty();
+        self.housekeeping.state_snapshot_schedule.mark_dirty();
         let wants_tunnel;
         let mut came_up = false;
         let mut replay_shared_announces = false;
@@ -164,7 +164,7 @@ impl Driver {
         writer: Box<dyn crate::interface::Writer>,
         mut registration: crate::event::DynamicInterfaceRegistration,
     ) {
-        self.state_snapshot_schedule.mark_dirty();
+        self.housekeeping.state_snapshot_schedule.mark_dirty();
         let parent_id = registration.parent_id;
         if self.retired_interface_parents.contains(&parent_id) {
             return;
@@ -269,7 +269,7 @@ impl Driver {
     }
 
     pub(crate) fn handle_interface_down_event(&mut self, id: InterfaceId) {
-        self.state_snapshot_schedule.mark_dirty();
+        self.housekeeping.state_snapshot_schedule.mark_dirty();
         let lost_direct = self.holepunch_manager.direct_interface_down(id);
         self.event_tx.remove_interface(id);
         if let Some(entry) = self.interfaces.get(&id) {

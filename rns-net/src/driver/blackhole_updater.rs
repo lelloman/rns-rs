@@ -43,19 +43,19 @@ pub(crate) struct BlackholeUpdater {
 }
 
 impl Driver {
-    /// Start fetching blackhole lists from `self.blackhole_sources`
+    /// Start fetching blackhole lists from `self.blackhole.sources`
     /// (`Transport.enable_blackhole_updater`). `interval` is the seconds
     /// between fetches from one source, or `None` for an hour.
     pub(crate) fn enable_blackhole_updater(&mut self, interval: Option<f64>) {
-        if self.blackhole_updater.is_some() || self.blackhole_sources.is_empty() {
+        if self.blackhole.updater.is_some() || self.blackhole.sources.is_empty() {
             return;
         }
         let requester = self.engine.identity_hash().copied().unwrap_or([0u8; 16]);
         self.wants_destination_type(BLACKHOLE_DESTINATION_TYPE, &requester);
-        let count = self.blackhole_sources.len();
+        let count = self.blackhole.sources.len();
         let s = if count == 1 { "" } else { "s" };
         log::debug!("Starting blackhole updater with {count} source{s}");
-        self.blackhole_updater = Some(BlackholeUpdater {
+        self.blackhole.updater = Some(BlackholeUpdater {
             interval: interval.unwrap_or(DEFAULT_UPDATE_INTERVAL),
             started_at: time::now(),
             last_job: None,
@@ -68,7 +68,7 @@ impl Driver {
     /// Run the updater's check when it is due.
     pub(crate) fn tick_blackhole_updater(&mut self, now: f64) {
         self.collect_blackhole_update_links();
-        let Some(updater) = self.blackhole_updater.as_mut() else {
+        let Some(updater) = self.blackhole.updater.as_mut() else {
             return;
         };
         if now < updater.started_at + INITIAL_WAIT
@@ -81,7 +81,8 @@ impl Driver {
         updater.last_job = Some(now);
         let interval = updater.interval;
         let due: Vec<[u8; 16]> = self
-            .blackhole_sources
+            .blackhole
+            .sources
             .iter()
             .copied()
             .filter(|source| {
@@ -114,7 +115,7 @@ impl Driver {
         let (_, sig_pub) = rns_crypto::identity::split_key(&announced.public_key);
         let (link_tx, link_rx) = mpsc::channel();
         self.handle_create_link(dest_hash, sig_pub, link_tx);
-        if let Some(updater) = self.blackhole_updater.as_mut() {
+        if let Some(updater) = self.blackhole.updater.as_mut() {
             updater.creating.push((source, link_rx));
             updater.last_updates.insert(source, now);
         }
@@ -123,7 +124,7 @@ impl Driver {
 
     /// Record the ids of the updater's links once they are created.
     fn collect_blackhole_update_links(&mut self) {
-        let Some(updater) = self.blackhole_updater.as_mut() else {
+        let Some(updater) = self.blackhole.updater.as_mut() else {
             return;
         };
         let mut links = Vec::new();
@@ -146,7 +147,8 @@ impl Driver {
     /// The source an updater link is to, or `None` for any other link.
     pub(crate) fn blackhole_update_source(&mut self, link_id: &[u8; 16]) -> Option<[u8; 16]> {
         self.collect_blackhole_update_links();
-        self.blackhole_updater
+        self.blackhole
+            .updater
             .as_ref()
             .and_then(|updater| updater.links.get(link_id).copied())
     }
@@ -175,7 +177,7 @@ impl Driver {
 
     /// An updater link was closed.
     pub(crate) fn blackhole_update_link_closed(&mut self, link_id: &[u8; 16]) {
-        if let Some(updater) = self.blackhole_updater.as_mut() {
+        if let Some(updater) = self.blackhole.updater.as_mut() {
             updater.links.remove(link_id);
         }
     }
@@ -210,7 +212,7 @@ impl Driver {
         if added > 0 {
             let spec = if added == 1 { "identity" } else { "identities" };
             log::debug!("Added {added} blackholed {spec} from {}", hex(&source));
-            if let Some(dir) = self.blackhole_dir.as_ref() {
+            if let Some(dir) = self.blackhole.dir.as_ref() {
                 if let Err(error) = crate::blackhole_store::save_source(dir, &source, list) {
                     log::error!(
                         "Error while persisting blackhole list from {}: {error}",

@@ -3,6 +3,28 @@
 //! `reload_blackhole` and `remove_blackholed_paths` do them.
 
 use super::*;
+
+/// Where the blackhole lists persist and the remote lists this node
+/// subscribes to.
+pub(crate) struct BlackholeState {
+    /// `storage/blackhole`, where the blackhole lists persist; `None` keeps
+    /// them in memory only.
+    pub(crate) dir: Option<std::path::PathBuf>,
+    /// Identity hashes of the remote blackhole lists this node subscribes to.
+    pub(crate) sources: Vec<[u8; 16]>,
+    /// Fetches the lists of `sources`, when enabled.
+    pub(crate) updater: Option<blackhole_updater::BlackholeUpdater>,
+}
+
+impl BlackholeState {
+    pub(crate) fn new() -> Self {
+        Self {
+            dir: None,
+            sources: Vec::new(),
+            updater: None,
+        }
+    }
+}
 use rns_core::encoding::hex;
 
 impl Driver {
@@ -39,7 +61,7 @@ impl Driver {
 
     /// Write this node's own entries to `storage/blackhole/local`.
     pub(crate) fn persist_blackhole(&self) {
-        let Some(dir) = self.blackhole_dir.as_ref() else {
+        let Some(dir) = self.blackhole.dir.as_ref() else {
             return;
         };
         if let Err(error) = crate::blackhole_store::save_local(
@@ -54,7 +76,7 @@ impl Driver {
     /// Load the persisted blackhole lists from `dir` and use it from now on.
     pub(crate) fn load_blackhole(&mut self, dir: std::path::PathBuf) {
         let now = time::now();
-        let sources = self.blackhole_sources.clone();
+        let sources = self.blackhole.sources.clone();
         let mut loaded = 0usize;
         for (identity_hash, entry) in crate::blackhole_store::load(&dir, &sources, now) {
             if self.engine.insert_blackhole_entry(identity_hash, entry) {
@@ -64,7 +86,7 @@ impl Driver {
         if loaded > 0 {
             log::info!("Loaded {loaded} blackholed identities");
         }
-        self.blackhole_dir = Some(dir);
+        self.blackhole.dir = Some(dir);
         self.remove_blackholed_paths();
     }
 

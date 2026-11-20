@@ -52,18 +52,19 @@ impl Driver {
 
     pub(super) fn finish_ratchet_cleanup_if_ready(&mut self) {
         let finished = self
+            .housekeeping
             .ratchet_cleanup_handle
             .as_ref()
             .is_some_and(std::thread::JoinHandle::is_finished);
         if finished {
-            if let Some(handle) = self.ratchet_cleanup_handle.take() {
+            if let Some(handle) = self.housekeeping.ratchet_cleanup_handle.take() {
                 let _ = handle.join();
             }
         }
     }
 
     pub(super) fn start_ratchet_cleanup(&mut self, now: f64) {
-        if self.ratchet_cleanup_handle.is_some() {
+        if self.housekeeping.ratchet_cleanup_handle.is_some() {
             return;
         }
         let Some(store) = self.ratchet_store.clone() else {
@@ -102,7 +103,7 @@ impl Driver {
                     Err(err) => log::warn!("failed to clean ratchets: {}", err),
                 }
             }) {
-            Ok(handle) => self.ratchet_cleanup_handle = Some(handle),
+            Ok(handle) => self.housekeeping.ratchet_cleanup_handle = Some(handle),
             Err(err) => log::warn!("failed to start ratchet cleanup worker: {}", err),
         }
     }

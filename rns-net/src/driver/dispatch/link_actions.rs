@@ -15,7 +15,7 @@ impl Driver {
                     | LinkManagerAction::LinkClosed { .. }
                     | LinkManagerAction::RemoteIdentified { .. }
             ) {
-                self.state_snapshot_schedule.mark_dirty();
+                self.housekeeping.state_snapshot_schedule.mark_dirty();
             }
             match action {
                 LinkManagerAction::SendPacket {

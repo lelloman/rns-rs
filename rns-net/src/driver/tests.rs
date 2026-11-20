@@ -2977,7 +2977,7 @@ fn graceful_shutdown_voids_async_announce_and_receipt_state() {
 
     driver.graceful_shutdown();
 
-    assert_eq!(driver.lifecycle_state, LifecycleState::Stopped);
+    assert_eq!(driver.lifecycle.state, LifecycleState::Stopped);
     {
         let queue = driver.announce_verify_queue.lock().unwrap();
         assert!(queue.is_empty());
@@ -3214,7 +3214,7 @@ fn enforce_drain_deadline_tears_down_remaining_links() {
 
     driver.enforce_drain_deadline();
 
-    assert_eq!(driver.lifecycle_state, LifecycleState::Stopping);
+    assert_eq!(driver.lifecycle.state, LifecycleState::Stopping);
     assert_eq!(driver.link_manager.link_count(), 0);
     let QueryResponse::DrainStatus(status) = driver.handle_query(QueryRequest::DrainStatus) else {
         panic!("expected drain status response");
@@ -9614,7 +9614,7 @@ fn known_destinations_cleanup_respects_ttl() {
     );
 
     driver.known.ttl = 10.0;
-    driver.cache_cleanup_counter = 3599;
+    driver.housekeeping.cache_cleanup_counter = 3599;
 
     let stale_dest = [0x11; 16];
     let fresh_dest = [0x22; 16];
@@ -9784,7 +9784,7 @@ fn known_destinations_cleanup_prunes_ratchets_to_surviving_destinations() {
     let store = Arc::new(TestRatchetStore::default());
     driver.ratchet_store = Some(store.clone());
     driver.known.ttl = 10.0;
-    driver.cache_cleanup_counter = 3599;
+    driver.housekeeping.cache_cleanup_counter = 3599;
 
     let stale_dest = [0x31; 16];
     let fresh_dest = [0x32; 16];
@@ -9934,7 +9934,7 @@ fn known_destinations_cleanup_enforces_cap() {
 
     driver.known.ttl = 1000.0;
     driver.known.max_entries = 2;
-    driver.cache_cleanup_counter = 3599;
+    driver.housekeeping.cache_cleanup_counter = 3599;
     let now = time::now();
     driver.known.entries.insert(
         [0x71; 16],
@@ -10002,7 +10002,7 @@ fn retained_known_destination_survives_cleanup() {
         Box::new(cbs),
     );
     driver.known.ttl = 10.0;
-    driver.cache_cleanup_counter = 3599;
+    driver.housekeeping.cache_cleanup_counter = 3599;
 
     let dest = [0x82; 16];
     driver.upsert_known_destination(
@@ -10085,7 +10085,7 @@ fn used_known_destination_cleanup_uses_last_used_time() {
         Box::new(cbs),
     );
     driver.known.ttl = 10.0;
-    driver.cache_cleanup_counter = 3599;
+    driver.housekeeping.cache_cleanup_counter = 3599;
 
     let dest = [0x83; 16];
     driver.known.entries.insert(
@@ -15208,9 +15208,9 @@ fn folded_timers_tick_without_a_timer_thread() {
     let driver = handle.join().unwrap();
     // About twenty ticks; a loaded test host may manage fewer.
     assert!(
-        driver.cache_cleanup_counter >= 3,
+        driver.housekeeping.cache_cleanup_counter >= 3,
         "ticks counted: {}",
-        driver.cache_cleanup_counter
+        driver.housekeeping.cache_cleanup_counter
     );
 }
 

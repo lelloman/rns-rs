@@ -138,6 +138,7 @@ pub(crate) use announce_check::{check_pending_announce, AnnounceCheck};
 mod dispatch;
 mod events;
 mod hook_events;
+mod housekeeping;
 mod interface_discovery;
 mod interface_management;
 mod known_destinations;
@@ -305,16 +306,12 @@ pub struct Driver {
     pub(crate) rx: EventReceiver,
     pub(crate) callbacks: Box<dyn Callbacks>,
     pub(crate) started: f64,
-    pub(crate) lifecycle_state: LifecycleState,
-    /// Whether `lifecycle_state` is still `Active`, shared with the node
-    /// handle so that each API call can check it without a driver query.
-    pub(crate) accepting_work: Arc<AtomicBool>,
+    /// Where the node is in its lifecycle, and its drain progress.
+    pub(crate) lifecycle: lifecycle::Lifecycle,
     /// This node is a client of a shared instance, which sends the path
     /// requests that rediscover paths for it
     /// (`Transport.owner.is_connected_to_shared_instance`).
     pub(crate) connected_to_shared_instance: bool,
-    pub(crate) drain_started_at: Option<Instant>,
-    pub(crate) drain_deadline: Option<Instant>,
     pub(crate) listener_controls: Vec<crate::interface::ListenerControl>,
     pub(crate) interface_management: Option<crate::node::InterfaceManagementConfig>,
     pub(crate) managed_interfaces: HashMap<String, ManagedInterface>,
@@ -347,13 +344,8 @@ pub struct Driver {
     /// interfaces that report them (`Transport.local_client_rssi_cache` and
     /// its SNR and Q siblings), oldest first.
     pub(crate) packet_signals: std::collections::VecDeque<([u8; 32], crate::event::PacketSignal)>,
-    /// `storage/blackhole`, where the blackhole lists persist; `None` keeps
-    /// them in memory only.
-    pub(crate) blackhole_dir: Option<std::path::PathBuf>,
-    /// Identity hashes of the remote blackhole lists this node subscribes to.
-    pub(crate) blackhole_sources: Vec<[u8; 16]>,
-    /// Fetches the lists of `blackhole_sources`, when enabled.
-    pub(crate) blackhole_updater: Option<blackhole_updater::BlackholeUpdater>,
+    /// The blackhole lists' storage and remote sources.
+    pub(crate) blackhole: blackhole::BlackholeState,
     /// Interface discovery: received discovered interfaces, this node's
     /// discovery announces and auto-connecting.
     pub(crate) discovery: interface_discovery::InterfaceDiscovery,
@@ -482,16 +474,8 @@ pub struct Driver {
     pub(crate) announce_verify_signal: Arc<WorkSignal>,
     /// Whether inbound announces should be verified off the driver thread.
     pub(crate) async_announce_verification: bool,
-    /// Tick counter for periodic MEMSTATS logging (every 300 ticks = ~5 min).
-    pub(crate) memory_stats_counter: u32,
-    /// When to republish the link/interface statistics snapshot.
-    pub(crate) state_snapshot_schedule: crate::state_snapshot::PublishSchedule,
-    /// Tick counter for periodic memory/cache cleanup (every ~3600 ticks = ~1 hour).
-    pub(crate) cache_cleanup_counter: u32,
-    /// Tick counter for incremental announce-cache cleanup scheduling.
-    pub(crate) announce_cache_cleanup_counter: u32,
-    /// Low-priority ratchet filesystem cleanup associated with the last pass.
-    ratchet_cleanup_handle: Option<std::thread::JoinHandle<()>>,
+    /// Schedules and progress of the periodic housekeeping jobs.
+    pub(crate) housekeeping: housekeeping::Housekeeping,
     /// Timers and housekeeping the driver runs itself when they are folded
     /// (see [`crate::engine::FOLD_TIMERS`]).
     pub(crate) folded: FoldedTimers,
@@ -501,13 +485,6 @@ pub struct Driver {
     /// The probe server, when it runs on the driver loop (with services
     /// folded); otherwise the node runs it on a thread of its own.
     pub(crate) probe_server: Option<crate::holepunch::probe::FoldedProbeServer>,
-    /// Runtime-configurable interval for starting announce cache cleanup.
-    pub(crate) announce_cache_cleanup_interval_ticks: u32,
-    /// When set, announce cache cleanup is in progress (contains active packet hashes).
-    /// Directory iterator for incremental announce cache cleanup.
-    /// Running total of files removed during current cache cleanup cycle.
-    /// Runtime-configurable announce cache cleanup batch size.
-    pub(crate) announce_cache_cleanup_batch_size: usize,
     /// Runtime-configurable management announce interval.
     pub(crate) management_announce_interval_secs: f64,
     /// Hook slots for the programmable hook system (one per HookPoint).

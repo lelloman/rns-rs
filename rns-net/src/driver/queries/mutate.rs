@@ -581,7 +581,7 @@ impl Driver {
             }
             "global.announce_cache_cleanup_interval_ticks" => match Self::expect_u64(value, key) {
                 Ok(value) if value > 0 => {
-                    self.announce_cache_cleanup_interval_ticks = value as u32;
+                    self.housekeeping.announce_cache_cleanup_interval_ticks = value as u32;
                     Ok(())
                 }
                 Ok(_) => Err(RuntimeConfigError {
@@ -592,7 +592,7 @@ impl Driver {
             },
             "global.announce_cache_cleanup_batch_size" => match Self::expect_u64(value, key) {
                 Ok(value) if value > 0 => {
-                    self.announce_cache_cleanup_batch_size = value as usize;
+                    self.housekeeping.announce_cache_cleanup_batch_size = value as usize;
                     Ok(())
                 }
                 Ok(_) => Err(RuntimeConfigError {
@@ -746,11 +746,12 @@ impl Driver {
                     defaults.known_destinations_cleanup_interval_ticks;
             }
             "global.announce_cache_cleanup_interval_ticks" => {
-                self.announce_cache_cleanup_interval_ticks =
+                self.housekeeping.announce_cache_cleanup_interval_ticks =
                     defaults.announce_cache_cleanup_interval_ticks;
             }
             "global.announce_cache_cleanup_batch_size" => {
-                self.announce_cache_cleanup_batch_size = defaults.announce_cache_cleanup_batch_size;
+                self.housekeeping.announce_cache_cleanup_batch_size =
+                    defaults.announce_cache_cleanup_batch_size;
             }
             "global.discovery_cleanup_interval_ticks" => {
                 self.discovery.cleanup_interval_ticks = defaults.discovery_cleanup_interval_ticks;

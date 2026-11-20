@@ -112,7 +112,10 @@ impl Driver {
     pub(crate) fn publish_state_snapshot(&mut self) {
         let links = self.link_info_entries();
         let interfaces = self.interface_stats();
-        let sequence = self.state_snapshot_schedule.published(links.len());
+        let sequence = self
+            .housekeeping
+            .state_snapshot_schedule
+            .published(links.len());
         self.event_tx
             .state_snapshot()
             .store(crate::state_snapshot::StateSnapshot {

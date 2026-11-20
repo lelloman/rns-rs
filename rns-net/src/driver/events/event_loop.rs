@@ -36,6 +36,7 @@ impl Driver {
             }
             self.flush_pending_link_frames();
             if self
+                .housekeeping
                 .state_snapshot_schedule
                 .needs_publish(self.link_manager.link_count())
             {
@@ -103,7 +104,11 @@ impl Driver {
             // stale for as long as the backlog takes to drain.
             let tick_interval =
                 Duration::from_millis(self.tick_interval_ms.load(Ordering::Relaxed));
-            if self.state_snapshot_schedule.event_handled(tick_interval) {
+            if self
+                .housekeeping
+                .state_snapshot_schedule
+                .event_handled(tick_interval)
+            {
                 self.publish_state_snapshot();
             }
             if unflushed >= WRITER_FLUSH_EVENTS {

@@ -403,7 +403,7 @@ pub(super) fn open_discovery_storage(driver: &mut Driver, config: &NodeConfig) {
             .unwrap_or(std::path::Path::new("."))
             .join("storage")
             .join("blackhole");
-        driver.blackhole_sources = config.management.blackhole_sources.clone();
+        driver.blackhole.sources = config.management.blackhole_sources.clone();
         driver.load_blackhole(blackhole_path);
         driver.enable_blackhole_updater(config.management.blackhole_update_interval);
     }
