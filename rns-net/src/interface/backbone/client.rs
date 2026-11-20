@@ -374,8 +374,8 @@ pub(super) struct ClientSource {
 }
 
 impl LoopSource for ClientSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.stream.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.stream.as_fd()
     }
 
     fn stopped(&self) -> bool {

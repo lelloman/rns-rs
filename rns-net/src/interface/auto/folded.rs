@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::io;
 use std::net::{SocketAddrV6, UdpSocket};
 use std::os::fd::AsFd;
-use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixDatagram;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -215,8 +214,8 @@ impl Controller {
 }
 
 impl LoopSource for Controller {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.anchor.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.anchor.as_fd()
     }
 
     fn on_ready(&mut self, _cx: &mut LoopContext<'_>) -> SourceStatus {
@@ -365,8 +364,8 @@ struct AutoSocket {
 }
 
 impl LoopSource for AutoSocket {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.socket.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.socket.as_fd()
     }
 
     fn stopped(&self) -> bool {

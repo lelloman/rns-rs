@@ -6,7 +6,6 @@
 use std::io::{self};
 use std::net::{SocketAddr, UdpSocket};
 use std::os::fd::AsFd;
-use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -290,8 +289,8 @@ struct UdpSource {
 }
 
 impl LoopSource for UdpSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.socket.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.socket.as_fd()
     }
 
     fn stopped(&self) -> bool {

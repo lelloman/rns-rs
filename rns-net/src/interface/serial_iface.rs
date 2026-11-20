@@ -4,7 +4,7 @@
 //! reads with HDLC framing, reconnects on failure.
 
 use std::io::{self, Read, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -322,8 +322,8 @@ struct SerialSource {
 }
 
 impl LoopSource for SerialSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.reader.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.reader.as_fd()
     }
 
     fn stopped(&self) -> bool {

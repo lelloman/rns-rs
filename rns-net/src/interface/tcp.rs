@@ -4,7 +4,7 @@
 
 use std::io::{self, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::os::unix::io::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -339,8 +339,8 @@ struct ReaderSource {
 }
 
 impl LoopSource for ReaderSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.stream.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.stream.as_fd()
     }
 
     fn stopped(&self) -> bool {

@@ -3,7 +3,7 @@
 use rns_core::encoding::hex;
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -983,8 +983,8 @@ impl WeaveSource {
 }
 
 impl LoopSource for WeaveSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.reader.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.reader.as_fd()
     }
 
     fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {

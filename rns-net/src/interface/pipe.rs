@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -335,8 +335,8 @@ struct PipeSource {
 }
 
 impl LoopSource for PipeSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.stdout.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.stdout.as_fd()
     }
 
     fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {

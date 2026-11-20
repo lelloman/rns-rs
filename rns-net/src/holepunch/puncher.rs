@@ -285,7 +285,7 @@ fn start_udp_punch_on_loop_with_limits(
     tx: &crate::event::EventSender,
     limits: PunchLimits,
 ) -> io::Result<PunchHandle> {
-    use std::os::fd::AsRawFd;
+    use std::os::fd::AsFd;
     let endpoints = punch_candidates(peer_endpoints, host_endpoints)?;
     socket.set_nonblocking(true)?;
     let status = Arc::new(AtomicU8::new(STATUS_RUNNING));
@@ -295,7 +295,7 @@ fn start_udp_punch_on_loop_with_limits(
     tx.register_source(
         super::next_loop_key(),
         Box::new(PunchSource {
-            fd: socket.as_raw_fd(),
+            registration: socket.as_fd().try_clone_to_owned()?,
             socket: Some(socket),
             punch: PunchState::new(endpoints, session_id, punch_token, limits),
             next_send: now,
@@ -547,9 +547,10 @@ impl PunchState {
 /// A punch on the driver loop: the socket is read when readable, and a
 /// timer sends each round and ends the punch.
 struct PunchSource {
-    /// The socket's descriptor, kept for deregistering after the socket
-    /// was handed over with the result.
-    fd: std::os::fd::RawFd,
+    /// A duplicate of the socket's descriptor, watched in its place: the
+    /// socket is handed over with the result before the source is
+    /// deregistered, and its new owner may close it first.
+    registration: std::os::fd::OwnedFd,
     socket: Option<UdpSocket>,
     punch: PunchState,
     next_send: Instant,
@@ -582,8 +583,8 @@ impl PunchSource {
 }
 
 impl crate::event::LoopSource for PunchSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.fd
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        std::os::fd::AsFd::as_fd(&self.registration)
     }
 
     fn stopped(&self) -> bool {

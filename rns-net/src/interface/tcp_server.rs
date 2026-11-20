@@ -7,7 +7,7 @@
 use std::io::{self, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::fd::AsFd;
-use std::os::unix::io::AsRawFd;
+use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -240,8 +240,8 @@ struct ListenerSource {
 }
 
 impl LoopSource for ListenerSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.listener.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.listener.as_fd()
     }
 
     fn stopped(&self) -> bool {
@@ -445,8 +445,8 @@ struct ClientSource {
 }
 
 impl LoopSource for ClientSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.stream.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.stream.as_fd()
     }
 
     fn stopped(&self) -> bool {
@@ -1049,7 +1049,7 @@ mod tests {
     }
 
     impl LoopSource for PauseOnce {
-        fn fd(&self) -> std::os::fd::RawFd {
+        fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
             self.inner.fd()
         }
         fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {

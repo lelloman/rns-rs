@@ -514,8 +514,8 @@ impl KissSource {
 }
 
 impl LoopSource for KissSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.reader.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.reader.as_fd()
     }
 
     fn stopped(&self) -> bool {

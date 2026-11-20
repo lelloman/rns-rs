@@ -14,7 +14,7 @@
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -307,8 +307,8 @@ struct ControlSource {
 }
 
 impl LoopSource for ControlSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.stream.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.stream.as_fd()
     }
 
     fn on_ready(&mut self, _cx: &mut LoopContext<'_>) -> SourceStatus {
@@ -515,8 +515,8 @@ impl StreamSource {
 }
 
 impl LoopSource for StreamSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.stream.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.stream.as_fd()
     }
 
     fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
