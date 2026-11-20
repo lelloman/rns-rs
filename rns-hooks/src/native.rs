@@ -18,6 +18,10 @@ use crate::result::{ExecuteResult, HookResult, Verdict};
 use crate::runtime::RawProviderEvent;
 use crate::wire::ActionWire;
 
+/// A loaded native hook library.
+///
+/// Native hooks run in the host process without any sandbox: load only
+/// trusted libraries.
 pub struct NativeProgram {
     _library: Library,
     on_call: NativeHookOnCallFn,
@@ -41,6 +45,13 @@ fn loader_path(path: &Path) -> PathBuf {
 }
 
 impl NativeProgram {
+    /// Loads the library at `path` and checks its ABI version.
+    ///
+    /// A bare file name is resolved against the current directory, never the
+    /// dynamic loader's search path. Loading runs the library's
+    /// initializers. Fails with [`HookError::CompileError`] if the library
+    /// cannot be loaded or lacks an entry point, and with
+    /// [`HookError::AbiVersionMismatch`] for a different ABI version.
     pub fn load(path: &Path) -> Result<Self, HookError> {
         let path = loader_path(path);
         let path = path.as_path();
@@ -93,6 +104,10 @@ impl NativeProgram {
         })
     }
 
+    /// Runs the hook once on an encoded context, synchronously.
+    ///
+    /// Fails with [`HookError::Trap`] if the hook returns a non-zero code and
+    /// with [`HookError::InvalidResult`] for an invalid verdict.
     pub fn execute(
         &self,
         ctx_bytes: &[u8],

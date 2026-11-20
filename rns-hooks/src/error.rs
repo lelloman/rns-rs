@@ -3,29 +3,39 @@ use std::fmt;
 /// Errors that can occur in the hook system.
 #[derive(Debug)]
 pub enum HookError {
-    /// WASM module failed to compile.
+    /// The program could not be loaded: a WASM module that does not compile,
+    /// a native library that fails to load or lacks an entry point, an
+    /// unregistered built-in id, or a backend this build does not include.
     CompileError(String),
     /// WASM module failed to instantiate.
     InstantiationError(String),
     /// WASM execution ran out of fuel.
     FuelExhausted,
-    /// WASM execution trapped (panic, out-of-bounds, etc.).
+    /// Execution failed: a WASM trap (panic, out-of-bounds access, ...), a
+    /// native hook's non-zero return code, or a built-in hook's error.
     Trap(String),
     /// Hook returned invalid result data.
     InvalidResult(String),
     /// Hook was auto-disabled after too many consecutive failures.
     AutoDisabled {
+        /// Name of the program.
         name: String,
+        /// Failures in a row that disabled it.
         consecutive_traps: u32,
     },
     /// Hook point not found or invalid.
     InvalidHookPoint(String),
     /// I/O error loading a WASM module.
     IoError(std::io::Error),
-    /// WASM module was compiled against an incompatible ABI version.
+    /// A WASM module or native library was built against an incompatible
+    /// ABI version.
     AbiVersionMismatch {
+        /// Name of the program, or the library path for a native hook.
         hook_name: String,
+        /// The host's ABI version.
         expected: i32,
+        /// The version the hook reported; `None` if it exports no version
+        /// function.
         found: Option<i32>,
     },
 }

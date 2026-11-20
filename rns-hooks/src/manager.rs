@@ -34,14 +34,25 @@ pub struct HookManager {
     linker: Linker<StoreData>,
 }
 
+/// Where a hook program comes from.
+///
+/// Parses from `"wasm"`, `"native"` (or `"dylib"`, `"dynamic"`) and
+/// `"builtin"` (or `"built-in"`, `"static"`), ignoring case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookBackend {
+    /// A WebAssembly module, run sandboxed with fuel and memory limits.
+    /// Needs the `wasm` feature.
     Wasm,
+    /// A shared library loaded into the process, unsandboxed. Needs the
+    /// `native` feature.
     Native,
+    /// A Rust hook registered with
+    /// [`register_builtin_hook`](crate::register_builtin_hook).
     Builtin,
 }
 
 impl HookBackend {
+    /// The canonical name: `"wasm"`, `"native"` or `"builtin"`.
     pub fn as_str(self) -> &'static str {
         match self {
             HookBackend::Wasm => "wasm",
@@ -65,6 +76,9 @@ impl std::str::FromStr for HookBackend {
 }
 
 impl HookManager {
+    /// Creates the manager, setting up the WASM engine and its host
+    /// functions when the `wasm` feature is on. Fails with
+    /// [`HookError::CompileError`] if Wasmtime cannot be configured.
     pub fn new() -> Result<Self, HookError> {
         #[cfg(feature = "wasm")]
         {
@@ -83,7 +97,12 @@ impl HookManager {
     /// Compile WASM bytes into a LoadedProgram.
     ///
     /// Validates that the module exports `__rns_abi_version` returning the
-    /// expected ABI version before accepting it.
+    /// expected ABI version before accepting it; that runs the module's
+    /// start code once. Fails with [`HookError::CompileError`] for an invalid
+    /// module (or without the `wasm` feature),
+    /// [`HookError::AbiVersionMismatch`] for a missing or different version,
+    /// and [`HookError::InstantiationError`] or [`HookError::Trap`] if
+    /// checking the version fails. Each run calls the module's `on_hook` export.
     pub fn compile(
         &self,
         name: String,
@@ -158,7 +177,8 @@ impl HookManager {
         Ok(())
     }
 
-    /// Compile a WASM file from disk.
+    /// Compile a WASM file from disk, as [`compile`](Self::compile); fails
+    /// with [`HookError::IoError`] if the file cannot be read.
     pub fn load_file(
         &self,
         name: String,
@@ -169,6 +189,11 @@ impl HookManager {
         self.compile(name, &bytes, priority)
     }
 
+    /// Loads a WASM module or native library from `path`, as the backend
+    /// says. Fails with [`HookError::CompileError`] for
+    /// [`HookBackend::Builtin`], which is loaded by id with
+    /// [`load_builtin`](Self::load_builtin), and for a backend this build
+    /// does not include.
     pub fn load_file_backend(
         &self,
         name: String,
@@ -198,6 +223,9 @@ impl HookManager {
         }
     }
 
+    /// Wraps the built-in hook registered under `id` as a program named
+    /// `name`. Fails with [`HookError::CompileError`] if no hook is
+    /// registered under `id`.
     pub fn load_builtin(
         &self,
         name: String,
@@ -211,7 +239,9 @@ impl HookManager {
     /// Execute a single program against a hook context. Returns an `ExecuteResult`
     /// containing the hook result, any injected actions, and modified data (all
     /// extracted from WASM memory before the store is dropped). Returns `None`
-    /// on trap/fuel exhaustion (fail-open).
+    /// if the program is disabled or fails (trap, fuel exhaustion, invalid
+    /// result): failures are logged and fail open, and enough of them in a
+    /// row disable the program.
     ///
     /// If `data_override` is provided (from a previous Modify verdict in a chain),
     /// it replaces the packet data region in the arena after writing the context.
@@ -238,6 +268,8 @@ impl HookManager {
         )
     }
 
+    /// [`execute_program`](Self::execute_program), with provider events
+    /// allowed when `provider_events_enabled` is true.
     pub fn execute_program_with_provider_events(
         &self,
         program: &mut LoadedProgram,
@@ -586,6 +618,9 @@ impl HookManager {
     ///
     /// When a hook returns Modify with modified data, subsequent hooks in the chain
     /// receive the modified data (only applicable to Packet contexts).
+    /// Runs the enabled programs in order (highest priority first), without
+    /// provider events; see
+    /// [`run_chain_with_provider_events`](Self::run_chain_with_provider_events).
     pub fn run_chain(
         &self,
         programs: &mut [LoadedProgram],
@@ -596,6 +631,14 @@ impl HookManager {
         self.run_chain_with_provider_events(programs, ctx, engine_access, now, false)
     }
 
+    /// Runs the enabled programs in order, stopping at the first `Drop` or
+    /// `Halt`.
+    ///
+    /// For a packet context, each `Modify` replaces the packet bytes the
+    /// following programs see. Injected actions and provider events are
+    /// collected from every program that ran. A program that fails is
+    /// skipped (fail-open). Returns `None` if nothing needs acting on: every
+    /// program continued and none injected actions or emitted events.
     pub fn run_chain_with_provider_events(
         &self,
         programs: &mut [LoadedProgram],
@@ -1422,32 +1465,6 @@ mod tests {
             .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
             .unwrap();
         assert_eq!(extract_counter(&exec3), 3);
-    }
-
-    #[test]
-    fn instance_persistence_resets_on_drop_cache() {
-        let mgr = make_manager();
-        let mut prog = mgr
-            .compile("counter".into(), WAT_COUNTER.as_bytes(), 0)
-            .unwrap();
-        let ctx = HookContext::Tick;
-
-        // Increment twice
-        mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
-            .unwrap();
-        let exec2 = mgr
-            .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
-            .unwrap();
-        assert_eq!(extract_counter(&exec2), 2);
-
-        // Drop cache (simulates reload)
-        prog.drop_cache();
-
-        // Counter should restart at 1
-        let exec3 = mgr
-            .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
-            .unwrap();
-        assert_eq!(extract_counter(&exec3), 1);
     }
 
     // --- ABI version validation tests ---

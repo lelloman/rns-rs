@@ -2,42 +2,80 @@ use crate::program::LoadedProgram;
 use crate::result::HookResult;
 
 /// All hook points in the transport pipeline.
+///
+/// The discriminant is the index of the point's [`HookSlot`]. Each point
+/// says which [`HookContext`] it passes and which verdicts take effect there;
+/// at the other points only injected actions and provider events do.
 #[repr(usize)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookPoint {
     // Packet lifecycle
+    /// An inbound packet, after admission checks and before the transport
+    /// engine sees it. Packet context; `Drop` discards the packet and
+    /// `Modify` replaces it.
     PreIngress = 0,
+    /// An inbound packet, after the transport engine handled it and before
+    /// the resulting actions are dispatched. Packet context; observation
+    /// only, as the engine has already acted on the packet.
     PreDispatch = 1,
 
     // Announce processing
+    /// A validated announce. Announce context; `Drop` makes the node
+    /// ignore the announce.
     AnnounceReceived = 2,
+    /// A path table entry was added or changed. Announce context with the
+    /// new path's hop count and interface.
     PathUpdated = 3,
+    /// An announce is being retransmitted. Announce context.
     AnnounceRetransmit = 4,
 
     // Link lifecycle
+    /// A link request arrived for a local destination. Link context.
     LinkRequestReceived = 5,
+    /// A link became active. Link context.
     LinkEstablished = 6,
+    /// A link closed. Link context, without an interface.
     LinkClosed = 7,
 
     // Interface lifecycle
+    /// An interface came up. Interface context.
     InterfaceUp = 8,
+    /// An interface went down. Interface context.
     InterfaceDown = 9,
+    /// An interface's settings were changed at runtime. Interface context.
     InterfaceConfigChanged = 10,
 
     // Backbone peer lifecycle
+    /// A peer connected to a backbone server interface. Backbone peer
+    /// context.
     BackbonePeerConnected = 11,
+    /// A backbone peer disconnected. Backbone peer context.
     BackbonePeerDisconnected = 12,
+    /// A backbone peer was dropped for being idle. Backbone peer context.
     BackbonePeerIdleTimeout = 13,
+    /// A backbone peer was dropped because writes to it stalled. Backbone
+    /// peer context.
     BackbonePeerWriteStall = 14,
+    /// A backbone peer's IP was penalized and blacklisted. Backbone peer
+    /// context.
     BackbonePeerPenalty = 15,
 
     // Per-action hooks
+    /// A packet about to be sent on one interface. Packet context; `Drop`
+    /// suppresses the send and `Modify` replaces the bytes.
     SendOnInterface = 16,
+    /// A packet about to be broadcast on all interfaces. Packet context;
+    /// `Drop` and `Modify` as for [`SendOnInterface`](Self::SendOnInterface).
     BroadcastOnAllInterfaces = 17,
+    /// A packet about to be delivered to a local destination. Packet
+    /// context with the packet hash; `Drop` and `Modify` take effect.
     DeliverLocal = 18,
+    /// Tunnel synthesis data about to be sent. Packet context whose bytes
+    /// are the synthesis payload; `Drop` suppresses it.
     TunnelSynthesize = 19,
 
     // Periodic
+    /// Once per driver tick (every second by default). Tick context.
     Tick = 20,
 }
 
@@ -51,31 +89,53 @@ impl HookPoint {
 /// This enum carries the relevant data for each hook invocation.
 /// The WASM runtime serializes this into the guest's linear memory.
 pub enum HookContext<'a> {
+    /// A packet (or, for tunnel synthesis, a payload) and its header fields.
     Packet {
+        /// Header fields of the packet.
         ctx: &'a crate::context::PacketContext,
+        /// The packet's raw bytes.
         raw: &'a [u8],
     },
+    /// An interface event.
     Interface {
+        /// The interface the event is about.
         interface_id: u64,
     },
+    /// The periodic tick; it carries no data.
     Tick,
+    /// An announce or path event.
     Announce {
+        /// The announced destination.
         destination_hash: [u8; 16],
+        /// Hop count of the announce or path.
         hops: u8,
+        /// Interface the announce arrived on or the path uses; 0 if unknown.
         interface_id: u64,
     },
+    /// A link event.
     Link {
+        /// The link's id.
         link_id: [u8; 16],
+        /// Interface the link runs over; 0 if unknown.
         interface_id: u64,
     },
+    /// A backbone peer event.
     BackbonePeer {
+        /// The backbone server interface the peer connected to.
         server_interface_id: u64,
+        /// The interface spawned for the peer; `None` for a penalty.
         peer_interface_id: Option<u64>,
+        /// The peer's IP address.
         peer_ip: std::net::IpAddr,
+        /// The peer's TCP port; 0 for a penalty.
         peer_port: u16,
+        /// How long the connection lasted; zero when the event has none.
         connected_for: std::time::Duration,
+        /// The peer sent data before it disconnected; false for other events.
         had_received_data: bool,
+        /// Penalty level of a penalty; 0 for other events.
         penalty_level: u8,
+        /// How long the IP is blacklisted, for a penalty; zero otherwise.
         blacklist_for: std::time::Duration,
     },
 }
@@ -102,9 +162,12 @@ fn hook_has_programs(_slot: &HookSlot, _ctx: &HookContext) -> Option<HookResult>
 
 /// A slot for a single hook point, holding its attached programs and runner.
 pub struct HookSlot {
+    /// Attached programs, highest priority first. After changing the list
+    /// directly, call [`update_runner`](Self::update_runner).
     pub programs: Vec<LoadedProgram>,
-    /// Function pointer — points to [`hook_noop`] when empty,
-    /// [`hook_has_programs`] when programs are attached.
+    /// [`hook_noop`] when no programs are attached, otherwise a runner that
+    /// also returns `None`: it only marks the slot active, and the programs
+    /// run through [`HookManager::run_chain`](crate::HookManager::run_chain).
     pub runner: HookFn,
 }
 

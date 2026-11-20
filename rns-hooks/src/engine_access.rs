@@ -4,12 +4,21 @@
 /// interface in neutral terms. `rns-net` provides the concrete implementation
 /// via a thin wrapper around `TransportEngine`.
 pub trait EngineAccess {
+    /// Whether the path table has a path to the destination.
     fn has_path(&self, dest: &[u8; 16]) -> bool;
+    /// Hop count of the path to the destination, or `None` without a path.
     fn hops_to(&self, dest: &[u8; 16]) -> Option<u8>;
+    /// Transport identity hash of the next hop towards the destination, or
+    /// `None` without a path.
     fn next_hop(&self, dest: &[u8; 16]) -> Option<[u8; 16]>;
+    /// Whether the identity hash is blackholed.
     fn is_blackholed(&self, identity: &[u8; 16]) -> bool;
+    /// Configured name of the interface, or `None` for an unknown id.
     fn interface_name(&self, id: u64) -> Option<String>;
+    /// Mode of the interface as its numeric constant (full, access point,
+    /// roaming, ...), or `None` for an unknown id.
     fn interface_mode(&self, id: u64) -> Option<u8>;
+    /// The node's transport identity hash, or `None` if it has none.
     fn identity_hash(&self) -> Option<[u8; 16]>;
     /// Outgoing announce rate for an interface, in millihertz (Hz * 1000).
     /// Returns None if the interface is not found.
