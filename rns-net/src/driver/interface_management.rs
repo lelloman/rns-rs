@@ -85,7 +85,7 @@ impl Driver {
         self.runtime_config.ifac_defaults.remove(name);
         #[cfg(runtime_config_ifaces)]
         self.remove_managed_runtime(name);
-        if let Some(announcer) = self.interface_announcer.as_mut() {
+        if let Some(announcer) = self.discovery.announcer.as_mut() {
             announcer.remove_interface(name);
         }
         log::info!("Interface '{name}' was detached");
@@ -351,10 +351,10 @@ impl Driver {
                 transport_enabled,
                 config.ifac.as_ref(),
             );
-            if let Some(announcer) = self.interface_announcer.as_mut() {
+            if let Some(announcer) = self.discovery.announcer.as_mut() {
                 announcer.upsert_interface(discoverable);
             } else if let Some(identity) = self.transport_identity.as_ref() {
-                self.interface_announcer =
+                self.discovery.announcer =
                     Some(self.new_interface_announcer(*identity.hash(), vec![discoverable]));
             }
         }

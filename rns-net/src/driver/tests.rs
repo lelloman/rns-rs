@@ -228,8 +228,8 @@ pub(crate) fn new_test_driver() -> Driver {
 #[test]
 fn driver_reuses_invalid_discovery_stamp_cache_across_announces() {
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
-    driver.discovery_required_value = StampCost::from_whole(100);
+    driver.discovery.enabled = true;
+    driver.discovery.required_value = StampCost::from_whole(100);
 
     let packed = rns_core::msgpack::pack(&rns_core::msgpack::Value::Map(vec![
         (
@@ -263,7 +263,7 @@ fn driver_reuses_invalid_discovery_stamp_cache_across_announces() {
             destination_hash: [0x31; 16],
             identity_hash: [0x32; 16],
             public_key: [0x33; 64],
-            name_hash: driver.discovery_name_hash,
+            name_hash: driver.discovery.name_hash,
             random_hash: [0x34; 10],
             ratchet: None,
             app_data: Some(app_data.clone()),
@@ -276,23 +276,24 @@ fn driver_reuses_invalid_discovery_stamp_cache_across_announces() {
         }));
 
     driver.dispatch_all(vec![announce.clone()]);
-    assert_eq!(driver.discovery_stamp_cache.invalid_len(), 1);
+    assert_eq!(driver.discovery.stamp_cache.invalid_len(), 1);
     assert!(driver
-        .discovery_stamp_cache
+        .discovery
+        .stamp_cache
         .contains_invalid_app_data(&app_data));
 
     // Even if the requirement changes, the repeated payload is rejected from
     // the driver's persistent cache before proof-of-work validation is retried.
-    driver.discovery_required_value = StampCost::ZERO;
+    driver.discovery.required_value = StampCost::ZERO;
     driver.dispatch_all(vec![announce]);
-    assert_eq!(driver.discovery_stamp_cache.invalid_len(), 1);
+    assert_eq!(driver.discovery.stamp_cache.invalid_len(), 1);
 }
 
 #[test]
 fn discovery_announces_from_non_source_networks_are_ignored() {
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
-    driver.discovery_required_value = StampCost::from_whole(100);
+    driver.discovery.enabled = true;
+    driver.discovery.required_value = StampCost::from_whole(100);
     let mut app_data = vec![0];
     app_data.extend_from_slice(&rns_core::msgpack::pack(&rns_core::msgpack::Value::Map(
         vec![(
@@ -306,7 +307,7 @@ fn discovery_announces_from_non_source_networks_are_ignored() {
             destination_hash: [0x31; 16],
             identity_hash,
             public_key: [0x33; 64],
-            name_hash: driver.discovery_name_hash,
+            name_hash: driver.discovery.name_hash,
             random_hash: [0x34; 10],
             ratchet: None,
             app_data: Some(app_data.clone()),
@@ -323,11 +324,11 @@ fn discovery_announces_from_non_source_networks_are_ignored() {
 
     // An announce that is looked at leaves its insufficient stamp in the
     // invalid cache; one from a network that is not a source is not looked at.
-    driver.interface_discovery_sources = vec![[0x55; 16]];
+    driver.discovery.sources = vec![[0x55; 16]];
     driver.dispatch_all(vec![from_other]);
-    assert_eq!(driver.discovery_stamp_cache.invalid_len(), 0);
+    assert_eq!(driver.discovery.stamp_cache.invalid_len(), 0);
     driver.dispatch_all(vec![from_source]);
-    assert_eq!(driver.discovery_stamp_cache.invalid_len(), 1);
+    assert_eq!(driver.discovery.stamp_cache.invalid_len(), 1);
 }
 
 fn make_announced_identity(
@@ -774,7 +775,7 @@ fn backbone_peer_pool_discovered_fill_target_after_configured() {
     let port_a = listener_a.local_addr().unwrap().port();
     let port_b = listener_b.local_addr().unwrap().port();
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
+    driver.discovery.enabled = true;
 
     driver.configure_backbone_peer_pool(
         BackbonePeerPoolSettings {
@@ -828,10 +829,10 @@ fn discovered_peer_pool_candidate_uses_autoconnect_overrides() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
-    driver.autoconnect_interface_mode = Some(constants::MODE_BOUNDARY);
-    driver.autoconnect_interface_gravity = -5;
-    driver.autoconnect_announces_to_internal = Some(true);
+    driver.discovery.enabled = true;
+    driver.discovery.autoconnect_mode = Some(constants::MODE_BOUNDARY);
+    driver.discovery.autoconnect_gravity = -5;
+    driver.discovery.autoconnect_announces_to_internal = Some(true);
     driver.configure_backbone_peer_pool(
         BackbonePeerPoolSettings {
             max_connected: 1,
@@ -866,7 +867,7 @@ fn discovered_peer_pool_requires_verified_implementation_unless_overridden() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
+    driver.discovery.enabled = true;
     driver.configure_backbone_peer_pool(
         BackbonePeerPoolSettings {
             max_connected: 3,
@@ -928,7 +929,7 @@ fn discovered_peer_pool_requires_verified_implementation_unless_overridden() {
     );
     override_iface.impl_name = None;
     override_iface.impl_version = None;
-    driver.autoconnect_unverified_implementations = true;
+    driver.discovery.autoconnect_unverified_implementations = true;
     assert!(driver.upsert_discovered_backbone_peer_pool_candidate(override_iface));
 }
 
@@ -938,7 +939,7 @@ fn discovered_peer_pool_requires_affordable_stamp_costs() {
     // 9b464382: auto-connect only when the announced costs are within this
     // node's DESTINATION_VALUE and PR_VALUE.
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
+    driver.discovery.enabled = true;
     let port = 41_000;
     driver.configure_backbone_peer_pool(
         BackbonePeerPoolSettings {
@@ -988,7 +989,7 @@ fn discovered_peer_pool_requires_transport_enabled_interface() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
+    driver.discovery.enabled = true;
     driver.configure_backbone_peer_pool(
         BackbonePeerPoolSettings {
             max_connected: 3,
@@ -1011,7 +1012,7 @@ fn discovered_peer_pool_requires_transport_enabled_interface() {
     iface.transport = false;
     // Even the unverified-implementation override must not auto-connect a
     // non-transport interface.
-    driver.autoconnect_unverified_implementations = true;
+    driver.discovery.autoconnect_unverified_implementations = true;
     assert!(!driver.upsert_discovered_backbone_peer_pool_candidate(iface.clone()));
 
     iface.transport = true;
@@ -1038,7 +1039,7 @@ fn backbone_peer_pool_prefers_configured_over_discovered() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let configured_port = listener.local_addr().unwrap().port();
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
+    driver.discovery.enabled = true;
 
     driver.configure_backbone_peer_pool(
         BackbonePeerPoolSettings {
@@ -1082,7 +1083,7 @@ fn backbone_peer_pool_priority_can_prefer_discovered_over_configured() {
     let configured_port = listener_a.local_addr().unwrap().port();
     let discovered_port = listener_b.local_addr().unwrap().port();
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
+    driver.discovery.enabled = true;
 
     driver.configure_backbone_peer_pool(
         BackbonePeerPoolSettings {
@@ -1151,7 +1152,7 @@ fn backbone_peer_pool_priority_does_not_preempt_active_peer() {
     assert_eq!(before.members[0].source, "configured");
     assert_eq!(before.members[0].interface_id, Some(7061));
 
-    driver.discover_interfaces = true;
+    driver.discovery.enabled = true;
     assert!(
         driver.upsert_discovered_backbone_peer_pool_candidate(make_discovered_backbone(
             "default-discovered",
@@ -1220,7 +1221,7 @@ fn backbone_peer_pool_sorts_discovered_candidates_by_quality() {
     let listener_b = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let listener_c = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
+    driver.discovery.enabled = true;
     let now = time::now();
 
     driver.configure_backbone_peer_pool(
@@ -1282,7 +1283,7 @@ fn backbone_peer_pool_deduplicates_discovered_candidates() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
+    driver.discovery.enabled = true;
     driver.configure_backbone_peer_pool(
         BackbonePeerPoolSettings {
             max_connected: 2,
@@ -1327,7 +1328,7 @@ fn backbone_peer_pool_failed_discovered_candidate_retries_replacement() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let replacement_port = listener.local_addr().unwrap().port();
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
+    driver.discovery.enabled = true;
     driver.configure_backbone_peer_pool(
         BackbonePeerPoolSettings {
             max_connected: 1,
@@ -1379,7 +1380,7 @@ fn backbone_peer_pool_failed_discovered_candidate_retries_replacement() {
 #[test]
 fn backbone_peer_pool_removes_stale_standby_discovered_candidates() {
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
+    driver.discovery.enabled = true;
     driver.configure_backbone_peer_pool(
         BackbonePeerPoolSettings {
             max_connected: 1,
@@ -1421,7 +1422,7 @@ fn backbone_peer_pool_cools_down_failed_peer_and_tries_next() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let reachable_port = listener.local_addr().unwrap().port();
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
+    driver.discovery.enabled = true;
 
     driver.configure_backbone_peer_pool(
         BackbonePeerPoolSettings {
@@ -1635,7 +1636,7 @@ fn backbone_peer_pool_configured_peer_reclaims_slot_from_discovered() {
     let configured_port = listener_a.local_addr().unwrap().port();
     let discovered_port = listener_b.local_addr().unwrap().port();
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
+    driver.discovery.enabled = true;
 
     driver.configure_backbone_peer_pool(
         BackbonePeerPoolSettings {
@@ -7464,7 +7465,7 @@ fn first_discovery_announce(
             ifac_netkey: None,
         }],
     );
-    driver.interface_announcer = Some(announcer);
+    driver.discovery.announcer = Some(announcer);
 
     let now = time::now();
     driver.tick_discovery_announcer(now);
@@ -7976,7 +7977,8 @@ fn runtime_config_sets_backbone_values() {
     };
     assert_eq!(entry.value, RuntimeConfigValue::Bool(true));
     assert!(driver
-        .interface_announcer
+        .discovery
+        .announcer
         .as_ref()
         .map(|announcer| announcer.contains_interface("public"))
         .unwrap_or(false));
@@ -8056,7 +8058,7 @@ fn runtime_config_sets_backbone_values() {
         panic!("expected runtime config reset success");
     };
     assert_eq!(entry.value, RuntimeConfigValue::Bool(false));
-    assert!(driver.interface_announcer.is_none());
+    assert!(driver.discovery.announcer.is_none());
 
     let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
         key: "backbone.public.latitude".into(),
@@ -17315,7 +17317,7 @@ fn autoconnected_backbone_client_with_unreachable_target_is_kept_until_detached(
         probe.local_addr().unwrap().port()
     };
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
+    driver.discovery.enabled = true;
     driver.enable_upstream_autoconnect(1, Vec::new(), Vec::new());
     driver.autoconnect_discovered(&make_discovered_backbone(
         "unreachable",
@@ -17364,7 +17366,7 @@ fn autoconnected_backbone_client_is_configured_as_upstream() {
     let listener = std::net::TcpListener::bind("127.0.0.2:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let mut driver = new_test_driver();
-    driver.discover_interfaces = true;
+    driver.discovery.enabled = true;
     driver.enable_upstream_autoconnect(1, Vec::new(), Vec::new());
     driver.autoconnect_discovered(&make_discovered_backbone(
         "discovered",

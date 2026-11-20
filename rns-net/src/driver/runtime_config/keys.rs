@@ -380,7 +380,7 @@ impl Driver {
             )),
             "global.discovery_cleanup_interval_ticks" => Some(make_entry(
                 key,
-                RuntimeConfigValue::Int(self.discovery_cleanup_interval_ticks as i64),
+                RuntimeConfigValue::Int(self.discovery.cleanup_interval_ticks as i64),
                 RuntimeConfigValue::Int(defaults.discovery_cleanup_interval_ticks as i64),
                 RuntimeConfigApplyMode::Immediate,
                 "Tick interval between discovered-interface cleanup passes.",

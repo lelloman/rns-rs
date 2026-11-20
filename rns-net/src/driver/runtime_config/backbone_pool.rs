@@ -10,7 +10,7 @@ impl Driver {
         settings: BackbonePeerPoolSettings,
         candidates: Vec<BackbonePeerPoolCandidateConfig>,
     ) {
-        if settings.max_connected == 0 || (candidates.is_empty() && !self.discover_interfaces) {
+        if settings.max_connected == 0 || (candidates.is_empty() && !self.discovery.enabled) {
             self.backbone_peer_pool = None;
             return;
         }
@@ -33,17 +33,17 @@ impl Driver {
         if let Some(pool) = self.backbone_peer_pool.as_mut() {
             Self::sort_backbone_peer_pool_candidates(pool);
         }
-        if !self.discover_interfaces {
+        if !self.discovery.enabled {
             self.maintain_backbone_peer_pool();
         }
     }
 
     #[cfg(feature = "iface-backbone")]
     pub(crate) fn seed_backbone_peer_pool_from_discovery_cache(&mut self) {
-        if !self.discover_interfaces || self.backbone_peer_pool.is_none() {
+        if !self.discovery.enabled || self.backbone_peer_pool.is_none() {
             return;
         }
-        match self.discovered_interfaces.list() {
+        match self.discovery.storage.list() {
             Ok(mut interfaces) => {
                 interfaces.sort_by(|a, b| {
                     Self::discovery_candidate_order(a).cmp(&Self::discovery_candidate_order(b))
@@ -65,7 +65,7 @@ impl Driver {
         &mut self,
         iface: crate::discovery::DiscoveredInterface,
     ) -> bool {
-        if !self.discover_interfaces || self.backbone_peer_pool.is_none() {
+        if !self.discovery.enabled || self.backbone_peer_pool.is_none() {
             return false;
         }
         let Some((remote, port, transport_identity, discovery)) =
@@ -74,7 +74,10 @@ impl Driver {
             return false;
         };
 
-        if !Self::autoconnect_qualified(&iface, self.autoconnect_unverified_implementations) {
+        if !Self::autoconnect_qualified(
+            &iface,
+            self.discovery.autoconnect_unverified_implementations,
+        ) {
             log::debug!(
                 "Not auto-connecting discovered {} \"{}\", auto-connect criteria not satisfied (transport {}, implementation {} version {})",
                 iface.interface_type,
@@ -124,15 +127,16 @@ impl Driver {
             candidate.config.client.target_host = remote;
             candidate.config.client.target_port = port;
             candidate.config.client.transport_identity = Some(transport_identity);
-            candidate.config.mode = self.autoconnect_interface_mode.unwrap_or_else(|| {
+            candidate.config.mode = self.discovery.autoconnect_mode.unwrap_or_else(|| {
                 if iface.transport && self.engine.transport_enabled() {
                     rns_core::constants::MODE_GATEWAY
                 } else {
                     rns_core::constants::MODE_FULL
                 }
             });
-            candidate.config.gravity = self.autoconnect_interface_gravity;
-            candidate.config.announces_to_internal = self.autoconnect_announces_to_internal;
+            candidate.config.gravity = self.discovery.autoconnect_gravity;
+            candidate.config.announces_to_internal =
+                self.discovery.autoconnect_announces_to_internal;
             if candidate.active_id.is_none() {
                 candidate.config.client.name = Self::discovered_pool_candidate_name(&iface);
             }
@@ -168,7 +172,7 @@ impl Driver {
             size: 16,
         };
         let ifac_enabled = ifac_runtime.netname.is_some() || ifac_runtime.netkey.is_some();
-        let mode = self.autoconnect_interface_mode.unwrap_or_else(|| {
+        let mode = self.discovery.autoconnect_mode.unwrap_or_else(|| {
             if iface.transport && self.engine.transport_enabled() {
                 rns_core::constants::MODE_GATEWAY
             } else {
@@ -179,10 +183,10 @@ impl Driver {
             config: BackbonePeerPoolCandidateConfig {
                 client,
                 mode,
-                gravity: self.autoconnect_interface_gravity,
+                gravity: self.discovery.autoconnect_gravity,
                 recursive_prs: false,
                 announces_from_internal: true,
-                announces_to_internal: self.autoconnect_announces_to_internal,
+                announces_to_internal: self.discovery.autoconnect_announces_to_internal,
                 ingress_control: self.ingress_control_defaults,
                 stamp_costs: Default::default(),
                 ifac_runtime,
@@ -208,7 +212,7 @@ impl Driver {
     #[cfg(feature = "iface-backbone")]
     pub(crate) fn cull_stale_discovered_backbone_peer_pool_candidates(&mut self) {
         let cached_discoveries: Option<std::collections::HashSet<[u8; 32]>> =
-            self.discovered_interfaces.list().ok().map(|interfaces| {
+            self.discovery.storage.list().ok().map(|interfaces| {
                 interfaces
                     .into_iter()
                     .map(|interface| interface.discovery_hash)

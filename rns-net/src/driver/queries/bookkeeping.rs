@@ -24,8 +24,7 @@ impl Driver {
     /// `network_id` are accepted: any are without
     /// `interface_discovery_sources`.
     pub(crate) fn discovery_source_allowed(&self, network_id: &[u8; 16]) -> bool {
-        self.interface_discovery_sources.is_empty()
-            || self.interface_discovery_sources.contains(network_id)
+        self.discovery.sources.is_empty() || self.discovery.sources.contains(network_id)
     }
 
     /// Remember a received packet's readings, keeping the newest

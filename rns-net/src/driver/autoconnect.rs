@@ -135,7 +135,7 @@ impl Driver {
             return;
         }
         log::info!("Auto-connecting up to {max} discovered interfaces");
-        self.upstream_autoconnect = Some(UpstreamAutoconnect::new(
+        self.discovery.upstream_autoconnect = Some(UpstreamAutoconnect::new(
             max,
             bootstrap_interfaces,
             #[cfg(feature = "iface-backbone")]
@@ -146,15 +146,16 @@ impl Driver {
     /// upstream `connect_discovered`: connect stored transport discoveries,
     /// best first, until the slots are full.
     pub(crate) fn autoconnect_stored_discoveries(&mut self) {
-        let Some(autoconnect) = self.upstream_autoconnect.as_ref() else {
+        let Some(autoconnect) = self.discovery.upstream_autoconnect.as_ref() else {
             return;
         };
         let max = autoconnect.max;
-        let mut interfaces = self.discovered_interfaces.list().unwrap_or_default();
+        let mut interfaces = self.discovery.storage.list().unwrap_or_default();
         interfaces.retain(|iface| self.discovery_source_allowed(&iface.network_id));
         crate::discovery::filter_and_sort_interfaces(&mut interfaces, false, true);
         for iface in interfaces {
             if self
+                .discovery
                 .upstream_autoconnect
                 .as_ref()
                 .is_some_and(|autoconnect| autoconnect.count() >= max)
@@ -163,7 +164,7 @@ impl Driver {
             }
             self.autoconnect_discovered(&iface);
         }
-        if let Some(autoconnect) = self.upstream_autoconnect.as_mut() {
+        if let Some(autoconnect) = self.discovery.upstream_autoconnect.as_mut() {
             autoconnect.initial_ran = true;
         }
     }
@@ -172,7 +173,7 @@ impl Driver {
     /// (`interface_exists`).
     #[cfg(feature = "iface-backbone")]
     fn autoconnect_endpoint_exists(&self, reachable_on: &str, port: Option<u16>) -> bool {
-        let Some(autoconnect) = self.upstream_autoconnect.as_ref() else {
+        let Some(autoconnect) = self.discovery.upstream_autoconnect.as_ref() else {
             return false;
         };
         let hash = endpoint_hash(reachable_on, port);
@@ -192,7 +193,7 @@ impl Driver {
     /// free and it qualifies.
     #[cfg(not(feature = "iface-backbone"))]
     pub(crate) fn autoconnect_discovered(&mut self, iface: &crate::discovery::DiscoveredInterface) {
-        if self.upstream_autoconnect.is_some() {
+        if self.discovery.upstream_autoconnect.is_some() {
             log::warn!(
                 "Not auto-connecting discovered interface {}: this build has no Backbone interface",
                 iface.name
@@ -204,7 +205,7 @@ impl Driver {
     /// free and it qualifies.
     #[cfg(feature = "iface-backbone")]
     pub(crate) fn autoconnect_discovered(&mut self, iface: &crate::discovery::DiscoveredInterface) {
-        let Some(autoconnect) = self.upstream_autoconnect.as_ref() else {
+        let Some(autoconnect) = self.discovery.upstream_autoconnect.as_ref() else {
             return;
         };
         if autoconnect.count() >= autoconnect.max {
@@ -214,7 +215,10 @@ impl Driver {
         if iface.interface_type != "BackboneInterface" {
             return;
         }
-        if !Self::autoconnect_qualified(iface, self.autoconnect_unverified_implementations) {
+        if !Self::autoconnect_qualified(
+            iface,
+            self.discovery.autoconnect_unverified_implementations,
+        ) {
             log::debug!(
                 "Not auto-connecting discovered {} {}, auto-connect criteria not satisfied",
                 iface.interface_type,
@@ -298,7 +302,7 @@ impl Driver {
         };
         let ifac_enabled = ifac_runtime.netname.is_some() || ifac_runtime.netkey.is_some();
         // Upstream: the configured mode, else gateway on a transport node.
-        let mode = self.autoconnect_interface_mode.unwrap_or_else(|| {
+        let mode = self.discovery.autoconnect_mode.unwrap_or_else(|| {
             if self.engine.transport_enabled() {
                 rns_core::constants::MODE_GATEWAY
             } else {
@@ -308,10 +312,10 @@ impl Driver {
         let config = BackbonePeerPoolCandidateConfig {
             client,
             mode,
-            gravity: self.autoconnect_interface_gravity,
+            gravity: self.discovery.autoconnect_gravity,
             recursive_prs: false,
             announces_from_internal: true,
-            announces_to_internal: self.autoconnect_announces_to_internal,
+            announces_to_internal: self.discovery.autoconnect_announces_to_internal,
             ingress_control: self.ingress_control_defaults,
             stamp_costs: Default::default(),
             ifac_runtime,
@@ -331,7 +335,7 @@ impl Driver {
                 if let Some(entry) = self.interfaces.get_mut(&id) {
                     entry.dynamic = false;
                 }
-                if let Some(autoconnect) = self.upstream_autoconnect.as_mut() {
+                if let Some(autoconnect) = self.discovery.upstream_autoconnect.as_mut() {
                     autoconnect.members.push(AutoconnectMember {
                         id,
                         name,
@@ -355,7 +359,7 @@ impl Driver {
 
     /// Run the monitor when it is due.
     pub(crate) fn tick_upstream_autoconnect(&mut self, now: f64) {
-        let Some(autoconnect) = self.upstream_autoconnect.as_mut() else {
+        let Some(autoconnect) = self.discovery.upstream_autoconnect.as_mut() else {
             return;
         };
         if !autoconnect.monitoring || now < autoconnect.last_monitor + MONITOR_INTERVAL {
@@ -367,7 +371,7 @@ impl Driver {
 
     /// upstream `__monitor_job`, one pass.
     fn run_autoconnect_monitor(&mut self, now: f64) {
-        let Some(autoconnect) = self.upstream_autoconnect.as_mut() else {
+        let Some(autoconnect) = self.discovery.upstream_autoconnect.as_mut() else {
             return;
         };
         let max = autoconnect.max;
@@ -439,7 +443,7 @@ impl Driver {
         }
 
         if initial_ran && free_slots > reserved_slots {
-            let mut candidates = self.discovered_interfaces.list().unwrap_or_default();
+            let mut candidates = self.discovery.storage.list().unwrap_or_default();
             candidates.retain(|iface| self.discovery_source_allowed(&iface.network_id));
             crate::discovery::filter_and_sort_interfaces(&mut candidates, true, true);
             if !candidates.is_empty() {
@@ -461,6 +465,7 @@ impl Driver {
     /// announcing network's identity hash.
     pub(crate) fn autoconnect_source(&self, id: InterfaceId) -> Option<String> {
         if let Some(member) = self
+            .discovery
             .upstream_autoconnect
             .as_ref()
             .and_then(|autoconnect| autoconnect.members.iter().find(|member| member.id == id))
@@ -476,14 +481,15 @@ impl Driver {
 
     /// Whether an interface was auto-connected from a discovery.
     pub(crate) fn is_autoconnected(&self, id: InterfaceId) -> bool {
-        self.upstream_autoconnect
+        self.discovery
+            .upstream_autoconnect
             .as_ref()
             .is_some_and(|autoconnect| autoconnect.members.iter().any(|member| member.id == id))
     }
 
     /// Detach an auto-connected interface (`teardown_interface`).
     pub(crate) fn teardown_autoconnected(&mut self, id: InterfaceId) {
-        let Some(autoconnect) = self.upstream_autoconnect.as_mut() else {
+        let Some(autoconnect) = self.discovery.upstream_autoconnect.as_mut() else {
             return;
         };
         let Some(index) = autoconnect

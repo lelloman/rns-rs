@@ -355,18 +355,19 @@ fn configure_discovery(
     config: &NodeConfig,
     network_identity: Option<Identity>,
 ) {
-    driver.discover_interfaces = config.discover_interfaces;
-    driver.interface_discovery_sources = config.discovery.interface_discovery_sources.clone();
+    driver.discovery.enabled = config.discover_interfaces;
+    driver.discovery.sources = config.discovery.interface_discovery_sources.clone();
     driver.forced_local_bitrate = config.shared_instance.force_bitrate;
     driver.network_identity = network_identity;
     driver.register_network_destinations();
-    driver.autoconnect_interface_mode = config.autoconnect_interface_mode;
-    driver.autoconnect_interface_gravity = config.autoconnect_interface_gravity;
-    driver.autoconnect_announces_to_internal =
+    driver.discovery.autoconnect_mode = config.autoconnect_interface_mode;
+    driver.discovery.autoconnect_gravity = config.autoconnect_interface_gravity;
+    driver.discovery.autoconnect_announces_to_internal =
         config.autoconnect_announces_to_internal.then_some(true);
-    driver.autoconnect_unverified_implementations = config.autoconnect_unverified_implementations;
+    driver.discovery.autoconnect_unverified_implementations =
+        config.autoconnect_unverified_implementations;
     if let Some(val) = config.discovery_required_value {
-        driver.discovery_required_value = val;
+        driver.discovery.required_value = val;
     }
 }
 
@@ -381,7 +382,7 @@ pub(super) fn start_interface_announcer(
         let transport_id = *identity.hash();
         let announcer = driver.new_interface_announcer(transport_id, discoverable_interfaces);
         log::info!("Interface discovery announcer initialized");
-        driver.interface_announcer = Some(announcer);
+        driver.discovery.announcer = Some(announcer);
     }
 }
 
@@ -396,7 +397,7 @@ pub(super) fn open_discovery_storage(driver: &mut Driver, config: &NodeConfig) {
             .join("storage")
             .join("discovery")
             .join("interfaces");
-        driver.discovered_interfaces = crate::discovery::DiscoveredInterfaceStorage::new(disc_path);
+        driver.discovery.storage = crate::discovery::DiscoveredInterfaceStorage::new(disc_path);
         let blackhole_path = std::path::PathBuf::from(cache_dir)
             .parent()
             .unwrap_or(std::path::Path::new("."))
