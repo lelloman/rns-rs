@@ -52,6 +52,10 @@ impl LinkManager {
                 LinkEngine::new_initiator(dest_hash, hops, mode, signalled_mtu, time::now(), rng)
             }
         };
+        #[allow(
+            clippy::expect_used,
+            reason = "a mode that is not enabled is the only error, and AES-256-CBC is enabled"
+        )]
         let (mut engine, request_data) = created.expect("AES-256-CBC is an enabled link mode");
 
         // Build the LINKREQUEST packet to compute link_id
