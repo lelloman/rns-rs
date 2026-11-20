@@ -19,6 +19,7 @@ impl TransportEngine {
             || ctx.packet.flags.transport_type != constants::TRANSPORT_BROADCAST
             || !self.has_local_clients()
             || self
+                .policy
                 .control_destinations
                 .contains(&ctx.packet.destination_hash)
         {
@@ -54,7 +55,8 @@ impl TransportEngine {
         // client as addressed to us so normal forwarding handles it (#183).
         let for_local_client = ctx.packet.flags.packet_type != constants::PACKET_TYPE_ANNOUNCE
             && self
-                .path_table
+                .paths
+                .table
                 .get(&ctx.packet.destination_hash)
                 .and_then(|ps| ps.primary())
                 .is_some_and(|entry| {
@@ -100,7 +102,8 @@ impl TransportEngine {
         }
 
         let Some(path_entry) = self
-            .path_table
+            .paths
+            .table
             .get(&ctx.packet.destination_hash)
             .and_then(|ps| ps.primary())
         else {
@@ -193,7 +196,7 @@ impl TransportEngine {
                 ctx.now,
                 proof_timeout,
             );
-            self.link_table.insert(link_id, link_entry);
+            self.routes.links.insert(link_id, link_entry);
             actions.push(TransportAction::LinkRequestReceived {
                 link_id,
                 destination_hash: ctx.packet.destination_hash,
@@ -202,7 +205,7 @@ impl TransportEngine {
         } else {
             let (trunc_hash, reverse_entry) =
                 create_reverse_entry(&ctx.packet, outbound_interface, ctx.iface, ctx.now);
-            self.reverse_table.insert(trunc_hash, reverse_entry);
+            self.routes.reverse.insert(trunc_hash, reverse_entry);
         }
 
         actions.push(TransportAction::SendOnInterface {
@@ -213,7 +216,8 @@ impl TransportEngine {
         // Transport.py (1.6.0) marks the path used, so the unused path pool
         // culling keeps paths that carry traffic through this node.
         if let Some(entry) = self
-            .path_table
+            .paths
+            .table
             .get_mut(&ctx.packet.destination_hash)
             .and_then(|ps| ps.primary_mut())
         {
@@ -242,7 +246,7 @@ impl TransportEngine {
         // add invalidation risk without avoiding locks or linear searches.
         // Keep this authoritative-table path even when profiling suggests a
         // cache: upstream's corresponding denormalized experiment was removed.
-        let Some(link_entry) = self.link_table.get(&ctx.packet.destination_hash).cloned() else {
+        let Some(link_entry) = self.routes.links.get(&ctx.packet.destination_hash).cloned() else {
             return;
         };
         if !link_entry.validated {
@@ -251,7 +255,7 @@ impl TransportEngine {
         // Upstream ef3e8086: every link packet past the validation check,
         // relayed or not, unless a local client sent it.
         if !self.serves_local_client(ctx.iface) {
-            self.link_rxb += ctx.packet.raw.len() as u64;
+            self.accounting.link_rxb += ctx.packet.raw.len() as u64;
         }
         let instance_local_link = self.interface_is_local_client(link_entry.next_hop_interface)
             && self.interface_is_local_client(link_entry.received_interface);
@@ -284,10 +288,10 @@ impl TransportEngine {
         });
         // Upstream ef3e8086: after `transmit`, unless sent to a local client.
         if !self.serves_local_client(outbound_iface) {
-            self.link_txb += forwarded_bytes;
+            self.accounting.link_txb += forwarded_bytes;
         }
 
-        if let Some(entry) = self.link_table.get_mut(&ctx.packet.destination_hash) {
+        if let Some(entry) = self.routes.links.get_mut(&ctx.packet.destination_hash) {
             entry.timestamp = ctx.now;
             // Upstream 3f55e9eb: `link_entry[IDX_LT_TRXB] += len(new_raw)`.
             entry.traffic += forwarded_bytes;
@@ -295,7 +299,8 @@ impl TransportEngine {
         // As in Transport.py, traffic on a relayed link uses the path to the
         // link's destination.
         if let Some(entry) = self
-            .path_table
+            .paths
+            .table
             .get_mut(&link_entry.destination_hash)
             .and_then(|ps| ps.primary_mut())
         {

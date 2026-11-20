@@ -114,7 +114,7 @@ impl TransportEngine {
             && self
                 .local_destinations
                 .contains_key(&packet.destination_hash)
-            && !self.path_table.contains_key(&packet.destination_hash)
+            && !self.paths.table.contains_key(&packet.destination_hash)
     }
 
     /// Whether `packet` is only relayed and leaves its hash unread: it is
@@ -138,13 +138,14 @@ impl TransportEngine {
             )
             && (self.config.transport_enabled || self.config.identity_hash.is_some())
             && self
-                .link_table
+                .routes
+                .links
                 .get(&packet.destination_hash)
                 .is_some_and(|entry| entry.validated)
             && !self
                 .local_destinations
                 .contains_key(&packet.destination_hash)
-            && !self.path_table.contains_key(&packet.destination_hash)
+            && !self.paths.table.contains_key(&packet.destination_hash)
     }
 
     /// Recheck current routing/filter state and consume a previously decoded frame.
@@ -168,16 +169,16 @@ impl TransportEngine {
         announce_queue: Option<&mut AnnounceVerifyQueue>,
         actions: &mut Vec<TransportAction>,
     ) {
-        self.inbound_filtered = false;
-        self.inbound_filtered_announce = false;
+        self.accounting.inbound_filtered = false;
+        self.accounting.inbound_filtered_announce = false;
         let Some(mut ctx) = self.prepare_decoded_packet(frame) else {
-            self.inbound_filtered = true;
+            self.accounting.inbound_filtered = true;
             return;
         };
         match self.destination_filter_verdict(&ctx) {
             DestinationFilterVerdict::Admit => {}
             DestinationFilterVerdict::Blocked => {
-                self.inbound_filtered = true;
+                self.accounting.inbound_filtered = true;
                 return;
             }
             // Upstream 819076c3 counts this one as a filtered announce.
@@ -234,9 +235,10 @@ impl TransportEngine {
         let mut destination_type = [0u8; constants::NAME_HASH_LENGTH / 8];
         destination_type.copy_from_slice(name_hash);
         let own_local_announce = ctx.from_local_client && ctx.packet.hops == 0;
-        if self.destination_filter.blocks(&destination_type) {
+        if self.policy.destination_filter.blocks(&destination_type) {
             DestinationFilterVerdict::Blocked
         } else if self
+            .policy
             .destination_filter
             .allows(&destination_type, own_local_announce)
         {
@@ -249,8 +251,8 @@ impl TransportEngine {
     /// Mark the inbound packet as a filtered announce: its bytes count as
     /// filtered and the interface's `afrxc` grows (upstream 819076c3).
     pub(super) fn filter_announce(&mut self) {
-        self.inbound_filtered = true;
-        self.inbound_filtered_announce = true;
+        self.accounting.inbound_filtered = true;
+        self.accounting.inbound_filtered_announce = true;
     }
 
     pub(in crate::transport) fn prepare_inbound_packet(
@@ -309,7 +311,7 @@ impl TransportEngine {
     }
 
     pub(super) fn remember_inbound_packet_hash<B: AsRef<[u8]>>(&mut self, packet: &RawPacket<B>) {
-        let remember_hash = !(self.link_table.contains_key(&packet.destination_hash)
+        let remember_hash = !(self.routes.links.contains_key(&packet.destination_hash)
             || (packet.flags.packet_type == constants::PACKET_TYPE_PROOF
                 && packet.context == constants::CONTEXT_LRPROOF));
         if remember_hash {

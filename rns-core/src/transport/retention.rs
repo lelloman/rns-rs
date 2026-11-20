@@ -2,19 +2,8 @@ use super::*;
 
 impl TransportEngine {
     pub(crate) fn insert_discovery_pr_tag(&mut self, unique_tag: [u8; 32]) -> bool {
-        if self.discovery_pr_tag_set.contains(&unique_tag) {
-            return false;
-        }
-        if self.config.max_discovery_pr_tags != usize::MAX
-            && self.discovery_pr_tags.len() >= self.config.max_discovery_pr_tags
-        {
-            if let Some(evicted) = self.discovery_pr_tags.pop_front() {
-                self.discovery_pr_tag_set.remove(&evicted);
-            }
-        }
-        self.discovery_pr_tags.push_back(unique_tag);
-        self.discovery_pr_tag_set.insert(unique_tag);
-        true
+        self.path_requests
+            .insert_discovery_tag(unique_tag, self.config.max_discovery_pr_tags)
     }
 
     pub(crate) fn upsert_path_destination(
@@ -24,12 +13,13 @@ impl TransportEngine {
         now: f64,
     ) {
         let max_paths = self.config.max_paths_per_destination;
-        if let Some(ps) = self.path_table.get_mut(&dest_hash) {
+        if let Some(ps) = self.paths.table.get_mut(&dest_hash) {
             ps.upsert(entry);
             return;
         }
         self.enforce_path_destination_cap(now);
-        self.path_table
+        self.paths
+            .table
             .insert(dest_hash, PathSet::from_single(entry, max_paths));
     }
 
@@ -40,12 +30,13 @@ impl TransportEngine {
         now: f64,
     ) {
         let max_paths = self.config.max_paths_per_destination;
-        if let Some(path_set) = self.path_table.get_mut(&dest_hash) {
+        if let Some(path_set) = self.paths.table.get_mut(&dest_hash) {
             path_set.upsert_primary(entry);
             return;
         }
         self.enforce_path_destination_cap(now);
-        self.path_table
+        self.paths
+            .table
             .insert(dest_hash, PathSet::from_single(entry, max_paths));
     }
 
@@ -57,7 +48,7 @@ impl TransportEngine {
         entry: PathEntry,
         now: f64,
     ) {
-        if let Some(path_set) = self.path_table.get_mut(&dest_hash) {
+        if let Some(path_set) = self.paths.table.get_mut(&dest_hash) {
             path_set.replace_primary(entry);
             return;
         }
@@ -79,25 +70,26 @@ impl TransportEngine {
         }
         let unused_path_linger = self.unused_path_linger();
         jobs::cull_path_table(
-            &mut self.path_table,
+            &mut self.paths.table,
             &self.interfaces,
             now,
             unused_path_linger,
             jobs::UnusedPoolLimits::UPSTREAM,
-            self.hop_limiter,
+            self.policy.hop_limiter,
         );
-        while self.path_table.len() >= self.config.max_path_destinations {
+        while self.paths.table.len() >= self.config.max_path_destinations {
             let Some(dest_hash) = self.oldest_path_destination() else {
                 break;
             };
-            self.path_table.remove(&dest_hash);
-            self.path_states.remove(&dest_hash);
-            self.path_destination_cap_evict_count += 1;
+            self.paths.table.remove(&dest_hash);
+            self.paths.states.remove(&dest_hash);
+            self.paths.cap_evict_count += 1;
         }
     }
 
     fn oldest_path_destination(&self) -> Option<[u8; 16]> {
-        self.path_table
+        self.paths
+            .table
             .iter()
             .filter_map(|(dest_hash, path_set)| {
                 path_set
@@ -120,9 +112,10 @@ impl TransportEngine {
     }
 
     pub(crate) fn announce_retained_bytes_total(&self) -> usize {
-        self.announce_table
+        self.announces
+            .table
             .values()
-            .chain(self.held_announces.values())
+            .chain(self.announces.held.values())
             .map(Self::announce_entry_size_bytes)
             .sum()
     }
@@ -131,7 +124,7 @@ impl TransportEngine {
         let ttl = self.config.announce_table_ttl_secs;
         let mut removed = 0usize;
 
-        self.announce_table.retain(|_, entry| {
+        self.announces.table.retain(|_, entry| {
             let keep = now <= entry.timestamp + ttl;
             if !keep {
                 removed += 1;
@@ -139,7 +132,7 @@ impl TransportEngine {
             keep
         });
 
-        self.held_announces.retain(|_, entry| {
+        self.announces.held.retain(|_, entry| {
             let keep = now <= entry.timestamp + ttl;
             if !keep {
                 removed += 1;
@@ -152,12 +145,14 @@ impl TransportEngine {
 
     fn oldest_retained_announce(&self) -> Option<([u8; 16], bool)> {
         let oldest_active = self
-            .announce_table
+            .announces
+            .table
             .iter()
             .map(|(dest_hash, entry)| (*dest_hash, false, entry.timestamp))
             .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(core::cmp::Ordering::Equal));
         let oldest_held = self
-            .held_announces
+            .announces
+            .held
             .iter()
             .map(|(dest_hash, entry)| (*dest_hash, true, entry.timestamp))
             .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(core::cmp::Ordering::Equal));
@@ -187,9 +182,9 @@ impl TransportEngine {
                 break;
             };
             if is_held {
-                self.held_announces.remove(&dest_hash);
+                self.announces.held.remove(&dest_hash);
             } else {
-                self.announce_table.remove(&dest_hash);
+                self.announces.table.remove(&dest_hash);
             }
         }
     }
@@ -207,14 +202,14 @@ impl TransportEngine {
         // Refresh the payload without letting incoming traffic repeatedly move
         // pending work beyond the next maintenance tick. Completed entries no
         // longer have a send to preserve; expired entries were culled above.
-        if let Some(pending) = self.announce_table.get(&dest_hash) {
+        if let Some(pending) = self.announces.table.get(&dest_hash) {
             if pending.retries <= constants::PATHFINDER_R {
                 entry.retransmit_timeout = entry.retransmit_timeout.min(pending.retransmit_timeout);
             }
         }
-        self.announce_table.insert(dest_hash, entry);
+        self.announces.table.insert(dest_hash, entry);
         self.enforce_announce_retention_cap(now);
-        self.announce_table.contains_key(&dest_hash)
+        self.announces.table.contains_key(&dest_hash)
     }
 
     pub(crate) fn insert_held_announce(
@@ -227,9 +222,9 @@ impl TransportEngine {
         if Self::announce_entry_size_bytes(&entry) > self.config.announce_table_max_bytes {
             return false;
         }
-        self.held_announces.insert(dest_hash, entry);
+        self.announces.held.insert(dest_hash, entry);
         self.enforce_announce_retention_cap(now);
-        self.held_announces.contains_key(&dest_hash)
+        self.announces.held.contains_key(&dest_hash)
     }
 }
 

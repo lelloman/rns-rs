@@ -2,7 +2,7 @@ use super::super::engine_fixtures::{engine, interface, path_entry, path_request}
 use super::*;
 
 fn known_path(engine: &mut TransportEngine, destination: [u8; 16], via: InterfaceId) {
-    engine.path_table.insert(
+    engine.paths.table.insert(
         destination,
         PathSet::from_single(path_entry(&destination, 900.0, 2, via, [0xBB; 16]), 1),
     );
@@ -22,12 +22,12 @@ fn path_request_from_the_next_hop_is_not_answered() {
     let from_next_hop = path_request(&destination, Some(&[0xBB; 16]), &[0x01; 16], None);
     let actions = engine.handle_path_request(&from_next_hop, InterfaceId(1), 1000.0);
     assert!(actions.is_empty());
-    assert!(!engine.announce_table.contains_key(&destination));
-    assert!(!engine.discovery_path_requests.contains_key(&destination));
+    assert!(!engine.announces.table.contains_key(&destination));
+    assert!(!engine.path_requests.discovery.contains_key(&destination));
 
     let from_another = path_request(&destination, Some(&[0xCC; 16]), &[0x02; 16], None);
     engine.handle_path_request(&from_another, InterfaceId(1), 1000.0);
-    assert!(engine.announce_table.contains_key(&destination));
+    assert!(engine.announces.table.contains_key(&destination));
 
     // A legacy request carries no transport id and is answered.
     let mut engine = super::super::engine_fixtures::engine(true);
@@ -35,7 +35,7 @@ fn path_request_from_the_next_hop_is_not_answered() {
     known_path(&mut engine, destination, InterfaceId(2));
     let legacy = path_request(&destination, None, &[0xBB; 16], None);
     engine.handle_path_request(&legacy, InterfaceId(1), 1000.0);
-    assert!(engine.announce_table.contains_key(&destination));
+    assert!(engine.announces.table.contains_key(&destination));
 }
 
 fn sent_interfaces(actions: &[TransportAction]) -> Vec<InterfaceId> {
@@ -75,7 +75,7 @@ fn without_transport_an_unknown_path_is_not_searched_for() {
     assert!(engine
         .handle_path_request(&request, InterfaceId(1), 1000.0)
         .is_empty());
-    assert!(engine.discovery_path_requests.is_empty());
+    assert!(engine.path_requests.discovery.is_empty());
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn path_request_shorter_than_a_destination_hash_is_dropped() {
     assert!(engine
         .handle_path_request(&[0xD3; 10], InterfaceId(1), 1000.0)
         .is_empty());
-    assert!(engine.path_requests.is_empty());
+    assert!(engine.path_requests.gates.is_empty());
 }
 
 /// An extension without the stamp marker carries no stamp, so a node
@@ -128,7 +128,7 @@ fn batched_request_sets_the_search_deadline() {
         .handle_path_request(&request, InterfaceId(1), 1000.0)
         .is_empty());
     assert_eq!(
-        engine.discovery_path_request_deadlines.get(&destination),
+        engine.path_requests.discovery_deadlines.get(&destination),
         Some(&(1000.0 + constants::PATH_REQUEST_TIMEOUT))
     );
 }
@@ -149,14 +149,15 @@ fn discovery_sets_the_search_deadline_and_reserves_the_request_airtime() {
 
     let timeout = discovery_path_request_timeout(&engine.interfaces);
     assert_eq!(
-        engine.discovery_path_request_deadlines.get(&destination),
+        engine.path_requests.discovery_deadlines.get(&destination),
         Some(&(1000.0 + timeout))
     );
     // Transport.py:3895: the request's data plus HEADER_MINSIZE.
     let data_len = request.len();
     let tx_time = ((data_len + constants::HEADER_MINSIZE) * 8) as f64 / bitrate as f64;
     let allowed_at = engine
-        .announce_queues
+        .announces
+        .queues
         .queue_for(&InterfaceId(2))
         .unwrap()
         .announce_allowed_at;
@@ -217,8 +218,8 @@ fn roaming_interface_answers_only_paths_learned_elsewhere() {
     assert!(engine
         .handle_path_request(&request, InterfaceId(1), 1000.0)
         .is_empty());
-    assert!(!engine.announce_table.contains_key(&destination));
-    assert!(!engine.discovery_path_requests.contains_key(&destination));
+    assert!(!engine.announces.table.contains_key(&destination));
+    assert!(!engine.path_requests.discovery.contains_key(&destination));
 
     let mut engine = super::super::engine_fixtures::engine(true);
     engine.register_interface(interface(1, constants::MODE_ROAMING));
@@ -226,7 +227,7 @@ fn roaming_interface_answers_only_paths_learned_elsewhere() {
     known_path(&mut engine, destination, InterfaceId(2));
     engine.handle_path_request(&request, InterfaceId(1), 1000.0);
     assert_eq!(
-        engine.announce_table[&destination].retransmit_timeout,
+        engine.announces.table[&destination].retransmit_timeout,
         1000.0 + constants::PATH_REQUEST_GRACE + constants::PATH_REQUEST_RG
     );
 }
@@ -241,7 +242,7 @@ fn known_path_is_answered_after_the_grace_time() {
     let request = path_request(&destination, Some(&[0x99; 16]), &[0x01; 16], None);
     engine.handle_path_request(&request, InterfaceId(1), 1000.0);
     assert_eq!(
-        engine.announce_table[&destination].retransmit_timeout,
+        engine.announces.table[&destination].retransmit_timeout,
         1000.0 + constants::PATH_REQUEST_GRACE
     );
 }
@@ -313,7 +314,7 @@ fn request_on_an_unregistered_interface_is_answered_after_the_grace_time() {
     let request = path_request(&destination, Some(&[0x99; 16]), &[0x01; 16], None);
     engine.handle_path_request(&request, InterfaceId(7), 1000.0);
     assert_eq!(
-        engine.announce_table[&destination].retransmit_timeout,
+        engine.announces.table[&destination].retransmit_timeout,
         1000.0 + constants::PATH_REQUEST_GRACE
     );
 }

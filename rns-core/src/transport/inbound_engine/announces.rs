@@ -51,7 +51,7 @@ impl TransportEngine {
             Ok(a) => a,
             Err(_) => {
                 actions.push(TransportAction::ProtocolViolation { interface: iface });
-                self.inbound_filtered = true;
+                self.accounting.inbound_filtered = true;
                 return;
             }
         };
@@ -62,18 +62,18 @@ impl TransportEngine {
 
         let sig_cache_key = Self::announce_sig_cache_key(&packet.destination_hash, &announce);
 
-        let validated = if self.announce_sig_cache.contains(&sig_cache_key) {
+        let validated = if self.announces.sig_cache.contains(&sig_cache_key) {
             announce.to_validated_with_cached_signature(&packet.destination_hash)
         } else {
             announce.validate(&packet.destination_hash).inspect(|_| {
-                self.announce_sig_cache.insert(sig_cache_key, now);
+                self.announces.sig_cache.insert(sig_cache_key, now);
             })
         };
         let validated = match validated {
             Ok(v) => v,
             Err(_) => {
                 self.record_invalid_announce(&announce, iface, now, actions);
-                self.inbound_filtered = true;
+                self.accounting.inbound_filtered = true;
                 return;
             }
         };
@@ -83,7 +83,7 @@ impl TransportEngine {
             Some(b) => b,
             None => {
                 actions.push(TransportAction::ProtocolViolation { interface: iface });
-                self.inbound_filtered = true;
+                self.accounting.inbound_filtered = true;
                 return;
             }
         };
@@ -156,7 +156,7 @@ impl TransportEngine {
     ) -> [u8; 16] {
         if let Some(transport_id) = packet.transport_id {
             if self.config.transport_enabled {
-                if let Some(announce_entry) = self.announce_table.get_mut(&packet.destination_hash)
+                if let Some(announce_entry) = self.announces.table.get_mut(&packet.destination_hash)
                 {
                     if packet.hops.checked_sub(1) == Some(announce_entry.hops) {
                         announce_entry.local_rebroadcasts += 1;
@@ -164,16 +164,16 @@ impl TransportEngine {
                             && announce_entry.local_rebroadcasts
                                 >= constants::LOCAL_REBROADCASTS_MAX
                         {
-                            self.announce_table.remove(&packet.destination_hash);
+                            self.announces.table.remove(&packet.destination_hash);
                         }
                     }
-                    if let Some(announce_entry) = self.announce_table.get(&packet.destination_hash)
+                    if let Some(announce_entry) = self.announces.table.get(&packet.destination_hash)
                     {
                         if packet.hops.checked_sub(1) == Some(announce_entry.hops + 1)
                             && announce_entry.retries > 0
                             && now < announce_entry.retransmit_timeout
                         {
-                            self.announce_table.remove(&packet.destination_hash);
+                            self.announces.table.remove(&packet.destination_hash);
                         }
                     }
                 }
@@ -199,17 +199,16 @@ impl TransportEngine {
     ) -> bool {
         let destination_hash = &packet.destination_hash;
         if packet.context == constants::CONTEXT_PATH_RESPONSE
-            || !self.path_table.contains_key(destination_hash)
-            || self.path_requests.contains_key(destination_hash)
-            || self.discovery_path_requests.contains_key(destination_hash)
-            || self.announce_table.contains_key(destination_hash)
+            || !self.paths.table.contains_key(destination_hash)
+            || self.path_requests.gates.contains_key(destination_hash)
+            || self.path_requests.discovery.contains_key(destination_hash)
+            || self.announces.table.contains_key(destination_hash)
         {
             return false;
         }
         if crate::transport::maintenance::announce_passes_prefilter(
             &self.config,
-            &self.path_table,
-            &self.path_states,
+            &self.paths,
             &self.interfaces,
             destination_hash,
             packet.data(),
@@ -218,7 +217,7 @@ impl TransportEngine {
         ) {
             return false;
         }
-        self.announce_receipts.push((iface, 0));
+        self.accounting.announce_receipts.push((iface, 0));
         self.filter_announce();
         true
     }
@@ -231,8 +230,8 @@ impl TransportEngine {
         }
         // Waiting path requests, local or for discovery, skip ingress
         // limiting (upstream logs this at pathing level since daec67a1).
-        if self.path_requests.contains_key(destination_hash)
-            || self.discovery_path_requests.contains_key(destination_hash)
+        if self.path_requests.gates.contains_key(destination_hash)
+            || self.path_requests.discovery.contains_key(destination_hash)
         {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                 "Skipping ingress limit check for {:02x?} due to waiting path requests",
@@ -288,7 +287,7 @@ impl TransportEngine {
         };
         // Upstream c850cdac: an announce ingress control takes up counts as
         // received, without bytes, whether it is held or dropped.
-        self.announce_receipts.push((iface, 0));
+        self.accounting.announce_receipts.push((iface, 0));
         let held = self.ingress_control.hold_announce(
             iface,
             &info.ingress_control,
@@ -305,7 +304,7 @@ impl TransportEngine {
             },
         );
         if held {
-            self.inbound_filtered = true;
+            self.accounting.inbound_filtered = true;
             HoldDecision::Held
         } else {
             HoldDecision::Filtered
@@ -330,7 +329,7 @@ impl TransportEngine {
                 actions.push(TransportAction::ProtocolViolation {
                     interface: ctx.iface,
                 });
-                self.inbound_filtered = true;
+                self.accounting.inbound_filtered = true;
                 return;
             }
         };
@@ -367,18 +366,18 @@ impl TransportEngine {
         // emitted just before rejected as not newer, and not rebroadcast.
         let behind_queued = announce_queue.has_destination(&ctx.packet.destination_hash);
         let sig_cache_key = Self::announce_sig_cache_key(&ctx.packet.destination_hash, &announce);
-        if !behind_queued && self.announce_sig_cache.contains(&sig_cache_key) {
+        if !behind_queued && self.announces.sig_cache.contains(&sig_cache_key) {
             let Ok(validated) =
                 announce.to_validated_with_cached_signature(&ctx.packet.destination_hash)
             else {
                 self.record_invalid_announce(&announce, ctx.iface, ctx.now, actions);
-                self.inbound_filtered = true;
+                self.accounting.inbound_filtered = true;
                 return;
             };
             let random_blob = match extract_random_blob(ctx.packet.data()) {
                 Some(b) => b,
                 None => {
-                    self.inbound_filtered = true;
+                    self.accounting.inbound_filtered = true;
                     return;
                 }
             };
@@ -403,14 +402,14 @@ impl TransportEngine {
         if !behind_queued && ctx.packet.context == constants::CONTEXT_PATH_RESPONSE {
             let Ok(validated) = announce.validate(&ctx.packet.destination_hash) else {
                 self.record_invalid_announce(&announce, ctx.iface, ctx.now, actions);
-                self.inbound_filtered = true;
+                self.accounting.inbound_filtered = true;
                 return;
             };
-            self.announce_sig_cache.insert(sig_cache_key, ctx.now);
+            self.announces.sig_cache.insert(sig_cache_key, ctx.now);
             let random_blob = match extract_random_blob(ctx.packet.data()) {
                 Some(b) => b,
                 None => {
-                    self.inbound_filtered = true;
+                    self.accounting.inbound_filtered = true;
                     return;
                 }
             };
@@ -438,7 +437,7 @@ impl TransportEngine {
                 actions.push(TransportAction::ProtocolViolation {
                     interface: ctx.iface,
                 });
-                self.inbound_filtered = true;
+                self.accounting.inbound_filtered = true;
                 return;
             }
         };
@@ -471,9 +470,9 @@ impl TransportEngine {
         now: f64,
         rng: &mut dyn Rng,
     ) -> Vec<TransportAction> {
-        self.inbound_filtered = false;
-        self.inbound_filtered_announce = false;
-        self.announce_sig_cache.insert(sig_cache_key, now);
+        self.accounting.inbound_filtered = false;
+        self.accounting.inbound_filtered_announce = false;
+        self.announces.sig_cache.insert(sig_cache_key, now);
         let mut actions = Vec::new();
         self.process_verified_announce(
             VerifiedAnnounceCtx {
@@ -494,7 +493,7 @@ impl TransportEngine {
 
     /// Whether an announce with this signature cache key was verified recently.
     pub fn announce_sig_cache_contains(&self, sig_cache_key: &[u8; 32]) -> bool {
-        self.announce_sig_cache.contains(sig_cache_key)
+        self.announces.sig_cache.contains(sig_cache_key)
     }
 
     /// Check if there's a waiting discovery path request for a destination.
@@ -504,10 +503,11 @@ impl TransportEngine {
         dest_hash: &[u8; 16],
     ) -> Option<Vec<InterfaceId>> {
         let request = self
-            .discovery_path_requests
+            .path_requests
+            .discovery
             .remove(dest_hash)
             .map(|req| req.requesting_interfaces);
-        self.discovery_path_request_deadlines.remove(dest_hash);
+        self.path_requests.discovery_deadlines.remove(dest_hash);
         request
     }
 }

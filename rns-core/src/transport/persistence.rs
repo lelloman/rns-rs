@@ -110,7 +110,7 @@ impl TransportEngine {
 
         let packet_hashes = self.packet_hashlist.iter().collect();
         let mut paths = Vec::new();
-        for (destination_hash, path_set) in &self.path_table {
+        for (destination_hash, path_set) in &self.paths.table {
             for entry in path_set.iter() {
                 let Some(interface_hash) = self.interface_hashes.get(&entry.receiving_interface)
                 else {
@@ -125,7 +125,8 @@ impl TransportEngine {
         }
 
         let tunnels = self
-            .tunnel_table
+            .tunnels
+            .table
             .iter()
             .map(|(tunnel_id, tunnel)| {
                 let interface_hash = tunnel
@@ -156,6 +157,7 @@ impl TransportEngine {
             .collect();
 
         let announce_rates = self
+            .announces
             .rate_limiter
             .entries()
             .map(|(destination_hash, entry)| PersistedAnnounceRate {
@@ -273,7 +275,8 @@ impl TransportEngine {
             // A restored tunnel waits at most TUNNEL_RECONNECT_WINDOW for its
             // endpoint to synthesize it again (upstream 023849ed).
             let expires = tunnel.expires.min(now + constants::TUNNEL_RECONNECT_WINDOW);
-            self.tunnel_table
+            self.tunnels
+                .table
                 .restore_detached(tunnel.tunnel_id, restored_paths, expires);
             stats.tunnels += 1;
         }
@@ -286,7 +289,7 @@ impl TransportEngine {
                 .len()
                 .saturating_sub(constants::MAX_RATE_TIMESTAMPS);
             timestamps.drain(..excess);
-            self.rate_limiter.restore(
+            self.announces.rate_limiter.restore(
                 rate.destination_hash,
                 RateEntry {
                     last: rate.last,
@@ -344,7 +347,9 @@ impl TransportEngine {
         };
         let mut destination_type = [0u8; constants::NAME_HASH_LENGTH / 8];
         destination_type.copy_from_slice(name_hash);
-        self.destination_filter.admits_restored(&destination_type)
+        self.policy
+            .destination_filter
+            .admits_restored(&destination_type)
     }
 }
 
@@ -690,7 +695,7 @@ mod tests {
         let mut source = TransportEngine::new(config(8));
         source.register_interface(interface(9, "tunnel-iface"));
         source.handle_tunnel([0x44; 32], InterfaceId(9), 100.0);
-        source.tunnel_table.store_tunnel_path(
+        source.tunnels.table.store_tunnel_path(
             &[0x44; 32],
             [5; 16],
             TunnelPath {
@@ -754,9 +759,11 @@ mod tests {
         // target 10s, grace 0, penalty 30s: the second fast announce blocks
         // until 100 + 10 + 30 = 140.
         assert!(!source
+            .announces
             .rate_limiter
             .check_and_update(&dest, 100.0, Some(10.0), 0, 30.0));
         assert!(source
+            .announces
             .rate_limiter
             .check_and_update(&dest, 101.0, Some(10.0), 0, 30.0));
 
@@ -775,11 +782,16 @@ mod tests {
         let mut restored = TransportEngine::new(config(8));
         let stats = restored.restore_persistence_snapshot(snapshot, 120.0, |_| None);
         assert_eq!(stats.announce_rates, 1);
-        assert!(restored
-            .rate_limiter
-            .check_and_update(&dest, 120.0, Some(10.0), 0, 30.0));
+        assert!(restored.announces.rate_limiter.check_and_update(
+            &dest,
+            120.0,
+            Some(10.0),
+            0,
+            30.0
+        ));
         // An unrestored engine would admit it as a first announce.
         assert!(!TransportEngine::new(config(8))
+            .announces
             .rate_limiter
             .check_and_update(&dest, 120.0, Some(10.0), 0, 30.0));
     }
@@ -998,9 +1010,9 @@ mod tests {
         let stats =
             engine.restore_persistence_snapshot(snapshot, 500.0, |hash| cache.get(hash).cloned());
         assert_eq!((stats.tunnels, stats.skipped_paths), (1, 5));
-        let restored = &engine.tunnel_table.get(&[0x11; 32]).unwrap().paths;
+        let restored = &engine.tunnels.table.get(&[0x11; 32]).unwrap().paths;
         let restored: Vec<_> = restored.keys().copied().collect();
         assert_eq!(restored, vec![[1; 16], [4; 16]]);
-        assert!(engine.tunnel_table.get(&[0x22; 32]).is_none());
+        assert!(engine.tunnels.table.get(&[0x22; 32]).is_none());
     }
 }

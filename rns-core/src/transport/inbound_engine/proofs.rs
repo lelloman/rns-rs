@@ -13,22 +13,24 @@ impl TransportEngine {
             // Link request proof routing. As in Transport.py, a shared
             // instance without transport also routes proofs for links to or
             // from its local clients (#183).
-            let for_local_client_link =
-                self.link_table
-                    .get(&packet.destination_hash)
-                    .is_some_and(|entry| {
-                        self.interface_is_local_client(entry.next_hop_interface)
-                            || self.interface_is_local_client(entry.received_interface)
-                    });
+            let for_local_client_link = self
+                .routes
+                .links
+                .get(&packet.destination_hash)
+                .is_some_and(|entry| {
+                    self.interface_is_local_client(entry.next_hop_interface)
+                        || self.interface_is_local_client(entry.received_interface)
+                });
             let verdict = self
+                .routes
                 .lrproof_verdict
                 .take()
                 .filter(|(link_id, _)| *link_id == packet.destination_hash)
                 .map(|(_, valid)| valid);
             if (self.config.transport_enabled || ctx.from_local_client || for_local_client_link)
-                && self.link_table.contains_key(&packet.destination_hash)
+                && self.routes.links.contains_key(&packet.destination_hash)
             {
-                let link_entry = self.link_table.get(&packet.destination_hash).cloned();
+                let link_entry = self.routes.links.get(&packet.destination_hash).cloned();
                 if verdict == Some(false) {
                     // Transport.py drops a transported proof whose signature
                     // does not verify, as a protocol violation.
@@ -58,7 +60,7 @@ impl TransportEngine {
                         // The caller checked the signature when it could recall
                         // the destination's identity (`verdict`); a proof from
                         // the destination proves it alive.
-                        if let Some(le) = self.link_table.get_mut(&packet.destination_hash) {
+                        if let Some(le) = self.routes.links.get_mut(&packet.destination_hash) {
                             le.validated = true;
                         }
                         if verdict == Some(true) {
@@ -105,11 +107,12 @@ impl TransportEngine {
             // instance without transport also routes proofs to or from its
             // local clients (#183).
             let proof_for_local_client = self
-                .reverse_table
+                .routes
+                .reverse
                 .get(&packet.destination_hash)
                 .is_some_and(|entry| self.interface_is_local_client(entry.receiving_interface));
             if self.config.transport_enabled || ctx.from_local_client || proof_for_local_client {
-                if let Some(reverse_entry) = self.reverse_table.remove(&packet.destination_hash) {
+                if let Some(reverse_entry) = self.routes.reverse.remove(&packet.destination_hash) {
                     if let Some(action) = route_proof_via_reverse(
                         packet,
                         &reverse_entry,

@@ -20,7 +20,7 @@ impl TransportEngine {
         if shared_medium {
             return;
         }
-        if let Some(waiting) = self.announce_table.get_mut(&packet.destination_hash) {
+        if let Some(waiting) = self.announces.table.get_mut(&packet.destination_hash) {
             if waiting.packet_hash == packet.packet_hash {
                 waiting.blocked_interfaces.insert(iface);
             }
@@ -43,12 +43,15 @@ impl TransportEngine {
         let required_value = self
             .interfaces
             .get(&ctx.iface)
-            .map(|info| info.stamp_costs.destination_cost(&self.stamp_requirements))
-            .unwrap_or(self.stamp_requirements.destination_cost);
+            .map(|info| {
+                info.stamp_costs
+                    .destination_cost(&self.policy.stamp_requirements)
+            })
+            .unwrap_or(self.policy.stamp_requirements.destination_cost);
         let stamp_status = ctx
             .validated
             .apply_stamp(&ctx.packet.destination_hash, required_value);
-        if self.stamp_requirements.enforced
+        if self.policy.stamp_requirements.enforced
             && stamp_status != crate::announce::AnnounceStampStatus::Valid
         {
             self.filter_announce();
@@ -75,20 +78,21 @@ impl TransportEngine {
         // Upstream's `received_announce(size)`: a valid announce that was
         // not held counts as received, with its bytes, whatever the path
         // table then makes of it.
-        self.announce_receipts
+        self.accounting
+            .announce_receipts
             .push((ctx.iface, ctx.original_raw.len()));
 
         if ctx.packet.hops > constants::PATHFINDER_M {
             return;
         }
 
-        let existing_set = self.path_table.get(&ctx.packet.destination_hash);
+        let existing_set = self.paths.table.get(&ctx.packet.destination_hash);
         let was_unknown_destination = existing_set.is_none_or(|ps| ps.is_empty());
 
         // Reset stale path state before first-path installation so path-state handling
         // cannot race ahead of the path table for previously unknown destinations.
         if was_unknown_destination {
-            self.path_states.remove(&ctx.packet.destination_hash);
+            self.paths.states.remove(&ctx.packet.destination_hash);
         }
 
         // Multi-path aware decision
@@ -155,7 +159,7 @@ impl TransportEngine {
         // Rate limiting
         let rate_blocked = if ctx.packet.context != constants::CONTEXT_PATH_RESPONSE {
             if let Some(iface_info) = self.interfaces.get(&ctx.iface) {
-                self.rate_limiter.check_and_update(
+                self.announces.rate_limiter.check_and_update(
                     &ctx.packet.destination_hash,
                     ctx.now,
                     iface_info.announce_rate_target,
@@ -184,7 +188,8 @@ impl TransportEngine {
         let replaces_as_upstream =
             matches!(mp_decision, MultiPathDecision::ReplaceAsUpstream { .. });
         let existing_blobs = self
-            .path_table
+            .paths
+            .table
             .get(&ctx.packet.destination_hash)
             .and_then(|ps| {
                 if replaces_as_upstream {
@@ -233,7 +238,8 @@ impl TransportEngine {
         // As upstream, the new path keeps when the destination's path was
         // last used.
         path_entry.used = self
-            .path_table
+            .paths
+            .table
             .get(&ctx.packet.destination_hash)
             .and_then(|ps| ps.primary())
             .map_or(0.0, |path| path.used);
@@ -266,12 +272,13 @@ impl TransportEngine {
             // As upstream, the tunnel keeps the path's random blobs and
             // when it was last used.
             let (blobs, used) = self
-                .path_table
+                .paths
+                .table
                 .get(&ctx.packet.destination_hash)
                 .and_then(|ps| ps.find_by_next_hop(&ctx.received_from))
                 .map(|e| (e.random_blobs.clone(), e.used))
                 .unwrap_or_default();
-            self.tunnel_table.store_tunnel_path(
+            self.tunnels.table.store_tunnel_path(
                 &tunnel_id,
                 ctx.packet.destination_hash,
                 tunnel::TunnelPath {
@@ -291,7 +298,7 @@ impl TransportEngine {
 
         // Re-apply the path-state reset after storing the path entry so any transient
         // stale state is also cleared once the destination exists in the path table.
-        self.path_states.remove(&ctx.packet.destination_hash);
+        self.paths.states.remove(&ctx.packet.destination_hash);
         // Upstream 833f6cf2: an announce from a local client this instance
         // serves proves its destination alive, so its path is marked
         // responsive (timestamp, expiry and use refreshed) instead of
@@ -311,7 +318,8 @@ impl TransportEngine {
             // upstream 70eb417d it goes only to the requesting interface, as
             // a path response (attached interface, blocked rebroadcast).
             if let Some((requesting_interface, _)) = self
-                .pending_local_path_requests
+                .path_requests
+                .pending_local
                 .remove(&ctx.packet.destination_hash)
             {
                 let entry = AnnounceEntry {

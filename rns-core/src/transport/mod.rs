@@ -285,38 +285,48 @@ impl AcceptedPathRequest {
     }
 }
 
-/// The core transport/routing engine.
-///
-/// Maintains routing tables and processes packets without performing any I/O.
-/// Returns `Vec<TransportAction>` that the caller must execute.
-pub struct TransportEngine {
-    config: TransportConfig,
-    path_table: BTreeMap<[u8; 16], PathSet>,
-    announce_table: BTreeMap<[u8; 16], AnnounceEntry>,
-    reverse_table: tables::ReverseTable,
-    link_table: tables::LinkTable,
-    /// Bytes of link packets received for relaying through the link table
-    /// (upstream ef3e8086 `Transport.link_rxb`), not counting those from
-    /// local clients; read with [`TransportEngine::link_traffic`].
-    link_rxb: u64,
-    /// Bytes of link packets relayed through the link table (upstream
-    /// ef3e8086 `Transport.link_txb`), not counting those sent to local
-    /// clients.
-    link_txb: u64,
-    held_announces: BTreeMap<[u8; 16], AnnounceEntry>,
-    packet_hashlist: PacketHashlist,
-    announce_sig_cache: AnnounceSignatureCache,
+/// The path table and the state the engine keeps per path destination.
+struct PathTables {
+    table: BTreeMap<[u8; 16], PathSet>,
+    /// Path states (`STATE_*`) of destinations, as upstream's
+    /// `Transport.path_states`.
+    states: BTreeMap<[u8; 16], u8>,
+    /// How many destinations were evicted to keep the path table within
+    /// its cap.
+    cap_evict_count: usize,
+}
+
+/// Announces waiting for retransmission and the per-destination and
+/// per-interface announce bookkeeping.
+struct AnnounceState {
+    /// Announces awaiting retransmission (`Transport.announce_table`).
+    table: BTreeMap<[u8; 16], AnnounceEntry>,
+    /// Announce table entries held aside (`Transport.held_announces`).
+    held: BTreeMap<[u8; 16], AnnounceEntry>,
+    sig_cache: AnnounceSignatureCache,
     rate_limiter: AnnounceRateLimiter,
-    path_states: BTreeMap<[u8; 16], u8>,
+    /// Per-interface outbound announce queues.
+    queues: AnnounceQueues,
+}
+
+/// Routes of proofs and link traffic through this node.
+struct LinkRoutes {
+    /// Where to send proofs of forwarded packets back to.
+    reverse: tables::ReverseTable,
+    /// Links relayed by this node.
+    links: tables::LinkTable,
     /// Whether the next LRPROOF for this link carries a valid signature, as
     /// checked by the caller with the destination's identity
     /// ([`TransportEngine::set_lrproof_verdict`]).
     lrproof_verdict: Option<([u8; 16], bool)>,
-    interfaces: BTreeMap<InterfaceId, InterfaceInfo>,
-    interface_hashes: BTreeMap<InterfaceId, [u8; 32]>,
+}
+
+/// Tunnels and the tunnel synthesis state of each interface.
+struct TunnelState {
+    table: TunnelTable,
     /// Tunnels this node synthesized, by the interface it synthesized them
     /// on (upstream 3281e283 `Interface.local_tunnel_id`).
-    local_tunnel_ids: BTreeMap<InterfaceId, [u8; 32]>,
+    local_ids: BTreeMap<InterfaceId, [u8; 32]>,
     /// The transport identity hash of the node that synthesized a tunnel
     /// over an interface (upstream 464e7598 `Interface.remote_transport`).
     remote_transports: BTreeMap<InterfaceId, [u8; 16]>,
@@ -331,15 +341,31 @@ pub struct TransportEngine {
     /// What the remote transport node reported in its synthesis extension
     /// (upstream b7a93b9b `remote_impl`, `remote_vers`, `remote_is_tn`,
     /// `remote_dst_cost`, `remote_pr_cost`).
-    remote_transport_infos: BTreeMap<InterfaceId, tunnel::RemoteTransportInfo>,
-    local_destinations: BTreeMap<[u8; 16], u8>,
-    blackholed_identities: BTreeMap<[u8; 16], BlackholeEntry>,
-    announce_queues: AnnounceQueues,
-    ingress_control: IngressControl,
-    tunnel_table: TunnelTable,
-    discovery_pr_tags: VecDeque<[u8; 32]>,
-    discovery_pr_tag_set: BTreeSet<[u8; 32]>,
-    path_requests: BTreeMap<[u8; 16], f64>,
+    remote_infos: BTreeMap<InterfaceId, tunnel::RemoteTransportInfo>,
+}
+
+/// Path requests sent, seen and waiting, and how this node sends its own.
+struct PathRequestState {
+    /// When this node last sent or accepted a path request, by destination
+    /// (the path request gate).
+    gates: BTreeMap<[u8; 16], f64>,
+    /// Tags of path requests already seen, oldest first, and as a set.
+    discovery_tags: VecDeque<[u8; 32]>,
+    discovery_tag_set: BTreeSet<[u8; 32]>,
+    /// Path requests waiting for an announce of their destination.
+    discovery: BTreeMap<[u8; 16], DiscoveryPathRequest>,
+    /// When each of those requests times out.
+    discovery_deadlines: BTreeMap<[u8; 16], f64>,
+    /// Path requests for destinations behind a local client, by destination:
+    /// the requesting interface and when it asked (Transport.py
+    /// `pending_local_path_requests`).
+    pending_local: BTreeMap<[u8; 16], (InterfaceId, f64)>,
+    /// Destinations whose path is being rediscovered, with the interface to
+    /// skip, sent one every `DISCOVERY_PR_TX_THROTTLE` seconds
+    /// (`Transport.pending_discovery_prs`).
+    pending_discovery: VecDeque<([u8; 16], Option<InterfaceId>)>,
+    /// When the next queued rediscovery request may be sent.
+    discovery_next_tx: f64,
     /// Whether path requests emitted or forwarded for local clients by this
     /// node are stamped (`Transport.STAMP_PRS`). Defaults to the compile-time
     /// constant; settable so the stamping path can be exercised.
@@ -348,9 +374,19 @@ pub struct TransportEngine {
     /// requests. Upstream's requests always carry one, but a client keeps
     /// `identity_hash` unset, since that marks a node serving local clients.
     client_transport_id: Option<[u8; 16]>,
-    /// Paths with more hops than this are culled (`Transport.HOP_LIMITER`,
-    /// upstream f96cef7e); `[filter] hop_limiter`.
-    hop_limiter: u8,
+}
+
+/// Traffic accounting the driver reads back after handing in a frame or a
+/// tick.
+struct TrafficAccounting {
+    /// Bytes of link packets received for relaying through the link table
+    /// (upstream ef3e8086 `Transport.link_rxb`), not counting those from
+    /// local clients; read with [`TransportEngine::link_traffic`].
+    link_rxb: u64,
+    /// Bytes of link packets relayed through the link table (upstream
+    /// ef3e8086 `Transport.link_txb`), not counting those sent to local
+    /// clients.
+    link_txb: u64,
     /// Whether the inbound packet being handled was dropped where upstream's
     /// `preprocess_inbound` drops it, so its bytes count as filtered
     /// (upstream 134dc677). Reset when a packet's handling starts; read with
@@ -369,32 +405,86 @@ pub struct TransportEngine {
     /// since upstream 29dc449a; read with
     /// [`TransportEngine::take_released_traffic`].
     released_traffic: Vec<ReleasedTraffic>,
+}
+
+/// What the engine admits and keeps, beyond [`TransportConfig`].
+struct Policy {
     /// Announce and path request stamp requirements (`STAMPS_ENFORCED`,
     /// `DESTINATION_COST`, `PR_COST`), configurable through `[stamps]`.
     stamp_requirements: StampRequirements,
     /// Announce filtering by destination type (`[filter]`, upstream
     /// 825c2e19).
     destination_filter: destination_filter::DestinationTypeFilter,
+    /// Paths with more hops than this are culled (`Transport.HOP_LIMITER`,
+    /// upstream f96cef7e); `[filter] hop_limiter`.
+    hop_limiter: u8,
     /// `Transport.control_hashes`: the path request and tunnel synthesis
     /// destinations, which are handled by the engine and never bridged as
     /// plain broadcasts.
     control_destinations: [[u8; 16]; 2],
-    discovery_path_requests: BTreeMap<[u8; 16], DiscoveryPathRequest>,
-    discovery_path_request_deadlines: BTreeMap<[u8; 16], f64>,
-    /// Path requests for destinations behind a local client, by destination:
-    /// the requesting interface and when it asked (Transport.py
-    /// `pending_local_path_requests`).
-    pending_local_path_requests: BTreeMap<[u8; 16], (InterfaceId, f64)>,
-    /// Destinations whose path is being rediscovered, with the interface to
-    /// skip, sent one every `DISCOVERY_PR_TX_THROTTLE` seconds
-    /// (`Transport.pending_discovery_prs`).
-    pending_discovery_prs: VecDeque<([u8; 16], Option<InterfaceId>)>,
-    /// When the next queued rediscovery request may be sent.
-    discovery_pr_next_tx: f64,
-    path_destination_cap_evict_count: usize,
-    // Job timing
+}
+
+impl TunnelState {
+    /// Drop the synthesis state of a removed interface.
+    fn forget_interface(&mut self, interface: InterfaceId) {
+        self.local_ids.remove(&interface);
+        self.reset_synthesis(interface);
+        self.remote_infos.remove(&interface);
+    }
+
+    /// Forget the remote transport and whether a synthesis was received or
+    /// emitted on an interface.
+    fn reset_synthesis(&mut self, interface: InterfaceId) {
+        self.remote_transports.remove(&interface);
+        self.synthesis_received.remove(&interface);
+        self.synthesis_emitted.remove(&interface);
+    }
+}
+
+impl PathRequestState {
+    /// Record a path request tag, evicting the oldest beyond `max_tags`;
+    /// false when the tag was already seen.
+    fn insert_discovery_tag(&mut self, unique_tag: [u8; 32], max_tags: usize) -> bool {
+        if self.discovery_tag_set.contains(&unique_tag) {
+            return false;
+        }
+        if max_tags != usize::MAX && self.discovery_tags.len() >= max_tags {
+            if let Some(evicted) = self.discovery_tags.pop_front() {
+                self.discovery_tag_set.remove(&evicted);
+            }
+        }
+        self.discovery_tags.push_back(unique_tag);
+        self.discovery_tag_set.insert(unique_tag);
+        true
+    }
+}
+
+/// When the periodic jobs last ran.
+struct JobTimers {
     announces_last_checked: f64,
     tables_last_culled: f64,
+}
+
+/// The core transport/routing engine.
+///
+/// Maintains routing tables and processes packets without performing any I/O.
+/// Returns `Vec<TransportAction>` that the caller must execute.
+pub struct TransportEngine {
+    config: TransportConfig,
+    paths: PathTables,
+    announces: AnnounceState,
+    routes: LinkRoutes,
+    packet_hashlist: PacketHashlist,
+    interfaces: BTreeMap<InterfaceId, InterfaceInfo>,
+    interface_hashes: BTreeMap<InterfaceId, [u8; 32]>,
+    tunnels: TunnelState,
+    local_destinations: BTreeMap<[u8; 16], u8>,
+    blackholed_identities: BTreeMap<[u8; 16], BlackholeEntry>,
+    ingress_control: IngressControl,
+    path_requests: PathRequestState,
+    accounting: TrafficAccounting,
+    policy: Policy,
+    timers: JobTimers,
 }
 
 mod engine_state;
