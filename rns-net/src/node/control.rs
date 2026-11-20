@@ -139,6 +139,19 @@ impl RnsNode {
         }
     }
 
+    /// The names this node knows destination types by: upstream's
+    /// `Transport.destination_type_map` and `flagged_type_map`, from the
+    /// `[filter]` section, the type files and the types applications asked
+    /// for.
+    pub fn destination_type_names(
+        &self,
+    ) -> Result<crate::destination_types::DestinationTypeNames, SendError> {
+        match self.query(QueryRequest::DestinationTypeNames)? {
+            QueryResponse::DestinationTypeNames(names) => Ok(names),
+            _ => Err(SendError),
+        }
+    }
+
     /// Enter drain mode and stop admitting new work.
     pub fn begin_drain(&self, timeout: Duration) -> Result<(), SendError> {
         // Draining is one-way. Refuse new work from this call on, before the
