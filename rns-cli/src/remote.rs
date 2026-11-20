@@ -42,18 +42,6 @@ struct RemoteCallbacks {
 }
 
 impl Callbacks for RemoteCallbacks {
-    fn on_announce(&mut self, _announced: rns_net::AnnouncedIdentity) {}
-
-    fn on_path_updated(&mut self, _dest_hash: rns_net::DestHash, _hops: u8) {}
-
-    fn on_local_delivery(
-        &mut self,
-        _dest_hash: rns_net::DestHash,
-        _raw: Vec<u8>,
-        _packet_hash: rns_net::PacketHash,
-    ) {
-    }
-
     fn on_link_established(
         &mut self,
         link_id: rns_net::LinkId,

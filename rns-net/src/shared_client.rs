@@ -611,17 +611,7 @@ pub fn bench_shared_client_replay_once(
     reconnect_wait: Duration,
 ) -> io::Result<usize> {
     struct BenchNoopCallbacks;
-    impl Callbacks for BenchNoopCallbacks {
-        fn on_announce(&mut self, _: crate::destination::AnnouncedIdentity) {}
-        fn on_path_updated(&mut self, _: rns_core::types::DestHash, _: u8) {}
-        fn on_local_delivery(
-            &mut self,
-            _: rns_core::types::DestHash,
-            _: Vec<u8>,
-            _: rns_core::types::PacketHash,
-        ) {
-        }
-    }
+    impl Callbacks for BenchNoopCallbacks {}
 
     fn build_shared_announce_raw(
         dest_hash: &[u8; 16],
@@ -979,17 +969,7 @@ mod tests {
     use crate::interface::local::LocalServerConfig;
 
     struct NoopCallbacks;
-    impl Callbacks for NoopCallbacks {
-        fn on_announce(&mut self, _: crate::destination::AnnouncedIdentity) {}
-        fn on_path_updated(&mut self, _: rns_core::types::DestHash, _: u8) {}
-        fn on_local_delivery(
-            &mut self,
-            _: rns_core::types::DestHash,
-            _: Vec<u8>,
-            _: rns_core::types::PacketHash,
-        ) {
-        }
-    }
+    impl Callbacks for NoopCallbacks {}
 
     fn find_free_port() -> u16 {
         crate::test_support::port()

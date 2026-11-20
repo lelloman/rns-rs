@@ -7,9 +7,7 @@ use rns_core::msgpack::{self, Value};
 use rns_core::types::IdentityHash;
 use rns_crypto::identity::Identity;
 use rns_net::link_manager::ResourceStrategy;
-use rns_net::{
-    AnnouncedIdentity, Callbacks, DestHash, Destination, PacketHash, RequestResponse, RnsNode,
-};
+use rns_net::{Callbacks, Destination, RequestResponse, RnsNode};
 
 use crate::acl::{Access, Operation};
 use crate::config::ServerConfig;
@@ -1464,14 +1462,7 @@ fn print_identity(identity: &Identity, client: &Identity, base256: bool, serve_n
 #[derive(Default)]
 struct ServerCallbacks;
 
-impl Callbacks for ServerCallbacks {
-    fn on_announce(&mut self, _announced: AnnouncedIdentity) {}
-
-    fn on_path_updated(&mut self, _dest_hash: DestHash, _hops: u8) {}
-
-    fn on_local_delivery(&mut self, _dest_hash: DestHash, _raw: Vec<u8>, _packet_hash: PacketHash) {
-    }
-}
+impl Callbacks for ServerCallbacks {}
 
 #[derive(Debug, Default)]
 struct ServerOptions {

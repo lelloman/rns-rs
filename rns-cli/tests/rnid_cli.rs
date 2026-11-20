@@ -11,19 +11,7 @@ use rns_net::{Callbacks, QueryRequest, QueryResponse, RnsNode};
 
 struct NoopCallbacks;
 
-impl Callbacks for NoopCallbacks {
-    fn on_announce(&mut self, _announced: rns_net::AnnouncedIdentity) {}
-
-    fn on_path_updated(&mut self, _dest_hash: rns_net::DestHash, _hops: u8) {}
-
-    fn on_local_delivery(
-        &mut self,
-        _dest_hash: rns_net::DestHash,
-        _raw: Vec<u8>,
-        _packet_hash: rns_net::PacketHash,
-    ) {
-    }
-}
+impl Callbacks for NoopCallbacks {}
 
 fn rnid(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_rnid"))
@@ -386,16 +374,6 @@ struct AnnounceRecorder(std::sync::mpsc::Sender<[u8; 16]>);
 impl Callbacks for AnnounceRecorder {
     fn on_announce(&mut self, announced: rns_net::AnnouncedIdentity) {
         let _ = self.0.send(announced.dest_hash.0);
-    }
-
-    fn on_path_updated(&mut self, _dest_hash: rns_net::DestHash, _hops: u8) {}
-
-    fn on_local_delivery(
-        &mut self,
-        _dest_hash: rns_net::DestHash,
-        _raw: Vec<u8>,
-        _packet_hash: rns_net::PacketHash,
-    ) {
     }
 }
 

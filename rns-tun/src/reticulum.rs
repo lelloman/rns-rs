@@ -7,7 +7,7 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rns_core::types::{DestHash, IdentityHash, LinkId, PacketHash};
+use rns_core::types::{DestHash, IdentityHash, LinkId};
 use rns_crypto::identity::Identity;
 use rns_net::{Callbacks, Destination, RnsNode};
 
@@ -86,7 +86,6 @@ impl Callbacks for NodeCallbacks {
     fn on_path_updated(&mut self, dest_hash: DestHash, _hops: u8) {
         self.emit(NodeEvent::PathUpdated(dest_hash.0));
     }
-    fn on_local_delivery(&mut self, _: DestHash, _: Vec<u8>, _: PacketHash) {}
     fn on_link_established(&mut self, link_id: LinkId, _: DestHash, _: f64, initiator: bool) {
         self.emit(NodeEvent::LinkEstablished {
             link_id: link_id.0,

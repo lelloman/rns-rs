@@ -96,8 +96,6 @@ impl Callbacks for TestCallbacks {
         let _ = self.tx.send(TestEvent::Announce(announced));
     }
 
-    fn on_path_updated(&mut self, _: DestHash, _: u8) {}
-
     fn on_local_delivery(&mut self, dest_hash: DestHash, raw: Vec<u8>, packet_hash: PacketHash) {
         let _ = self.tx.send(TestEvent::Delivery {
             dest_hash,
@@ -117,11 +115,7 @@ impl Callbacks for TestCallbacks {
 
 struct TransportCallbacks;
 
-impl Callbacks for TransportCallbacks {
-    fn on_announce(&mut self, _: AnnouncedIdentity) {}
-    fn on_path_updated(&mut self, _: DestHash, _: u8) {}
-    fn on_local_delivery(&mut self, _: DestHash, _: Vec<u8>, _: PacketHash) {}
-}
+impl Callbacks for TransportCallbacks {}
 
 // ─── Helper functions ────────────────────────────────────────────────────────
 

@@ -2,17 +2,10 @@
 use crate::protocol::{self, Command, Message};
 use anyhow::{bail, Result};
 use rns_core::constants;
-use rns_net::{
-    AnnouncedIdentity, Callbacks, DestHash, InterfaceConfig, InterfaceId, NodeConfig, PacketHash,
-    RnsNode, TcpServerConfig,
-};
+use rns_net::{Callbacks, InterfaceConfig, InterfaceId, NodeConfig, RnsNode, TcpServerConfig};
 
 struct RelayCallbacks;
-impl Callbacks for RelayCallbacks {
-    fn on_announce(&mut self, _: AnnouncedIdentity) {}
-    fn on_path_updated(&mut self, _: DestHash, _: u8) {}
-    fn on_local_delivery(&mut self, _: DestHash, _: Vec<u8>, _: PacketHash) {}
-}
+impl Callbacks for RelayCallbacks {}
 
 pub(crate) fn run(port: u16) -> Result<()> {
     let node = RnsNode::start(

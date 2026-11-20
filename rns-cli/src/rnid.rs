@@ -171,11 +171,7 @@ enum RsgMessage<'a> {
 
 struct NoCallbacks;
 
-impl rns_net::Callbacks for NoCallbacks {
-    fn on_announce(&mut self, _: rns_net::AnnouncedIdentity) {}
-    fn on_path_updated(&mut self, _: rns_net::DestHash, _: u8) {}
-    fn on_local_delivery(&mut self, _: rns_net::DestHash, _: Vec<u8>, _: rns_net::PacketHash) {}
-}
+impl rns_net::Callbacks for NoCallbacks {}
 
 struct Rnid {
     args: Namespace,

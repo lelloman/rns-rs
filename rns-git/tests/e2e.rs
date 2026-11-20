@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use rns_core::msgpack::{self, Value};
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
-use rns_net::{AnnouncedIdentity, Callbacks, DestHash, Destination, LinkId, PacketHash, RnsNode};
+use rns_net::{AnnouncedIdentity, Callbacks, DestHash, Destination, LinkId, RnsNode};
 
 use rns_git::config::ServerConfig;
 use rns_git::git;
@@ -37,11 +37,6 @@ impl Callbacks for ClientCallbacks {
         let _ = self.tx.send(Event::Announce(announced));
     }
 
-    fn on_path_updated(&mut self, _dest_hash: DestHash, _hops: u8) {}
-
-    fn on_local_delivery(&mut self, _dest_hash: DestHash, _raw: Vec<u8>, _packet_hash: PacketHash) {
-    }
-
     fn on_link_established(
         &mut self,
         link_id: LinkId,
@@ -65,14 +60,7 @@ impl Callbacks for ClientCallbacks {
 
 struct NoopCallbacks;
 
-impl Callbacks for NoopCallbacks {
-    fn on_announce(&mut self, _announced: AnnouncedIdentity) {}
-
-    fn on_path_updated(&mut self, _dest_hash: DestHash, _hops: u8) {}
-
-    fn on_local_delivery(&mut self, _dest_hash: DestHash, _raw: Vec<u8>, _packet_hash: PacketHash) {
-    }
-}
+impl Callbacks for NoopCallbacks {}
 
 struct E2eHarness {
     tmp: tempfile::TempDir,

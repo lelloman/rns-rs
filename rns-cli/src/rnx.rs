@@ -19,9 +19,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rns_core::msgpack::{self, Value};
-use rns_core::types::{DestHash, IdentityHash, LinkId, PacketHash};
+use rns_core::types::{DestHash, IdentityHash, LinkId};
 use rns_net::destination::Destination;
-use rns_net::{AnnouncedIdentity, Callbacks, RnsNode};
+use rns_net::{Callbacks, RnsNode};
 
 use crate::app;
 use crate::args::{Args, Opt, OptionSpec};
@@ -166,10 +166,6 @@ struct RnxCallbacks {
 }
 
 impl Callbacks for RnxCallbacks {
-    fn on_announce(&mut self, _announced: AnnouncedIdentity) {}
-    fn on_path_updated(&mut self, _dest_hash: DestHash, _hops: u8) {}
-    fn on_local_delivery(&mut self, _dest_hash: DestHash, _raw: Vec<u8>, _packet_hash: PacketHash) {
-    }
     fn on_link_established(
         &mut self,
         link_id: LinkId,

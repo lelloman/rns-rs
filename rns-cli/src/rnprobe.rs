@@ -15,9 +15,7 @@ use crate::pyfmt::{prettyhexrep, round_float, str_of};
 use rns_core::types::{DestHash, PacketHash};
 use rns_net::event::{QueryRequest, QueryResponse, MAX_PROBE_PAYLOAD_SIZE};
 use rns_net::pickle::PickleValue;
-use rns_net::{
-    config, storage, AnnouncedIdentity, Callbacks, Destination, RnsNode, RpcAddr, RpcClient,
-};
+use rns_net::{config, storage, Callbacks, Destination, RnsNode, RpcAddr, RpcClient};
 
 const VERSION: &str = env!("FULL_VERSION");
 const DEFAULT_PROBE_SIZE: usize = 16;
@@ -55,9 +53,6 @@ struct ProbeCallbacks {
 }
 
 impl Callbacks for ProbeCallbacks {
-    fn on_announce(&mut self, _: AnnouncedIdentity) {}
-    fn on_path_updated(&mut self, _: DestHash, _: u8) {}
-    fn on_local_delivery(&mut self, _: DestHash, _: Vec<u8>, _: PacketHash) {}
     fn on_proof_packet(
         &mut self,
         _: DestHash,

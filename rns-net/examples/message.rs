@@ -96,8 +96,6 @@ impl Callbacks for TransportCallbacks {
             announced.hops
         );
     }
-    fn on_path_updated(&mut self, _dest_hash: DestHash, _hops: u8) {}
-    fn on_local_delivery(&mut self, _dest_hash: DestHash, _raw: Vec<u8>, _hash: PacketHash) {}
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

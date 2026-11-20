@@ -69,7 +69,6 @@ impl Callbacks for TestCallbacks {
         let _ = self.tx.send(RustEvent::Announce(announced));
     }
 
-    fn on_path_updated(&mut self, _: DestHash, _: u8) {}
     fn on_local_delivery(&mut self, dest_hash: DestHash, raw: Vec<u8>, packet_hash: PacketHash) {
         let _ = self.tx.send(RustEvent::Delivery {
             dest_hash,
