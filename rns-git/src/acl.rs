@@ -59,8 +59,10 @@ impl Access {
     ///
     /// # Errors
     /// An entry that is neither `all`, `none` nor a 32-character hex hash.
-    // Kept as a source-compatible public constructor; internal call sites use named config types.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one rule list per operation; kept as a source-compatible public constructor, while internal call sites use named config types"
+    )]
     pub fn new(
         read: &[String],
         write: &[String],
@@ -84,7 +86,10 @@ impl Access {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one rule list per operation, as the server configuration names them"
+    )]
     pub(crate) fn new_with_aliases(
         read: &[String],
         write: &[String],
