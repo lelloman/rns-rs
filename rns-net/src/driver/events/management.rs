@@ -9,7 +9,7 @@ impl Driver {
 
     /// Tick the discovery announcer: start stamp generation if due, send announce if ready.
     pub(crate) fn tick_discovery_announcer(&mut self, now: f64) {
-        let announcer = match self.interface_announcer.as_mut() {
+        let announcer = match self.discovery.announcer.as_mut() {
             Some(a) => a,
             None => return,
         };
@@ -65,7 +65,7 @@ impl Driver {
             &["discovery", "interface"],
             Some(identity_hash),
         );
-        let name_hash = self.discovery_name_hash;
+        let name_hash = self.discovery.name_hash;
         let random_hash = crate::common::management::announce_random_blob(&mut self.rng, now);
 
         let (announce_data, _) = match rns_core::announce::AnnounceData::pack(

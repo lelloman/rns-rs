@@ -132,12 +132,12 @@ impl Driver {
             self.log_memory_stats();
         }
 
-        if self.discover_interfaces {
-            self.discovery_cleanup_counter += 1;
-            if self.discovery_cleanup_counter >= self.discovery_cleanup_interval_ticks {
-                self.discovery_cleanup_counter = 0;
-                let sources = &self.interface_discovery_sources;
-                if let Ok(removed) = self.discovered_interfaces.cleanup_with_filters(
+        if self.discovery.enabled {
+            self.discovery.cleanup_counter += 1;
+            if self.discovery.cleanup_counter >= self.discovery.cleanup_interval_ticks {
+                self.discovery.cleanup_counter = 0;
+                let sources = &self.discovery.sources;
+                if let Ok(removed) = self.discovery.storage.cleanup_with_filters(
                     |identity| self.engine.is_blackholed(identity, now),
                     |network_id| sources.is_empty() || sources.contains(network_id),
                 ) {

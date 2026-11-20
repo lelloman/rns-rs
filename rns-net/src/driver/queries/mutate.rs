@@ -603,7 +603,7 @@ impl Driver {
             },
             "global.discovery_cleanup_interval_ticks" => match Self::expect_u64(value, key) {
                 Ok(value) if value > 0 => {
-                    self.discovery_cleanup_interval_ticks = value as u32;
+                    self.discovery.cleanup_interval_ticks = value as u32;
                     Ok(())
                 }
                 Ok(_) => Err(RuntimeConfigError {
@@ -753,7 +753,7 @@ impl Driver {
                 self.announce_cache_cleanup_batch_size = defaults.announce_cache_cleanup_batch_size;
             }
             "global.discovery_cleanup_interval_ticks" => {
-                self.discovery_cleanup_interval_ticks = defaults.discovery_cleanup_interval_ticks;
+                self.discovery.cleanup_interval_ticks = defaults.discovery_cleanup_interval_ticks;
             }
             "global.management_announce_interval_secs" => {
                 self.management_announce_interval_secs = defaults.management_announce_interval_secs;

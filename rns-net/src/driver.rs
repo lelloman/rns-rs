@@ -138,6 +138,7 @@ pub(crate) use announce_check::{check_pending_announce, AnnounceCheck};
 mod dispatch;
 mod events;
 mod hook_events;
+mod interface_discovery;
 mod interface_management;
 mod lifecycle;
 mod link_stamps;
@@ -354,9 +355,9 @@ pub struct Driver {
     pub(crate) blackhole_sources: Vec<[u8; 16]>,
     /// Fetches the lists of `blackhole_sources`, when enabled.
     pub(crate) blackhole_updater: Option<blackhole_updater::BlackholeUpdater>,
-    /// Network identities whose discovered interfaces are accepted; empty
-    /// accepts any (`interface_discovery_sources`).
-    pub(crate) interface_discovery_sources: Vec<[u8; 16]>,
+    /// Interface discovery: received discovered interfaces, this node's
+    /// discovery announces and auto-connecting.
+    pub(crate) discovery: interface_discovery::InterfaceDiscovery,
     /// The network identity, when one is configured, kept apart from the
     /// transport identity: it signs this node's discovery announces,
     /// decrypts `discovery_encrypt` announces and their own are encrypted
@@ -366,9 +367,6 @@ pub struct Driver {
     /// The bitrate the shared instance's client interfaces report
     /// (`force_shared_instance_bitrate`).
     pub(crate) forced_local_bitrate: Option<u64>,
-    /// Upstream's auto-connecting of discovered interfaces, when
-    /// `autoconnect_discovered_interfaces` is set under the upstream policy.
-    pub(crate) upstream_autoconnect: Option<autoconnect::UpstreamAutoconnect>,
     /// Store for received remote ratchets, if persistence/use is enabled.
     pub(crate) ratchet_store: Option<Arc<dyn crate::storage::RatchetStore>>,
     /// TTL for received ratchets, in seconds.
@@ -481,38 +479,14 @@ pub struct Driver {
     backbone_peer_pool: Option<BackbonePeerPool>,
     /// Shared allocator for listener-created and discovery-created dynamic interfaces.
     pub(crate) next_dynamic_interface_id: Arc<AtomicU64>,
-    /// Storage for discovered interfaces.
-    pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
-    /// Required stamp value for accepting discovered interfaces.
-    pub(crate) discovery_required_value: rns_core::stamp::StampCost,
-    /// Bounded cache of discovery payloads with previously rejected stamps.
-    pub(crate) discovery_stamp_cache: crate::discovery::DiscoveryStampCache,
-    /// Name hash for interface discovery announces ("rnstransport.discovery.interface").
-    pub(crate) discovery_name_hash: [u8; 10],
     /// Destination hash for the probe responder (if respond_to_probes is enabled).
     pub(crate) probe_responder_hash: Option<[u8; 16]>,
-    /// Whether interface discovery is enabled.
-    pub(crate) discover_interfaces: bool,
-    /// Explicit mode for interfaces created from discovery announces.
-    pub(crate) autoconnect_interface_mode: Option<u8>,
-    /// Gravity for interfaces created from discovery announces.
-    pub(crate) autoconnect_interface_gravity: i64,
-    /// Internal announce propagation override for discovered interfaces.
-    pub(crate) autoconnect_announces_to_internal: Option<bool>,
-    /// Allow auto-connecting discovered interfaces from unverified implementations.
-    pub(crate) autoconnect_unverified_implementations: bool,
-    /// Announcer for discoverable interfaces (None if nothing to announce).
-    pub(crate) interface_announcer: Option<crate::discovery::InterfaceAnnouncer>,
     /// Shared async announce verification queue.
     pub(crate) announce_verify_queue: Arc<Mutex<AnnounceVerifyQueue>>,
     /// Wakes the verification thread when announces are queued.
     pub(crate) announce_verify_signal: Arc<WorkSignal>,
     /// Whether inbound announces should be verified off the driver thread.
     pub(crate) async_announce_verification: bool,
-    /// Tick counter for periodic discovery cleanup (every ~3600 ticks = ~1 hour).
-    pub(crate) discovery_cleanup_counter: u32,
-    /// Runtime-configurable discovery cleanup interval.
-    pub(crate) discovery_cleanup_interval_ticks: u32,
     /// Tick counter for periodic MEMSTATS logging (every 300 ticks = ~5 min).
     pub(crate) memory_stats_counter: u32,
     /// When to republish the link/interface statistics snapshot.

@@ -142,7 +142,7 @@ impl Driver {
                     // Check if this is a discovery announce (matched by name_hash
                     // since discovery is a SINGLE destination — its dest hash varies
                     // with the sender's identity).
-                    if name_hash == self.discovery_name_hash && self.discover_interfaces {
+                    if name_hash == self.discovery.name_hash && self.discovery.enabled {
                         if !self.discovery_source_allowed(&identity_hash) {
                             log::debug!(
                                 "Interface discovered from non-authorized network identity {:02x?}, ignoring",
@@ -154,8 +154,8 @@ impl Driver {
                                     app_data,
                                     &identity_hash,
                                     hops,
-                                    self.discovery_required_value,
-                                    &mut self.discovery_stamp_cache,
+                                    self.discovery.required_value,
+                                    &mut self.discovery.stamp_cache,
                                     self.network_identity.as_ref(),
                                     crate::time::now(),
                                 )
@@ -163,10 +163,10 @@ impl Driver {
                                 crate::discovery::apply_transport_autoconnect_mode(
                                     &mut discovered,
                                     self.engine.transport_enabled(),
-                                    self.autoconnect_interface_mode,
+                                    self.discovery.autoconnect_mode,
                                 );
                                 if let Err(e) =
-                                    self.discovered_interfaces.store_received(&mut discovered)
+                                    self.discovery.storage.store_received(&mut discovered)
                                 {
                                     log::warn!("Failed to store discovered interface: {}", e);
                                 } else {

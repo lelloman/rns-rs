@@ -120,16 +120,16 @@ impl Driver {
 
         if handle.current.discoverable {
             let iface = Self::make_discoverable_interface(&handle);
-            if let Some(announcer) = self.interface_announcer.as_mut() {
+            if let Some(announcer) = self.discovery.announcer.as_mut() {
                 announcer.upsert_interface(iface);
             } else if let Some(identity) = self.transport_identity.as_ref() {
-                self.interface_announcer =
+                self.discovery.announcer =
                     Some(self.new_interface_announcer(*identity.hash(), vec![iface]));
             }
-        } else if let Some(announcer) = self.interface_announcer.as_mut() {
+        } else if let Some(announcer) = self.discovery.announcer.as_mut() {
             announcer.remove_interface(interface_name);
             if announcer.is_empty() {
-                self.interface_announcer = None;
+                self.discovery.announcer = None;
             }
         }
 
@@ -166,16 +166,16 @@ impl Driver {
 
         if handle.current.discoverable {
             let iface = Self::make_tcp_server_discoverable_interface(&handle);
-            if let Some(announcer) = self.interface_announcer.as_mut() {
+            if let Some(announcer) = self.discovery.announcer.as_mut() {
                 announcer.upsert_interface(iface);
             } else if let Some(identity) = self.transport_identity.as_ref() {
-                self.interface_announcer =
+                self.discovery.announcer =
                     Some(self.new_interface_announcer(*identity.hash(), vec![iface]));
             }
-        } else if let Some(announcer) = self.interface_announcer.as_mut() {
+        } else if let Some(announcer) = self.discovery.announcer.as_mut() {
             announcer.remove_interface(interface_name);
             if announcer.is_empty() {
-                self.interface_announcer = None;
+                self.discovery.announcer = None;
             }
         }
 
