@@ -74,6 +74,26 @@ mod local_client_announce_tests {
         hops: u8,
         context: u8,
     ) -> RawPacket {
+        announce_with_random_blob(
+            identity_seed,
+            ratchet,
+            header_type,
+            hops,
+            context,
+            &[0x5C; 10],
+        )
+    }
+
+    /// [`announce_in_context`] carrying `random_blob`, whose bytes 5..10
+    /// are its emission time.
+    pub(super) fn announce_with_random_blob(
+        identity_seed: u8,
+        ratchet: bool,
+        header_type: u8,
+        hops: u8,
+        context: u8,
+        random_blob: &[u8; 10],
+    ) -> RawPacket {
         let identity = rns_crypto::identity::Identity::from_private_key(&[identity_seed; 64]);
         let dest_hash = destination_hash("forward", &["test"], Some(identity.hash()));
         let ratchet_key = [0x3C; 32];
@@ -81,7 +101,7 @@ mod local_client_announce_tests {
             &identity,
             &dest_hash,
             &name_hash("forward", &["test"]),
-            &[0x5C; 10],
+            random_blob,
             ratchet.then_some(&ratchet_key),
             None,
         )

@@ -525,6 +525,64 @@ fn a_local_clients_announce_marks_its_path_responsive() {
     }
 }
 
+/// Upstream d72cfdd7 marks a local client's path response responsive
+/// where it checks for a pending path request, before the path is stored.
+/// The path stored next is built with the use read before that marking,
+/// and 833f6cf2's marking after the store then sets it all again, so the
+/// outcome is that of 833f6cf2 alone: whether or not a request is pending
+/// and whether or not a path was known, the path ends up responsive with
+/// its timestamp, expiry and use set to now.
+#[test]
+fn a_local_clients_path_response_marks_its_path_responsive() {
+    use super::local_client_announce_tests::announce_with_random_blob;
+    use crate::transport::tests::make_random_blob;
+    for (known, pending) in [(false, false), (false, true), (true, false), (true, true)] {
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_local_client_interface(2));
+        let response = announce_with_random_blob(
+            11,
+            false,
+            constants::HEADER_1,
+            0,
+            constants::CONTEXT_PATH_RESPONSE,
+            &make_random_blob(1000),
+        );
+        let dest = response.destination_hash;
+        if known {
+            let mut path = make_path_entry(500.0, 0, InterfaceId(2), [0x77; 16]);
+            path.random_blobs = vec![make_random_blob(900)];
+            path.used = 600.0;
+            engine
+                .path_table
+                .insert(dest, PathSet::from_single(path, 1));
+        }
+        if pending {
+            engine
+                .pending_local_path_requests
+                .insert(dest, (InterfaceId(1), 1000.0));
+        }
+        receive(&mut engine, &response, 2);
+        let case = format!("known {known} pending {pending}");
+        let path = engine.path_table.get(&dest).unwrap().primary().unwrap();
+        assert_eq!(
+            path.random_blobs.last(),
+            Some(&make_random_blob(1000)),
+            "{case}"
+        );
+        assert_eq!(
+            engine.path_states.get(&dest).copied(),
+            Some(constants::STATE_RESPONSIVE),
+            "{case}"
+        );
+        assert_eq!(
+            (path.timestamp, path.expires, path.used),
+            (1001.0, 1001.0 + constants::PATHFINDER_E, 1001.0),
+            "{case}"
+        );
+    }
+}
+
 fn table_entry(hops: u8, retries: u8, retransmit_timeout: f64) -> AnnounceEntry {
     AnnounceEntry {
         timestamp: 1000.0,
