@@ -793,7 +793,7 @@ impl Driver {
             .runtime
             .lock()
             .map(|runtime| runtime.reconnect_wait)
-            .unwrap_or(candidate.config.client.reconnect_wait);
+            .unwrap_or(crate::interface::backbone::RECONNECT_WAIT);
         if candidate.config.source == BackbonePeerPoolCandidateSource::Configured {
             // Configured peers are ones the operator asked for: like a
             // standalone Backbone client (and Python, which retries every

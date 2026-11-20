@@ -960,9 +960,7 @@ fn make_client_config(port: u16, id: u64) -> BackboneClientConfig {
         target_host: "127.0.0.1".into(),
         target_port: port,
         interface_id: InterfaceId(id),
-        reconnect_wait: Duration::from_millis(100),
         max_reconnect_tries: Some(2),
-        connect_timeout: Duration::from_secs(2),
         transport_identity: None,
         bitrate: CLIENT_BITRATE_GUESS,
         runtime: Arc::new(Mutex::new(BackboneClientRuntime {
@@ -1214,10 +1212,12 @@ fn backbone_client_keeps_reconnecting_until_server_returns() {
     let (tx, rx) = crate::event::channel();
 
     let mut config = make_client_config(port, 9360);
-    config.reconnect_wait = Duration::from_millis(20);
     config.max_reconnect_tries = None;
-    config.connect_timeout = Duration::from_millis(200);
-    config.runtime = Arc::new(Mutex::new(BackboneClientRuntime::from_config(&config)));
+    config.runtime = Arc::new(Mutex::new(BackboneClientRuntime {
+        reconnect_wait: Duration::from_millis(20),
+        max_reconnect_tries: None,
+        connect_timeout: Duration::from_millis(200),
+    }));
     let _writer = start_client(config, tx).unwrap();
 
     let (server_stream, _) = listener.accept().unwrap();
@@ -1256,9 +1256,8 @@ fn configured_client_with_unreachable_target_retries_until_it_connects() {
     let port = find_free_port();
     let (tx, rx) = crate::event::channel();
     let mut config = make_client_config(port, 9380);
-    config.reconnect_wait = Duration::from_millis(100);
     config.max_reconnect_tries = None;
-    config.runtime = Arc::new(Mutex::new(BackboneClientRuntime::from_config(&config)));
+    lock_or_recover(&config.runtime, "test").max_reconnect_tries = None;
     let control = ListenerControl::new();
     let mut writer = start_retrying_client(config, tx, 0, None, control.clone()).unwrap();
     assert_eq!(
@@ -1305,9 +1304,12 @@ fn backbone_client_without_reconnect_tries_leaves_reconnecting_to_owner() {
     let (tx, rx) = crate::event::channel();
 
     let mut config = make_client_config(port, 9370);
-    config.reconnect_wait = Duration::from_millis(20);
     config.max_reconnect_tries = Some(0);
-    config.runtime = Arc::new(Mutex::new(BackboneClientRuntime::from_config(&config)));
+    {
+        let mut runtime = lock_or_recover(&config.runtime, "test");
+        runtime.reconnect_wait = Duration::from_millis(20);
+        runtime.max_reconnect_tries = Some(0);
+    }
     let _writer = start_client(config, tx).unwrap();
 
     let (server_stream, _) = listener.accept().unwrap();
