@@ -11,7 +11,7 @@ fn path_request_gates_and_searches_last_through_their_timeout() {
     let gated = [0xA1; 16];
     let searched = [0xA2; 16];
     engine.record_outbound_path_request(gated, 1000.0 - constants::PATH_REQUEST_GATE_TIMEOUT);
-    engine.discovery_path_requests.insert(
+    engine.path_requests.discovery.insert(
         searched,
         DiscoveryPathRequest {
             timestamp: 1000.0 - constants::DISCOVERY_PATH_REQUEST_TIMEOUT,
@@ -20,12 +20,12 @@ fn path_request_gates_and_searches_last_through_their_timeout() {
         },
     );
     engine.tick(1000.0, &mut rng);
-    assert!(engine.path_requests.contains_key(&gated));
-    assert!(engine.discovery_path_requests.contains_key(&searched));
+    assert!(engine.path_requests.gates.contains_key(&gated));
+    assert!(engine.path_requests.discovery.contains_key(&searched));
 
     engine.tick(1006.0, &mut rng);
-    assert!(!engine.path_requests.contains_key(&gated));
-    assert!(!engine.discovery_path_requests.contains_key(&searched));
+    assert!(!engine.path_requests.gates.contains_key(&gated));
+    assert!(!engine.path_requests.discovery.contains_key(&searched));
 }
 
 fn random_blob(timebase: u64) -> [u8; 10] {
@@ -51,15 +51,20 @@ fn prefilter_keeps_every_announce_with_multiple_paths_or_shorter_preference() {
     interfaces.insert(InterfaceId(1), interface(1, constants::MODE_FULL));
     let mut path = path_entry(&destination, 1000.0, 2, InterfaceId(1), [0x77; 16]);
     path.random_blobs = vec![random_blob(1000)];
-    let mut path_table = BTreeMap::new();
-    path_table.insert(destination, PathSet::from_single(path, 1));
+    let mut paths = PathTables {
+        table: BTreeMap::new(),
+        states: BTreeMap::new(),
+        cap_evict_count: 0,
+    };
+    paths
+        .table
+        .insert(destination, PathSet::from_single(path, 1));
     let older = announce_data(900);
 
     let passes = |config: &TransportConfig| {
         announce_passes_prefilter(
             config,
-            &path_table,
-            &BTreeMap::new(),
+            &paths,
             &interfaces,
             &destination,
             &older,
@@ -85,7 +90,7 @@ fn rediscovery_engine() -> TransportEngine {
 }
 
 fn unproven_link(engine: &mut TransportEngine, link: u8, destination: [u8; 16], proof: f64) {
-    engine.link_table.insert(
+    engine.routes.links.insert(
         [link; 16],
         LinkEntry {
             timestamp: 1000.0,
@@ -103,7 +108,7 @@ fn unproven_link(engine: &mut TransportEngine, link: u8, destination: [u8; 16], 
 }
 
 fn one_hop_path(engine: &mut TransportEngine, destination: [u8; 16]) {
-    engine.path_table.insert(
+    engine.paths.table.insert(
         destination,
         PathSet::from_single(
             path_entry(&destination, 1000.0, 1, InterfaceId(2), [0x77; 16]),
@@ -114,7 +119,8 @@ fn one_hop_path(engine: &mut TransportEngine, destination: [u8; 16]) {
 
 fn queued_rediscoveries(engine: &TransportEngine) -> Vec<[u8; 16]> {
     engine
-        .pending_discovery_prs
+        .path_requests
+        .pending_discovery
         .iter()
         .map(|(destination, _)| *destination)
         .collect()
@@ -129,7 +135,7 @@ fn link_awaiting_its_proof_triggers_no_rediscovery() {
     unproven_link(&mut engine, 1, [0xC1; 16], 1020.0);
     unproven_link(&mut engine, 2, [0xC2; 16], 1030.0);
     engine.tick(1020.0, &mut rng);
-    assert!(engine.pending_discovery_prs.is_empty());
+    assert!(engine.path_requests.pending_discovery.is_empty());
 }
 
 /// Every vanished destination is queued, each once.
@@ -159,7 +165,7 @@ fn rediscovery_throttle_lasts_path_request_mi() {
         engine.record_outbound_path_request([0xC3; 16], requested);
         engine.tick(1020.0, &mut rng);
         assert_eq!(
-            engine.pending_discovery_prs.is_empty(),
+            engine.path_requests.pending_discovery.is_empty(),
             throttled,
             "requested at {requested}"
         );
@@ -176,7 +182,7 @@ fn local_client_link_to_an_instance_local_destination_is_not_rediscovered() {
         let mut engine = rediscovery_engine();
         let mut rng = rns_crypto::FixedRng::new(&[0x21; 32]);
         let destination = [0xC4; 16];
-        engine.path_table.insert(
+        engine.paths.table.insert(
             destination,
             PathSet::from_single(
                 path_entry(&destination, 1000.0, hops, InterfaceId(1), [0x77; 16]),
@@ -184,7 +190,7 @@ fn local_client_link_to_an_instance_local_destination_is_not_rediscovered() {
             ),
         );
         unproven_link(&mut engine, 1, destination, 1010.0);
-        engine.link_table.get_mut(&[1; 16]).unwrap().taken_hops = 0;
+        engine.routes.links.get_mut(&[1; 16]).unwrap().taken_hops = 0;
         engine.tick(1020.0, &mut rng);
         assert_eq!(
             queued_rediscoveries(&engine),
@@ -245,9 +251,9 @@ fn tables_are_culled_every_cull_interval() {
     engine.tick(1000.0, &mut rng);
     engine.record_outbound_path_request([0xE1; 16], 900.0);
     engine.tick(1002.0, &mut rng);
-    assert!(engine.path_requests.contains_key(&[0xE1; 16]));
+    assert!(engine.path_requests.gates.contains_key(&[0xE1; 16]));
     engine.tick(1000.0 + constants::TABLES_CULL_INTERVAL + 0.5, &mut rng);
-    assert!(!engine.path_requests.contains_key(&[0xE1; 16]));
+    assert!(!engine.path_requests.gates.contains_key(&[0xE1; 16]));
 }
 
 /// A path request waiting on a local client's answer is forgotten once
@@ -266,11 +272,12 @@ fn waiting_local_path_requests_expire() {
         (0xF4, 1, now - 2.0 * timeout),
     ] {
         engine
-            .pending_local_path_requests
+            .path_requests
+            .pending_local
             .insert([destination; 16], (InterfaceId(interface), requested));
     }
     engine.tick(now, &mut rng);
-    let left: Vec<_> = engine.pending_local_path_requests.keys().copied().collect();
+    let left: Vec<_> = engine.path_requests.pending_local.keys().copied().collect();
     assert_eq!(left, vec![[0xF1; 16]]);
 }
 

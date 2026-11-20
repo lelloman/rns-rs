@@ -67,7 +67,7 @@ fn only_packets_routed_by_path_mark_it_used() {
     ] {
         let mut engine = engine(true);
         engine.register_interface(interface(1, constants::MODE_FULL));
-        engine.path_table.insert(
+        engine.paths.table.insert(
             destination,
             PathSet::from_single(
                 path_entry(&destination, 900.0, 2, InterfaceId(1), [0x77; 16]),
@@ -76,7 +76,7 @@ fn only_packets_routed_by_path_mark_it_used() {
         );
         let packet = packet(packet_type, destination_type, 0, destination);
         engine.handle_outbound(&packet, destination_type, attached, 1000.0);
-        let used = engine.path_table[&destination].primary().unwrap().used;
+        let used = engine.paths.table[&destination].primary().unwrap().used;
         assert_eq!(
             used == 1000.0,
             marks,
@@ -108,7 +108,7 @@ fn only_forwarded_announces_are_gated_by_the_announce_cap() {
         engine.register_destination([0xB1; 16], constants::DESTINATION_SINGLE);
         engine.register_destination([0xB2; 16], constants::DESTINATION_SINGLE);
         for destination in [[0xB1; 16], [0xB2; 16]] {
-            engine.path_table.insert(
+            engine.paths.table.insert(
                 destination,
                 PathSet::from_single(
                     path_entry(&destination, 900.0, 1, InterfaceId(1), [0x77; 16]),

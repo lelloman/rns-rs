@@ -33,7 +33,7 @@ impl TransportEngine {
             && dest_type != constants::DESTINATION_GROUP
             && !(dest_type == constants::DESTINATION_LINK && attached_interface.is_some());
         if uses_path {
-            if let Some(path_set) = self.path_table.get_mut(&packet.destination_hash) {
+            if let Some(path_set) = self.paths.table.get_mut(&packet.destination_hash) {
                 if let Some(entry) = path_set.primary_mut() {
                     entry.used = now;
                 }
@@ -42,7 +42,7 @@ impl TransportEngine {
 
         let start = actions.len();
         route_outbound_into(
-            &self.path_table,
+            &self.paths.table,
             &self.interfaces,
             &self.local_destinations,
             packet,
@@ -90,7 +90,7 @@ impl TransportEngine {
                             (None, None, constants::ANNOUNCE_CAP)
                         };
                     let emitted = announce_queue::announce_emitted(&raw).unwrap_or(now);
-                    if let Some(send_action) = self.announce_queues.gate_announce(
+                    if let Some(send_action) = self.announces.queues.gate_announce(
                         interface,
                         raw,
                         *dest_hash,

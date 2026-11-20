@@ -20,14 +20,15 @@ impl TransportEngine {
 
     /// Primary path of each destination in the path table.
     pub fn path_table_entries(&self) -> impl Iterator<Item = (&[u8; 16], &PathEntry)> {
-        self.path_table
+        self.paths
+            .table
             .iter()
             .filter_map(|(k, ps)| ps.primary().map(|e| (k, e)))
     }
 
     /// All paths of each destination in the path table.
     pub fn path_table_sets(&self) -> impl Iterator<Item = (&[u8; 16], &PathSet)> {
-        self.path_table.iter()
+        self.paths.table.iter()
     }
 
     /// Number of registered interfaces.
@@ -37,7 +38,7 @@ impl TransportEngine {
 
     /// Number of link table entries.
     pub fn link_table_count(&self) -> usize {
-        self.link_table.len()
+        self.routes.links.len()
     }
 
     /// Upstream's `Transport.link_rxb` and `link_txb` (ef3e8086): the bytes
@@ -46,12 +47,13 @@ impl TransportEngine {
     /// the traffic of the node's own links (01ffb98e), which the link
     /// manager counts and the driver adds to these.
     pub fn link_traffic(&self) -> (u64, u64) {
-        (self.link_rxb, self.link_txb)
+        (self.accounting.link_rxb, self.accounting.link_txb)
     }
 
     /// Number of validated link table entries.
     pub fn active_link_count(&self) -> usize {
-        self.link_table
+        self.routes
+            .links
             .values()
             .filter(|entry| entry.validated)
             .count()
@@ -67,7 +69,8 @@ impl TransportEngine {
             && packet.flags.packet_type != crate::constants::PACKET_TYPE_LINKREQUEST
             && packet.context != crate::constants::CONTEXT_LRPROOF
             && self
-                .link_table
+                .routes
+                .links
                 .get(&packet.destination_hash)
                 .is_some_and(|entry| !entry.validated)
     }
@@ -92,22 +95,22 @@ impl TransportEngine {
 
     /// Number of destinations in the path table.
     pub fn path_table_count(&self) -> usize {
-        self.path_table.len()
+        self.paths.table.len()
     }
 
     /// Number of announces waiting for retransmission.
     pub fn announce_table_count(&self) -> usize {
-        self.announce_table.len()
+        self.announces.table.len()
     }
 
     /// Number of reverse table entries.
     pub fn reverse_table_count(&self) -> usize {
-        self.reverse_table.len()
+        self.routes.reverse.len()
     }
 
     /// Number of announce table entries held aside (upstream `Transport.held_announces`).
     pub fn held_announces_count(&self) -> usize {
-        self.held_announces.len()
+        self.announces.held.len()
     }
 
     /// Number of packet hashes retained for duplicate suppression.
@@ -134,12 +137,12 @@ impl TransportEngine {
 
     /// Number of entries in the announce signature cache.
     pub fn announce_sig_cache_len(&self) -> usize {
-        self.announce_sig_cache.len()
+        self.announces.sig_cache.len()
     }
 
     /// Number of destinations in the announce rate table.
     pub fn rate_limiter_count(&self) -> usize {
-        self.rate_limiter.len()
+        self.announces.rate_limiter.len()
     }
 
     /// Number of blackholed identities.
@@ -149,47 +152,47 @@ impl TransportEngine {
 
     /// Number of tunnels in the tunnel table.
     pub fn tunnel_count(&self) -> usize {
-        self.tunnel_table.len()
+        self.tunnels.table.len()
     }
 
     /// Number of discovery path request tags remembered.
     pub fn discovery_pr_tags_count(&self) -> usize {
-        self.discovery_pr_tags.len()
+        self.path_requests.discovery_tags.len()
     }
 
     #[cfg(test)]
     pub(crate) fn has_discovery_pr_tag(&self, unique_tag: &[u8; 32]) -> bool {
-        self.discovery_pr_tag_set.contains(unique_tag)
+        self.path_requests.discovery_tag_set.contains(unique_tag)
     }
 
     /// Number of discovery path requests waiting for a path.
     pub fn discovery_path_requests_count(&self) -> usize {
-        self.discovery_path_requests.len()
+        self.path_requests.discovery.len()
     }
 
     /// Number of interface announce queues.
     pub fn announce_queue_count(&self) -> usize {
-        self.announce_queues.queue_count()
+        self.announces.queues.queue_count()
     }
 
     /// Number of interface announce queues holding announces.
     pub fn nonempty_announce_queue_count(&self) -> usize {
-        self.announce_queues.nonempty_queue_count()
+        self.announces.queues.nonempty_queue_count()
     }
 
     /// Number of announces waiting in interface announce queues.
     pub fn queued_announce_count(&self) -> usize {
-        self.announce_queues.total_queued_announces()
+        self.announces.queues.total_queued_announces()
     }
 
     /// Bytes of the announces waiting in interface announce queues.
     pub fn queued_announce_bytes(&self) -> usize {
-        self.announce_queues.total_queued_bytes()
+        self.announces.queues.total_queued_bytes()
     }
 
     /// Number of announces dropped because the limit on announce queues was reached.
     pub fn announce_queue_interface_cap_drop_count(&self) -> u64 {
-        self.announce_queues.interface_cap_drop_count()
+        self.announces.queues.interface_cap_drop_count()
     }
 
     /// Number of registered local destinations.
@@ -199,7 +202,7 @@ impl TransportEngine {
 
     /// The announce rate limiter.
     pub fn rate_limiter(&self) -> &AnnounceRateLimiter {
-        &self.rate_limiter
+        &self.announces.rate_limiter
     }
 
     /// Info of a registered interface.
@@ -219,7 +222,8 @@ impl TransportEngine {
     /// `interface`: one hop, expiring in an hour. Adds the path when there is none.
     pub fn redirect_path(&mut self, dest_hash: &[u8; 16], interface: InterfaceId, now: f64) {
         if let Some(entry) = self
-            .path_table
+            .paths
+            .table
             .get_mut(dest_hash)
             .and_then(|ps| ps.primary_mut())
         {
@@ -257,18 +261,18 @@ impl TransportEngine {
 
     /// Remove every path to `dest_hash`. Returns whether there were any.
     pub fn drop_path(&mut self, dest_hash: &[u8; 16]) -> bool {
-        self.path_table.remove(dest_hash).is_some()
+        self.paths.table.remove(dest_hash).is_some()
     }
 
     /// Remove every path whose next hop is `transport_hash`. Returns how many were removed.
     pub fn drop_all_via(&mut self, transport_hash: &[u8; 16]) -> usize {
         let mut removed = 0usize;
-        for ps in self.path_table.values_mut() {
+        for ps in self.paths.table.values_mut() {
             let before = ps.len();
             ps.retain(|entry| &entry.next_hop != transport_hash);
             removed += before - ps.len();
         }
-        self.path_table.retain(|_, ps| !ps.is_empty());
+        self.paths.table.retain(|_, ps| !ps.is_empty());
         removed
     }
 
@@ -276,7 +280,7 @@ impl TransportEngine {
     pub fn drop_paths_for_interface(&mut self, interface: InterfaceId) -> usize {
         let mut removed = 0usize;
         let mut cleared_destinations = Vec::new();
-        for (dest_hash, ps) in self.path_table.iter_mut() {
+        for (dest_hash, ps) in self.paths.table.iter_mut() {
             let before = ps.len();
             ps.retain(|entry| entry.receiving_interface != interface);
             if ps.is_empty() {
@@ -284,44 +288,44 @@ impl TransportEngine {
             }
             removed += before - ps.len();
         }
-        self.path_table.retain(|_, ps| !ps.is_empty());
+        self.paths.table.retain(|_, ps| !ps.is_empty());
         for dest_hash in cleared_destinations {
-            self.path_states.remove(&dest_hash);
+            self.paths.states.remove(&dest_hash);
         }
         removed
     }
 
     /// Remove every reverse table entry on `interface`. Returns how many were removed.
     pub fn drop_reverse_for_interface(&mut self, interface: InterfaceId) -> usize {
-        let before = self.reverse_table.len();
-        self.reverse_table.retain(|_, entry| {
+        let before = self.routes.reverse.len();
+        self.routes.reverse.retain(|_, entry| {
             entry.receiving_interface != interface && entry.outbound_interface != interface
         });
-        before - self.reverse_table.len()
+        before - self.routes.reverse.len()
     }
 
     /// Remove every link table entry on `interface`. Returns how many were removed.
     pub fn drop_links_for_interface(&mut self, interface: InterfaceId) -> usize {
-        let before = self.link_table.len();
-        self.link_table.retain(|_, entry| {
+        let before = self.routes.links.len();
+        self.routes.links.retain(|_, entry| {
             entry.next_hop_interface != interface && entry.received_interface != interface
         });
-        before - self.link_table.len()
+        before - self.routes.links.len()
     }
 
     /// Clear the announce table, held announces, interface announce queues and
     /// ingress control state.
     pub fn drop_announce_queues(&mut self) {
-        self.announce_table.clear();
-        self.held_announces.clear();
-        self.announce_queues = AnnounceQueues::new(self.config.announce_queue_max_interfaces);
+        self.announces.table.clear();
+        self.announces.held.clear();
+        self.announces.queues = AnnounceQueues::new(self.config.announce_queue_max_interfaces);
         self.ingress_control.clear();
     }
 
     /// [`Self::drop_announce_queues`], and clear the reverse table too.
     pub fn void_queues(&mut self) {
         self.drop_announce_queues();
-        self.reverse_table.clear();
+        self.routes.reverse.clear();
     }
 
     /// Hash of this node's transport identity, if set.
@@ -354,7 +358,7 @@ impl TransportEngine {
     /// Primary path of each destination, skipping those over `max_hops` hops.
     pub fn get_path_table(&self, max_hops: Option<u8>) -> Vec<PathTableRow> {
         let mut result = Vec::new();
-        for (dest_hash, ps) in self.path_table.iter() {
+        for (dest_hash, ps) in self.paths.table.iter() {
             if let Some(entry) = ps.primary() {
                 if let Some(max) = max_hops {
                     if entry.hops > max {
@@ -384,9 +388,10 @@ impl TransportEngine {
 
     /// Return (total destinations, never-used destinations) in the path pool.
     pub fn path_pool_counts(&self) -> (usize, usize) {
-        let total = self.path_table.len();
+        let total = self.paths.table.len();
         let unused = self
-            .path_table
+            .paths
+            .table
             .values()
             .filter(|paths| paths.primary().is_some_and(|path| path.used == 0.0))
             .count();
@@ -405,7 +410,7 @@ impl TransportEngine {
     pub fn link_distribution(&self) -> Vec<LinkDistribution> {
         let mut distribution: Vec<LinkDistribution> = Vec::new();
         let mut index_of: BTreeMap<[u8; 16], usize> = BTreeMap::new();
-        for (_, entry) in self.link_table.in_insertion_order() {
+        for (_, entry) in self.routes.links.in_insertion_order() {
             let index = *index_of.entry(entry.destination_hash).or_insert_with(|| {
                 distribution.push(LinkDistribution {
                     destination_hash: entry.destination_hash,
@@ -435,7 +440,8 @@ impl TransportEngine {
 
     /// Every announce rate table entry.
     pub fn get_rate_table(&self) -> Vec<RateTableRow> {
-        self.rate_limiter
+        self.announces
+            .rate_limiter
             .entries()
             .map(|(hash, entry)| {
                 (
@@ -458,25 +464,27 @@ impl TransportEngine {
 
     /// Destinations in the path table.
     pub fn active_destination_hashes(&self) -> alloc::collections::BTreeSet<[u8; 16]> {
-        self.path_table.keys().copied().collect()
+        self.paths.table.keys().copied().collect()
     }
 
     /// Number of destinations evicted because the path table was full.
     pub fn path_destination_cap_evict_count(&self) -> usize {
-        self.path_destination_cap_evict_count
+        self.paths.cap_evict_count
     }
 
     /// Hashes of the announce packets behind every path and tunnel path, sorted
     /// and without duplicates.
     pub fn active_packet_hashes(&self) -> Vec<[u8; 32]> {
         let mut hashes: Vec<[u8; 32]> = self
-            .path_table
+            .paths
+            .table
             .values()
             .flat_map(|ps| ps.iter().map(|p| p.packet_hash))
             .collect();
 
         hashes.extend(
-            self.tunnel_table
+            self.tunnels
+                .table
                 .iter()
                 .flat_map(|(_, tunnel)| tunnel.paths.values().map(|p| p.packet_hash)),
         );
@@ -493,7 +501,9 @@ impl TransportEngine {
         now: f64,
         ttl_secs: f64,
     ) -> usize {
-        self.rate_limiter.cull_stale(active, now, ttl_secs)
+        self.announces
+            .rate_limiter
+            .cull_stale(active, now, ttl_secs)
     }
 
     /// Update the incoming announce frequency of an interface, in announces per second.
@@ -526,13 +536,13 @@ impl TransportEngine {
     /// The tunnel this node synthesized on an interface, if any (upstream
     /// 3281e283 `local_tunnel_id`).
     pub fn local_tunnel_id(&self, interface: &InterfaceId) -> Option<[u8; 32]> {
-        self.local_tunnel_ids.get(interface).copied()
+        self.tunnels.local_ids.get(interface).copied()
     }
 
     /// The transport identity hash of the node that synthesized a tunnel
     /// over an interface (upstream 464e7598 `remote_transport`).
     pub fn remote_transport(&self, interface: &InterfaceId) -> Option<[u8; 16]> {
-        self.remote_transports.get(interface).copied()
+        self.tunnels.remote_transports.get(interface).copied()
     }
 
     /// What the remote transport node reported in its synthesis extension
@@ -541,13 +551,13 @@ impl TransportEngine {
         &self,
         interface: &InterfaceId,
     ) -> Option<&tunnel::RemoteTransportInfo> {
-        self.remote_transport_infos.get(interface)
+        self.tunnels.remote_infos.get(interface)
     }
 
     /// Whether this node has sent a tunnel synthesis on `interface` since it
     /// connected (upstream b7a93b9b `synthesis_emitted`).
     pub fn synthesis_emitted(&self, interface: &InterfaceId) -> bool {
-        self.synthesis_emitted.contains(interface)
+        self.tunnels.synthesis_emitted.contains(interface)
     }
 
     /// The interface a tunnel id names: the one a remote node's tunnel is
@@ -559,7 +569,8 @@ impl TransportEngine {
             .find(|(_, info)| info.tunnel_id.as_ref() == Some(tunnel_id))
             .map(|(id, _)| *id)
             .or_else(|| {
-                self.local_tunnel_ids
+                self.tunnels
+                    .local_ids
                     .iter()
                     .find(|(_, local)| *local == tunnel_id)
                     .map(|(id, _)| *id)
@@ -573,7 +584,7 @@ impl TransportEngine {
 
     /// Announces waiting in `interface`'s announce queue.
     pub fn queued_announce_count_for(&self, interface: &InterfaceId) -> usize {
-        self.announce_queues.queued_for(interface)
+        self.announces.queues.queued_for(interface)
     }
 
     /// Whether the inbound packet handled last was filtered: dropped where
@@ -588,7 +599,7 @@ impl TransportEngine {
     /// request it delivers, and [`Self::complete_verified_announce`];
     /// clears the flag.
     pub fn take_inbound_filtered(&mut self) -> bool {
-        core::mem::take(&mut self.inbound_filtered)
+        core::mem::take(&mut self.accounting.inbound_filtered)
     }
 
     /// Whether that packet was a filtered announce, counted in `afrxc`
@@ -596,7 +607,7 @@ impl TransportEngine {
     /// held announce, a type `required_destinations_only` rejects, a
     /// blackholed identity, or a failed stamp. Clears the flag.
     pub fn take_inbound_filtered_announce(&mut self) -> bool {
-        core::mem::take(&mut self.inbound_filtered_announce)
+        core::mem::take(&mut self.accounting.inbound_filtered_announce)
     }
 
     /// Announces to count as received in `arxc`/`arxb`, as (interface,
@@ -604,24 +615,24 @@ impl TransportEngine {
     /// bytes, and a released one that was accepted with its size (upstream
     /// c850cdac). Clears the list.
     pub fn take_announce_receipts(&mut self) -> Vec<(InterfaceId, usize)> {
-        core::mem::take(&mut self.announce_receipts)
+        core::mem::take(&mut self.accounting.announce_receipts)
     }
 
     /// The frames of held announces released since the last call, to charge
     /// to received or filtered bytes (upstream 29dc449a). Clears the list.
     pub fn take_released_traffic(&mut self) -> Vec<ReleasedTraffic> {
-        core::mem::take(&mut self.released_traffic)
+        core::mem::take(&mut self.accounting.released_traffic)
     }
 
     /// Paths with more hops than this are culled (`Transport.HOP_LIMITER`).
     pub fn hop_limiter(&self) -> u8 {
-        self.hop_limiter
+        self.policy.hop_limiter
     }
 
     /// Set the hop limiter paths are culled against, from `[filter]
     /// hop_limiter`.
     pub fn set_hop_limiter(&mut self, hop_limiter: u8) {
-        self.hop_limiter = hop_limiter;
+        self.policy.hop_limiter = hop_limiter;
     }
 
     /// Whether an announce burst is active on `interface`.
@@ -646,17 +657,17 @@ impl TransportEngine {
 
     #[cfg(test)]
     pub(crate) fn path_table(&self) -> &BTreeMap<[u8; 16], PathSet> {
-        &self.path_table
+        &self.paths.table
     }
 
     #[cfg(test)]
     pub(crate) fn announce_table(&self) -> &BTreeMap<[u8; 16], AnnounceEntry> {
-        &self.announce_table
+        &self.announces.table
     }
 
     #[cfg(test)]
     pub(crate) fn held_announces(&self) -> &BTreeMap<[u8; 16], AnnounceEntry> {
-        &self.held_announces
+        &self.announces.held
     }
 
     #[cfg(test)]
@@ -680,9 +691,9 @@ impl TransportEngine {
         self.packet_hashlist.seed_hashing(dedup_seed);
         let hasher = foldhash::fast::FixedState::with_seed(reverse_seed);
         let mut table =
-            tables::ReverseTable::with_capacity_and_hasher(self.reverse_table.len(), hasher);
-        table.extend(self.reverse_table.drain());
-        self.reverse_table = table;
+            tables::ReverseTable::with_capacity_and_hasher(self.routes.reverse.len(), hasher);
+        table.extend(self.routes.reverse.drain());
+        self.routes.reverse = table;
     }
 }
 
@@ -888,7 +899,7 @@ mod tests {
         // A known path is redirected, an unknown one created.
         for dest in [dest, [0x0F; 16]] {
             engine.redirect_path(&dest, InterfaceId(2), 2000.0);
-            let path = engine.path_table[&dest].primary().unwrap();
+            let path = engine.paths.table[&dest].primary().unwrap();
             assert_eq!(
                 (
                     path.hops,
@@ -916,7 +927,7 @@ mod tests {
         assert_eq!(engine.path_table_count(), 1);
 
         for (n, (receiving, outbound)) in [(1, 2), (3, 1), (2, 3), (4, 5)].into_iter().enumerate() {
-            engine.reverse_table.insert(
+            engine.routes.reverse.insert(
                 [n as u8; 16],
                 ReverseEntry {
                     receiving_interface: InterfaceId(receiving),
@@ -989,7 +1000,7 @@ mod tests {
         engine.blackhole_identity([1; 16], 1000.0, None, None);
         engine.blackhole_identity([2; 16], 1000.0, Some(1.0), Some("spam".into()));
         for n in 1..=2u8 {
-            engine.discovery_path_requests.insert(
+            engine.path_requests.discovery.insert(
                 [n; 16],
                 DiscoveryPathRequest {
                     timestamp: 1000.0,
@@ -1020,7 +1031,7 @@ mod tests {
         let mut engine = TransportEngine::new(make_config(true));
         assert_eq!(engine.rate_limiter_count(), 0);
         for (n, last) in [(1u8, 1000.0), (2, 1900.0)] {
-            engine.rate_limiter.restore(
+            engine.announces.rate_limiter.restore(
                 [n; 16],
                 RateEntry {
                     last,
@@ -1053,7 +1064,7 @@ mod tests {
         let mut engine = TransportEngine::new(config);
         let raw: PacketBytes = vec![0u8; 100].into();
         let gate = |engine: &mut TransportEngine, iface: u64, dest: u8| {
-            engine.announce_queues.gate_announce(
+            engine.announces.queues.gate_announce(
                 InterfaceId(iface),
                 raw.clone(),
                 [dest; 16],

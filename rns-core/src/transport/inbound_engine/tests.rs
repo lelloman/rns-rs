@@ -219,7 +219,7 @@ fn announce_addressed_to_this_transport_is_not_forwarded() {
     );
     let actions = receive(&mut engine, &announce, 1);
     assert!(sent_on(&actions, 2).is_none());
-    assert!(engine.reverse_table.is_empty());
+    assert!(engine.routes.reverse.is_empty());
 }
 
 /// The local hop delta masks only a local client's own zero-hop
@@ -354,7 +354,7 @@ fn forwarded_link_traffic_counts_raw_bytes() {
             context,
         )
     };
-    let traffic = |engine: &TransportEngine| engine.link_table[&link_id].traffic;
+    let traffic = |engine: &TransportEngine| engine.routes.links[&link_id].traffic;
     assert_eq!(traffic(&engine), 0);
 
     // Toward the destination, then back.
@@ -572,7 +572,10 @@ fn ingress_control_holds_only_unrequested_announces_during_a_burst() {
         });
         let announce = announce_in_context(7, false, constants::HEADER_1, 0, context);
         if requested {
-            engine.path_requests.insert(announce.destination_hash, 0.0);
+            engine
+                .path_requests
+                .gates
+                .insert(announce.destination_hash, 0.0);
         }
         let actions = receive(&mut engine, &announce, 1);
         assert_eq!(
@@ -633,13 +636,15 @@ fn only_a_local_clients_path_response_answers_a_pending_request() {
         );
         let dest = response.destination_hash;
         engine
-            .pending_local_path_requests
+            .path_requests
+            .pending_local
             .insert(dest, (InterfaceId(3), 1000.0));
         let actions = receive(&mut engine, &response, from);
         assert!(announced(&actions));
         assert_eq!(
             engine
-                .announce_table
+                .announces
+                .table
                 .get(&dest)
                 .map(|entry| (entry.attached_interface, entry.block_rebroadcasts)),
             answered.then_some((Some(InterfaceId(3)), true)),
@@ -667,7 +672,8 @@ fn a_local_clients_path_response_answers_only_the_requesting_interface() {
     );
     let dest = response.destination_hash;
     engine
-        .pending_local_path_requests
+        .path_requests
+        .pending_local
         .insert(dest, (InterfaceId(3), 1000.0));
     receive(&mut engine, &response, 2);
 
@@ -712,10 +718,10 @@ fn a_local_clients_announce_marks_its_path_responsive() {
             announce_in_context(10, false, constants::HEADER_1, 0, constants::CONTEXT_NONE);
         let dest = announce.destination_hash;
         receive(&mut engine, &announce, from);
-        let path = engine.path_table.get(&dest).unwrap().primary().unwrap();
+        let path = engine.paths.table.get(&dest).unwrap().primary().unwrap();
         let case = format!("serves {serves} from {from}");
         assert_eq!(
-            engine.path_states.get(&dest).copied(),
+            engine.paths.states.get(&dest).copied(),
             responsive.then_some(constants::STATE_RESPONSIVE),
             "{case}"
         );
@@ -754,24 +760,26 @@ fn a_local_clients_path_response_marks_its_path_responsive() {
             path.random_blobs = vec![make_random_blob(900)];
             path.used = 600.0;
             engine
-                .path_table
+                .paths
+                .table
                 .insert(dest, PathSet::from_single(path, 1));
         }
         if pending {
             engine
-                .pending_local_path_requests
+                .path_requests
+                .pending_local
                 .insert(dest, (InterfaceId(1), 1000.0));
         }
         receive(&mut engine, &response, 2);
         let case = format!("known {known} pending {pending}");
-        let path = engine.path_table.get(&dest).unwrap().primary().unwrap();
+        let path = engine.paths.table.get(&dest).unwrap().primary().unwrap();
         assert_eq!(
             path.random_blobs.last(),
             Some(&make_random_blob(1000)),
             "{case}"
         );
         assert_eq!(
-            engine.path_states.get(&dest).copied(),
+            engine.paths.states.get(&dest).copied(),
             Some(constants::STATE_RESPONSIVE),
             "{case}"
         );
@@ -794,10 +802,11 @@ fn engine_with_known_path(dest: [u8; 16], hops: u8, state: Option<u8>) -> Transp
     let mut path = make_path_entry(900.0, hops, InterfaceId(1), [0x29; 16]);
     path.random_blobs = vec![make_random_blob(1000)];
     engine
-        .path_table
+        .paths
+        .table
         .insert(dest, PathSet::from_single(path, 1));
     if let Some(state) = state {
-        engine.path_states.insert(dest, state);
+        engine.paths.states.insert(dest, state);
     }
     engine
 }
@@ -834,7 +843,7 @@ fn unresponsive_path_replacement_is_not_rebroadcast() {
         let mut engine = engine_with_known_path(dest, path_hops, state);
         receive(&mut engine, &announce, 2);
         let case = format!("path {path_hops} {state:?} announce {emitted} hops {hops}");
-        let path = engine.path_table.get(&dest).unwrap().primary().unwrap();
+        let path = engine.paths.table.get(&dest).unwrap().primary().unwrap();
         assert_eq!(
             path.receiving_interface == InterfaceId(2),
             replaced,
@@ -844,7 +853,7 @@ fn unresponsive_path_replacement_is_not_rebroadcast() {
             assert_eq!(path.hops, hops, "{case}");
         }
         assert_eq!(
-            engine.announce_table.contains_key(&dest),
+            engine.announces.table.contains_key(&dest),
             rebroadcast,
             "{case}"
         );
@@ -953,7 +962,8 @@ fn unresponsive_path_recovery_native_and_upstream() {
             path.expires = 1000.0;
         }
         engine
-            .path_table
+            .paths
+            .table
             .insert(dest, PathSet::from_single(path, case.max_paths));
         receive(&mut engine, &announce, 2);
         let label = format!(
@@ -966,7 +976,7 @@ fn unresponsive_path_recovery_native_and_upstream() {
             case.emitted,
             case.hops
         );
-        let paths = engine.path_table.get(&dest).unwrap();
+        let paths = engine.paths.table.get(&dest).unwrap();
         let primary = paths.primary().unwrap();
         assert_eq!(
             (
@@ -980,7 +990,7 @@ fn unresponsive_path_recovery_native_and_upstream() {
         let replaced = primary.receiving_interface == InterfaceId(2);
         assert_eq!(paths.len(), 1, "{label}");
         assert_eq!(
-            engine.announce_table.contains_key(&dest),
+            engine.announces.table.contains_key(&dest),
             case.rebroadcast,
             "{label}"
         );
@@ -1136,7 +1146,8 @@ fn upstream_recovery_decides_every_path_update_as_upstream() {
             path.expires = 1000.0;
         }
         engine
-            .path_table
+            .paths
+            .table
             .insert(dest, PathSet::from_single(path, case.max_paths));
         receive(&mut engine, &announce, 2);
         let label = format!(
@@ -1150,7 +1161,7 @@ fn upstream_recovery_decides_every_path_update_as_upstream() {
             case.emitted,
             case.hops
         );
-        let paths = engine.path_table.get(&dest).unwrap();
+        let paths = engine.paths.table.get(&dest).unwrap();
         let primary = paths.primary().unwrap();
         assert_eq!(
             (
@@ -1163,7 +1174,7 @@ fn upstream_recovery_decides_every_path_update_as_upstream() {
         );
         assert_eq!(paths.len(), case.paths, "{label}");
         assert_eq!(
-            engine.announce_table.contains_key(&dest),
+            engine.announces.table.contains_key(&dest),
             case.rebroadcast,
             "{label}"
         );
@@ -1217,18 +1228,19 @@ fn future_emission_time_filter_only_in_native_mode() {
         let mut path = make_path_entry(900.0, 2, InterfaceId(1), A);
         path.random_blobs = vec![make_random_blob(path_emitted)];
         engine
-            .path_table
+            .paths
+            .table
             .insert(dest, PathSet::from_single(path, 1));
         receive(&mut engine, &announce, 2);
         let label = format!("{recovery:?} path {path_emitted} announce {emitted} hops {hops}");
-        let path = engine.path_table.get(&dest).unwrap().primary().unwrap();
+        let path = engine.paths.table.get(&dest).unwrap().primary().unwrap();
         assert_eq!(
             (path.next_hop, path.hops, path.receiving_interface.0),
             primary,
             "{label}"
         );
         assert_eq!(
-            engine.announce_table.contains_key(&dest),
+            engine.announces.table.contains_key(&dest),
             rebroadcast,
             "{label}"
         );
@@ -1278,12 +1290,13 @@ fn local_rebroadcasts_end_retransmission_after_a_retry() {
     for (retries, removed_after) in [(1, Some(2)), (0, None)] {
         let mut engine = TransportEngine::new(make_config(true));
         engine
-            .announce_table
+            .announces
+            .table
             .insert(dest, table_entry(2, retries, 2000.0));
         for heard in 1..=3u8 {
             let from = engine.announce_received_from(&rebroadcast(3), 1500.0);
             assert_eq!(from, [0x29; 16]);
-            let entry = engine.announce_table.get(&dest);
+            let entry = engine.announces.table.get(&dest);
             if removed_after.is_some_and(|after| heard >= after) {
                 assert!(entry.is_none(), "retries {retries} heard {heard}");
             } else {
@@ -1295,10 +1308,11 @@ fn local_rebroadcasts_end_retransmission_after_a_retry() {
     // A rebroadcast at other hops is not a local one.
     let mut engine = TransportEngine::new(make_config(true));
     engine
-        .announce_table
+        .announces
+        .table
         .insert(dest, table_entry(2, 1, 2000.0));
     engine.announce_received_from(&rebroadcast(5), 1500.0);
-    assert_eq!(engine.announce_table[&dest].local_rebroadcasts, 0);
+    assert_eq!(engine.announces.table[&dest].local_rebroadcasts, 0);
 }
 
 /// As upstream: hearing the announce one hop further on, after this
@@ -1310,11 +1324,12 @@ fn announce_passed_on_by_another_node_ends_retransmission() {
     for (retries, now, removed) in [(1, 1500.0, true), (0, 1500.0, false), (1, 2000.0, false)] {
         let mut engine = TransportEngine::new(make_config(true));
         engine
-            .announce_table
+            .announces
+            .table
             .insert(dest, table_entry(2, retries, 2000.0));
         engine.announce_received_from(&rebroadcast(4), now);
         assert_eq!(
-            !engine.announce_table.contains_key(&dest),
+            !engine.announces.table.contains_key(&dest),
             removed,
             "retries {retries} at {now}"
         );
@@ -1324,7 +1339,8 @@ fn announce_passed_on_by_another_node_ends_retransmission() {
     // destination and leaves the table alone.
     let mut engine = TransportEngine::new(make_config(true));
     engine
-        .announce_table
+        .announces
+        .table
         .insert(dest, table_entry(2, 1, 2000.0));
     let direct = packet(
         flags(
@@ -1338,7 +1354,7 @@ fn announce_passed_on_by_another_node_ends_retransmission() {
         constants::CONTEXT_NONE,
     );
     assert_eq!(engine.announce_received_from(&direct, 1500.0), dest);
-    assert_eq!(engine.announce_table[&dest].local_rebroadcasts, 0);
+    assert_eq!(engine.announces.table[&dest].local_rebroadcasts, 0);
 }
 
 /// A path response is never prefiltered, even when an ordinary
@@ -1399,7 +1415,7 @@ fn prefilter_spares_path_responses() {
         &data,
     )
     .unwrap();
-    engine.discovery_path_requests.insert(
+    engine.path_requests.discovery.insert(
         dest,
         DiscoveryPathRequest {
             timestamp: 1000.0,
@@ -1408,9 +1424,10 @@ fn prefilter_spares_path_responses() {
         },
     );
     assert!(!engine.prefilter_announce(&announce, InterfaceId(1), 1000.0));
-    engine.discovery_path_requests.remove(&dest);
+    engine.path_requests.discovery.remove(&dest);
     engine
-        .announce_table
+        .announces
+        .table
         .insert(dest, table_entry(1, 0, 2000.0));
     assert!(!engine.prefilter_announce(&announce, InterfaceId(1), 1000.0));
 }
@@ -1514,7 +1531,7 @@ fn shared_instance_routes_proofs_for_its_local_clients() {
         let mut engine = TransportEngine::new(config);
         engine.register_interface(make_local_client_interface(1));
         engine.register_interface(make_interface(2, constants::MODE_FULL));
-        engine.reverse_table.insert(
+        engine.routes.reverse.insert(
             [0x50; 16],
             ReverseEntry {
                 receiving_interface: InterfaceId(receiving),
@@ -1582,11 +1599,11 @@ fn forwarded_link_request_needing_a_clamp_in_a_mode_not_enabled_is_dropped() {
         let actions = receive(&mut engine, &request, 1);
         if mode == 0x01 {
             assert!(sent_on(&actions, 2).is_some());
-            assert_eq!(engine.link_table.len(), 1);
+            assert_eq!(engine.routes.links.len(), 1);
             assert!(!protocol_violation_on(&actions, 1));
         } else {
             assert!(sent_on(&actions, 2).is_none(), "mode {mode}");
-            assert!(engine.link_table.is_empty(), "mode {mode}");
+            assert!(engine.routes.links.is_empty(), "mode {mode}");
             assert!(protocol_violation_on(&actions, 1), "mode {mode}");
         }
     }

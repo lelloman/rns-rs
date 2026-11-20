@@ -13,14 +13,9 @@ use super::*;
 /// where announces only replace the primary path as upstream does), and
 /// with `prefer_shorter_path` a shorter one can replace the path regardless
 /// of emission time, so both keep every announce.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the engine tables are passed as separate borrows so the caller can hold other engine fields mutably; runs for every received announce"
-)]
 pub(super) fn announce_passes_prefilter(
     config: &TransportConfig,
-    path_table: &BTreeMap<[u8; 16], PathSet>,
-    path_states: &BTreeMap<[u8; 16], u8>,
+    paths: &PathTables,
     interfaces: &BTreeMap<InterfaceId, InterfaceInfo>,
     destination_hash: &[u8; 16],
     data: &[u8],
@@ -32,7 +27,7 @@ pub(super) fn announce_passes_prefilter(
     if keeps_alternatives || config.prefer_shorter_path {
         return true;
     }
-    let Some(existing) = path_table.get(destination_hash).and_then(PathSet::primary) else {
+    let Some(existing) = paths.table.get(destination_hash).and_then(PathSet::primary) else {
         return true;
     };
     let Some(random_blob) = extract_random_blob(data) else {
@@ -44,7 +39,7 @@ pub(super) fn announce_passes_prefilter(
         timebase_from_random_blob(&random_blob),
         gravity(&announce_iface).unwrap_or(0),
         gravity(&existing.receiving_interface),
-        path_states.get(destination_hash) == Some(&constants::STATE_UNRESPONSIVE),
+        paths.states.get(destination_hash) == Some(&constants::STATE_UNRESPONSIVE),
         now,
         config.unresponsive_path_recovery,
     )
@@ -60,7 +55,7 @@ impl TransportEngine {
         };
         self.process_tick_pending_announces(&mut ctx);
 
-        let mut queue_actions = self.announce_queues.process_queues(now, &self.interfaces);
+        let mut queue_actions = self.announces.queues.process_queues(now, &self.interfaces);
         ctx.actions.append(&mut queue_actions);
 
         self.process_tick_ingress_release(&mut ctx);
@@ -78,42 +73,47 @@ impl TransportEngine {
         now: f64,
     ) {
         if self
-            .pending_discovery_prs
+            .path_requests
+            .pending_discovery
             .iter()
             .any(|(queued, _)| *queued == destination_hash)
-            || self.pending_discovery_prs.len() >= constants::MAX_QUEUED_DISCOVERY_PRS
+            || self.path_requests.pending_discovery.len() >= constants::MAX_QUEUED_DISCOVERY_PRS
         {
             return;
         }
         // Upstream's sender thread sleeps one throttle interval before each
         // request, the first included.
-        if self.pending_discovery_prs.is_empty() {
-            self.discovery_pr_next_tx = self
-                .discovery_pr_next_tx
+        if self.path_requests.pending_discovery.is_empty() {
+            self.path_requests.discovery_next_tx = self
+                .path_requests
+                .discovery_next_tx
                 .max(now + constants::DISCOVERY_PR_TX_THROTTLE);
         }
-        self.pending_discovery_prs
+        self.path_requests
+            .pending_discovery
             .push_back((destination_hash, skip_interface));
     }
 
     /// When this node last sent or accepted a path request for
     /// `destination_hash`, if within `PATH_REQUEST_GATE_TIMEOUT`.
     pub fn last_path_request(&self, destination_hash: &[u8; 16]) -> Option<f64> {
-        self.path_requests.get(destination_hash).copied()
+        self.path_requests.gates.get(destination_hash).copied()
     }
 
     /// `Transport.handle_disovery_path_requests`: send the oldest queued
     /// rediscovery request once its throttle interval has passed.
     fn process_tick_rediscovery(&mut self, ctx: &mut TickCtx<'_>) {
-        if ctx.now < self.discovery_pr_next_tx {
+        if ctx.now < self.path_requests.discovery_next_tx {
             return;
         }
-        if let Some((destination_hash, skip_interface)) = self.pending_discovery_prs.pop_front() {
+        if let Some((destination_hash, skip_interface)) =
+            self.path_requests.pending_discovery.pop_front()
+        {
             ctx.actions.push(TransportAction::RediscoverPath {
                 destination_hash,
                 skip_interface,
             });
-            self.discovery_pr_next_tx = ctx.now + constants::DISCOVERY_PR_TX_THROTTLE;
+            self.path_requests.discovery_next_tx = ctx.now + constants::DISCOVERY_PR_TX_THROTTLE;
         }
     }
 
@@ -123,7 +123,8 @@ impl TransportEngine {
     fn rediscover_unproven_link_paths(&mut self, now: f64) {
         let mut requests: Vec<([u8; 16], Option<InterfaceId>)> = Vec::new();
         let unproven: Vec<LinkEntry> = self
-            .link_table
+            .routes
+            .links
             .values()
             .filter(|entry| !entry.validated && now > entry.proof_timeout)
             .cloned()
@@ -204,7 +205,7 @@ impl TransportEngine {
     }
 
     fn process_tick_pending_announces(&mut self, ctx: &mut TickCtx<'_>) {
-        if ctx.now <= self.announces_last_checked + constants::ANNOUNCES_CHECK_INTERVAL {
+        if ctx.now <= self.timers.announces_last_checked + constants::ANNOUNCES_CHECK_INTERVAL {
             return;
         }
 
@@ -213,8 +214,8 @@ impl TransportEngine {
         if let Some(identity_hash) = self.config.identity_hash {
             let mut blocked_broadcasts = BTreeMap::new();
             let announce_actions = jobs::process_pending_announces(
-                &mut self.announce_table,
-                &mut self.held_announces,
+                &mut self.announces.table,
+                &mut self.announces.held,
                 &identity_hash,
                 ctx.now,
                 &mut blocked_broadcasts,
@@ -225,7 +226,7 @@ impl TransportEngine {
         }
         self.cull_expired_announce_entries(ctx.now);
         self.enforce_announce_retention_cap(ctx.now);
-        self.announces_last_checked = ctx.now;
+        self.timers.announces_last_checked = ctx.now;
     }
 
     fn process_tick_ingress_release(&mut self, ctx: &mut TickCtx<'_>) {
@@ -240,12 +241,7 @@ impl TransportEngine {
             }
             // Upstream 85d36979: held announces that can no longer update
             // their destination's path are culled before one is released.
-            let (config, path_table, path_states, interfaces) = (
-                &self.config,
-                &self.path_table,
-                &self.path_states,
-                &self.interfaces,
-            );
+            let (config, paths, interfaces) = (&self.config, &self.paths, &self.interfaces);
             let now = ctx.now;
             let keep = |destination_hash: &[u8; 16], held: &ingress_control::HeldAnnounce| {
                 let Ok(packet) = RawPacket::unpack(&held.raw) else {
@@ -253,8 +249,7 @@ impl TransportEngine {
                 };
                 announce_passes_prefilter(
                     config,
-                    path_table,
-                    path_states,
+                    paths,
                     interfaces,
                     destination_hash,
                     packet.data(),
@@ -284,11 +279,13 @@ impl TransportEngine {
                 // again, to received or filtered bytes, and a filtered
                 // announce counts in afrxc. Inbound processing records it as
                 // a received announce (c850cdac).
-                self.released_traffic.push(ReleasedTraffic {
+                self.accounting.released_traffic.push(ReleasedTraffic {
                     interface: held.receiving_interface,
                     size: held.raw.len(),
-                    filtered: core::mem::take(&mut self.inbound_filtered),
-                    filtered_announce: core::mem::take(&mut self.inbound_filtered_announce),
+                    filtered: core::mem::take(&mut self.accounting.inbound_filtered),
+                    filtered_announce: core::mem::take(
+                        &mut self.accounting.inbound_filtered_announce,
+                    ),
                 });
                 ctx.actions.extend(released_actions);
             }
@@ -296,53 +293,57 @@ impl TransportEngine {
     }
 
     fn cull_tick_tables(&mut self, ctx: &mut TickCtx<'_>) {
-        if ctx.now <= self.tables_last_culled + constants::TABLES_CULL_INTERVAL {
+        if ctx.now <= self.timers.tables_last_culled + constants::TABLES_CULL_INTERVAL {
             return;
         }
 
         let unused_path_linger = self.unused_path_linger();
         jobs::cull_path_table(
-            &mut self.path_table,
+            &mut self.paths.table,
             &self.interfaces,
             ctx.now,
             unused_path_linger,
             jobs::UnusedPoolLimits::UPSTREAM,
-            self.hop_limiter,
+            self.policy.hop_limiter,
         );
-        jobs::cull_reverse_table(&mut self.reverse_table, &self.interfaces, ctx.now);
+        jobs::cull_reverse_table(&mut self.routes.reverse, &self.interfaces, ctx.now);
         self.rediscover_unproven_link_paths(ctx.now);
         let (_culled, link_closed_actions) =
-            jobs::cull_link_table(&mut self.link_table, &self.interfaces, ctx.now);
+            jobs::cull_link_table(&mut self.routes.links, &self.interfaces, ctx.now);
         ctx.actions.extend(link_closed_actions);
-        jobs::cull_path_states(&mut self.path_states, &self.path_table);
+        jobs::cull_path_states(&mut self.paths.states, &self.paths.table);
         self.cull_blackholed(ctx.now);
         // Upstream drops a path request gate, and a discovery path request,
         // only once its timeout has passed.
-        self.path_requests.retain(|_, requested_at| {
+        self.path_requests.gates.retain(|_, requested_at| {
             ctx.now <= *requested_at + constants::PATH_REQUEST_GATE_TIMEOUT
         });
-        self.discovery_path_requests.retain(|destination, req| {
+        self.path_requests.discovery.retain(|destination, req| {
             let deadline = self
-                .discovery_path_request_deadlines
+                .path_requests
+                .discovery_deadlines
                 .get(destination)
                 .copied()
                 .unwrap_or(req.timestamp + constants::DISCOVERY_PATH_REQUEST_TIMEOUT);
             ctx.now <= deadline
         });
-        self.discovery_path_request_deadlines
-            .retain(|destination, _| self.discovery_path_requests.contains_key(destination));
+        self.path_requests
+            .discovery_deadlines
+            .retain(|destination, _| self.path_requests.discovery.contains_key(destination));
         // Transport.py culls these only when the requesting interface is
         // gone; also expire them, as a local client answers right away.
-        self.pending_local_path_requests
+        self.path_requests
+            .pending_local
             .retain(|_, (interface, requested_at)| {
                 self.interfaces.contains_key(interface)
                     && ctx.now < *requested_at + constants::PATH_REQUEST_TIMEOUT
             });
-        self.tunnel_table
+        self.tunnels
+            .table
             .void_missing_interfaces(ctx.now, |id| self.interfaces.contains_key(id));
-        self.tunnel_table.cull(ctx.now);
-        self.announce_sig_cache.cull(ctx.now);
-        self.tables_last_culled = ctx.now;
+        self.tunnels.table.cull(ctx.now);
+        self.announces.sig_cache.cull(ctx.now);
+        self.timers.tables_last_culled = ctx.now;
     }
 
     /// Gate retransmitted announce actions through per-interface bandwidth queues.
@@ -368,7 +369,7 @@ impl TransportEngine {
                             (None, None, constants::ANNOUNCE_CAP)
                         };
                     let emitted = announce_queue::announce_emitted(&raw).unwrap_or(now);
-                    if let Some(send_action) = self.announce_queues.gate_announce(
+                    if let Some(send_action) = self.announces.queues.gate_announce(
                         interface,
                         raw,
                         dest_hash,
@@ -416,7 +417,7 @@ impl TransportEngine {
                                 &dest_hash,
                                 hops,
                                 &self.local_destinations,
-                                &self.path_table,
+                                &self.paths.table,
                                 &self.interfaces,
                             )
                         })
@@ -427,7 +428,7 @@ impl TransportEngine {
 
                     for (iface_id, bitrate, airtime_profile, announce_cap) in iface_ids {
                         let emitted = announce_queue::announce_emitted(&raw).unwrap_or(now);
-                        if let Some(send_action) = self.announce_queues.gate_announce(
+                        if let Some(send_action) = self.announces.queues.gate_announce(
                             iface_id,
                             raw.clone(),
                             dest_hash,
@@ -470,7 +471,7 @@ impl TransportEngine {
 
     #[cfg(test)]
     pub(crate) fn link_table_ref(&self) -> &super::tables::LinkTable {
-        &self.link_table
+        &self.routes.links
     }
 }
 

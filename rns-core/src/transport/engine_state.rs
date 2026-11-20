@@ -14,61 +14,81 @@ impl TransportEngine {
         let announce_queue_max_interfaces = config.announce_queue_max_interfaces;
         TransportEngine {
             config,
-            path_table: BTreeMap::new(),
-            announce_table: BTreeMap::new(),
-            reverse_table: tables::ReverseTable::default(),
-            link_table: tables::LinkTable::new(),
-            link_rxb: 0,
-            link_txb: 0,
-            held_announces: BTreeMap::new(),
+            paths: PathTables {
+                table: BTreeMap::new(),
+                states: BTreeMap::new(),
+                cap_evict_count: 0,
+            },
+            announces: AnnounceState {
+                table: BTreeMap::new(),
+                held: BTreeMap::new(),
+                sig_cache: AnnounceSignatureCache::new(sig_cache_max, sig_cache_ttl),
+                rate_limiter: AnnounceRateLimiter::new(),
+                queues: AnnounceQueues::new(announce_queue_max_interfaces),
+            },
+            routes: LinkRoutes {
+                reverse: tables::ReverseTable::default(),
+                links: tables::LinkTable::new(),
+                lrproof_verdict: None,
+            },
             packet_hashlist: PacketHashlist::with_allocation(
                 packet_hashlist_max_entries,
                 packet_hashlist_allocation,
             ),
-            announce_sig_cache: AnnounceSignatureCache::new(sig_cache_max, sig_cache_ttl),
-            rate_limiter: AnnounceRateLimiter::new(),
-            path_states: BTreeMap::new(),
-            lrproof_verdict: None,
             interfaces: BTreeMap::new(),
             interface_hashes: BTreeMap::new(),
-            local_tunnel_ids: BTreeMap::new(),
-            remote_transports: BTreeMap::new(),
-            synthesis_received: BTreeSet::new(),
-            synthesis_emitted: BTreeSet::new(),
-            remote_transport_infos: BTreeMap::new(),
+            tunnels: TunnelState {
+                table: TunnelTable::new(),
+                local_ids: BTreeMap::new(),
+                remote_transports: BTreeMap::new(),
+                synthesis_received: BTreeSet::new(),
+                synthesis_emitted: BTreeSet::new(),
+                remote_infos: BTreeMap::new(),
+            },
             local_destinations: BTreeMap::new(),
             blackholed_identities: BTreeMap::new(),
-            announce_queues: AnnounceQueues::new(announce_queue_max_interfaces),
             ingress_control: IngressControl::new(),
-            tunnel_table: TunnelTable::new(),
-            discovery_pr_tags: VecDeque::new(),
-            discovery_pr_tag_set: BTreeSet::new(),
-            path_requests: BTreeMap::new(),
-            stamp_prs: constants::STAMP_PRS,
-            client_transport_id: None,
-            hop_limiter: constants::HOP_LIMITER,
-            inbound_filtered: false,
-            inbound_filtered_announce: false,
-            announce_receipts: Vec::new(),
-            released_traffic: Vec::new(),
-            stamp_requirements: StampRequirements::default(),
-            destination_filter: Default::default(),
-            control_destinations: [
-                crate::destination::destination_hash("rnstransport", &["path", "request"], None),
-                crate::destination::destination_hash(
-                    "rnstransport",
-                    &["tunnel", "synthesize"],
-                    None,
-                ),
-            ],
-            discovery_path_requests: BTreeMap::new(),
-            discovery_path_request_deadlines: BTreeMap::new(),
-            pending_local_path_requests: BTreeMap::new(),
-            pending_discovery_prs: VecDeque::new(),
-            discovery_pr_next_tx: 0.0,
-            path_destination_cap_evict_count: 0,
-            announces_last_checked: 0.0,
-            tables_last_culled: 0.0,
+            path_requests: PathRequestState {
+                gates: BTreeMap::new(),
+                discovery_tags: VecDeque::new(),
+                discovery_tag_set: BTreeSet::new(),
+                discovery: BTreeMap::new(),
+                discovery_deadlines: BTreeMap::new(),
+                pending_local: BTreeMap::new(),
+                pending_discovery: VecDeque::new(),
+                discovery_next_tx: 0.0,
+                stamp_prs: constants::STAMP_PRS,
+                client_transport_id: None,
+            },
+            accounting: TrafficAccounting {
+                link_rxb: 0,
+                link_txb: 0,
+                inbound_filtered: false,
+                inbound_filtered_announce: false,
+                announce_receipts: Vec::new(),
+                released_traffic: Vec::new(),
+            },
+            policy: Policy {
+                stamp_requirements: StampRequirements::default(),
+                destination_filter: Default::default(),
+                hop_limiter: constants::HOP_LIMITER,
+                control_destinations: [
+                    crate::destination::destination_hash(
+                        "rnstransport",
+                        &["path", "request"],
+                        None,
+                    ),
+                    crate::destination::destination_hash(
+                        "rnstransport",
+                        &["tunnel", "synthesize"],
+                        None,
+                    ),
+                ],
+            },
+            timers: JobTimers {
+                announces_last_checked: 0.0,
+                tables_last_culled: 0.0,
+            },
         }
     }
 
@@ -89,17 +109,14 @@ impl TransportEngine {
     pub fn deregister_interface(&mut self, id: InterfaceId) {
         self.interfaces.remove(&id);
         self.interface_hashes.remove(&id);
-        self.local_tunnel_ids.remove(&id);
-        self.remote_transports.remove(&id);
-        self.synthesis_received.remove(&id);
-        self.synthesis_emitted.remove(&id);
-        self.remote_transport_infos.remove(&id);
+        self.tunnels.forget_interface(id);
         self.drop_paths_for_interface(id);
         self.drop_reverse_for_interface(id);
         self.drop_links_for_interface(id);
-        self.announce_queues.remove_interface(id);
+        self.announces.queues.remove_interface(id);
         self.ingress_control.remove_interface(&id);
-        self.pending_local_path_requests
+        self.path_requests
+            .pending_local
             .retain(|_, (interface, _)| *interface != id);
     }
 
@@ -124,14 +141,16 @@ impl TransportEngine {
 
     /// Whether the path table holds at least one path to `dest_hash`.
     pub fn has_path(&self, dest_hash: &[u8; 16]) -> bool {
-        self.path_table
+        self.paths
+            .table
             .get(dest_hash)
             .is_some_and(|ps| !ps.is_empty())
     }
 
     /// Hops to `dest_hash` on its primary path.
     pub fn hops_to(&self, dest_hash: &[u8; 16]) -> Option<u8> {
-        self.path_table
+        self.paths
+            .table
             .get(dest_hash)
             .and_then(|ps| ps.primary())
             .map(|e| e.hops)
@@ -139,7 +158,8 @@ impl TransportEngine {
 
     /// Next hop of the primary path to `dest_hash`.
     pub fn next_hop(&self, dest_hash: &[u8; 16]) -> Option<[u8; 16]> {
-        self.path_table
+        self.paths
+            .table
             .get(dest_hash)
             .and_then(|ps| ps.primary())
             .map(|e| e.next_hop)
@@ -147,7 +167,8 @@ impl TransportEngine {
 
     /// Interface of the primary path to `dest_hash`.
     pub fn next_hop_interface(&self, dest_hash: &[u8; 16]) -> Option<InterfaceId> {
-        self.path_table
+        self.paths
+            .table
             .get(dest_hash)
             .and_then(|ps| ps.primary())
             .map(|e| e.receiving_interface)
@@ -176,16 +197,17 @@ impl TransportEngine {
         }
 
         // Failover: if we have alternative paths, promote the next one
-        if let Some(ps) = self.path_table.get_mut(dest_hash) {
+        if let Some(ps) = self.paths.table.get_mut(dest_hash) {
             if ps.len() > 1 {
                 ps.failover(false); // demote old primary to back
                                     // Clear unresponsive state since we promoted a fresh primary
-                self.path_states.remove(dest_hash);
+                self.paths.states.remove(dest_hash);
                 return;
             }
         }
 
-        self.path_states
+        self.paths
+            .states
             .insert(*dest_hash, constants::STATE_UNRESPONSIVE);
     }
 
@@ -195,7 +217,8 @@ impl TransportEngine {
     /// marks it responsive.
     pub fn mark_path_responsive(&mut self, dest_hash: &[u8; 16], now: f64) {
         if let Some(entry) = self
-            .path_table
+            .paths
+            .table
             .get_mut(dest_hash)
             .and_then(|paths| paths.primary_mut())
         {
@@ -207,14 +230,16 @@ impl TransportEngine {
             entry.expires = super::announce_proc::compute_path_expires(now, mode);
             entry.used = now;
         }
-        self.path_states
+        self.paths
+            .states
             .insert(*dest_hash, constants::STATE_RESPONSIVE);
     }
 
     /// Upstream's `Transport.get_path_state` (41260ea1): the state the path
     /// to `dest_hash` is marked with, `STATE_UNKNOWN` when it has none.
     pub fn path_state(&self, dest_hash: &[u8; 16]) -> u8 {
-        self.path_states
+        self.paths
+            .states
             .get(dest_hash)
             .copied()
             .unwrap_or(constants::STATE_UNKNOWN)
@@ -222,12 +247,12 @@ impl TransportEngine {
 
     /// Whether the path to `dest_hash` is marked unresponsive.
     pub fn path_is_unresponsive(&self, dest_hash: &[u8; 16]) -> bool {
-        self.path_states.get(dest_hash) == Some(&constants::STATE_UNRESPONSIVE)
+        self.paths.states.get(dest_hash) == Some(&constants::STATE_UNRESPONSIVE)
     }
 
     /// Expire every path to `dest_hash`; the next table cull removes them.
     pub fn expire_path(&mut self, dest_hash: &[u8; 16]) {
-        if let Some(ps) = self.path_table.get_mut(dest_hash) {
+        if let Some(ps) = self.paths.table.get_mut(dest_hash) {
             ps.expire_all();
         }
     }
@@ -238,19 +263,19 @@ impl TransportEngine {
 
     /// Add or replace a link table entry.
     pub fn register_link(&mut self, link_id: [u8; 16], entry: LinkEntry) {
-        self.link_table.insert(link_id, entry);
+        self.routes.links.insert(link_id, entry);
     }
 
     /// Mark a link table entry as validated.
     pub fn validate_link(&mut self, link_id: &[u8; 16]) {
-        if let Some(entry) = self.link_table.get_mut(link_id) {
+        if let Some(entry) = self.routes.links.get_mut(link_id) {
             entry.validated = true;
         }
     }
 
     /// Remove a link table entry.
     pub fn remove_link(&mut self, link_id: &[u8; 16]) {
-        self.link_table.remove(link_id);
+        self.routes.links.remove(link_id);
     }
 
     /// Return the destination whose unvalidated link route can be rebalanced
@@ -261,7 +286,7 @@ impl TransportEngine {
         packet_hops: u8,
         receiving_interface: InterfaceId,
     ) -> Option<[u8; 16]> {
-        let entry = self.link_table.get(link_id)?;
+        let entry = self.routes.links.get(link_id)?;
         (self.config.transport_enabled
             && !entry.validated
             && packet_hops != entry.remaining_hops
@@ -318,7 +343,7 @@ impl TransportEngine {
         }
         let (hops, from_local_client) = self.filtered_inbound_hops(packet, receiving_interface)?;
         let link_id = packet.destination_hash;
-        let entry = self.link_table.get(&link_id)?;
+        let entry = self.routes.links.get(&link_id)?;
         let for_local_client_link = self.interface_is_local_client(entry.next_hop_interface)
             || self.interface_is_local_client(entry.received_interface);
         (self.config.transport_enabled || from_local_client || for_local_client_link)
@@ -361,7 +386,7 @@ impl TransportEngine {
     /// upstream, which also drops it when the destination's identity is
     /// unknown; without one it is routed unchecked.
     pub fn set_lrproof_verdict(&mut self, link_id: [u8; 16], valid: bool) {
-        self.lrproof_verdict = Some((link_id, valid));
+        self.routes.lrproof_verdict = Some((link_id, valid));
     }
 
     /// Validate a mismatched-hop LRPROOF and update the relay link route and
@@ -402,14 +427,14 @@ impl TransportEngine {
             return false;
         }
 
-        let destination_hash = match self.link_table.get_mut(link_id) {
+        let destination_hash = match self.routes.links.get_mut(link_id) {
             Some(entry) if !entry.validated => {
                 entry.remaining_hops = packet_hops;
                 entry.destination_hash
             }
             _ => return false,
         };
-        if let Some(paths) = self.path_table.get_mut(&destination_hash) {
+        if let Some(paths) = self.paths.table.get_mut(&destination_hash) {
             paths.update_primary_hops(packet_hops);
         }
         true
@@ -421,7 +446,8 @@ impl TransportEngine {
         destination_hash: &[u8; 16],
         packet_hops: u8,
     ) -> bool {
-        self.path_table
+        self.paths
+            .table
             .get_mut(destination_hash)
             .is_some_and(|paths| paths.update_primary_hops(packet_hops))
     }
@@ -521,7 +547,7 @@ impl TransportEngine {
         now: f64,
     ) -> Vec<TransportAction> {
         let mut actions = Vec::new();
-        let reattaching = self.tunnel_table.get(&tunnel_id).is_some();
+        let reattaching = self.tunnels.table.get(&tunnel_id).is_some();
         if reattaching {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                 "Tunnel endpoint {:02x?} reappeared on interface {}; restoring paths",
@@ -541,7 +567,7 @@ impl TransportEngine {
             info.tunnel_id = Some(tunnel_id);
         }
 
-        let restored_paths = self.tunnel_table.handle_tunnel(
+        let restored_paths = self.tunnels.table.handle_tunnel(
             tunnel_id,
             interface,
             now,
@@ -552,7 +578,7 @@ impl TransportEngine {
         // As upstream, a path that is not restored leaves the tunnel.
         let mut deprecated_paths = Vec::new();
         for (dest_hash, tunnel_path) in &restored_paths {
-            let existing = self.path_table.get(dest_hash).and_then(|ps| ps.primary());
+            let existing = self.paths.table.get(dest_hash).and_then(|ps| ps.primary());
             let replaced = existing.map(|existing| existing.next_hop);
             let should_restore = match existing {
                 Some(existing) => {
@@ -605,7 +631,7 @@ impl TransportEngine {
                 // As upstream, the restored path takes the place of the one
                 // it was judged against, even when that one ranks better.
                 if let (Some(replaced), Some(paths)) =
-                    (replaced, self.path_table.get_mut(dest_hash))
+                    (replaced, self.paths.table.get_mut(dest_hash))
                 {
                     paths.retain(|path| path.next_hop != replaced);
                 }
@@ -626,7 +652,7 @@ impl TransportEngine {
             }
         }
 
-        if let Some(entry) = self.tunnel_table.get_mut(&tunnel_id) {
+        if let Some(entry) = self.tunnels.table.get_mut(&tunnel_id) {
             for dest_hash in &deprecated_paths {
                 log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                     "Removing path to {:02x?} from tunnel {:02x?}",
@@ -649,12 +675,14 @@ impl TransportEngine {
     /// when it had already received one, which upstream 13b98a6b counts as
     /// a protocol violation.
     pub fn mark_synthesis_received(&mut self, interface: InterfaceId) -> bool {
-        self.synthesis_received.insert(interface)
+        self.tunnels.synthesis_received.insert(interface)
     }
 
     /// Record the transport node that synthesized a tunnel over an interface.
     pub fn set_remote_transport(&mut self, interface: InterfaceId, identity_hash: [u8; 16]) {
-        self.remote_transports.insert(interface, identity_hash);
+        self.tunnels
+            .remote_transports
+            .insert(interface, identity_hash);
     }
 
     /// Record what the remote transport node reported about itself in its
@@ -664,7 +692,7 @@ impl TransportEngine {
         interface: InterfaceId,
         info: tunnel::RemoteTransportInfo,
     ) {
-        self.remote_transport_infos.insert(interface, info);
+        self.tunnels.remote_infos.insert(interface, info);
     }
 
     /// Forget an interface's tunnel synthesis state when it connects again:
@@ -675,9 +703,7 @@ impl TransportEngine {
     /// stays until its next synthesis replaces it, as upstream keeps the
     /// interface's `remote_impl`, `remote_vers` and costs.
     pub fn reset_tunnel_synthesis(&mut self, interface: InterfaceId) {
-        self.remote_transports.remove(&interface);
-        self.synthesis_received.remove(&interface);
-        self.synthesis_emitted.remove(&interface);
+        self.tunnels.reset_synthesis(interface);
     }
 
     /// Synthesize a tunnel on an interface.
@@ -715,9 +741,9 @@ impl TransportEngine {
         match tunnel::build_tunnel_synthesize_data(identity, &interface_hash, extension, rng) {
             Ok((data, tunnel_id)) => {
                 if !reverse {
-                    self.local_tunnel_ids.insert(interface_id, tunnel_id);
+                    self.tunnels.local_ids.insert(interface_id, tunnel_id);
                 }
-                self.synthesis_emitted.insert(interface_id);
+                self.tunnels.synthesis_emitted.insert(interface_id);
                 let dest_hash = crate::destination::destination_hash(
                     "rnstransport",
                     &["tunnel", "synthesize"],
@@ -739,18 +765,18 @@ impl TransportEngine {
 
     /// Void a tunnel's interface connection (tunnel disconnected).
     pub fn void_tunnel_interface(&mut self, tunnel_id: &[u8; 32]) {
-        self.tunnel_table.void_tunnel_interface(tunnel_id);
+        self.tunnels.table.void_tunnel_interface(tunnel_id);
     }
 
     /// Void a tunnel whose interface was removed; it waits
     /// `TUNNEL_RECONNECT_WINDOW` to be synthesized again.
     pub fn release_tunnel_interface(&mut self, tunnel_id: &[u8; 32], now: f64) {
-        self.tunnel_table.release_tunnel_interface(tunnel_id, now);
+        self.tunnels.table.release_tunnel_interface(tunnel_id, now);
     }
 
     /// Access the tunnel table for queries.
     pub fn tunnel_table(&self) -> &TunnelTable {
-        &self.tunnel_table
+        &self.tunnels.table
     }
 
     // =========================================================================
@@ -887,15 +913,18 @@ mod tests {
         engine.register_interface(make_interface(1, constants::MODE_FULL));
         engine.register_interface(make_interface(2, constants::MODE_FULL));
         engine
-            .pending_local_path_requests
+            .path_requests
+            .pending_local
             .insert([1; 16], (InterfaceId(1), 10.0));
         engine
-            .pending_local_path_requests
+            .path_requests
+            .pending_local
             .insert([2; 16], (InterfaceId(2), 10.0));
         engine.deregister_interface(InterfaceId(1));
         assert_eq!(
             engine
-                .pending_local_path_requests
+                .path_requests
+                .pending_local
                 .keys()
                 .collect::<Vec<_>>(),
             [&[2; 16]]
@@ -927,7 +956,7 @@ mod tests {
         let mut paths =
             PathSet::from_single(make_path_entry(1000.0, 1, InterfaceId(1), [0x01; 16]), 2);
         paths.upsert(make_path_entry(1000.0, 2, InterfaceId(1), [0x02; 16]));
-        engine.path_table.insert(dest, paths);
+        engine.paths.table.insert(dest, paths);
 
         engine.mark_path_unresponsive(&dest, Some(InterfaceId(1)));
         assert_eq!(engine.next_hop(&dest), Some([0x02; 16]));
@@ -1057,7 +1086,7 @@ mod tests {
         let tunnel_id = [0xCC; 32];
         let dest = [0xDD; 16];
         engine.handle_tunnel(tunnel_id, InterfaceId(1), 1000.0);
-        engine.tunnel_table.store_tunnel_path(
+        engine.tunnels.table.store_tunnel_path(
             &tunnel_id,
             dest,
             path,
@@ -1066,10 +1095,11 @@ mod tests {
             usize::MAX,
         );
         engine.void_tunnel_interface(&tunnel_id);
-        engine.path_table.remove(&dest);
+        engine.paths.table.remove(&dest);
         if let Some(existing) = existing {
             engine
-                .path_table
+                .paths
+                .table
                 .insert(dest, PathSet::from_single(existing, 1));
         }
         engine.handle_tunnel(tunnel_id, InterfaceId(1), now);
@@ -1165,7 +1195,7 @@ mod tests {
         let dest = [0xDD; 16];
         let (first, second) = (make_random_blob(100), make_random_blob(90));
         engine.handle_tunnel(tunnel_id, InterfaceId(1), 1000.0);
-        engine.tunnel_table.store_tunnel_path(
+        engine.tunnels.table.store_tunnel_path(
             &tunnel_id,
             dest,
             TunnelPath {
@@ -1178,9 +1208,9 @@ mod tests {
             usize::MAX,
         );
         engine.void_tunnel_interface(&tunnel_id);
-        engine.path_table.remove(&dest);
+        engine.paths.table.remove(&dest);
         engine.handle_tunnel(tunnel_id, InterfaceId(1), 2000.0);
-        let restored = engine.path_table[&dest].primary().unwrap();
+        let restored = engine.paths.table[&dest].primary().unwrap();
         assert_eq!(restored.used, 1500.0);
         assert_eq!(restored.random_blobs, vec![first, second]);
     }
@@ -1201,7 +1231,7 @@ mod tests {
             (beaten, tunnel_path(2, 5000.0, 100)),
             (expired, tunnel_path(2, 1500.0, 100)),
         ] {
-            engine.tunnel_table.store_tunnel_path(
+            engine.tunnels.table.store_tunnel_path(
                 &tunnel_id,
                 dest,
                 path,
@@ -1212,9 +1242,9 @@ mod tests {
         }
         engine.void_tunnel_interface(&tunnel_id);
         for dest in [restored, beaten, expired] {
-            engine.path_table.remove(&dest);
+            engine.paths.table.remove(&dest);
         }
-        engine.path_table.insert(
+        engine.paths.table.insert(
             beaten,
             PathSet::from_single(
                 PathEntry {
@@ -1235,7 +1265,7 @@ mod tests {
 
         // Reattached again with nothing to restore, the tunnel stays.
         engine.void_tunnel_interface(&tunnel_id);
-        engine.path_table.remove(&restored);
+        engine.paths.table.remove(&restored);
         engine.handle_tunnel(tunnel_id, InterfaceId(1), 6000.0);
         let entry = engine.tunnel_table().get(&tunnel_id).unwrap();
         assert!(entry.paths.is_empty());

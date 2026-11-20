@@ -88,7 +88,7 @@ impl TransportEngine {
         // tag, a failed enforced stamp, a malformed one) as filtered inbound.
         // Since c850cdac one batched into a request in flight is received.
         if request.is_none() {
-            self.inbound_filtered = true;
+            self.accounting.inbound_filtered = true;
         }
         request
     }
@@ -116,7 +116,8 @@ impl TransportEngine {
             .next_hop_interface(&ctx.destination_hash)
             .is_some_and(|iface| self.serves_local_client(iface))
         {
-            self.pending_local_path_requests
+            self.path_requests
+                .pending_local
                 .insert(ctx.destination_hash, (ctx.interface_id, ctx.now));
         }
         // Transport.py:3450-3457: a destination local to this system answers
@@ -185,7 +186,7 @@ impl TransportEngine {
         // transition, a stamping node marks an unstamped request relayed to
         // local clients with the 0xFF sentinel flags byte (upstream 7c1b6486).
         let tag = &ctx.tag[..ctx.tag_len];
-        if !relay_to_local_clients && self.stamp_prs && ctx.ext_payload.is_none() {
+        if !relay_to_local_clients && self.path_requests.stamp_prs && ctx.ext_payload.is_none() {
             // Transport.py:3826-3828 with STAMP_PRS: `request_path` finds no
             // stamp for the client's tag and queues one stamper job per
             // egress interface. The stamp is ground off the engine thread and
@@ -201,9 +202,9 @@ impl TransportEngine {
                 })
                 .collect();
         }
-        let ext_payload = ctx
-            .ext_payload
-            .or_else(|| (relay_to_local_clients && self.stamp_prs).then(unstamped_relay_payload));
+        let ext_payload = ctx.ext_payload.or_else(|| {
+            (relay_to_local_clients && self.path_requests.stamp_prs).then(unstamped_relay_payload)
+        });
 
         // Path requests always carry the transport identity since 1.6.0.
         let Some((raw, _)) = build_path_request_packet(
@@ -308,8 +309,8 @@ impl TransportEngine {
                     let required_value = self
                         .interfaces
                         .get(&interface_id)
-                        .map(|info| info.stamp_costs.pr_cost(&self.stamp_requirements))
-                        .unwrap_or(self.stamp_requirements.path_request_cost);
+                        .map(|info| info.stamp_costs.pr_cost(&self.policy.stamp_requirements))
+                        .unwrap_or(self.policy.stamp_requirements.path_request_cost);
                     let valid = crate::stamp::stamp_valid(stamp, required_value, &workblock);
                     carried_stamp_value = Some(value);
                     stamped = valid;
@@ -339,7 +340,7 @@ impl TransportEngine {
                     valid
                 }
             };
-            if self.stamp_requirements.enforced && !valid {
+            if self.policy.stamp_requirements.enforced && !valid {
                 return None;
             }
         }
@@ -351,10 +352,13 @@ impl TransportEngine {
             return None;
         }
 
-        let already_in_flight = self.path_requests.contains_key(&destination_hash)
-            && !self.path_table.contains_key(&destination_hash)
+        let already_in_flight = self.path_requests.gates.contains_key(&destination_hash)
+            && !self.paths.table.contains_key(&destination_hash)
             && !self.local_destinations.contains_key(&destination_hash);
-        self.path_requests.entry(destination_hash).or_insert(now);
+        self.path_requests
+            .gates
+            .entry(destination_hash)
+            .or_insert(now);
 
         let mut tag = [0u8; 16];
         tag[..tag_len].copy_from_slice(&tag_bytes[..tag_len]);
@@ -394,7 +398,8 @@ impl TransportEngine {
 
         let timeout = discovery_path_request_timeout(&self.interfaces);
         let request = self
-            .discovery_path_requests
+            .path_requests
+            .discovery
             .entry(ctx.destination_hash)
             .or_insert_with(|| DiscoveryPathRequest {
                 timestamp: ctx.now,
@@ -404,7 +409,8 @@ impl TransportEngine {
         if !request.requesting_interfaces.contains(&ctx.interface_id) {
             request.requesting_interfaces.push(ctx.interface_id);
         }
-        self.discovery_path_request_deadlines
+        self.path_requests
+            .discovery_deadlines
             .entry(ctx.destination_hash)
             .or_insert(ctx.now + timeout);
     }
@@ -412,36 +418,36 @@ impl TransportEngine {
     /// Record a locally generated path request, refreshing its gate timeout.
     #[doc(hidden)]
     pub fn record_outbound_path_request(&mut self, destination_hash: [u8; 16], now: f64) {
-        self.path_requests.insert(destination_hash, now);
+        self.path_requests.gates.insert(destination_hash, now);
     }
 
     /// Whether this node stamps the path requests it emits and the unstamped
     /// ones it forwards for local clients (`Transport.STAMP_PRS`).
     pub fn stamp_prs(&self) -> bool {
-        self.stamp_prs
+        self.path_requests.stamp_prs
     }
 
     /// Set the transport id this shared instance client's own path requests
     /// carry, as upstream's client sends its (ephemeral) transport
     /// identity's hash.
     pub fn set_client_transport_id(&mut self, transport_id: Option<[u8; 16]>) {
-        self.client_transport_id = transport_id;
+        self.path_requests.client_transport_id = transport_id;
     }
 
     /// Override the compile-time `STAMP_PRS` default.
     #[doc(hidden)]
     pub fn set_stamp_prs(&mut self, enabled: bool) {
-        self.stamp_prs = enabled;
+        self.path_requests.stamp_prs = enabled;
     }
 
     /// Stamp requirements applied to received announces and path requests.
     pub fn stamp_requirements(&self) -> StampRequirements {
-        self.stamp_requirements
+        self.policy.stamp_requirements
     }
 
     /// Destination type filter applied to received announces.
     pub fn destination_filter(&self) -> &super::destination_filter::DestinationTypeFilter {
-        &self.destination_filter
+        &self.policy.destination_filter
     }
 
     /// Mutable access to the destination type filter, for `[filter]` and
@@ -449,13 +455,13 @@ impl TransportEngine {
     pub fn destination_filter_mut(
         &mut self,
     ) -> &mut super::destination_filter::DestinationTypeFilter {
-        &mut self.destination_filter
+        &mut self.policy.destination_filter
     }
 
     /// Override the compile-time `STAMPS_ENFORCED`, `DESTINATION_COST` and
     /// `PR_COST` defaults, as the `[stamps]` config section does upstream.
     pub fn set_stamp_requirements(&mut self, requirements: StampRequirements) {
-        self.stamp_requirements = requirements;
+        self.policy.stamp_requirements = requirements;
     }
 
     /// Build a path request frame for `destination_hash` as this node emits
@@ -475,7 +481,7 @@ impl TransportEngine {
             self.config
                 .identity_hash
                 .as_ref()
-                .or(self.client_transport_id.as_ref()),
+                .or(self.path_requests.client_transport_id.as_ref()),
             tag,
             ext_payload,
         )
@@ -488,7 +494,8 @@ impl TransportEngine {
         from_local_client: bool,
     ) -> bool {
         let Some(path) = self
-            .path_table
+            .paths
+            .table
             .get(&ctx.destination_hash)
             .and_then(|ps| ps.primary())
             .cloned()
@@ -519,7 +526,7 @@ impl TransportEngine {
         }
         // Leave the active entry in place until replacement so insertion can
         // preserve its pending send deadline under repeated path requests.
-        if let Some(existing) = self.announce_table.get(&ctx.destination_hash).cloned() {
+        if let Some(existing) = self.announces.table.get(&ctx.destination_hash).cloned() {
             self.insert_held_announce(ctx.destination_hash, existing, ctx.now);
         }
         // Transport.py:3492-3506: answer local clients, and requests for
@@ -639,7 +646,7 @@ impl TransportEngine {
         // generating a stamp for a request it did not originate.
         let ext_payload = ctx
             .ext_payload
-            .or_else(|| self.stamp_prs.then(unstamped_relay_payload));
+            .or_else(|| self.path_requests.stamp_prs.then(unstamped_relay_payload));
         let Some((path_request_raw, path_request_len)) = build_path_request_packet(
             &ctx.destination_hash,
             self.config.identity_hash.as_ref(),
@@ -659,13 +666,14 @@ impl TransportEngine {
                 op_freq,
                 op_samples,
             ) || self
-                .announce_queues
+                .announces
+                .queues
                 .blocks_recursive_path_request(id, ctx.now)
             {
                 continue;
             }
 
-            self.announce_queues.reserve_recursive_path_request(
+            self.announces.queues.reserve_recursive_path_request(
                 id,
                 path_request_len + constants::HEADER_MINSIZE,
                 ctx.now,
@@ -687,7 +695,8 @@ impl TransportEngine {
                 actions.len(),
             );
             let request = self
-                .discovery_path_requests
+                .path_requests
+                .discovery
                 .entry(ctx.destination_hash)
                 .or_insert_with(|| DiscoveryPathRequest {
                     timestamp: ctx.now,
@@ -699,7 +708,8 @@ impl TransportEngine {
             }
             request.engaged = true;
             let timeout = discovery_path_request_timeout(&self.interfaces);
-            self.discovery_path_request_deadlines
+            self.path_requests
+                .discovery_deadlines
                 .insert(ctx.destination_hash, ctx.now + timeout);
         } else {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,

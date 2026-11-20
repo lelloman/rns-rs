@@ -45,23 +45,25 @@ fn culling_expired_announces_counts_both_tables() {
     let ttl = engine.config.announce_table_ttl_secs;
     for (table, expired) in [(false, [1, 5]), (true, [3, 6])] {
         let entries = if table {
-            &mut engine.held_announces
+            &mut engine.announces.held
         } else {
-            &mut engine.announce_table
+            &mut engine.announces.table
         };
         for (i, destination) in expired.into_iter().enumerate() {
             entries.insert([destination; 16], entry(1000.0 - i as f64, 4));
         }
     }
     engine
-        .announce_table
+        .announces
+        .table
         .insert([2; 16], entry(1000.0 + ttl, 4));
     engine
-        .held_announces
+        .announces
+        .held
         .insert([4; 16], entry(1000.0 + ttl, 4));
     assert_eq!(engine.cull_expired_announce_entries(1000.5 + ttl), 4);
-    assert!(engine.announce_table.contains_key(&[2; 16]));
-    assert!(engine.held_announces.contains_key(&[4; 16]));
+    assert!(engine.announces.table.contains_key(&[2; 16]));
+    assert!(engine.announces.held.contains_key(&[4; 16]));
 }
 
 /// The retention cap holds announces up to exactly its size, and an
@@ -72,7 +74,7 @@ fn retention_cap_admits_up_to_its_size() {
     let mut engine = capped_engine(2 * size);
     assert!(engine.insert_announce_entry([1; 16], entry(1000.0, 8), 1000.0));
     assert!(engine.insert_held_announce([2; 16], entry(1000.0, 8), 1000.0));
-    assert!(engine.announce_table.contains_key(&[1; 16]));
+    assert!(engine.announces.table.contains_key(&[1; 16]));
 
     let exact = size + 16 * 3;
     let mut engine = capped_engine(exact);
@@ -84,5 +86,5 @@ fn retention_cap_admits_up_to_its_size() {
     assert!(engine.insert_announce_entry([1; 16], entry(999.0, 4), 1000.0));
     assert!(!engine.insert_announce_entry([2; 16], entry(1000.0, 25), 1000.0));
     assert!(!engine.insert_held_announce([3; 16], entry(1000.0, 25), 1000.0));
-    assert!(engine.announce_table.contains_key(&[1; 16]));
+    assert!(engine.announces.table.contains_key(&[1; 16]));
 }

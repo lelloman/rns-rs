@@ -140,7 +140,7 @@ fn test_deregister_interface_removes_announce_queue_state() {
     let mut engine = TransportEngine::new(make_config(false));
     engine.register_interface(make_interface(1, constants::MODE_FULL));
 
-    let _ = engine.announce_queues.gate_announce(
+    let _ = engine.announces.queues.gate_announce(
         InterfaceId(1),
         vec![0x01; 100].into(),
         [0xAA; 16],
@@ -151,7 +151,7 @@ fn test_deregister_interface_removes_announce_queue_state() {
         None,
         constants::ANNOUNCE_CAP,
     );
-    let _ = engine.announce_queues.gate_announce(
+    let _ = engine.announces.queues.gate_announce(
         InterfaceId(1),
         vec![0x02; 100].into(),
         [0xBB; 16],
@@ -220,7 +220,7 @@ fn test_deregister_interface_removes_transport_state() {
             used: 0.0,
         },
     );
-    engine.reverse_table.insert(
+    engine.routes.reverse.insert(
         [0x44; 16],
         tables::ReverseEntry {
             receiving_interface: InterfaceId(2),
@@ -278,7 +278,7 @@ fn test_deregister_interface_preserves_other_announce_queues() {
     engine.register_interface(make_interface(1, constants::MODE_FULL));
     engine.register_interface(make_interface(2, constants::MODE_FULL));
 
-    let _ = engine.announce_queues.gate_announce(
+    let _ = engine.announces.queues.gate_announce(
         InterfaceId(1),
         vec![0x01; 100].into(),
         [0xAA; 16],
@@ -289,7 +289,7 @@ fn test_deregister_interface_preserves_other_announce_queues() {
         None,
         constants::ANNOUNCE_CAP,
     );
-    let _ = engine.announce_queues.gate_announce(
+    let _ = engine.announces.queues.gate_announce(
         InterfaceId(1),
         vec![0x02; 100].into(),
         [0xAB; 16],
@@ -300,7 +300,7 @@ fn test_deregister_interface_preserves_other_announce_queues() {
         None,
         constants::ANNOUNCE_CAP,
     );
-    let _ = engine.announce_queues.gate_announce(
+    let _ = engine.announces.queues.gate_announce(
         InterfaceId(2),
         vec![0x03; 100].into(),
         [0xBA; 16],
@@ -311,7 +311,7 @@ fn test_deregister_interface_preserves_other_announce_queues() {
         None,
         constants::ANNOUNCE_CAP,
     );
-    let _ = engine.announce_queues.gate_announce(
+    let _ = engine.announces.queues.gate_announce(
         InterfaceId(2),
         vec![0x04; 100].into(),
         [0xBB; 16],
@@ -492,7 +492,8 @@ fn test_duplicate_announce_from_second_interface_uses_existing_path() {
         } if *destination_hash == dest_hash && *interface == InterfaceId(2)
     )));
     let path = engine
-        .path_table
+        .paths
+        .table
         .get(&dest_hash)
         .and_then(|set| set.primary())
         .expect("first announce should install a path");
@@ -520,7 +521,8 @@ fn test_duplicate_announce_from_second_interface_uses_existing_path() {
         } if *destination_hash == dest_hash && *interface == InterfaceId(2)
     )));
     let path = engine
-        .path_table
+        .paths
+        .table
         .get(&dest_hash)
         .and_then(|set| set.primary())
         .expect("higher-gravity reception should become primary");
@@ -614,7 +616,7 @@ fn an_announce_heard_again_while_waiting_is_not_rebroadcast_to_that_interface() 
     receive_on(&mut engine, &first, 1, 1000.0);
     receive_on(&mut engine, &second, 2, 1000.1);
 
-    let path = engine.path_table[&dest_hash].primary().unwrap();
+    let path = engine.paths.table[&dest_hash].primary().unwrap();
     assert_eq!(path.receiving_interface, InterfaceId(1));
     assert_eq!(retransmitted_on(&mut engine, 1010.0), vec![1, 3]);
 }
@@ -672,7 +674,7 @@ fn test_expire_path() {
     let mut engine = TransportEngine::new(make_config(false));
     let dest = [0x33; 16];
 
-    engine.path_table.insert(
+    engine.paths.table.insert(
         dest,
         PathSet::from_single(
             PathEntry {
@@ -694,7 +696,7 @@ fn test_expire_path() {
     engine.expire_path(&dest);
     // Path still exists but expires = 0
     assert!(engine.has_path(&dest));
-    assert_eq!(engine.path_table[&dest].primary().unwrap().expires, 0.0);
+    assert_eq!(engine.paths.table[&dest].primary().unwrap().expires, 0.0);
 }
 
 #[test]
@@ -718,14 +720,14 @@ fn test_link_table_operations() {
         },
     );
 
-    assert!(engine.link_table.contains_key(&link_id));
-    assert!(!engine.link_table[&link_id].validated);
+    assert!(engine.routes.links.contains_key(&link_id));
+    assert!(!engine.routes.links[&link_id].validated);
 
     engine.validate_link(&link_id);
-    assert!(engine.link_table[&link_id].validated);
+    assert!(engine.routes.links[&link_id].validated);
 
     engine.remove_link(&link_id);
-    assert!(!engine.link_table.contains_key(&link_id));
+    assert!(!engine.routes.links.contains_key(&link_id));
 }
 
 #[test]
@@ -870,7 +872,7 @@ fn valid_lrproof_rebalances_relay_link_and_destination_path() {
         &signing_public,
     ));
 
-    assert_eq!(engine.link_table[&link_id].remaining_hops, 5);
+    assert_eq!(engine.routes.links[&link_id].remaining_hops, 5);
     assert_eq!(engine.hops_to(&destination_hash), Some(5));
 
     let packet = RawPacket::pack(
@@ -898,7 +900,7 @@ fn valid_lrproof_rebalances_relay_link_and_destination_path() {
         },
         &mut inbound_rng,
     );
-    assert!(engine.link_table[&link_id].validated);
+    assert!(engine.routes.links[&link_id].validated);
     assert!(actions.iter().any(|action| matches!(
         action,
         TransportAction::SendOnInterface {
@@ -985,9 +987,9 @@ fn a_valid_transported_lrproof_refreshes_the_destination_path() {
             ..
         }
     )));
-    assert!(engine.link_table[&link_id].validated);
+    assert!(engine.routes.links[&link_id].validated);
     // Transport.mark_path_responsive: as fresh as a new announce.
-    let path = engine.path_table[&destination_hash].primary().unwrap();
+    let path = engine.paths.table[&destination_hash].primary().unwrap();
     assert_eq!(path.timestamp, 500.0);
     assert_eq!(path.expires, 500.0 + constants::PATHFINDER_E);
     assert_eq!(path.used, 500.0);
@@ -1019,9 +1021,9 @@ fn an_invalid_transported_lrproof_is_dropped_as_a_protocol_violation() {
             interface: InterfaceId(2)
         }
     )));
-    assert!(!engine.link_table[&link_id].validated);
+    assert!(!engine.routes.links[&link_id].validated);
     assert_eq!(
-        engine.path_table[&destination_hash]
+        engine.paths.table[&destination_hash]
             .primary()
             .unwrap()
             .timestamp,
@@ -1035,7 +1037,7 @@ fn an_invalid_transported_lrproof_is_dropped_as_a_protocol_violation() {
         .iter()
         .any(|action| matches!(action, TransportAction::SendOnInterface { .. })));
     assert_eq!(
-        engine.path_table[&destination_hash]
+        engine.paths.table[&destination_hash]
             .primary()
             .unwrap()
             .timestamp,
@@ -1047,7 +1049,7 @@ fn an_invalid_transported_lrproof_is_dropped_as_a_protocol_violation() {
 fn valid_lrproof_rebalances_link_when_destination_path_is_absent() {
     let (mut engine, link_id, destination_hash, signing_public, proof) =
         lrproof_rebalance_fixture();
-    assert!(engine.path_table.remove(&destination_hash).is_some());
+    assert!(engine.paths.table.remove(&destination_hash).is_some());
 
     assert!(engine.rebalance_link_path_from_lrproof(
         &link_id,
@@ -1057,7 +1059,7 @@ fn valid_lrproof_rebalances_link_when_destination_path_is_absent() {
         &signing_public,
     ));
 
-    assert_eq!(engine.link_table[&link_id].remaining_hops, 5);
+    assert_eq!(engine.routes.links[&link_id].remaining_hops, 5);
     assert_eq!(engine.hops_to(&destination_hash), None);
 }
 
@@ -1073,7 +1075,7 @@ fn relay_rebalance_rejects_invalid_signature_wrong_interface_and_validated_link(
         &proof,
         &signing_public,
     ));
-    assert_eq!(engine.link_table[&link_id].remaining_hops, 3);
+    assert_eq!(engine.routes.links[&link_id].remaining_hops, 3);
     assert_eq!(engine.hops_to(&destination_hash), Some(3));
 
     let (_, _, _, _, valid_proof) = lrproof_rebalance_fixture();
@@ -1361,7 +1363,7 @@ fn test_tick_retransmits_announce() {
     ));
 
     // Retries should have increased
-    assert_eq!(engine.announce_table[&dest].retries, 1);
+    assert_eq!(engine.announces.table[&dest].retries, 1);
 }
 
 #[test]
@@ -1503,7 +1505,7 @@ fn test_void_queues_clears_shutdown_transients() {
         make_announce_entry(held_dest, 100.0, 16),
         100.0,
     ));
-    engine.reverse_table.insert(
+    engine.routes.reverse.insert(
         [0x93; 16],
         tables::ReverseEntry {
             receiving_interface: InterfaceId(1),
@@ -1511,7 +1513,7 @@ fn test_void_queues_clears_shutdown_transients() {
             timestamp: 100.0,
         },
     );
-    let _ = engine.announce_queues.gate_announce(
+    let _ = engine.announces.queues.gate_announce(
         InterfaceId(1),
         vec![0xAA; 32].into(),
         [0x94; 16],
@@ -1522,7 +1524,7 @@ fn test_void_queues_clears_shutdown_transients() {
         None,
         constants::ANNOUNCE_CAP,
     );
-    let _ = engine.announce_queues.gate_announce(
+    let _ = engine.announces.queues.gate_announce(
         InterfaceId(1),
         vec![0xBB; 32].into(),
         [0x95; 16],
@@ -1686,7 +1688,7 @@ fn test_async_announce_retransmit_cleanup_happens_before_queueing() {
     )
     .unwrap();
 
-    engine.announce_table.insert(
+    engine.announces.table.insert(
         dest_hash,
         AnnounceEntry {
             timestamp: 1000.0,
@@ -1725,7 +1727,7 @@ fn test_async_announce_retransmit_cleanup_happens_before_queueing() {
     assert!(actions.is_empty());
     assert_eq!(queue.len(), 1);
     assert!(
-        !engine.announce_table.contains_key(&dest_hash),
+        !engine.announces.table.contains_key(&dest_hash),
         "retransmit completion should clear announce_table before queueing"
     );
 }
@@ -1870,7 +1872,7 @@ fn local_client_path_response_waits_behind_its_queued_announce() {
         );
         assert!(actions.is_empty(), "{actions:?}");
     }
-    assert!(!engine.path_table.contains_key(&dest_hash));
+    assert!(!engine.paths.table.contains_key(&dest_hash));
     assert_eq!(queue.len(), 2);
 
     let batch = queue.take_pending(1000.2);
@@ -1891,14 +1893,16 @@ fn local_client_path_response_waits_behind_its_queued_announce() {
     }
 
     let path = engine
-        .path_table
+        .paths
+        .table
         .get(&dest_hash)
         .unwrap()
         .primary()
         .unwrap();
     assert_eq!(path.random_blobs.last().unwrap()[0], 0xA0);
     let entry = engine
-        .announce_table
+        .announces
+        .table
         .get(&dest_hash)
         .expect("the announce is rebroadcast");
     assert!(!entry.block_rebroadcasts);
@@ -2043,7 +2047,7 @@ fn announce_signature_cache_hit_yields_same_validated_announce() {
 
     let mut engine = TransportEngine::new(make_config(false));
     engine.register_interface(make_interface(1, constants::MODE_FULL));
-    engine.announce_sig_cache.insert(
+    engine.announces.sig_cache.insert(
         TransportEngine::announce_sig_cache_key(&dest, &cached),
         1000.0,
     );
@@ -2066,7 +2070,7 @@ fn announce_signature_cache_hit_still_checks_destination_binding() {
 
     let mut engine = TransportEngine::new(make_config(false));
     engine.register_interface(make_interface(1, constants::MODE_FULL));
-    engine.announce_sig_cache.insert(
+    engine.announces.sig_cache.insert(
         TransportEngine::announce_sig_cache_key(&other_dest, &announce),
         1000.0,
     );
@@ -2090,7 +2094,7 @@ fn announce_with_cached_signature_but_different_fields_is_verified_again() {
     // The variants reuse the announce's random blob, so with its path known
     // the prefilter (upstream 096e6726) would drop them before validation.
     // Without the path they reach the signature cache.
-    engine.path_table.remove(&dest);
+    engine.paths.table.remove(&dest);
 
     // Same destination hash and signature, different public key.
     let other_identity = rns_crypto::identity::Identity::from_private_key(&[0x65; 64]);
@@ -2150,7 +2154,7 @@ fn test_tick_culls_expired_path() {
     engine.register_interface(make_interface(1, constants::MODE_FULL));
 
     let dest = [0x66; 16];
-    engine.path_table.insert(
+    engine.paths.table.insert(
         dest,
         PathSet::from_single(
             PathEntry {
@@ -2849,9 +2853,10 @@ fn updated_path_keeps_its_use_time_in_the_table_and_the_tunnel() {
     let (dest, first) =
         signed_announce_with(0x51, "used", blob_emitted_at(900), constants::CONTEXT_NONE);
     engine.handle_inbound(InboundFrame::new(&first, InterfaceId(1), 1000.0), &mut rng);
-    assert_eq!(engine.path_table[&dest].primary().unwrap().used, 0.0);
+    assert_eq!(engine.paths.table[&dest].primary().unwrap().used, 0.0);
     engine
-        .path_table
+        .paths
+        .table
         .get_mut(&dest)
         .unwrap()
         .primary_mut()
@@ -2861,7 +2866,7 @@ fn updated_path_keeps_its_use_time_in_the_table_and_the_tunnel() {
     let (_, newer) =
         signed_announce_with(0x51, "used", blob_emitted_at(1150), constants::CONTEXT_NONE);
     engine.handle_inbound(InboundFrame::new(&newer, InterfaceId(1), 1200.0), &mut rng);
-    let path = engine.path_table[&dest].primary().unwrap();
+    let path = engine.paths.table[&dest].primary().unwrap();
     assert_eq!((path.timestamp, path.used), (1200.0, 1100.0));
     let tunnel = engine.tunnel_table().get(&tunnel_id).unwrap();
     assert_eq!(tunnel.paths[&dest].used, 1100.0);
@@ -2940,7 +2945,7 @@ fn test_tunnel_reattach_restores_paths() {
 
     // Manually add a path to the tunnel
     let dest = [0xDD; 16];
-    engine.tunnel_table.store_tunnel_path(
+    engine.tunnels.table.store_tunnel_path(
         &tunnel_id,
         dest,
         tunnel::TunnelPath {
@@ -2961,7 +2966,7 @@ fn test_tunnel_reattach_restores_paths() {
     engine.void_tunnel_interface(&tunnel_id);
 
     // Remove path from path table to simulate it expiring
-    engine.path_table.remove(&dest);
+    engine.paths.table.remove(&dest);
     assert!(!engine.has_path(&dest));
 
     // Reattach tunnel on new interface
@@ -2970,7 +2975,7 @@ fn test_tunnel_reattach_restores_paths() {
 
     // Should restore the path
     assert!(engine.has_path(&dest));
-    let path = engine.path_table.get(&dest).unwrap().primary().unwrap();
+    let path = engine.paths.table.get(&dest).unwrap().primary().unwrap();
     assert_eq!(path.hops, 3);
     assert_eq!(path.receiving_interface, InterfaceId(2));
 
@@ -2989,7 +2994,7 @@ fn test_active_packet_hashes_include_detached_tunnel_paths() {
     let destination_hash = [0xDB; 16];
     let packet_hash = [0xEC; 32];
     engine.handle_tunnel(tunnel_id, InterfaceId(1), 1000.0);
-    engine.tunnel_table.store_tunnel_path(
+    engine.tunnels.table.store_tunnel_path(
         &tunnel_id,
         destination_hash,
         tunnel::TunnelPath {
@@ -3006,7 +3011,7 @@ fn test_active_packet_hashes_include_detached_tunnel_paths() {
         usize::MAX,
     );
     engine.void_tunnel_interface(&tunnel_id);
-    engine.path_table.remove(&destination_hash);
+    engine.paths.table.remove(&destination_hash);
 
     let active_hashes = engine.active_packet_hashes();
     assert_eq!(active_hashes, vec![packet_hash]);
@@ -3023,7 +3028,7 @@ fn test_tunnel_reattach_does_not_overwrite_newer_path() {
     let newer_blob = make_random_blob(200);
 
     engine.handle_tunnel(tunnel_id, InterfaceId(1), 1000.0);
-    engine.tunnel_table.store_tunnel_path(
+    engine.tunnels.table.store_tunnel_path(
         &tunnel_id,
         dest,
         tunnel::TunnelPath {
@@ -3041,7 +3046,7 @@ fn test_tunnel_reattach_does_not_overwrite_newer_path() {
     );
     engine.void_tunnel_interface(&tunnel_id);
 
-    engine.path_table.insert(
+    engine.paths.table.insert(
         dest,
         PathSet::from_single(
             PathEntry {
@@ -3062,7 +3067,7 @@ fn test_tunnel_reattach_does_not_overwrite_newer_path() {
     engine.register_interface(make_interface(2, constants::MODE_FULL));
     engine.handle_tunnel(tunnel_id, InterfaceId(2), 2000.0);
 
-    let path = engine.path_table.get(&dest).unwrap().primary().unwrap();
+    let path = engine.paths.table.get(&dest).unwrap().primary().unwrap();
     assert_eq!(path.next_hop, [0xAB; 16]);
     assert_eq!(path.hops, 3);
     assert_eq!(path.receiving_interface, InterfaceId(3));
@@ -3307,7 +3312,7 @@ fn test_path_request_forwarded_on_ap() {
         _ => panic!("Expected SendOnInterface for forwarded path request"),
     }
     // Should have stored a discovery path request
-    assert!(engine.discovery_path_requests.contains_key(&dest));
+    assert!(engine.path_requests.discovery.contains_key(&dest));
 }
 
 fn make_stamped_path_request_data(
@@ -3464,7 +3469,7 @@ fn test_recursive_path_request_rebuilds_transport_payload() {
         }
         _ => panic!("expected SendOnInterface for recursive path request"),
     }
-    assert!(engine.discovery_path_requests.contains_key(&dest));
+    assert!(engine.path_requests.discovery.contains_key(&dest));
 }
 
 #[test]
@@ -3488,7 +3493,7 @@ fn test_path_request_forwarded_on_internal() {
         }
         _ => panic!("expected SendOnInterface for recursive path request"),
     }
-    assert!(engine.discovery_path_requests.contains_key(&dest));
+    assert!(engine.path_requests.discovery.contains_key(&dest));
 }
 
 #[test]
@@ -3519,7 +3524,7 @@ fn boundary_path_request_searches_only_boundary_and_gateway_interfaces() {
         })
         .collect();
     assert_eq!(interfaces, vec![InterfaceId(2), InterfaceId(3)]);
-    assert!(engine.discovery_path_requests.contains_key(&dest));
+    assert!(engine.path_requests.discovery.contains_key(&dest));
 }
 
 #[test]
@@ -3545,7 +3550,7 @@ fn recursive_prs_on_boundary_keeps_unfiltered_egress_behavior() {
         }
         _ => panic!("expected SendOnInterface for recursive path request"),
     }
-    assert!(engine.discovery_path_requests.contains_key(&dest));
+    assert!(engine.path_requests.discovery.contains_key(&dest));
 }
 
 #[test]
@@ -3562,7 +3567,7 @@ fn test_path_request_not_forwarded_on_full() {
 
     // MODE_FULL is not in DISCOVER_PATHS_FOR, so no forwarding
     assert!(actions.is_empty());
-    assert!(!engine.discovery_path_requests.contains_key(&dest));
+    assert!(!engine.path_requests.discovery.contains_key(&dest));
 }
 
 fn expect_local_path_response(
@@ -3621,7 +3626,7 @@ fn path_request_for_local_destination_requests_path_response() {
         // reaches the local answer, as in Python.
         let actions = engine.handle_path_request(&data, InterfaceId(1), 1002.0);
         assert!(actions.is_empty(), "duplicate tag answered: {actions:?}");
-        assert!(!engine.discovery_path_requests.contains_key(&dest));
+        assert!(!engine.path_requests.discovery.contains_key(&dest));
     }
 }
 
@@ -3711,7 +3716,7 @@ fn test_path_request_forwarded_on_full_with_recursive_prs() {
         }
         _ => panic!("expected SendOnInterface for recursive path request"),
     }
-    assert!(engine.discovery_path_requests.contains_key(&dest));
+    assert!(engine.path_requests.discovery.contains_key(&dest));
 }
 
 #[test]
@@ -3733,7 +3738,7 @@ fn test_recursive_prs_still_obeys_ingress_control() {
     let actions = engine.handle_path_request(&data, InterfaceId(1), 1001.0);
 
     assert!(actions.is_empty());
-    assert!(!engine.discovery_path_requests.contains_key(&dest));
+    assert!(!engine.path_requests.discovery.contains_key(&dest));
 }
 
 #[test]
@@ -3754,7 +3759,7 @@ fn test_queued_ingress_limited_path_request_cannot_escape_after_burst_clears() {
         engine.handle_path_request_with_ingress_limit(&data, InterfaceId(1), 1000.0, true);
 
     assert!(actions.is_empty());
-    assert!(!engine.discovery_path_requests.contains_key(&dest));
+    assert!(!engine.path_requests.discovery.contains_key(&dest));
     assert!(!engine.pr_burst_active(&InterfaceId(1)));
 }
 
@@ -3765,7 +3770,7 @@ fn test_duplicate_discovery_path_request_is_suppressed() {
     engine.register_interface(make_interface(2, constants::MODE_FULL));
 
     let dest = [0xD7; 16];
-    engine.path_table.insert(
+    engine.paths.table.insert(
         dest,
         PathSet::from_single(make_path_entry(100.0, 1, InterfaceId(1), dest), 1),
     );
@@ -3810,17 +3815,18 @@ fn discovery_path_request_timeout_covers_slowest_interface_round_trip() {
         1
     );
     assert_eq!(
-        engine.discovery_path_request_deadlines.get(&destination),
+        engine.path_requests.discovery_deadlines.get(&destination),
         Some(&1026.0)
     );
 
     let mut rng = rns_crypto::FixedRng::new(&[0x20; 32]);
     engine.tick(1016.0, &mut rng);
-    assert!(engine.discovery_path_requests.contains_key(&destination));
+    assert!(engine.path_requests.discovery.contains_key(&destination));
     engine.tick(1027.0, &mut rng);
-    assert!(!engine.discovery_path_requests.contains_key(&destination));
+    assert!(!engine.path_requests.discovery.contains_key(&destination));
     assert!(!engine
-        .discovery_path_request_deadlines
+        .path_requests
+        .discovery_deadlines
         .contains_key(&destination));
 }
 
@@ -3880,7 +3886,7 @@ fn discovery_path_request_without_bitrate_uses_fixed_deadline() {
         1
     );
     assert_eq!(
-        engine.discovery_path_request_deadlines.get(&destination),
+        engine.path_requests.discovery_deadlines.get(&destination),
         Some(&2015.0)
     );
 }
@@ -3894,27 +3900,27 @@ fn path_request_gate_registers_early_without_refresh_and_expires_at_45_seconds()
     engine
         .accept_path_request(&first, InterfaceId(1), 1000.0)
         .expect("first unique request");
-    assert_eq!(engine.path_requests.get(&destination), Some(&1000.0));
+    assert_eq!(engine.path_requests.gates.get(&destination), Some(&1000.0));
 
     let second = make_path_request_data(&destination, &[0x13; 16]);
     engine
         .accept_path_request(&second, InterfaceId(2), 1020.0)
         .expect("different tag for the same destination");
     assert_eq!(
-        engine.path_requests.get(&destination),
+        engine.path_requests.gates.get(&destination),
         Some(&1000.0),
         "inbound duplicates must not extend the gate"
     );
 
     let mut rng = rns_crypto::FixedRng::new(&[0x21; 32]);
     engine.tick(1044.0, &mut rng);
-    assert!(engine.path_requests.contains_key(&destination));
+    assert!(engine.path_requests.gates.contains_key(&destination));
     engine.tick(1050.0, &mut rng);
-    assert!(!engine.path_requests.contains_key(&destination));
+    assert!(!engine.path_requests.gates.contains_key(&destination));
 
     engine.record_outbound_path_request(destination, 2000.0);
     engine.record_outbound_path_request(destination, 2020.0);
-    assert_eq!(engine.path_requests.get(&destination), Some(&2020.0));
+    assert_eq!(engine.path_requests.gates.get(&destination), Some(&2020.0));
 }
 
 #[test]
@@ -3955,7 +3961,8 @@ fn same_destination_path_requests_share_one_search_and_batch_requesters() {
         .is_empty());
 
     let request = engine
-        .discovery_path_requests
+        .path_requests
+        .discovery
         .get(&destination)
         .expect("the shared search remains pending");
     assert!(request.engaged);
@@ -3981,7 +3988,7 @@ fn test_path_request_ingress_burst_suppresses_recursive_discovery() {
     let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
 
     assert!(actions.is_empty());
-    assert!(!engine.discovery_path_requests.contains_key(&dest));
+    assert!(!engine.path_requests.discovery.contains_key(&dest));
 }
 
 #[test]
@@ -4014,7 +4021,7 @@ fn test_path_request_egress_limit_skips_only_limited_interface() {
         }
         _ => panic!("expected SendOnInterface for the unlimited egress interface"),
     }
-    assert!(engine.discovery_path_requests.contains_key(&dest));
+    assert!(engine.path_requests.discovery.contains_key(&dest));
 }
 
 #[test]
@@ -4026,7 +4033,7 @@ fn test_recursive_path_request_skips_interface_with_queued_announces() {
     engine.register_interface(blocked);
     engine.register_interface(make_interface(3, constants::MODE_FULL));
 
-    let _ = engine.announce_queues.gate_announce(
+    let _ = engine.announces.queues.gate_announce(
         InterfaceId(2),
         vec![0xAA; 100].into(),
         [0xA0; 16],
@@ -4037,7 +4044,7 @@ fn test_recursive_path_request_skips_interface_with_queued_announces() {
         None,
         constants::ANNOUNCE_CAP,
     );
-    let _ = engine.announce_queues.gate_announce(
+    let _ = engine.announces.queues.gate_announce(
         InterfaceId(2),
         vec![0xBB; 100].into(),
         [0xB0; 16],
@@ -4061,7 +4068,7 @@ fn test_recursive_path_request_skips_interface_with_queued_announces() {
         }
         _ => panic!("expected SendOnInterface for the unqueued egress interface"),
     }
-    assert!(engine.discovery_path_requests.contains_key(&dest));
+    assert!(engine.path_requests.discovery.contains_key(&dest));
 }
 
 #[test]
@@ -4072,7 +4079,7 @@ fn test_recursive_path_request_skips_interface_with_active_announce_cap() {
     blocked.bitrate = Some(1_000);
     engine.register_interface(blocked);
 
-    let _ = engine.announce_queues.gate_announce(
+    let _ = engine.announces.queues.gate_announce(
         InterfaceId(2),
         vec![0xAA; 100].into(),
         [0xA0; 16],
@@ -4090,7 +4097,7 @@ fn test_recursive_path_request_skips_interface_with_active_announce_cap() {
     let actions = engine.handle_path_request(&data, InterfaceId(1), 901.0);
 
     assert!(actions.is_empty());
-    assert!(!engine.discovery_path_requests.contains_key(&dest));
+    assert!(!engine.path_requests.discovery.contains_key(&dest));
 }
 
 #[test]
@@ -4108,7 +4115,8 @@ fn test_recursive_path_request_reserves_announce_cap_on_sent_interface() {
 
     assert_eq!(actions.len(), 1);
     let queue = engine
-        .announce_queues
+        .announces
+        .queues
         .queue_for(&InterfaceId(2))
         .expect("sent recursive PR should create announce-cap state");
     assert!(
@@ -4199,7 +4207,8 @@ fn test_path_destination_cap_evicts_oldest_and_clears_state() {
         1001.0,
     );
     engine
-        .path_states
+        .paths
+        .states
         .insert(dest1, constants::STATE_UNRESPONSIVE);
 
     engine.upsert_path_destination(
@@ -4212,7 +4221,7 @@ fn test_path_destination_cap_evicts_oldest_and_clears_state() {
     assert!(!engine.has_path(&dest1));
     assert!(engine.has_path(&dest2));
     assert!(engine.has_path(&dest3));
-    assert!(!engine.path_states.contains_key(&dest1));
+    assert!(!engine.paths.states.contains_key(&dest1));
     assert_eq!(engine.path_destination_cap_evict_count(), 1);
 }
 
@@ -4306,7 +4315,7 @@ fn test_redirect_path_replaces_stale_transport_next_hop() {
 
     engine.redirect_path(&link_id, direct_interface, 1001.0);
 
-    let path = engine.path_table[&link_id].primary().unwrap();
+    let path = engine.paths.table[&link_id].primary().unwrap();
     assert_eq!(path.receiving_interface, direct_interface);
     assert_eq!(path.next_hop, link_id);
     assert_eq!(path.hops, 1);
@@ -4355,7 +4364,7 @@ fn test_redirect_path_creates_direct_next_hop() {
 
     engine.redirect_path(&link_id, direct_interface, 2000.0);
 
-    let path = engine.path_table[&link_id].primary().unwrap();
+    let path = engine.paths.table[&link_id].primary().unwrap();
     assert_eq!(path.receiving_interface, direct_interface);
     assert_eq!(path.next_hop, link_id);
     assert_eq!(path.hops, 1);
@@ -4368,7 +4377,7 @@ fn test_roaming_loop_prevention() {
 
     let dest = [0xD3; 16];
     // Path is known and routes through the same interface (1)
-    engine.path_table.insert(
+    engine.paths.table.insert(
         dest,
         PathSet::from_single(
             PathEntry {
@@ -4393,7 +4402,7 @@ fn test_roaming_loop_prevention() {
 
     // ROAMING interface, path next-hop on same interface → loop prevention, no action
     assert!(actions.is_empty());
-    assert!(!engine.announce_table.contains_key(&dest));
+    assert!(!engine.announces.table.contains_key(&dest));
 }
 
 /// Build a minimal HEADER_1 announce raw packet for testing.
@@ -4420,7 +4429,7 @@ fn learned_path_is_answered_while_request_gate_timestamp_remains() {
     let payload = vec![0xAB; 32]; // simulated announce data (pubkey, sig, etc.)
     let announce_raw = make_announce_raw(&dest, &payload);
 
-    engine.path_table.insert(
+    engine.paths.table.insert(
         dest,
         PathSet::from_single(
             PathEntry {
@@ -4438,7 +4447,7 @@ fn learned_path_is_answered_while_request_gate_timestamp_remains() {
         ),
     );
     engine.record_outbound_path_request(dest, 999.0);
-    let gate_before = engine.path_requests[&dest];
+    let gate_before = engine.path_requests.gates[&dest];
 
     let tag = [0x05; 16];
     let data = make_path_request_data(&dest, &tag);
@@ -4446,15 +4455,16 @@ fn learned_path_is_answered_while_request_gate_timestamp_remains() {
 
     // The announce table should now have an entry with populated packet_raw/packet_data
     let entry = engine
-        .announce_table
+        .announces
+        .table
         .get(&dest)
         .expect("announce entry must exist");
     assert_eq!(entry.packet_raw, announce_raw);
     assert_eq!(entry.packet_data, payload);
     assert!(entry.block_rebroadcasts);
-    assert!(engine.path_requests.contains_key(&dest));
-    assert_eq!(engine.path_requests[&dest], gate_before);
-    assert!(!engine.discovery_path_requests.contains_key(&dest));
+    assert!(engine.path_requests.gates.contains_key(&dest));
+    assert_eq!(engine.path_requests.gates[&dest], gate_before);
+    assert!(!engine.path_requests.discovery.contains_key(&dest));
 }
 
 #[test]
@@ -4466,7 +4476,7 @@ fn test_path_request_discovers_when_known_path_has_no_announce_raw() {
 
     let dest = [0xD6; 16];
 
-    engine.path_table.insert(
+    engine.paths.table.insert(
         dest,
         PathSet::from_single(
             PathEntry {
@@ -4488,7 +4498,7 @@ fn test_path_request_discovers_when_known_path_has_no_announce_raw() {
     let data = make_path_request_data(&dest, &tag);
     let actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
 
-    assert!(!engine.announce_table.contains_key(&dest));
+    assert!(!engine.announces.table.contains_key(&dest));
     assert_eq!(actions.len(), 1);
     match &actions[0] {
         TransportAction::SendOnInterface { interface, raw } => {
@@ -4497,7 +4507,7 @@ fn test_path_request_discovers_when_known_path_has_no_announce_raw() {
         }
         _ => panic!("expected SendOnInterface for recursive path request"),
     }
-    assert!(engine.discovery_path_requests.contains_key(&dest));
+    assert!(engine.path_requests.discovery.contains_key(&dest));
 }
 
 #[test]
@@ -4508,7 +4518,7 @@ fn test_discovery_request_consumed_on_announce() {
     let dest = [0xD4; 16];
 
     // Simulate a waiting discovery request
-    engine.discovery_path_requests.insert(
+    engine.path_requests.discovery.insert(
         dest,
         DiscoveryPathRequest {
             timestamp: 900.0,
@@ -4522,7 +4532,7 @@ fn test_discovery_request_consumed_on_announce() {
     assert_eq!(iface, Some(vec![InterfaceId(1)]));
 
     // Should be gone now
-    assert!(!engine.discovery_path_requests.contains_key(&dest));
+    assert!(!engine.path_requests.discovery.contains_key(&dest));
     assert_eq!(engine.discovery_path_requests_waiting(&dest), None);
 }
 
@@ -4543,7 +4553,7 @@ fn test_pending_path_request_announce_bypasses_ingress_control() {
     let name_hash = crate::destination::name_hash("ingress", &["path-request"]);
     let announce_raw = build_announce_for_issue4(&dest_hash, &name_hash);
 
-    engine.discovery_path_requests.insert(
+    engine.path_requests.discovery.insert(
         dest_hash,
         DiscoveryPathRequest {
             timestamp: 999.0,
@@ -4568,7 +4578,7 @@ fn test_pending_path_request_announce_bypasses_ingress_control() {
 
     assert_eq!(engine.held_announce_count(&InterfaceId(1)), 0);
     assert!(engine.has_path(&dest_hash));
-    assert!(!engine.discovery_path_requests.contains_key(&dest_hash));
+    assert!(!engine.path_requests.discovery.contains_key(&dest_hash));
     assert!(actions.iter().any(|a| {
         matches!(
             a,
@@ -4587,7 +4597,8 @@ fn test_pending_path_request_announce_bypasses_ingress_control() {
     }));
 
     let entry = engine
-        .announce_table
+        .announces
+        .table
         .get(&dest_hash)
         .expect("path response announce should be queued");
     assert!(entry.block_rebroadcasts);
@@ -4843,7 +4854,7 @@ fn forwarding_a_packet_marks_its_path_used() {
         action,
         TransportAction::SendOnInterface { interface, .. } if *interface == InterfaceId(2)
     )));
-    let path = engine.path_table[&dest_hash].primary().unwrap();
+    let path = engine.paths.table[&dest_hash].primary().unwrap();
     // Used, so the unused path pool culling keeps it; the announce time
     // stays what it was.
     assert_eq!(path.used, 1500.0);
@@ -4866,7 +4877,7 @@ fn relayed_link_traffic_marks_the_destination_path_used() {
         .iter()
         .any(|action| matches!(action, TransportAction::SendOnInterface { .. })));
     assert_eq!(
-        engine.path_table[&[0xBB; 16]].primary().unwrap().used,
+        engine.paths.table[&[0xBB; 16]].primary().unwrap().used,
         1500.0
     );
 }
@@ -4919,7 +4930,8 @@ fn transported_link_proof_timeout_uses_outbound_interface_bitrate() {
     );
 
     let entry = engine
-        .link_table
+        .routes
+        .links
         .values()
         .next()
         .expect("transported link request should create tracking state");
@@ -5073,7 +5085,7 @@ fn test_local_client_proof_to_external_applies_local_hops_delta() {
     engine.register_interface(make_interface(2, constants::MODE_FULL));
 
     let proof_dest = [0xA5; 16];
-    engine.reverse_table.insert(
+    engine.routes.reverse.insert(
         proof_dest,
         tables::ReverseEntry {
             receiving_interface: InterfaceId(2),
@@ -5123,7 +5135,7 @@ fn test_proof_for_local_client_preserves_hops() {
     engine.register_interface(make_local_client_interface(2));
 
     let proof_dest = [0xA6; 16];
-    engine.reverse_table.insert(
+    engine.routes.reverse.insert(
         proof_dest,
         tables::ReverseEntry {
             receiving_interface: InterfaceId(2),
@@ -5416,7 +5428,8 @@ fn repeated_path_requests_do_not_postpone_pending_response() {
     let mut path = make_path_entry(100.0, 1, InterfaceId(2), dest);
     path.announce_raw = Some(make_announce_raw(&dest, &[0xAB; 32]));
     engine
-        .path_table
+        .paths
+        .table
         .insert(dest, PathSet::from_single(path, 1));
     engine.handle_path_request(
         &make_path_request_data(&dest, &[1; 16]),
@@ -5446,7 +5459,7 @@ fn refreshed_announce_does_not_postpone_pending_send() {
         let mut engine = TransportEngine::new(make_config(true));
         engine.register_interface(make_interface(1, constants::MODE_FULL));
         let dest = [0xD7; 16];
-        engine.path_table.insert(
+        engine.paths.table.insert(
             dest,
             PathSet::from_single(make_path_entry(100.0, 1, InterfaceId(1), dest), 1),
         );
@@ -5492,7 +5505,7 @@ fn announce_replacement_does_not_revive_expired_or_completed_deadlines() {
         let mut fresh = make_announce_entry(dest, now, 32);
         fresh.retransmit_timeout = now + 0.4;
         engine.insert_announce_entry(dest, fresh, now);
-        assert_eq!(engine.announce_table[&dest].retransmit_timeout, now + 0.4);
+        assert_eq!(engine.announces.table[&dest].retransmit_timeout, now + 0.4);
     }
 }
 
@@ -5607,14 +5620,16 @@ fn relayed_link_traffic_forwards_identically_without_its_hash() {
         // Contexts that bypass deduplication forward the repeat as well;
         // the others drop it as a duplicate.
         let forwarded = hashing
-            .link_table
+            .routes
+            .links
             .get(&link_id)
             .map(|entry| entry.timestamp);
         let last_forward = if deferred { 1002.0 } else { 1001.0 };
         assert_eq!(forwarded, Some(last_forward), "context {context}");
         assert_eq!(
             deferring
-                .link_table
+                .routes
+                .links
                 .get(&link_id)
                 .map(|entry| entry.timestamp),
             forwarded
@@ -5656,8 +5671,8 @@ fn deferred_hash_is_computed_when_routing_changes_before_handling() {
         .decode_inbound(packet.raw.as_slice().into())
         .unwrap();
     assert!(decoded.packet_hash().is_none());
-    deferring.link_table.remove(&link_id);
-    hashing.link_table.remove(&link_id);
+    deferring.routes.links.remove(&link_id);
+    hashing.routes.links.remove(&link_id);
     let unhashed = handle_decoded_at(&mut deferring, decoded, 1001.0);
     let hashed = handle_decoded_at(
         &mut hashing,
@@ -5728,7 +5743,7 @@ fn own_link_resource_transfers_alone_skip_hashing() {
 
         // A path-table route would key a reverse entry on the hash.
         let mut engine = own_link();
-        engine.path_table.insert(
+        engine.paths.table.insert(
             link_id,
             PathSet::from_single(make_path_entry(1000.0, 1, InterfaceId(1), [0xAA; 16]), 1),
         );
@@ -5764,7 +5779,7 @@ fn own_link_resource_transfers_alone_skip_hashing() {
 fn seeding_table_hashing_keeps_reverse_entries() {
     let mut engine = TransportEngine::new(make_config(true));
     for i in 0..100u8 {
-        engine.reverse_table.insert(
+        engine.routes.reverse.insert(
             [i; 16],
             tables::ReverseEntry {
                 receiving_interface: InterfaceId(1),
@@ -5773,14 +5788,15 @@ fn seeding_table_hashing_keeps_reverse_entries() {
             },
         );
     }
-    let before = engine.reverse_table.hasher().clone();
+    let before = engine.routes.reverse.hasher().clone();
     let mut rng = rns_crypto::FixedRng::new(&[0x5A; 8]);
     engine.seed_table_hashing(&mut rng);
 
     assert_eq!(engine.reverse_table_count(), 100);
     for i in 0..100u8 {
         let entry = engine
-            .reverse_table
+            .routes
+            .reverse
             .remove(&[i; 16])
             .expect("entry survives reseeding");
         assert_eq!(entry.timestamp, f64::from(i));
@@ -5789,7 +5805,7 @@ fn seeding_table_hashing_keeps_reverse_entries() {
     use core::hash::BuildHasher;
     assert_ne!(
         before.hash_one(probe),
-        engine.reverse_table.hasher().hash_one(probe),
+        engine.routes.reverse.hasher().hash_one(probe),
         "the seed changes the hash function"
     );
 
@@ -5922,7 +5938,8 @@ fn test_issue183_sibling_h1_linkrequest_forwarded_to_local_client() {
             })
             .expect("forwarded LINKREQUEST should report LinkRequestReceived");
         let entry = engine
-            .link_table
+            .routes
+            .links
             .get(&link_id)
             .expect("forwarded LINKREQUEST should create a link table entry");
         assert_eq!(entry.next_hop_interface, InterfaceId(1));
@@ -6060,7 +6077,7 @@ fn test_issue183_sibling_link_handshake_routes_lrproof_back() {
         assert_eq!(sends[0][1], 0);
         assert_eq!(&sends[0][2..18], &link_id);
         assert_eq!(&sends[0][19..], &[0x6D; 96][..]);
-        assert!(engine.link_table.get(&link_id).unwrap().validated);
+        assert!(engine.routes.links.get(&link_id).unwrap().validated);
     }
 }
 
@@ -6249,7 +6266,7 @@ fn test_shared_instance_rebroadcasts_local_client_announce_once() {
     for transport_enabled in [false, true] {
         let (mut engine, dest_hash) = make_issue183_daemon(transport_enabled);
         assert!(
-            engine.announce_table.contains_key(&dest_hash),
+            engine.announces.table.contains_key(&dest_hash),
             "local client announce must be queued for rebroadcast \
              (transport_enabled={transport_enabled})"
         );
@@ -6572,7 +6589,7 @@ fn test_shared_instance_without_transport_or_local_clients_ignores_path_request(
         1003.0,
     );
     assert!(actions.is_empty());
-    assert!(engine.announce_table.is_empty());
+    assert!(engine.announces.table.is_empty());
 }
 
 #[test]
@@ -6591,7 +6608,8 @@ fn test_shared_instance_with_transport_answers_path_request_for_local_client_imm
         "known path is answered from the path table"
     );
     let entry = engine
-        .announce_table
+        .announces
+        .table
         .get(&dest_hash)
         .expect("path response must be queued");
     assert_eq!(entry.attached_interface, Some(InterfaceId(3)));
@@ -6620,7 +6638,7 @@ fn test_shared_client_does_not_relay_for_its_shared_instance() {
     );
     let dest_hash = RawPacket::unpack(&response).unwrap().destination_hash;
     assert!(engine.has_path(&dest_hash));
-    assert!(engine.announce_table.is_empty());
+    assert!(engine.announces.table.is_empty());
 
     for dest in [dest_hash, [0xE7; 16]] {
         let actions = engine.handle_path_request(
@@ -6630,8 +6648,8 @@ fn test_shared_client_does_not_relay_for_its_shared_instance() {
         );
         assert!(actions.is_empty());
     }
-    assert!(engine.announce_table.is_empty());
-    assert!(engine.pending_local_path_requests.is_empty());
+    assert!(engine.announces.table.is_empty());
+    assert!(engine.path_requests.pending_local.is_empty());
 }
 
 /// PR #190 setup: a transport daemon (identity X = 0x42) whose path to `D`
@@ -6759,7 +6777,7 @@ fn link_distribution_counts_per_destination() {
         ([0x03; 16], other, false, 2, 7),
         ([0x04; 16], dest, true, 3, 25),
     ] {
-        engine.link_table.insert(
+        engine.routes.links.insert(
             link_id,
             LinkEntry {
                 timestamp: 1000.0,
@@ -7268,7 +7286,7 @@ fn rediscovery_engine(transport_enabled: bool) -> TransportEngine {
 }
 
 fn insert_path(engine: &mut TransportEngine, dest: [u8; 16], hops: u8, iface: u64) {
-    engine.path_table.insert(
+    engine.paths.table.insert(
         dest,
         PathSet::from_single(
             make_path_entry(1000.0, hops, InterfaceId(iface), [0x77; 16]),
@@ -7278,7 +7296,7 @@ fn insert_path(engine: &mut TransportEngine, dest: [u8; 16], hops: u8, iface: u6
 }
 
 fn insert_unproven_link(engine: &mut TransportEngine, link: u8, dest: [u8; 16], taken_hops: u8) {
-    engine.link_table.insert(
+    engine.routes.links.insert(
         [link; 16],
         LinkEntry {
             timestamp: 1000.0,
@@ -7336,7 +7354,7 @@ fn unproven_link_to_a_vanished_path_rediscovers_it_everywhere() {
     let sent = tick_rediscoveries(&mut engine, 1020.0, 1022.0);
     // Queued at the cull, sent one throttle interval later, on every interface.
     assert_eq!(sent, vec![(1020.5, dest, None)]);
-    assert!(engine.link_table.is_empty());
+    assert!(engine.routes.links.is_empty());
 }
 
 #[test]
@@ -7385,7 +7403,7 @@ fn unproven_link_on_a_distant_path_is_left_alone() {
     insert_unproven_link(&mut engine, 0x05, dest, 3);
 
     assert!(tick_rediscoveries(&mut engine, 1020.0, 1022.0).is_empty());
-    assert!(engine.link_table.is_empty());
+    assert!(engine.routes.links.is_empty());
     assert!(!engine.path_is_unresponsive(&dest));
 }
 
@@ -7431,7 +7449,7 @@ fn non_transport_rediscovery_expires_the_path() {
     assert!(sent.is_empty());
     // Not marked unresponsive, but expired.
     assert!(!engine.path_is_unresponsive(&dest));
-    let expires = engine.path_table[&dest]
+    let expires = engine.paths.table[&dest]
         .primary()
         .map(|entry| entry.expires);
     assert_eq!(expires, Some(0.0));
@@ -7449,7 +7467,7 @@ fn rediscovery_queue_is_throttled_deduplicated_and_bounded() {
         engine.queue_path_rediscovery([i as u8; 16], None, now);
     }
     assert_eq!(
-        engine.pending_discovery_prs.len(),
+        engine.path_requests.pending_discovery.len(),
         constants::MAX_QUEUED_DISCOVERY_PRS
     );
 
@@ -7966,7 +7984,7 @@ fn held_announces_that_cannot_update_a_path_are_culled() {
     assert_eq!(released.len(), 1);
     assert_eq!(released[0].size, announce_fresh.len());
     assert_eq!(
-        engine.path_table[&stale]
+        engine.paths.table[&stale]
             .primary()
             .unwrap()
             .receiving_interface,
@@ -7999,7 +8017,7 @@ fn announces_that_cannot_update_a_known_path_are_prefiltered() {
     assert!(engine.has_path(&dest));
     engine.take_announce_receipts();
     // Remove the newer announce's retransmission, which would exempt it.
-    engine.announce_table.remove(&dest);
+    engine.announces.table.remove(&dest);
 
     // A corrupted signature is not even looked at.
     let last = older.len() - 1;
