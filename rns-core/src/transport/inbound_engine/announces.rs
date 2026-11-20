@@ -18,13 +18,11 @@ impl TransportEngine {
         if let Some(queue) = announce_queue {
             self.try_enqueue_announce(ctx, rng, queue, actions);
         } else {
-            let original_raw = ctx
-                .original_raw
-                .as_deref()
-                .expect("announce packets retain original raw bytes");
+            // The wire bytes are never rewritten inbound: hops change only
+            // in the decoded header, so `raw` is the announce as received.
             self.process_inbound_announce(
                 &ctx.packet,
-                original_raw,
+                &ctx.packet.raw,
                 ctx.iface,
                 ctx.now,
                 rng,
@@ -358,10 +356,8 @@ impl TransportEngine {
             return;
         }
 
-        let original_raw = ctx
-            .original_raw
-            .as_deref()
-            .expect("announce packets retain original raw bytes");
+        // The announce as received: inbound handling never rewrites `raw`.
+        let original_raw: &[u8] = &ctx.packet.raw;
 
         // Upstream processes inbound announces one at a time, in the order
         // they arrive. An announce that would be processed at once, without

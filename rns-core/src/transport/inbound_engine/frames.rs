@@ -299,12 +299,9 @@ impl TransportEngine {
         packet.hops = hops;
         packet.rssi = frame.rx.rssi;
         packet.snr = frame.rx.snr;
-        let retain_original_raw = packet.flags.packet_type == constants::PACKET_TYPE_ANNOUNCE;
-        let original_raw = retain_original_raw.then(|| packet.raw.clone());
         Some(InboundPacketCtx {
             packet,
             hash_deferred,
-            original_raw,
             iface: frame.iface,
             now: frame.now,
             from_local_client,
