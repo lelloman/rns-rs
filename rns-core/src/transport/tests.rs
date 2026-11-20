@@ -2177,7 +2177,7 @@ fn lrrtt_local_delivery_preserves_post_ingress_hops() {
 }
 
 #[test]
-fn test_prepare_inbound_packet_only_retains_original_raw_for_announces() {
+fn test_prepare_inbound_packet_keeps_wire_bytes() {
     let engine = TransportEngine::new(make_config(false));
     let dest = [0xAB; 16];
     let flags = PacketFlags {
@@ -2201,7 +2201,6 @@ fn test_prepare_inbound_packet_only_retains_original_raw_for_announces() {
         })
         .expect("packet should parse and pass filter");
 
-    assert!(ctx.original_raw.is_none());
     assert_eq!(*ctx.packet.raw, *packet.raw);
     assert_eq!(ctx.packet.hops, 1);
     assert_eq!(ctx.iface, InterfaceId(9));
@@ -2230,10 +2229,9 @@ fn test_prepare_inbound_packet_only_retains_original_raw_for_announces() {
             },
         })
         .expect("announce should parse and pass filter");
-    assert_eq!(
-        announce_ctx.original_raw.as_deref(),
-        Some(announce.raw.as_slice())
-    );
+    // Announces are processed from these bytes as received.
+    assert_eq!(*announce_ctx.packet.raw, *announce.raw);
+    assert_eq!(announce_ctx.packet.hops, 1);
 }
 
 #[test]

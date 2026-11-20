@@ -224,7 +224,6 @@ struct InboundPacketCtx {
     /// `packet.packet_hash` is zeroed: the packet is link traffic that is
     /// only forwarded, or a local link resource part, and nothing reads it.
     hash_deferred: bool,
-    original_raw: Option<PacketBytes>,
     iface: InterfaceId,
     now: f64,
     from_local_client: bool,
