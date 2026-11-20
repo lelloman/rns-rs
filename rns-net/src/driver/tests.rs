@@ -3769,6 +3769,11 @@ fn dynamic_interface_inherits_parent_announce_cap() {
     // interfaces too.
     parent.info.stamp_costs.destination_cost = Some(StampCost::from_f64(17.5));
     parent.info.stamp_costs.pr_cost = Some(StampCost::ZERO);
+    // Spawned clients take the parent's ingress control, as upstream copies
+    // `ingress_control` and its `ic_*` settings to them.
+    parent.info.ingress_control = rns_core::transport::types::IngressControlConfig::disabled();
+    parent.info.ingress_control.max_held_announces = 17;
+    parent.info.ingress_control.burst_hold = 1.5;
     driver.interfaces.insert(InterfaceId(10), parent);
 
     let mut info = make_interface_info(11);
@@ -3796,6 +3801,9 @@ fn dynamic_interface_inherits_parent_announce_cap() {
         Some(StampCost::from_f64(17.5))
     );
     assert_eq!(registered.stamp_costs.pr_cost, Some(StampCost::ZERO));
+    assert!(!registered.ingress_control.enabled);
+    assert_eq!(registered.ingress_control.max_held_announces, 17);
+    assert_eq!(registered.ingress_control.burst_hold, 1.5);
 }
 
 #[cfg(feature = "iface-backbone")]
