@@ -231,6 +231,12 @@ impl RnsNode {
         let (mut driver, handles) =
             new_driver(&config, &queue_config, transport_config, rx, &tx, callbacks);
         let network_identity = config.network_identity.take();
+        // The transport identity is the driver's before any interface
+        // starts (upstream 25cce0a8 `Transport.ensure_identity()` before the
+        // interfaces): a client that connects during startup sends its
+        // tunnel synthesis, signed by it, from its first connect event, and
+        // the driver handles no interface event before the node's threads
+        // are spawned below.
         let probe_server = configure_driver_services(
             &mut driver,
             &config,
