@@ -193,6 +193,32 @@ pub fn cull_path_table(
     pool: UnusedPoolLimits,
     hop_limiter: u8,
 ) -> usize {
+    cull_path_table_on_instance(
+        path_table,
+        interfaces,
+        now,
+        unused_path_linger,
+        pool,
+        hop_limiter,
+        false,
+    )
+}
+
+/// [`cull_path_table`] on an engine that may serve local clients as a
+/// shared instance. Upstream 833f6cf2: when `serves_local_clients`, a
+/// never-used path learnt on a local client interface is not removed for
+/// lingering unused, so an instance keeps the paths to its own clients'
+/// destinations. Expiry, a missing interface, the hop limiter and the
+/// never-used pool cap still apply.
+pub(crate) fn cull_path_table_on_instance(
+    path_table: &mut alloc::collections::BTreeMap<[u8; 16], super::tables::PathSet>,
+    interfaces: &alloc::collections::BTreeMap<InterfaceId, super::types::InterfaceInfo>,
+    now: f64,
+    unused_path_linger: f64,
+    pool: UnusedPoolLimits,
+    hop_limiter: u8,
+    serves_local_clients: bool,
+) -> usize {
     // Upstream counts used paths over the whole table before removing stale
     // ones, and sizes the never-used pool from that count.
     let used_count = path_table
@@ -210,11 +236,15 @@ pub fn cull_path_table(
             } else {
                 unused_path_linger
             };
+            let local_client_path = serves_local_clients
+                && interfaces
+                    .get(&p.receiving_interface)
+                    .is_some_and(|info| info.is_local_client);
             // Upstream f96cef7e also removes a path, used or not, with more
             // hops than the hop limiter allows.
             now <= p.expires
                 && interfaces.contains_key(&p.receiving_interface)
-                && !(p.used == 0.0 && now > p.timestamp + linger)
+                && !(p.used == 0.0 && now > p.timestamp + linger && !local_client_path)
                 && p.hops <= hop_limiter
         });
         culled += before - ps.len();
@@ -720,6 +750,59 @@ mod tests {
             crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn never_used_local_client_paths_stay_on_an_instance_serving_them() {
+        // Upstream 833f6cf2: an instance keeps a never-used path learnt on a
+        // local client interface past the unused-path linger; a node that
+        // does not serve local clients removes it as any other.
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(1), make_interface_info(1));
+        interfaces.insert(
+            InterfaceId(2),
+            InterfaceInfo {
+                is_local_client: true,
+                ..make_interface_info(2)
+            },
+        );
+        let path = |iface: u64| {
+            super::super::tables::PathSet::from_single(
+                PathEntry {
+                    timestamp: 100.0,
+                    next_hop: [0; 16],
+                    hops: 0,
+                    expires: 99_999.0,
+                    random_blobs: Vec::new(),
+                    receiving_interface: InterfaceId(iface),
+                    packet_hash: [0; 32],
+                    announce_raw: None,
+                    used: 0.0,
+                },
+                1,
+            )
+        };
+        let now = 100.0 + crate::constants::UNUSED_PATH_LINGER + 1.0;
+        for (serves_local_clients, local_kept) in [(true, true), (false, false)] {
+            let mut table = BTreeMap::new();
+            table.insert([0x11; 16], path(1));
+            table.insert([0x22; 16], path(2));
+            cull_path_table_on_instance(
+                &mut table,
+                &interfaces,
+                now,
+                crate::constants::UNUSED_PATH_LINGER,
+                UnusedPoolLimits::fixed(2048),
+                crate::constants::HOP_LIMITER,
+                serves_local_clients,
+            );
+            assert!(!table.contains_key(&[0x11; 16]));
+            assert_eq!(
+                table.contains_key(&[0x22; 16]),
+                local_kept,
+                "serves local clients: {serves_local_clients}"
+            );
+        }
     }
 
     fn path_with_usage(timestamp: f64, expires: f64, used: f64) -> super::super::tables::PathSet {
