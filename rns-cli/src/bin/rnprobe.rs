@@ -69,6 +69,12 @@ impl Callbacks for ProbeCallbacks {
     }
 }
 
+/// Runs `rnprobe` on already parsed `args`. `usage_name` is the program name
+/// printed in usage and errors (e.g. `rns-ctl rnprobe`), `version_name` the one
+/// printed by `--version`.
+///
+/// Blocks until the command is done, and exits the process itself on an
+/// argument error or a failure, with upstream's exit status.
 pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     rns_cli::argparse::enforce(&args, "rnprobe", usage_name);
     if args.has("version") {

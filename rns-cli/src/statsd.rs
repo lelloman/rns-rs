@@ -1,3 +1,6 @@
+//! `rns-statsd`: records traffic statistics of a running Reticulum instance,
+//! collected through a hook, into an SQLite database.
+
 #![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
 
 use std::collections::HashMap;
@@ -169,10 +172,15 @@ pub fn parse_args(argv: Vec<String>) -> Args {
     CLI.parse("rns-statsd", argv)
 }
 
+/// Runs `rns-statsd` on the process's command line; see [`main_entry_from`].
 pub fn main_entry() {
     main_entry_from(parse_args(std::env::args().skip(1).collect()));
 }
 
+/// Runs `rns-statsd` on already parsed `args` and exits the process: blocks
+/// until SIGINT, SIGTERM or SIGHUP, then exits 0, 1 on an error, or 101 after a
+/// panic. Installs the process's logger, signal handlers and a panic hook
+/// that asks the service to stop.
 pub fn main_entry_from(args: Args) {
     let previous_panic_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {

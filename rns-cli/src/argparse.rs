@@ -8,62 +8,95 @@
 
 use crate::args::{Args, Seen};
 
+/// An argparse `action`: what an option does when given.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
+    /// `store`: keeps the value given.
     Store,
+    /// `store_true`: a flag without a value.
     StoreTrue,
+    /// `count`: counts how often the option is given.
     Count,
+    /// `append`: collects every value given.
     Append,
+    /// `help`: prints the help and exits 0.
     Help,
+    /// `version`: the tool prints its version; [`check`] stops looking
+    /// at the command line there.
     Version,
 }
 
+/// An argparse `nargs`: how many values an option or positional takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Nargs {
+    /// Exactly one (the default for `store`).
     One,
+    /// None: a flag.
     Zero,
+    /// `"?"`: zero or one.
     Optional,
+    /// `"*"`: any number.
     ZeroOrMore,
 }
 
+/// An argparse `type`: what a value must parse as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ty {
+    /// Any string.
     Str,
+    /// Python `float()`: see [`python_float_ok`].
     Float,
+    /// Python `int()`: see [`python_int_ok`].
     Int,
 }
 
 /// One `add_argument` of an upstream parser.
 #[derive(Debug)]
 pub struct Action {
+    /// Option strings (`-t`, `--timeout`); empty for a positional.
     pub opts: &'static [&'static str],
+    /// Name of the attribute the value is stored under; for a positional also
+    /// its name in usage when it has no metavar.
     pub dest: &'static str,
+    /// What the option does.
     pub kind: Kind,
+    /// How many values it takes.
     pub nargs: Nargs,
+    /// Name of the value in usage and help; defaults to `dest`, uppercased for
+    /// options.
     pub metavar: Option<&'static str>,
+    /// Help text; `==SUPPRESS==` hides the action from usage and help.
     pub help: Option<&'static str>,
+    /// What its value must parse as.
     pub ty: Ty,
+    /// Whether usage shows it outside `[...]`.
     pub required: bool,
 }
 
 /// An upstream utility's `ArgumentParser`.
 #[derive(Debug)]
 pub struct Parser {
+    /// Name the parser is looked up by (the utility's name).
     pub name: &'static str,
+    /// Text printed between the usage and the arguments.
     pub description: Option<&'static str>,
     /// Text after the options.
     pub epilog: Option<&'static str>,
     /// `RawDescriptionHelpFormatter`: the description and epilog are
     /// printed as written, not refilled.
     pub raw_description: bool,
+    /// The arguments, in the order they were added.
     pub actions: &'static [Action],
 }
 
 /// What parsing a command line comes to before the tool runs.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Exit {
+    /// Process exit status: 0 for help, 2 for an argument error.
     pub code: i32,
+    /// What to print on stdout.
     pub stdout: String,
+    /// What to print on stderr.
     pub stderr: String,
 }
 

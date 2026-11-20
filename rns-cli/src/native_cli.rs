@@ -14,7 +14,9 @@ pub const SUPPRESS: &str = "==SUPPRESS==";
 
 /// A tool's argparse parser, and text shown after its options, verbatim.
 pub struct Cli {
+    /// The tool's arguments.
     pub parser: Parser,
+    /// Text printed after the help, as written.
     pub epilog: Option<&'static str>,
     spec: OnceLock<OptionSpec>,
 }
@@ -121,6 +123,7 @@ pub const fn positional(dest: &'static str, nargs: Nargs, help: &'static str) ->
 }
 
 impl Cli {
+    /// A tool from its parser and epilog.
     pub const fn new(parser: Parser, epilog: Option<&'static str>) -> Self {
         Cli {
             parser,
@@ -194,6 +197,7 @@ impl Cli {
         }
     }
 
+    /// Prints [`Cli::help_text`] to stdout.
     pub fn print_help(&self, prog: &str) {
         print!("{}", self.help_text(prog));
     }

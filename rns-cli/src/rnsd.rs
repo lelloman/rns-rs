@@ -1,3 +1,6 @@
+//! `rnsd`, the Reticulum daemon: runs a node from the config directory
+//! until it is signalled to stop.
+
 #![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
 
 use rns_core::display::hex;
@@ -145,14 +148,24 @@ pub const OPTIONS: OptionSpec = OptionSpec {
     ],
 };
 
+/// Runs `rnsd` on the process's command line; see [`main_entry_from`].
 pub fn main_entry() {
     main_entry_from(Args::parse_spec(&OPTIONS));
 }
 
+/// Runs `rnsd` on already parsed `args`: starts the node and blocks until
+/// SIGINT or SIGTERM (or, with `-i`, the end of console input), then shuts
+/// it down. Installs the process's logger and SIGINT/SIGTERM handlers.
+/// Exits the process with status 1 when the node cannot start, and with 2
+/// on an argument error.
 pub fn main_entry_from(args: Args) {
     main_entry_impl(args, "rnsd", "rnsd", log::Level::Debug);
 }
 
+/// [`main_entry_from`] for `rns-ctl daemon`: `usage_name` and
+/// `version_name` are the program names printed in usage and by
+/// `--version`, and received announces are logged at info rather than
+/// debug level.
 pub fn main_entry_from_named(args: Args, usage_name: &str, version_name: &str) {
     // `rns-ctl daemon` historically reported received announces at INFO,
     // while the standalone `rnsd` binary keeps them at DEBUG.

@@ -230,6 +230,9 @@ impl Callbacks for RnxCallbacks {
     }
 }
 
+/// Runs `rnx` on the process's command line and returns the exit status
+/// for the binary to exit with. Blocks until the command is done; an
+/// argument error exits the process directly with status 2.
 pub fn main() -> i32 {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let args = Args::parse_spec_from(arguments, &OPTIONS);
