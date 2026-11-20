@@ -130,6 +130,8 @@ The operator scripts have their own tests, run by CI with
 | rns-ctl-web-smoke | `node --test rns-ctl/assets/app.smoke.test.js` for the built-in UI |
 | Android Client | `./gradlew testDebugUnitTest assembleDebug` in `rns-tun-android/` |
 | ESP32 Lockfile | `rns-esp32/Cargo.lock` is up to date |
+| ESP32 Host Clippy and Tests | Clippy on `rns-esp32`'s host-side library and tests, its host `cargo test` |
+| ESP32 Firmware Clippy | `cargo clippy --features firmware --target xtensa-esp32s3-espidf --release` in `rns-esp32/` |
 | Python Tools | Compile and unit-test `scripts/` and `tests/` |
 | Upstream Badge | The README badge version matches `- Version:` in `UPSTREAM.md` |
 | RustSec audit | `cargo audit` on both lock files, weekly and on manifest changes; `deny.toml` configures `cargo-deny` |
@@ -161,6 +163,7 @@ set has `rns-core` or `rns-crypto`, `rns-cli` or `rns-ctl`, and `rns-net`.
 | Cargo Test (rns-ctl tls) | A dependency of `rns-ctl` |
 | Android Client | Anything `rns-tun-android` depends on, including itself (Gradle files included) |
 | ESP32 Lockfile | `rns-esp32/`, `vendor/`, or the manifest of a crate the firmware depends on |
+| ESP32 Host Clippy and Tests, ESP32 Firmware Clippy | What runs ESP32 Lockfile, or any change to a crate the firmware depends on |
 | rns-ctl-web-smoke | `rns-ctl/assets/` |
 
 "A dependency of X" includes X itself. Paths outside the crates:

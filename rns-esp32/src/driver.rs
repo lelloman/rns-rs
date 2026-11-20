@@ -24,6 +24,7 @@ use crate::ifac::{self, IfacState};
 use crate::lora::LoRaWriter;
 use crate::rng::EspRng;
 use crate::util::hex;
+use crate::util::LockExt;
 use rns_esp32::channel::TxChannel;
 use rns_esp32::control::{
     authorize_request, compiled_controller_keys, control_destination, control_reply_destination,
@@ -46,10 +47,10 @@ const TX_QUEUE_MAX_FRAMES: usize = 32;
 const EVENT_WAIT_IDLE_MS: u64 = 20;
 
 /// How often mode-specific threads check for shutdown.
-pub const SHUTDOWN_POLL_MS: u64 = 20;
+pub(crate) const SHUTDOWN_POLL_MS: u64 = 20;
 
 /// Events processed by the driver loop.
-pub enum Event {
+pub(crate) enum Event {
     /// Inbound frame from an interface.
     Frame {
         interface_id: InterfaceId,
@@ -66,7 +67,7 @@ pub enum Event {
 }
 
 /// Reason the driver event loop exited.
-pub enum DriverExit {
+pub(crate) enum DriverExit {
     /// UART detected an RNode DETECT handshake; switch to USB bridge mode.
     BridgeRequested(Vec<KissFrame>),
     /// Triple-press requested BLE bridge mode.
@@ -86,7 +87,7 @@ struct InterfaceEntry {
 }
 
 /// The transport driver: owns the engine, interfaces, and event loop.
-pub struct Driver {
+pub(crate) struct Driver {
     engine: TransportEngine,
     interfaces: Vec<InterfaceEntry>,
     rng: EspRng,
@@ -106,7 +107,7 @@ pub struct Driver {
 
 impl Driver {
     /// Create a new driver with the given transport config and event receiver.
-    pub fn new(config: TransportConfig, rx: mpsc::Receiver<Event>) -> Self {
+    pub(crate) fn new(config: TransportConfig, rx: mpsc::Receiver<Event>) -> Self {
         let mut engine = TransportEngine::new(config);
         // Key the engine's tables so a sender cannot grind packet hashes
         // into colliding slots.
@@ -140,14 +141,14 @@ impl Driver {
     }
 
     /// Attach shared display stats.
-    pub fn set_stats(&mut self, stats: SharedStats) {
+    pub(crate) fn set_stats(&mut self, stats: SharedStats) {
         self.stats = Some(stats);
     }
 
     /// Set the node identity (needed for announces). Its `transport`
     /// destination is registered, as upstream registers a destination on
     /// creation: the engine only sends announces for registered ones.
-    pub fn set_identity(&mut self, identity: Identity) {
+    pub(crate) fn set_identity(&mut self, identity: Identity) {
         let transport = rns_core::destination::destination_hash(
             "rns_esp32",
             &["transport"],
@@ -166,20 +167,25 @@ impl Driver {
         self.identity = Some(identity);
     }
 
-    pub fn set_settings_partition(&mut self, partition: EspDefaultNvsPartition) {
+    pub(crate) fn set_settings_partition(&mut self, partition: EspDefaultNvsPartition) {
         self.settings_partition = Some(partition);
     }
 
-    pub fn set_device_settings(&mut self, settings: DeviceSettings) {
+    pub(crate) fn set_device_settings(&mut self, settings: DeviceSettings) {
         self.device_settings = settings;
     }
 
-    pub fn active_radio_config(&self) -> RadioConfig {
+    pub(crate) fn active_radio_config(&self) -> RadioConfig {
         self.active_radio_config
     }
 
     /// Register a LoRa interface with the transport engine.
-    pub fn add_interface(&mut self, id: InterfaceId, writer: LoRaWriter, ifac: Option<IfacState>) {
+    pub(crate) fn add_interface(
+        &mut self,
+        id: InterfaceId,
+        writer: LoRaWriter,
+        ifac: Option<IfacState>,
+    ) {
         let info = InterfaceInfo {
             id,
             name: String::from("LoRa"),
@@ -232,12 +238,12 @@ impl Driver {
     }
 
     /// Drain any stale events from the channel (e.g. after returning from bridge mode).
-    pub fn drain_events(&self) {
+    pub(crate) fn drain_events(&self) {
         while self.rx.try_recv().is_ok() {}
     }
 
     /// Run the main event loop. Blocks until bridge detected, shutdown, or disconnect.
-    pub fn run(&mut self, uart: &UartDriver<'_>) -> DriverExit {
+    pub(crate) fn run(&mut self, uart: &UartDriver<'_>) -> DriverExit {
         log::info!("Driver event loop started");
         let mut detect_state = crate::rnode::BridgeDetectState::new();
 
@@ -266,7 +272,7 @@ impl Driver {
             match event {
                 Event::Frame { interface_id, data } => {
                     if let Some(ref stats) = self.stats {
-                        stats.lock().unwrap().rx_bytes += data.len() as u32;
+                        stats.locked().rx_bytes += data.len() as u32;
                     }
                     self.handle_frame(interface_id, data);
                 }
@@ -285,7 +291,7 @@ impl Driver {
                     if !self.device_settings.ble_open_control {
                         log::info!("BLE bridge request ignored: BLE open control disabled");
                         if let Some(ref stats) = self.stats {
-                            stats.lock().unwrap().set_status("BLE control off");
+                            stats.locked().set_status("BLE control off");
                         }
                         continue;
                     }
@@ -385,7 +391,7 @@ impl Driver {
                         announce.hops
                     );
                     if let Some(ref stats) = self.stats {
-                        stats.lock().unwrap().announces += 1;
+                        stats.locked().announces += 1;
                     }
                 }
                 TransportAction::PathUpdated {
@@ -464,7 +470,7 @@ impl Driver {
                     );
                 }
                 if let Some(ref stats) = self.stats {
-                    let mut stats = stats.lock().unwrap();
+                    let mut stats = stats.locked();
                     stats.active_freq = config.frequency;
                     stats.active_bw = config.bandwidth;
                     stats.active_sf = config.spreading_factor;
@@ -486,7 +492,7 @@ impl Driver {
             ControlBody::SetBlePolicy { ble_open_control } => {
                 self.device_settings.ble_open_control = ble_open_control;
                 if let Some(ref stats) = self.stats {
-                    let mut stats = stats.lock().unwrap();
+                    let mut stats = stats.locked();
                     stats.set_status(if ble_open_control {
                         "BLE control on"
                     } else {
@@ -635,7 +641,7 @@ impl Driver {
                     self.send_on_interface(id, &packet.raw);
                 }
                 if let Some(ref stats) = self.stats {
-                    stats.lock().unwrap().set_status("Ping sent!");
+                    stats.locked().set_status("Ping sent!");
                 }
             }
             Err(e) => log::error!("Failed to build ping: {:?}", e),
@@ -668,7 +674,7 @@ impl Driver {
             self.send_announce_for_aspects(&["control"], None);
         }
         if let Some(ref stats) = self.stats {
-            stats.lock().unwrap().set_status("Announce sent!");
+            stats.locked().set_status("Announce sent!");
         }
     }
 
@@ -822,7 +828,7 @@ impl Driver {
                     Ok(()) => {
                         log::debug!("TX {} bytes on {:?}", frame.len(), entry.id);
                         if let Some(ref stats) = self.stats {
-                            stats.lock().unwrap().tx_bytes += frame.len() as u32;
+                            stats.locked().tx_bytes += frame.len() as u32;
                         }
                     }
                     Err(e) => {
@@ -836,11 +842,11 @@ impl Driver {
 
 /// Spawn a tick thread that sends Event::Tick at a regular interval.
 /// Exits when `shutdown` is set to true or the channel closes.
-pub fn spawn_tick_thread(
+pub(crate) fn spawn_tick_thread(
     tx: mpsc::Sender<Event>,
     interval_ms: u64,
     shutdown: Arc<AtomicBool>,
-) -> JoinHandle<()> {
+) -> std::io::Result<JoinHandle<()>> {
     std::thread::Builder::new()
         .name("tick".into())
         .stack_size(2048)
@@ -862,17 +868,20 @@ pub fn spawn_tick_thread(
                 }
             }
         })
-        .expect("failed to spawn tick thread")
 }
 
 /// Milliseconds since boot (monotonic), for the channel logic.
+#[allow(unsafe_code, reason = "the ESP-IDF timer is a C call")]
 fn now_ms() -> u64 {
+    // SAFETY: esp_timer_get_time only reads the system timer.
     let ticks = unsafe { esp_idf_sys::esp_timer_get_time() };
     (ticks / 1_000) as u64
 }
 
 /// Get current time as seconds since boot (monotonic).
+#[allow(unsafe_code, reason = "the ESP-IDF timer is a C call")]
 fn now() -> f64 {
+    // SAFETY: esp_timer_get_time only reads the system timer.
     let ticks = unsafe { esp_idf_sys::esp_timer_get_time() };
     ticks as f64 / 1_000_000.0
 }

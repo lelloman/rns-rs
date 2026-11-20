@@ -26,8 +26,8 @@ impl BleRxBuffer {
 
     pub fn pop_into(&mut self, buf: &mut [u8]) -> usize {
         let n = buf.len().min(self.queue.len());
-        for b in buf.iter_mut().take(n) {
-            *b = self.queue.pop_front().expect("buffer length checked");
+        for (b, byte) in buf.iter_mut().zip(self.queue.drain(..n)) {
+            *b = byte;
         }
         n
     }
@@ -38,6 +38,10 @@ impl BleRxBuffer {
 
     pub fn len(&self) -> usize {
         self.queue.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
     }
 }
 

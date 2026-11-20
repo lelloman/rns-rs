@@ -13,7 +13,7 @@ const MAX_CONTROL_IDENTITIES: usize = 3;
 /// per-packet RSSI/SNR. It does not answer the optional statistics commands.
 const RNODE_PROTOCOL: (u8, u8) = (1, 52);
 
-fn main() {
+fn main() -> Result<(), String> {
     if env::var_os("CARGO_FEATURE_FIRMWARE").is_some() {
         embuild::espidf::sysenv::output();
     }
@@ -41,7 +41,7 @@ fn main() {
         format!("{}.{}.{}-{}", major, minor, commit_count, commit_hash)
     };
 
-    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
+    let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(|e| format!("OUT_DIR: {e}"))?);
     let version_rs = out_dir.join("firmware_version.rs");
     fs::write(
         &version_rs,
@@ -62,7 +62,7 @@ fn main() {
             RNODE_PROTOCOL.1
         ),
     )
-    .expect("write firmware_version.rs");
+    .map_err(|e| format!("write firmware_version.rs: {e}"))?;
 
     let control_rs = out_dir.join("control_build_config.rs");
     fs::write(
@@ -70,9 +70,10 @@ fn main() {
         build_control_config(
             env::var("RNS_ESP32_CONTROL_PUBKEYS").ok(),
             env::var("RNS_ESP32_BT_OPEN_DEFAULT").ok(),
-        ),
+        )?,
     )
-    .expect("write control_build_config.rs");
+    .map_err(|e| format!("write control_build_config.rs: {e}"))?;
+    Ok(())
 }
 
 fn git_output(args: &[&str]) -> Option<String> {
@@ -85,11 +86,14 @@ fn git_output(args: &[&str]) -> Option<String> {
         .map(|stdout| stdout.trim().to_string())
 }
 
-fn build_control_config(pubkeys_env: Option<String>, ble_default_env: Option<String>) -> String {
+fn build_control_config(
+    pubkeys_env: Option<String>,
+    ble_default_env: Option<String>,
+) -> Result<String, String> {
     let keys = parse_control_pubkeys(pubkeys_env.as_deref())
-        .unwrap_or_else(|err| panic!("invalid RNS_ESP32_CONTROL_PUBKEYS: {err}"));
+        .map_err(|err| format!("invalid RNS_ESP32_CONTROL_PUBKEYS: {err}"))?;
     let ble_default = parse_bool_env(ble_default_env.as_deref(), false)
-        .unwrap_or_else(|err| panic!("invalid RNS_ESP32_BT_OPEN_DEFAULT: {err}"));
+        .map_err(|err| format!("invalid RNS_ESP32_BT_OPEN_DEFAULT: {err}"))?;
 
     let mut rendered = String::new();
     rendered.push_str(&format!(
@@ -116,7 +120,7 @@ fn build_control_config(pubkeys_env: Option<String>, ble_default_env: Option<Str
         "pub const BLE_OPEN_CONTROL_DEFAULT: bool = {};\n",
         ble_default
     ));
-    rendered
+    Ok(rendered)
 }
 
 fn parse_control_pubkeys(value: Option<&str>) -> Result<Vec<[u8; 64]>, String> {
@@ -172,7 +176,7 @@ fn parse_bool_env(value: Option<&str>, default: bool) -> Result<bool, String> {
 }
 
 fn parse_hex(input: &str) -> Result<Vec<u8>, String> {
-    if input.len() % 2 != 0 {
+    if !input.len().is_multiple_of(2) {
         return Err("hex string must have even length".into());
     }
 

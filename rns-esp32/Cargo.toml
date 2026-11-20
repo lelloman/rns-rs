@@ -33,6 +33,26 @@ path = "src/main.rs"
 required-features = ["firmware"]
 test = false
 
+# The workspace's lints (root Cargo.toml [workspace.lints]), copied: this
+# crate is outside the workspace (it needs the ESP-IDF toolchain), so it
+# cannot inherit them. Keep the two tables in step.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "warn"
+unused_lifetimes = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+mem_forget = "warn"
+missing_safety_doc = "warn"
+undocumented_unsafe_blocks = "warn"
+panic = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"] }
 

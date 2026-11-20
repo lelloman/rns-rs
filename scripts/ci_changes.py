@@ -109,6 +109,7 @@ JOBS = (
     "armv7",
     "ctl_tls",
     "esp32",
+    "esp32_lint",
     "web_smoke",
 )
 
@@ -318,6 +319,10 @@ def select(paths: list[str], ws: Workspace, force_full: bool = False) -> dict[st
         crate = ws.crate_for(path)
         if crate in ws.esp32_deps and path == f"{ws.dirs[crate]}/Cargo.toml":
             jobs.add("esp32")
+    # The firmware's lints and host tests also run when the code of a crate
+    # it builds changes.
+    if "esp32" in jobs or seeds & ws.esp32_deps:
+        jobs.add("esp32_lint")
 
     if full:
         affected = set(ws.dirs)

@@ -21,6 +21,8 @@ use ssd1306::size::DisplaySize128x64;
 use ssd1306::I2CDisplayInterface;
 use ssd1306::Ssd1306;
 
+use crate::util::LockExt;
+
 type Display = Ssd1306<
     ssd1306::prelude::I2CInterface<I2cDriver<'static>>,
     DisplaySize128x64,
@@ -32,40 +34,40 @@ const BRIDGE_NUM_PAGES: u8 = 3; // bridge status, bridge radio, off
 const BLE_WAITING_NUM_PAGES: u8 = 2; // ble status, off
 
 #[derive(Clone, Copy, PartialEq)]
-pub enum Mode {
+pub(crate) enum Mode {
     Standalone,
     Bridge,
     BleWaiting,
 }
 
 /// Shared display stats updated by the driver.
-pub struct DisplayStats {
-    pub identity_hex: String,
-    pub tx_bytes: u32,
-    pub rx_bytes: u32,
-    pub announces: u32,
-    pub page: u8,
-    pub mode: Mode,
+pub(crate) struct DisplayStats {
+    pub(crate) identity_hex: String,
+    pub(crate) tx_bytes: u32,
+    pub(crate) rx_bytes: u32,
+    pub(crate) announces: u32,
+    pub(crate) page: u8,
+    pub(crate) mode: Mode,
     // Bridge-mode stats
-    pub bridge_tx_bytes: u32,
-    pub bridge_rx_bytes: u32,
-    pub bridge_freq: Option<u32>,
-    pub bridge_bw: Option<u32>,
-    pub bridge_sf: Option<u8>,
-    pub bridge_cr: Option<u8>,
-    pub bridge_power: Option<i8>,
-    pub active_freq: u32,
-    pub active_bw: u32,
-    pub active_sf: u8,
-    pub active_cr: u8,
-    pub active_power: i8,
+    pub(crate) bridge_tx_bytes: u32,
+    pub(crate) bridge_rx_bytes: u32,
+    pub(crate) bridge_freq: Option<u32>,
+    pub(crate) bridge_bw: Option<u32>,
+    pub(crate) bridge_sf: Option<u8>,
+    pub(crate) bridge_cr: Option<u8>,
+    pub(crate) bridge_power: Option<i8>,
+    pub(crate) active_freq: u32,
+    pub(crate) active_bw: u32,
+    pub(crate) active_sf: u8,
+    pub(crate) active_cr: u8,
+    pub(crate) active_power: i8,
     /// Temporary status message (shown for a few refresh cycles then cleared).
     status: Option<String>,
     status_ttl: u8,
 }
 
 impl DisplayStats {
-    pub fn new(identity_hex: String) -> Self {
+    pub(crate) fn new(identity_hex: String) -> Self {
         Self {
             identity_hex,
             tx_bytes: 0,
@@ -98,11 +100,11 @@ impl DisplayStats {
         }
     }
 
-    pub fn cycle_page(&mut self) {
+    pub(crate) fn cycle_page(&mut self) {
         self.page = (self.page + 1) % self.num_pages();
     }
 
-    pub fn set_mode(&mut self, mode: Mode) {
+    pub(crate) fn set_mode(&mut self, mode: Mode) {
         self.mode = mode;
         self.page = 0;
         if mode == Mode::Bridge {
@@ -120,7 +122,7 @@ impl DisplayStats {
         self.page == self.num_pages() - 1
     }
 
-    pub fn set_status(&mut self, msg: &str) {
+    pub(crate) fn set_status(&mut self, msg: &str) {
         self.status = Some(String::from(msg));
         self.status_ttl = 6; // ~3 seconds at 500ms refresh
     }
@@ -135,10 +137,13 @@ impl DisplayStats {
     }
 }
 
-pub type SharedStats = Arc<Mutex<DisplayStats>>;
+pub(crate) type SharedStats = Arc<Mutex<DisplayStats>>;
 
 /// Initialize the OLED display.
-pub fn init(mut i2c: I2cDriver<'static>, mut rst: PinDriver<'static, Output>) -> Option<Display> {
+pub(crate) fn init(
+    mut i2c: I2cDriver<'static>,
+    mut rst: PinDriver<'static, Output>,
+) -> Option<Display> {
     // Reset the display — hold low, then release
     if let Err(e) = rst.set_high() {
         log::warn!("OLED RST set_high failed: {:?}", e);
@@ -154,6 +159,10 @@ pub fn init(mut i2c: I2cDriver<'static>, mut rst: PinDriver<'static, Output>) ->
     std::thread::sleep(std::time::Duration::from_millis(20));
 
     // Keep RST pin alive — dropping it would float the line and reset the display
+    #[allow(
+        clippy::mem_forget,
+        reason = "dropping the pin would float RST and reset the display"
+    )]
     std::mem::forget(rst);
 
     // Scan I2C bus to verify display is present
@@ -392,12 +401,12 @@ fn render(display: &mut Display, stats: &DisplayStats) -> bool {
 }
 
 /// Display refresh loop. Run in a dedicated thread.
-pub fn refresh_loop(mut display: Display, stats: SharedStats) {
+pub(crate) fn refresh_loop(mut display: Display, stats: SharedStats) {
     let mut display_on = true;
 
     loop {
         {
-            let mut s = stats.lock().unwrap();
+            let mut s = stats.locked();
             let should_be_on = render(&mut display, &s);
             s.tick_status();
 

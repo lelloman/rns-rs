@@ -13,7 +13,17 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import ci_changes  # noqa: E402
 
 
-HEAVY = ("android", "hooks", "interop", "docker", "armv7", "ctl_tls", "esp32", "web_smoke")
+HEAVY = (
+    "android",
+    "hooks",
+    "interop",
+    "docker",
+    "armv7",
+    "ctl_tls",
+    "esp32",
+    "esp32_lint",
+    "web_smoke",
+)
 
 
 class SelectTests(unittest.TestCase):
@@ -64,7 +74,10 @@ class SelectTests(unittest.TestCase):
         self.assertIn("rns-server", crates)
         self.assertNotIn("rns-crypto", crates)
         self.assertNotIn("rns-hooks", crates)
-        self.assertEqual(self.jobs(out), {"android", "hooks", "interop", "docker", "armv7", "ctl_tls"})
+        self.assertEqual(
+            self.jobs(out),
+            {"android", "hooks", "interop", "docker", "armv7", "ctl_tls", "esp32_lint"},
+        )
         self.assertEqual(out["no_std"], "true")
         self.assertEqual(out["esp32"], "false")
 
@@ -87,10 +100,16 @@ class SelectTests(unittest.TestCase):
         self.assertIn("hooks", self.jobs(out))
 
     def test_esp32(self) -> None:
-        self.assertEqual(self.jobs(self.select("rns-esp32/src/main.rs")), {"esp32"})
-        self.assertEqual(self.jobs(self.select("vendor/maybe-async-cfg/src/lib.rs")), {"esp32"})
+        both = {"esp32", "esp32_lint"}
+        self.assertEqual(self.jobs(self.select("rns-esp32/src/main.rs")), both)
+        self.assertEqual(self.jobs(self.select("vendor/maybe-async-cfg/src/lib.rs")), both)
         self.assertEqual(self.select("rns-esp32/src/main.rs")["cargo_test"], "false")
         self.assertIn("esp32", self.jobs(self.select("rns-core/Cargo.toml")))
+        # A firmware dependency's code reaches the lints, not the lock file.
+        self.assertEqual(
+            self.jobs(self.select("rns-crypto/src/sha256.rs")) & both, {"esp32_lint"}
+        )
+        self.assertNotIn("esp32_lint", self.jobs(self.select("rns-net/src/lib.rs")))
 
     def test_web_assets(self) -> None:
         out = self.select("rns-ctl/assets/app.js")
