@@ -7,7 +7,7 @@ Each case feeds a stats dict to upstream's `program_setup` through a stand-in
 Reticulum instance, with `time.time()` pinned, and stores the inputs
 (`<case>.pickle`) next to upstream's exact output (`<case>.txt`). The Rust
 test `rnstatus_view_matches_upstream` renders the same inputs and compares
-byte for byte. The checkout must be RNS 1.6.1 (rgit 884f109b).
+byte for byte. The checkout must be RNS 1.6.1 (rgit f876ed8d).
 """
 import contextlib
 import copy
@@ -142,6 +142,13 @@ SHARED_ONE = iface("Shared Instance[rns/other]", clients=2, outgoing_announce_fr
                    incoming_announce_frequency=1, outgoing_pr_frequency=0.0,
                    incoming_pr_frequency=0.0)
 SHARED_EMPTY = iface("Shared Instance[rns/empty]", clients=0)
+TUNNEL_NO_TN = iface("TCPInterface[Peer/192.0.2.5:4242]", bitrate=10_000_000, mtu=16384,
+                     tunnel_id=bytes([0x34] * 16), remote_transport_id=bytes([0x56] * 16),
+                     rem_impl="Reticulum Rust Implementation", rem_vers=(0, 10, 0),
+                     rem_is_tn=False, rem_pr_cost=7.25)
+TUNNEL_NO_CLIENTS = iface("TCPServerInterface[Quiet/0.0.0.0:4243]", clients=0,
+                          tunnel_id=bytes([0x78] * 16), rem_impl="RNS", rem_vers=(1, 6, 1),
+                          rem_is_tn=True)
 
 ALL = [SHARED, TCP_SERVER, TCP_CLIENT, TCP_OUT, LOCAL, RNODE, RNODE2, RNODE3, RNODE4, WEAVE,
        WEAVE_PEER, AUTO, AUTO_PEER, BACKBONE_CLIENT, I2P_OK, I2P_MANY, I2P_UNCONN, I2P_PEER,
@@ -207,6 +214,8 @@ CASES = {
                                         "name_filter": "lora2"}),
     "blocked_ips": (stats(), {"blocked_ips": True}),
     "tunnels": (stats(), {"dispall": True, "tstats": True}),
+    "tunnels_remote_transport": (stats(interfaces=[TCP_SERVER, TUNNEL_NO_TN, TUNNEL_NO_CLIENTS]),
+                                 {"dispall": True, "tstats": True}),
     "profiling": (stats(interfaces=[]), {"profiling": PROFILING}),
     "empty": (stats(interfaces=[], transport=False), {}),
 }

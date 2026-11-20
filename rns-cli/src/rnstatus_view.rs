@@ -421,7 +421,9 @@ fn render_tunnel(out: &mut String, ifstat: &PickleValue, opts: &ViewOptions) {
     // Upstream indexes these keys directly; a missing key reads as
     // `None` here, as from an instance that predates them.
     let tunnel_id = bytes_of(ifstat, "tunnel_id").filter(|b| !b.is_empty());
-    if opts.tstats {
+    // Upstream f876ed8d: no tunnel id line for an interface with clients
+    // (`if tstats and not clients`, where `clients` is the reported count).
+    if opts.tstats && !truthy(get(ifstat, "clients")) {
         let tid = tunnel_id.map(hexrep).unwrap_or_else(|| "None".into());
         outln!(out, "    Tunnel ID : {tid}");
     }
@@ -439,9 +441,16 @@ fn render_tunnel(out: &mut String, ifstat: &PickleValue, opts: &ViewOptions) {
     } else {
         "Unknown implementation".into()
     };
+    // Upstream f876ed8d: a known version is followed by whether the remote
+    // node has transport enabled.
+    let trns_str = if truthy(get(ifstat, "rem_is_tn")) {
+        ", transport enabled"
+    } else {
+        ", no transport"
+    };
     let vers_str = match get(ifstat, "rem_vers") {
         Some(PickleValue::List(components)) if !components.is_empty() => format!(
-            " {}",
+            " {}{trns_str}",
             components.iter().map(str_of).collect::<Vec<_>>().join(".")
         ),
         _ => ", unknown version".into(),
