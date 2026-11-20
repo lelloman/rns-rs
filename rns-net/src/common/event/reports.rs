@@ -216,8 +216,9 @@ pub struct LinkInfoEntry {
     pub channel_send_other_error: u64,
     /// Channel messages received.
     pub channel_messages_received: u64,
-    /// Proofs built for packets received on the link.
-    pub channel_proofs_sent: u64,
+    /// Proofs built for packets received on the link, channel or not.
+    /// Reported under the `channel_proofs_sent` key by the HTTP API.
+    pub packet_proofs_sent: u64,
     /// Proofs received for channel packets.
     pub channel_proofs_received: u64,
 }

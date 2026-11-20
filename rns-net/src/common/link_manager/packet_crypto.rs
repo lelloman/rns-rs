@@ -156,7 +156,7 @@ impl LinkManager {
         packet_hash: &[u8; 32],
     ) -> Vec<LinkManagerAction> {
         let Some(key) = self.links.get_mut(link_id).map(|link| {
-            link.channel_proofs_sent += 1;
+            link.packet_proofs_sent += 1;
             link.engine.signing_key().clone()
         }) else {
             return Vec::new();

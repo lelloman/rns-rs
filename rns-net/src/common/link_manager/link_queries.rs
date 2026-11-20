@@ -103,7 +103,7 @@ impl LinkManager {
                     channel_send_too_big: managed.channel_send_too_big,
                     channel_send_other_error: managed.channel_send_other_error,
                     channel_messages_received: managed.channel_messages_received,
-                    channel_proofs_sent: managed.channel_proofs_sent,
+                    packet_proofs_sent: managed.packet_proofs_sent,
                     channel_proofs_received: managed.channel_proofs_received,
                 }
             })
