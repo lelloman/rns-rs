@@ -3,20 +3,38 @@
 
 use super::*;
 
-/// Upstream's `link_distribution` answer at 3f55e9eb: a dict from
-/// destination hash to `{"active", "pending", "traffic", "from_ifs"}`.
-/// `from_ifs` is a Python set there, which umsgpack cannot pack, so
-/// `rpc_return` raises `unsupported type: <class 'set'>` for any
-/// destination with links, and the client gets no answer. Only the empty
-/// dict of an empty link table goes out. The pickle codec, which upstream's
-/// RPC no longer speaks, fails the same way.
-pub(super) fn link_distribution_to_pickle(
-    entries: &[LinkDistributionEntry],
-) -> io::Result<PickleValue> {
-    if !entries.is_empty() {
-        return Err(upstream_rpc_exception("unsupported type: <class 'set'>"));
-    }
-    Ok(PickleValue::Dict(Vec::new()))
+/// Upstream's `link_distribution` answer (1f7cd145): a dict from
+/// destination hash to `{"active", "pending", "traffic", "from_ifs"}`, in
+/// the order of `entries`, with `from_ifs` the list of interface hashes in
+/// the order first seen. At 3f55e9eb `from_ifs` was a Python set, which
+/// umsgpack cannot pack; 1f7cd145 made it this list, so the answer encodes.
+pub(super) fn link_distribution_to_pickle(entries: &[LinkDistributionEntry]) -> PickleValue {
+    let key = |k: &str| PickleValue::String(k.into());
+    PickleValue::Dict(
+        entries
+            .iter()
+            .map(|entry| {
+                (
+                    PickleValue::Bytes(entry.destination_hash.to_vec()),
+                    PickleValue::Dict(vec![
+                        (key("active"), PickleValue::Int(entry.active as i64)),
+                        (key("pending"), PickleValue::Int(entry.pending as i64)),
+                        (key("traffic"), PickleValue::Int(entry.traffic as i64)),
+                        (
+                            key("from_ifs"),
+                            PickleValue::List(
+                                entry
+                                    .from_interface_hashes
+                                    .iter()
+                                    .map(|hash| PickleValue::Bytes(hash.to_vec()))
+                                    .collect(),
+                            ),
+                        ),
+                    ]),
+                )
+            })
+            .collect(),
+    )
 }
 
 /// Upstream's `get_path_table()` entries, keys in its order.

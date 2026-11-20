@@ -2442,12 +2442,12 @@ fn known_destination_entries_rpc_keeps_the_native_list() {
     );
 }
 
-// Upstream 3f55e9eb: `link_distribution`'s `from_ifs` are a Python set,
-// which umsgpack cannot pack. With links in the table, upstream's
-// `rpc_loop` logs the exception and closes the connection unanswered; an
-// empty table answers an empty dict.
+// Upstream 1f7cd145: `link_distribution`'s `from_ifs` is a list, so the
+// answer encodes and the client gets it (at 3f55e9eb a set made upstream's
+// `rpc_loop` close the connection unanswered). An empty table answers an
+// empty dict.
 #[test]
-fn link_distribution_rpc_fails_as_upstreams_set_does() {
+fn link_distribution_rpc_answers_with_from_ifs_lists() {
     let key = derive_auth_key(b"link-distribution");
     let request = rns_core::msgpack::pack(&MsgpackValue::Map(vec![(
         MsgpackValue::Str("get".into()),
@@ -2469,7 +2469,7 @@ fn link_distribution_rpc_fails_as_upstreams_set_does() {
                     active: 1,
                     pending: 0,
                     traffic: 42,
-                    from_interface_hashes: vec![[0x11; 32]],
+                    from_interface_hashes: vec![[0x11; 32], [0x22; 32]],
                 })
                 .collect();
             let _ = resp_tx.send(QueryResponse::LinkDistribution(entries));
@@ -2477,25 +2477,29 @@ fn link_distribution_rpc_fails_as_upstreams_set_does() {
         let handler = thread::spawn(move || handle_connection(server, &key, &event_tx));
         client_auth(&mut client, &key).unwrap();
         send_bytes(&mut client, &request).unwrap();
-        let result = handler.join().unwrap();
+        handler.join().unwrap().unwrap();
         driver.join().unwrap();
-        if links == 0 {
-            result.unwrap();
-            let answer = recv_bytes(&mut client).unwrap();
-            assert_eq!(
-                rns_core::msgpack::unpack_exact(&answer).unwrap(),
-                MsgpackValue::Map(Vec::new())
-            );
+        let answer = recv_bytes(&mut client).unwrap();
+        let expected = if links == 0 {
+            MsgpackValue::Map(Vec::new())
         } else {
-            let error = result.unwrap_err();
-            assert_eq!(
-                upstream_rpc_exception_line(&error).as_deref(),
-                Some(
-                    "An error ocurred while handling RPC call from local client: unsupported type: <class 'set'>"
-                )
-            );
-            let mut buf = [0u8; 1];
-            assert_eq!(client.read(&mut buf).unwrap(), 0);
-        }
+            let key = |k: &str| MsgpackValue::Str(k.into());
+            MsgpackValue::Map(vec![(
+                MsgpackValue::Bin(vec![0xD5; 16]),
+                MsgpackValue::Map(vec![
+                    (key("active"), MsgpackValue::UInt(1)),
+                    (key("pending"), MsgpackValue::UInt(0)),
+                    (key("traffic"), MsgpackValue::UInt(42)),
+                    (
+                        key("from_ifs"),
+                        MsgpackValue::Array(vec![
+                            MsgpackValue::Bin(vec![0x11; 32]),
+                            MsgpackValue::Bin(vec![0x22; 32]),
+                        ]),
+                    ),
+                ]),
+            )])
+        };
+        assert_eq!(rns_core::msgpack::unpack_exact(&answer).unwrap(), expected);
     }
 }

@@ -384,17 +384,19 @@ impl TransportEngine {
         (total, unused)
     }
 
-    /// Upstream's `Transport.link_distribution()` (3f55e9eb): for each
-    /// destination with links in the link table, how many are validated
-    /// (`active`) and how many are not (`pending`), the bytes forwarded
-    /// along them (`traffic`) and the interfaces their link requests came in
-    /// on (`from_ifs`), each once. Destinations and interfaces come in the
-    /// order the link table first yields them; this link table is ordered by
-    /// link id, where upstream's dict keeps insertion order.
+    /// Upstream's `Transport.link_distribution()` (3f55e9eb, 1f7cd145): for
+    /// each destination with links in the link table, how many are
+    /// validated (`active`) and how many are not (`pending`), the bytes
+    /// forwarded along them (`traffic`) and the interfaces their link
+    /// requests came in on (`from_ifs`), each once. As upstream iterates its
+    /// `link_table` dict, the links are taken in the order they were
+    /// inserted ([`LinkTable::in_insertion_order`]), so destinations come in
+    /// the order of their first link and interfaces in the order first
+    /// seen.
     pub fn link_distribution(&self) -> Vec<LinkDistribution> {
         let mut distribution: Vec<LinkDistribution> = Vec::new();
         let mut index_of: BTreeMap<[u8; 16], usize> = BTreeMap::new();
-        for entry in self.link_table.values() {
+        for (_, entry) in self.link_table.in_insertion_order() {
             let index = *index_of.entry(entry.destination_hash).or_insert_with(|| {
                 distribution.push(LinkDistribution {
                     destination_hash: entry.destination_hash,

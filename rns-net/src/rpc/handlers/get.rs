@@ -64,7 +64,7 @@ fn get_interface_stats(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> 
 fn get_link_distribution(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
     let resp = send_query(event_tx, QueryRequest::LinkDistribution)?;
     if let QueryResponse::LinkDistribution(entries) = resp {
-        link_distribution_to_pickle(&entries)
+        Ok(link_distribution_to_pickle(&entries))
     } else {
         Ok(PickleValue::Dict(Vec::new()))
     }

@@ -18137,6 +18137,91 @@ fn links_to_built_in_destinations_are_not_reported_to_the_application() {
 // Upstream 3f55e9eb `link_distribution()`: `from_ifs` holds the
 // receiving interfaces' `get_hash()`, so two interfaces of the same name
 // count once.
+// Upstream 1f7cd145: `from_ifs` is a list of the interface hashes in the
+// order first seen, so the RPC answer encodes, and the dict and the lists
+// follow the order links were inserted in `Transport.link_table`.
+#[test]
+fn link_distribution_rpc_answer_keeps_upstreams_order() {
+    use rns_core::msgpack::Value as V;
+    use rns_core::transport::tables::LinkEntry;
+    let mut driver = new_test_driver();
+    for id in 1..=2 {
+        let entry = make_entry(id, Box::new(MockWriter::new().0), true);
+        driver.engine.register_interface(entry.info.clone());
+        driver.interfaces.insert(InterfaceId(id), entry);
+    }
+    let dest = [0xD5; 16];
+    let other = [0x0E; 16];
+    // Inserted in this order, against the order of their link ids: two
+    // links to `dest` over interface 2, one to `other`, one to `dest` over
+    // interface 1.
+    for (link_id, destination_hash, received, validated, traffic) in [
+        (0x0C, dest, 2, true, 300),
+        (0x0B, other, 1, false, 0),
+        (0x0A, dest, 2, false, 5),
+        (0x01, dest, 1, true, 12),
+    ] {
+        driver.engine.register_link(
+            [link_id; 16],
+            LinkEntry {
+                timestamp: 1000.0,
+                next_hop_transport_id: [0x33; 16],
+                next_hop_interface: InterfaceId(1),
+                remaining_hops: 1,
+                received_interface: InterfaceId(received),
+                taken_hops: 1,
+                destination_hash,
+                validated,
+                proof_timeout: 2000.0,
+                traffic,
+            },
+        );
+    }
+    let hash_of = |id: u64| {
+        rns_core::hash::full_hash(
+            driver
+                .interface_display_name(&driver.interfaces[&InterfaceId(id)])
+                .as_bytes(),
+        )
+    };
+    let (first_if, second_if) = (hash_of(2), hash_of(1));
+    assert_ne!(first_if, second_if);
+
+    let request = rns_core::msgpack::pack(&V::Map(vec![(
+        V::Str("get".into()),
+        V::Str("link_distribution".into()),
+    )]));
+    let answer = crate::rpc::answer_request(&request, &mut driver).unwrap();
+    let key = |k: &str| V::Str(k.into());
+    let expected = V::Map(vec![
+        (
+            V::Bin(dest.to_vec()),
+            V::Map(vec![
+                (key("active"), V::UInt(2)),
+                (key("pending"), V::UInt(1)),
+                (key("traffic"), V::UInt(317)),
+                (
+                    key("from_ifs"),
+                    V::Array(vec![V::Bin(first_if.to_vec()), V::Bin(second_if.to_vec())]),
+                ),
+            ]),
+        ),
+        (
+            V::Bin(other.to_vec()),
+            V::Map(vec![
+                (key("active"), V::UInt(0)),
+                (key("pending"), V::UInt(1)),
+                (key("traffic"), V::UInt(0)),
+                (key("from_ifs"), V::Array(vec![V::Bin(second_if.to_vec())])),
+            ]),
+        ),
+    ]);
+    let decoded = rns_core::msgpack::unpack_exact(&answer).unwrap();
+    assert_eq!(decoded, expected);
+    // What umsgpack packs for the same dict, byte for byte.
+    assert_eq!(rns_core::msgpack::pack(&decoded), answer);
+}
+
 #[test]
 fn link_distribution_names_receiving_interfaces_by_hash() {
     use rns_core::transport::tables::LinkEntry;

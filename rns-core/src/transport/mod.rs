@@ -294,7 +294,7 @@ pub struct TransportEngine {
     path_table: BTreeMap<[u8; 16], PathSet>,
     announce_table: BTreeMap<[u8; 16], AnnounceEntry>,
     reverse_table: tables::ReverseTable,
-    link_table: BTreeMap<[u8; 16], LinkEntry>,
+    link_table: tables::LinkTable,
     held_announces: BTreeMap<[u8; 16], AnnounceEntry>,
     packet_hashlist: PacketHashlist,
     announce_sig_cache: AnnounceSignatureCache,

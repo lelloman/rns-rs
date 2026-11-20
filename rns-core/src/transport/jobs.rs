@@ -132,7 +132,7 @@ pub fn cull_reverse_table(
 
 /// Cull expired entries from the link table.
 pub fn cull_link_table(
-    link_table: &mut alloc::collections::BTreeMap<[u8; 16], super::tables::LinkEntry>,
+    link_table: &mut super::tables::LinkTable,
     interfaces: &alloc::collections::BTreeMap<InterfaceId, super::types::InterfaceInfo>,
     now: f64,
 ) -> (usize, Vec<TransportAction>) {
@@ -633,7 +633,7 @@ mod tests {
 
     #[test]
     fn test_cull_link_table_validated_timeout() {
-        let mut table = BTreeMap::new();
+        let mut table = LinkTable::new();
         let mut interfaces = BTreeMap::new();
         interfaces.insert(InterfaceId(1), make_interface_info(1));
         interfaces.insert(InterfaceId(2), make_interface_info(2));
@@ -665,7 +665,7 @@ mod tests {
 
     #[test]
     fn test_cull_link_table_unvalidated_proof_timeout() {
-        let mut table = BTreeMap::new();
+        let mut table = LinkTable::new();
         let mut interfaces = BTreeMap::new();
         interfaces.insert(InterfaceId(1), make_interface_info(1));
         interfaces.insert(InterfaceId(2), make_interface_info(2));
@@ -1253,7 +1253,7 @@ mod tests {
         let mut interfaces = BTreeMap::new();
         interfaces.insert(InterfaceId(1), make_interface_info(1));
         interfaces.insert(InterfaceId(2), make_interface_info(2));
-        let mut table = BTreeMap::new();
+        let mut table = LinkTable::new();
         let entries = [
             (
                 0x01,
