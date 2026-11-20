@@ -196,6 +196,7 @@ pub(super) fn node_config_from(
         autoconnect_unverified_implementations: reticulum.autoconnect_unverified_implementations,
         discovery_required_value: reticulum.required_discovery_value,
         respond_to_probes: reticulum.respond_to_probes,
+        use_implicit_proof: reticulum.use_implicit_proof,
         prefer_shorter_path: reticulum.prefer_shorter_path,
         max_paths_per_destination: reticulum.max_paths_per_destination,
         packet_hashlist_max_entries: reticulum.packet_hashlist_max_entries,

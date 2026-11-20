@@ -107,7 +107,9 @@ pub struct ReticulumSection {
     /// `panic_on_interface_error`: fail startup when an interface fails to
     /// start, instead of logging it and going on.
     pub panic_on_interface_error: bool,
-    /// `use_implicit_proof`; parsed and kept, not read elsewhere.
+    /// `use_implicit_proof`: prove received single packets with the
+    /// signature alone (64 bytes) instead of the packet hash and the
+    /// signature (96 bytes).
     pub use_implicit_proof: bool,
     /// `network_identity`: path of the network identity file, created when
     /// missing.

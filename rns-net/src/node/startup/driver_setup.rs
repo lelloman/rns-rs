@@ -171,6 +171,7 @@ pub(super) fn new_driver(
     *driver.engine.destination_filter_mut() = queue_config.filter.destination_filter();
     let stamp_targets = crate::stamper::StampTargets::from(&config.stamps);
     driver.interface_settings.underlay_mark = config.underlay_mark;
+    driver.proofs.implicit = config.use_implicit_proof;
     driver
         .link_manager
         .set_link_mtu_discovery(queue_config.link_mtu_discovery);

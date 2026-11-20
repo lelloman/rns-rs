@@ -33,6 +33,9 @@ pub(crate) struct PacketProofs {
     >,
     /// Reused buffer for single-packet proofs the proof pool finished.
     pub(crate) pool_outcomes: Vec<crate::common::link_manager::ProofOutcome>,
+    /// Prove received single packets implicitly, with the signature alone,
+    /// as upstream's `use_implicit_proof` (on by default).
+    pub(crate) implicit: bool,
 }
 
 impl PacketProofs {
@@ -45,6 +48,7 @@ impl PacketProofs {
             pending_probes: HashSet::new(),
             strategies: HashMap::new(),
             pool_outcomes: Vec::new(),
+            implicit: true,
         }
     }
 }

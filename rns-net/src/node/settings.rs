@@ -137,6 +137,10 @@ pub struct NodeConfig {
     pub discovery_required_value: Option<rns_core::stamp::StampCost>,
     /// Respond to probe packets with automatic proof (like Python's respond_to_probes).
     pub respond_to_probes: bool,
+    /// `use_implicit_proof`: prove received packets with the signature
+    /// alone, instead of the packet hash and the signature. Link packets are
+    /// always proved explicitly, as upstream does.
+    pub use_implicit_proof: bool,
     /// Accept an announce with strictly fewer hops even when the random_blob
     /// is a duplicate of the existing path entry.  Default `false` preserves
     /// Python-compatible anti-replay behaviour.
@@ -235,6 +239,7 @@ impl Default for NodeConfig {
             autoconnect_unverified_implementations: false,
             discovery_required_value: None,
             respond_to_probes: false,
+            use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,

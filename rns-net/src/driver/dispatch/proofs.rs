@@ -99,9 +99,12 @@ impl Driver {
         signature: &[u8; 64],
         interface: Option<InterfaceId>,
     ) {
-        // Build explicit proof: [packet_hash:32][signature:64]
+        // As upstream's `Identity.prove`: implicit [signature:64], or
+        // explicit [packet_hash:32][signature:64].
         let mut proof_data = Vec::with_capacity(96);
-        proof_data.extend_from_slice(packet_hash);
+        if !self.proofs.implicit {
+            proof_data.extend_from_slice(packet_hash);
+        }
         proof_data.extend_from_slice(signature);
 
         // Address the proof to the truncated packet hash (first 16 bytes),
