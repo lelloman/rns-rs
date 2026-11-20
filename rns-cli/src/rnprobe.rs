@@ -25,19 +25,15 @@ const DEFAULT_TIMEOUT: f64 = 12.0;
 
 /// upstream rnprobe's options: `-s`, `-n`, `-t` and `-w` always take a
 /// value (`-t 5`, `-t5` or `--timeout=5`).
-pub const OPTIONS: OptionSpec = OptionSpec {
-    options: &[
-        Opt::value("", "config"),
-        Opt::value("s", "size"),
-        Opt::value("n", "probes"),
-        Opt::value("t", "timeout"),
-        Opt::value("w", "wait"),
-        Opt::count("v", "verbose"),
+pub static OPTIONS: OptionSpec = OptionSpec::new(
+    Some(&crate::upstream_parsers::RNPROBE),
+    &[],
+    &[
         // Rust-only: the shared parser's `-c` and an alias of `--probes`.
         Opt::value("c", ""),
         Opt::value("", "count").rust_only(),
     ],
-};
+);
 
 /// The `rnprobe` binary: options from the command line.
 pub fn main() -> ExitCode {

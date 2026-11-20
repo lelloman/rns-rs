@@ -24,41 +24,11 @@ const MONITOR_MIN_SLEEP: Duration = Duration::from_millis(200);
 
 /// upstream rnstatus's options, and the Rust-only `-c` for `--config`.
 /// `-q` is `--queues` here, not a quiet counter.
-pub const OPTIONS: OptionSpec = OptionSpec {
-    options: &[
-        Opt::value("", "config"),
-        Opt::value("", "attach"),
-        Opt::value("", "detach"),
-        Opt::value("", "reload"),
-        Opt::flag("a", "all"),
-        Opt::flag("A", "announce-stats"),
-        Opt::flag("P", "pr-stats"),
-        Opt::flag("F", "filter-stats"),
-        Opt::flag("l", "link-stats"),
-        Opt::flag("B", "burst"),
-        Opt::flag("b", "blocked-ips"),
-        Opt::flag("t", "totals"),
-        Opt::flag("T", "tunnels"),
-        Opt::flag("p", "pps"),
-        Opt::flag("q", "queues"),
-        Opt::flag("z", "profiling"),
-        Opt::value("s", "sort"),
-        Opt::flag("r", "reverse"),
-        Opt::flag("j", "json"),
-        Opt::value("R", ""),
-        Opt::value("i", ""),
-        Opt::value("w", ""),
-        Opt::flag("d", "discovered"),
-        Opt::flag("D", ""),
-        Opt::flag("", "show-stale"),
-        Opt::flag("", "show-unknown"),
-        Opt::flag("m", "monitor"),
-        Opt::value("I", "monitor-interval"),
-        Opt::count("v", "verbose"),
-        Opt::value("c", ""),
-        Opt::value("", "identity").rust_only(),
-    ],
-};
+pub static OPTIONS: OptionSpec = OptionSpec::new(
+    Some(&crate::upstream_parsers::RNSTATUS),
+    &[],
+    &[Opt::value("c", ""), Opt::value("", "identity").rust_only()],
+);
 
 /// The `rnstatus` binary: options from the command line.
 pub fn main() -> ExitCode {

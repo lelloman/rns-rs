@@ -6,7 +6,7 @@
 use std::sync::OnceLock;
 
 use crate::argparse::{self, Action, Kind, Nargs, Parser, Ty};
-use crate::args::{self, Args, Opt, OptionSpec};
+use crate::args::{Args, OptionSpec};
 
 /// argparse's `SUPPRESS`, as an option's help: the option is left out of
 /// the usage and the help.
@@ -134,36 +134,8 @@ impl Cli {
 
     /// The option table [`Args::parse_spec_from`] reads, from the parser.
     pub fn spec(&'static self) -> &'static OptionSpec {
-        self.spec.get_or_init(|| {
-            let options: Vec<Opt> = self
-                .parser
-                .actions
-                .iter()
-                .filter(|a| !a.opts.is_empty() && !matches!(a.kind, Kind::Help | Kind::Version))
-                .map(|a| {
-                    let short = a
-                        .opts
-                        .iter()
-                        .find_map(|o| o.strip_prefix('-').filter(|s| !s.starts_with('-')))
-                        .unwrap_or("");
-                    let long = a
-                        .opts
-                        .iter()
-                        .find_map(|o| o.strip_prefix("--"))
-                        .unwrap_or("");
-                    let kind = match (a.kind, a.nargs) {
-                        (Kind::StoreTrue, _) => args::Kind::Flag,
-                        (Kind::Count, _) => args::Kind::Count,
-                        (_, Nargs::Optional | Nargs::ZeroOrMore) => args::Kind::Optional,
-                        _ => args::Kind::Value,
-                    };
-                    Opt::new(short, long, kind)
-                })
-                .collect();
-            OptionSpec {
-                options: Box::leak(options.into_boxed_slice()),
-            }
-        })
+        self.spec
+            .get_or_init(|| OptionSpec::new(Some(&self.parser), &[], &[]))
     }
 
     /// Parse `argv` for `prog`. As argparse, `--help` prints the help and

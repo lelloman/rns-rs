@@ -5,46 +5,14 @@ use super::*;
 /// upstream rnid's options. `-d`, `-e`, `-V` and `-s` take any number of
 /// paths (`nargs="*"`): the first is the option's value and the rest
 /// follow it as positionals in the parser's trace.
-pub const OPTIONS: OptionSpec = OptionSpec {
-    options: &[
-        Opt::value("", "config"),
-        Opt::value("i", "identity"),
-        Opt::value("g", "generate"),
-        Opt::value("m", "import-pub"),
-        Opt::value("M", "import-prv"),
-        Opt::flag("x", "export-pub"),
-        Opt::flag("X", "export-prv"),
-        Opt::count("v", "verbose"),
-        Opt::count("q", "quiet"),
-        Opt::optional("a", "announce"),
-        Opt::value("H", "hash"),
-        Opt::optional("d", "decrypt"),
-        Opt::optional("e", "encrypt"),
-        Opt::optional("V", "validate"),
-        Opt::optional("s", "sign"),
-        Opt::optional("S", "sign-message"),
-        Opt::optional("E", "embed-meta"),
-        Opt::optional("", "meta-spec"),
-        Opt::flag("", "raw"),
-        Opt::value("w", "write"),
-        Opt::value("r", "read"),
-        Opt::flag("f", "force"),
-        Opt::flag("I", "stdin"),
-        Opt::flag("O", "stdout"),
-        Opt::flag("R", "request"),
-        Opt::flag("N", "no-cache"),
-        Opt::value("t", ""),
-        Opt::flag("p", "print-identity"),
-        Opt::flag("P", "print-private"),
-        Opt::flag("B", "base32"),
-        Opt::flag("b", "base64"),
-        Opt::flag("U", "base256"),
-        Opt::flag("F", "hex"),
-        Opt::flag("", "meta"),
+pub static OPTIONS: OptionSpec = OptionSpec::new(
+    Some(&crate::upstream_parsers::RNID),
+    &[],
+    &[
         // Rust-only: the older short name of --base256.
         Opt::flag("Z", ""),
     ],
-};
+);
 
 /// `-S` without a message is upstream's `NO_MESSAGE`.
 #[derive(Clone, Debug, PartialEq)]

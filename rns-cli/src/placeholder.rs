@@ -26,25 +26,18 @@ pub struct Placeholder {
 pub const RNPKG_EXAMPLE_CONFIG: &str = "# This is an example package manager configuration file.\n";
 
 /// upstream rnpkg's options, and the Rust-only `-c` for `--config`.
-pub(crate) const OPTIONS: OptionSpec = OptionSpec {
-    options: &[
-        Opt::value("", "config"),
-        Opt::count("v", "verbose"),
-        Opt::count("q", "quiet"),
-        Opt::flag("", "exampleconfig"),
-        Opt::value("c", ""),
-    ],
-};
+pub(crate) static OPTIONS: OptionSpec = OptionSpec::new(
+    Some(&crate::upstream_parsers::RNPKG),
+    &[],
+    &[Opt::value("c", "")],
+);
 
 /// upstream rnir's options: rnpkg's without `--exampleconfig`.
-pub(crate) const RNIR_OPTIONS: OptionSpec = OptionSpec {
-    options: &[
-        Opt::value("", "config"),
-        Opt::count("v", "verbose"),
-        Opt::count("q", "quiet"),
-        Opt::value("c", ""),
-    ],
-};
+pub(crate) static RNIR_OPTIONS: OptionSpec = OptionSpec::new(
+    Some(&crate::upstream_parsers::RNIR),
+    &[],
+    &[Opt::value("c", "")],
+);
 
 /// Runs the placeholder on the process's command line: handles `--help`,
 /// `--version` and `--exampleconfig`, otherwise starts Reticulum (attached

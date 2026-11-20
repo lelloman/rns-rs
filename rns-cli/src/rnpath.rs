@@ -23,38 +23,11 @@ const VERSION: &str = env!("FULL_VERSION");
 
 /// upstream rnpath's options, and the Rust-only `-c` for `--config`. `-d`,
 /// `-x`, `-B` and `-U` are flags acting on the positional destination.
-pub const OPTIONS: OptionSpec = OptionSpec {
-    options: &[
-        Opt::value("", "config"),
-        Opt::flag("t", "table"),
-        Opt::flag("a", "active"),
-        Opt::flag("u", "usage"),
-        Opt::flag("V", "vias"),
-        Opt::flag("E", "expiry"),
-        Opt::value("m", "max"),
-        Opt::value("M", "min-value"),
-        Opt::flag("r", "rates"),
-        Opt::flag("d", "drop"),
-        Opt::flag("D", "drop-announces"),
-        Opt::flag("x", "drop-via"),
-        Opt::value("w", ""),
-        Opt::value("R", ""),
-        Opt::value("i", ""),
-        Opt::value("W", ""),
-        Opt::flag("b", "blackholed"),
-        Opt::flag("B", "blackhole"),
-        Opt::flag("U", "unblackhole"),
-        Opt::value("", "duration"),
-        Opt::value("", "reason"),
-        Opt::flag("p", "blackholed-list"),
-        Opt::flag("j", "json"),
-        Opt::flag("A", "analyze"),
-        Opt::value("", "capture"),
-        Opt::count("v", "verbose"),
-        Opt::value("c", ""),
-        Opt::value("", "identity").rust_only(),
-    ],
-};
+pub static OPTIONS: OptionSpec = OptionSpec::new(
+    Some(&crate::upstream_parsers::RNPATH),
+    &[],
+    &[Opt::value("c", ""), Opt::value("", "identity").rust_only()],
+);
 
 /// The `rnpath` binary: options from the command line.
 pub fn main() -> ExitCode {

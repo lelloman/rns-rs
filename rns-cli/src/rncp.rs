@@ -19,7 +19,7 @@ use rns_net::{
 };
 
 use crate::app;
-use crate::args::{Args, Opt, OptionSpec};
+use crate::args::{Args, OptionSpec};
 use crate::pyfmt::{prettyhexrep, prettysize, prettytime, round_float, Num};
 use crate::pylog::{
     self, abspath, basename, expanduser, LOG_ERROR, LOG_INFO, LOG_NOTICE, LOG_VERBOSE, LOG_WARNING,
@@ -38,28 +38,16 @@ const SYMS: [char; 7] = ['⢄', '⢂', '⢁', '⡁', '⡈', '⡐', '⡠'];
 const STATS_MAX: usize = 32;
 
 /// upstream rncp's options, and Rust-only long names for -i, -a, -b and -w.
-pub(crate) const OPTIONS: OptionSpec = OptionSpec {
-    options: &[
-        Opt::value("", "config"),
-        Opt::count("v", "verbose"),
-        Opt::count("q", "quiet"),
-        Opt::flag("S", "silent"),
-        Opt::flag("l", "listen"),
-        Opt::flag("C", "no-compress"),
-        Opt::flag("F", "allow-fetch"),
-        Opt::flag("f", "fetch"),
-        Opt::value("j", "jail"),
-        Opt::value("s", "save"),
-        Opt::flag("O", "overwrite"),
-        Opt::value("b", "announce").rust_only(),
-        Opt::value("a", "allowed").rust_only(),
-        Opt::flag("n", "no-auth"),
-        Opt::flag("p", "print-identity"),
-        Opt::value("i", "identity").rust_only(),
-        Opt::value("w", "timeout").rust_only(),
-        Opt::flag("P", "phy-rates"),
+pub(crate) static OPTIONS: OptionSpec = OptionSpec::new(
+    Some(&crate::upstream_parsers::RNCP),
+    &[
+        ("b", "announce"),
+        ("a", "allowed"),
+        ("i", "identity"),
+        ("w", "timeout"),
     ],
-};
+    &[],
+);
 
 /// upstream's argparse namespace.
 #[derive(Debug)]

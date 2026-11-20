@@ -44,30 +44,20 @@ const SYMS: [char; 7] = ['⢄', '⢂', '⢁', '⡁', '⡈', '⡐', '⡠'];
 
 /// upstream rnx's options, and the Rust-only long names this
 /// implementation has accepted.
-pub(crate) const OPTIONS: OptionSpec = OptionSpec {
-    options: &[
-        Opt::value("", "config"),
-        Opt::count("v", "verbose"),
-        Opt::count("q", "quiet"),
-        Opt::flag("p", "print-identity"),
-        Opt::flag("l", "listen"),
-        Opt::value("i", "identity").rust_only(),
-        Opt::flag("x", "interactive"),
-        Opt::flag("b", "no-announce"),
-        Opt::value("a", "allowed").rust_only(),
-        Opt::flag("n", "noauth"),
-        Opt::flag("N", "noid"),
-        Opt::flag("d", "detailed"),
-        Opt::flag("m", "mirror").rust_only(),
-        Opt::value("w", "timeout").rust_only(),
-        Opt::value("W", "result-timeout").rust_only(),
-        Opt::value("", "stdin"),
-        Opt::value("", "stdout"),
-        Opt::value("", "stderr"),
+pub(crate) static OPTIONS: OptionSpec = OptionSpec::new(
+    Some(&crate::upstream_parsers::RNX),
+    &[
+        ("i", "identity"),
+        ("a", "allowed"),
+        ("m", "mirror"),
+        ("w", "timeout"),
+        ("W", "result-timeout"),
+    ],
+    &[
         Opt::flag("", "no-auth").rust_only(),
         Opt::flag("", "no-id").rust_only(),
     ],
-};
+);
 
 /// upstream's argparse namespace.
 #[derive(Debug)]

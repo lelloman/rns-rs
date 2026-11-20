@@ -38,7 +38,7 @@ use rns_net::compressor::Bzip2Compressor;
 use rns_net::destination::Destination;
 use rns_net::{Callbacks, ChannelSendError, RnsNode, SendError};
 
-use crate::args::{Args, Opt, OptionSpec};
+use crate::args::{Args, OptionSpec};
 use crate::pyfmt::prettyhexrep;
 
 const APP_NAME: &str = "rnsh";
@@ -197,26 +197,8 @@ struct CliOptions {
 }
 
 /// upstream rnsh's options.
-pub(crate) const OPTIONS: OptionSpec = OptionSpec {
-    options: &[
-        Opt::value("c", "config"),
-        Opt::value("", "rnsconfig"),
-        Opt::value("i", "identity"),
-        Opt::count("v", "verbose"),
-        Opt::count("q", "quiet"),
-        Opt::flag("p", "print-identity"),
-        Opt::flag("l", "listen"),
-        Opt::value("s", "service"),
-        Opt::value("b", "announce"),
-        Opt::value("a", "allowed"),
-        Opt::flag("n", "no-auth"),
-        Opt::flag("A", "remote-command-as-args"),
-        Opt::flag("C", "no-remote-command"),
-        Opt::flag("N", "no-id"),
-        Opt::flag("m", "mirror"),
-        Opt::value("w", "timeout"),
-    ],
-};
+pub(crate) static OPTIONS: OptionSpec =
+    OptionSpec::new(Some(&crate::upstream_parsers::RNSH), &[], &[]);
 
 impl CliOptions {
     /// The options upstream's parser takes from `argv`, or what it prints
