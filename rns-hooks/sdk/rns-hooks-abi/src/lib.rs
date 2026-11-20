@@ -1,4 +1,15 @@
+//! Definitions shared by the rns-hooks host and the hook programs it runs.
+//!
+//! Everything here is part of the binary contract between the two sides:
+//! the context layouts the host writes, the result a hook returns, the
+//! action wire tags, the native hook entry points, and the payload formats
+//! of the bundled stats and sentinel hooks. All multi-byte integers are
+//! little-endian. A change to a context, result or wire layout means bumping
+//! [`ABI_VERSION`]; the stats and sentinel payloads are versioned by their
+//! payload type strings instead.
+
 #![no_std]
+#![warn(missing_docs)]
 
 pub mod context;
 pub mod native;
