@@ -6,14 +6,32 @@
 
 mod ble;
 mod button;
-mod config;
 mod display;
 mod driver;
-mod ifac;
 mod lora;
 mod rng;
 mod rnode;
+
+// Shared with the library, where their items are public.
+#[allow(
+    unreachable_pub,
+    reason = "public in the library that shares this module"
+)]
+mod config;
+#[allow(
+    unreachable_pub,
+    reason = "public in the library that shares this module"
+)]
+mod ifac;
+#[allow(
+    unreachable_pub,
+    reason = "public in the library that shares this module"
+)]
 mod util;
+#[allow(
+    unreachable_pub,
+    reason = "public in the library that shares this module"
+)]
 mod version;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,6 +57,12 @@ const NVS_NAMESPACE: &str = "rns";
 const NVS_KEY_IDENTITY: &str = "id_prv";
 const NVS_KEY_SETTINGS: &str = "settings";
 
+// Boot-time setup: the firmware cannot run without its peripherals, NVS or
+// threads, and a panic ends in ESP-IDF's handler, which restarts the board.
+#[allow(
+    clippy::expect_used,
+    reason = "boot-time hardware setup; a failure restarts the board"
+)]
 fn main() {
     // Initialize ESP-IDF logging and system
     esp_idf_svc::sys::link_patches();
@@ -211,7 +235,8 @@ fn main() {
 
         // Spawn tick thread
         let tick_handle =
-            driver::spawn_tick_thread(tx.clone(), config::TICK_INTERVAL_MS, shutdown.clone());
+            driver::spawn_tick_thread(tx.clone(), config::TICK_INTERVAL_MS, shutdown.clone())
+                .expect("failed to spawn tick thread");
 
         // Update display mode
         if let Ok(mut s) = display_stats.lock() {
@@ -338,6 +363,10 @@ fn main() {
 }
 
 /// Load identity from NVS, or generate a new one and persist it.
+#[allow(
+    clippy::expect_used,
+    reason = "boot-time NVS setup; a failure restarts the board"
+)]
 fn load_or_create_identity(nvs_partition: &EspDefaultNvsPartition) -> Identity {
     let nvs =
         EspNvs::<NvsDefault>::new(nvs_partition.clone(), NVS_NAMESPACE, true).expect("NVS open");
@@ -380,6 +409,10 @@ fn load_or_create_identity(nvs_partition: &EspDefaultNvsPartition) -> Identity {
     identity
 }
 
+#[allow(
+    clippy::expect_used,
+    reason = "boot-time NVS setup; a failure restarts the board"
+)]
 fn load_or_create_settings(nvs_partition: &EspDefaultNvsPartition) -> DeviceSettings {
     let nvs =
         EspNvs::<NvsDefault>::new(nvs_partition.clone(), NVS_NAMESPACE, true).expect("NVS open");
@@ -411,6 +444,10 @@ fn load_or_create_settings(nvs_partition: &EspDefaultNvsPartition) -> DeviceSett
     }
 }
 
+#[allow(
+    clippy::expect_used,
+    reason = "boot-time NVS setup; a failure restarts the board"
+)]
 fn persist_settings(nvs_partition: &EspDefaultNvsPartition, settings: DeviceSettings) {
     let nvs = EspNvs::<NvsDefault>::new(nvs_partition.clone(), NVS_NAMESPACE, true)
         .expect("NVS open for write");

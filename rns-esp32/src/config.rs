@@ -3,7 +3,7 @@
     reason = "shared with the library; the firmware binary includes this module privately and uses only part of it"
 )]
 
-/// Hardcoded LoRa radio parameters for Heltec V3 + SX1262.
+//! Hardcoded LoRa radio parameters for Heltec V3 + SX1262.
 
 /// A decimal number from a build-time environment variable, or `default`
 /// when it is not set. An invalid number fails the build.

@@ -16,6 +16,7 @@ use esp_idf_hal::uart::UartDriver;
 
 use crate::display::SharedStats;
 use crate::lora::SharedRadio;
+use crate::util::LockExt;
 use crate::version;
 use rns_esp32::channel::{airtime_limit, ChannelMonitor, TxChannel};
 use rns_esp32::protocol::{
@@ -29,7 +30,7 @@ use rns_esp32::protocol::{
 
 /// Transport-agnostic serial interface for the RNode bridge.
 /// Implemented by both UART (USB) and BLE NUS transports.
-pub trait BridgeTransport {
+pub(crate) trait BridgeTransport {
     /// Read bytes with a timeout in milliseconds. Returns number of bytes read.
     fn read(&self, buf: &mut [u8], timeout_ms: u32) -> usize;
     /// Write a frame in full.
@@ -41,22 +42,19 @@ pub trait BridgeTransport {
 }
 
 /// UART transport — wraps the existing UartDriver for USB serial bridge.
-pub struct UartTransport<'a, 'b> {
+pub(crate) struct UartTransport<'a, 'b> {
     uart: &'b UartDriver<'a>,
 }
 
 impl<'a, 'b> UartTransport<'a, 'b> {
-    pub fn new(uart: &'b UartDriver<'a>) -> Self {
+    pub(crate) fn new(uart: &'b UartDriver<'a>) -> Self {
         Self { uart }
     }
 }
 
 impl<'a, 'b> BridgeTransport for UartTransport<'a, 'b> {
     fn read(&self, buf: &mut [u8], timeout_ms: u32) -> usize {
-        match self.uart.read(buf, timeout_ms) {
-            Ok(n) => n,
-            Err(_) => 0,
-        }
+        self.uart.read(buf, timeout_ms).unwrap_or_default()
     }
 
     fn write(&self, data: &[u8]) -> io::Result<()> {
@@ -75,10 +73,10 @@ impl<'a, 'b> BridgeTransport for UartTransport<'a, 'b> {
 }
 
 /// BLE NUS transport — wraps the BLE module for wireless serial bridge.
-pub struct BleTransport;
+pub(crate) struct BleTransport;
 
 impl BleTransport {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self
     }
 }
@@ -116,7 +114,7 @@ const TX_QUEUE_MAX_FRAMES: usize = 32;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Reason the bridge loop exited.
-pub enum BridgeExit {
+pub(crate) enum BridgeExit {
     IdleTimeout,
     Leave,
     TransportError,
@@ -124,7 +122,7 @@ pub enum BridgeExit {
 
 /// RNode bridge: handles serial protocol and bridges data to/from LoRa.
 /// Generic over the serial transport (UART for USB, BLE NUS for wireless).
-pub struct RNodeBridge<T: BridgeTransport> {
+pub(crate) struct RNodeBridge<T: BridgeTransport> {
     radio: SharedRadio,
     transport: T,
     dio1: PinDriver<'static, Input>,
@@ -156,7 +154,7 @@ pub struct RNodeBridge<T: BridgeTransport> {
 }
 
 impl<T: BridgeTransport> RNodeBridge<T> {
-    pub fn new(
+    pub(crate) fn new(
         radio: SharedRadio,
         transport: T,
         dio1: PinDriver<'static, Input>,
@@ -198,7 +196,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
     }
 
     /// Run the RNode bridge loop. Blocks until serial goes idle or host sends LEAVE.
-    pub fn run(mut self) -> (BridgeExit, PinDriver<'static, Input>) {
+    pub(crate) fn run(mut self) -> (BridgeExit, PinDriver<'static, Input>) {
         log::info!("RNode bridge mode active");
 
         let mut rx_buf = [0u8; 512];
@@ -207,10 +205,14 @@ impl<T: BridgeTransport> RNodeBridge<T> {
         let notifier = notification.notifier();
 
         self.dio1.set_interrupt_type(InterruptType::PosEdge).ok();
+        // SAFETY: the callback owns everything it uses (the notifier), and
+        // every return path removes the subscription before giving the pin
+        // back.
+        #[allow(unsafe_code, reason = "a non-static GPIO interrupt subscription")]
         unsafe {
             self.dio1
                 .subscribe_nonstatic(move || {
-                    let _ = notifier.notify(NonZeroU32::new(1).unwrap());
+                    let _ = notifier.notify(NonZeroU32::MIN);
                 })
                 .ok();
         }
@@ -259,14 +261,12 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                         }
                     }
                 }
-            } else {
-                if self.dio1.enable_interrupt().is_ok() {
-                    let _ = notification.wait(TickType::new_millis(10).ticks());
-                }
+            } else if self.dio1.enable_interrupt().is_ok() {
+                let _ = notification.wait(TickType::new_millis(10).ticks());
             }
 
             let received = {
-                let mut radio = self.radio.lock().unwrap();
+                let mut radio = self.radio.locked();
                 radio
                     .receive()
                     .map(|data| (data, radio.last_packet_stats()))
@@ -275,7 +275,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                 log::debug!("RNode: LoRa RX {} bytes, forwarding to serial", data.len());
                 self.rx_count = self.rx_count.wrapping_add(1);
                 if let Some(ref stats) = self.stats {
-                    stats.lock().unwrap().bridge_rx_bytes += data.len() as u32;
+                    stats.locked().bridge_rx_bytes += data.len() as u32;
                 }
                 // As upstream firmware: reception stats, then the frame.
                 let [rssi_frame, snr_frame] = reception_stat_frames(rssi, snr);
@@ -390,15 +390,13 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                 }
             }
             CMD_RADIO_STATE => {
-                if frame.data.first() == Some(&RADIO_STATE_ON) {
-                    if self.apply_radio_config() {
-                        self.radio_on = true;
-                        let resp = kiss_encode(CMD_RADIO_STATE, &[RADIO_STATE_ON]);
-                        self.transport.write(&resp)?;
-                        let ready = kiss_encode(CMD_READY, &[0x01]);
-                        self.transport.write(&ready)?;
-                        self.report_phy_stats()?;
-                    }
+                if frame.data.first() == Some(&RADIO_STATE_ON) && self.apply_radio_config() {
+                    self.radio_on = true;
+                    let resp = kiss_encode(CMD_RADIO_STATE, &[RADIO_STATE_ON]);
+                    self.transport.write(&resp)?;
+                    let ready = kiss_encode(CMD_READY, &[0x01]);
+                    self.transport.write(&ready)?;
+                    self.report_phy_stats()?;
                 }
             }
             CMD_STAT_RX => {
@@ -441,7 +439,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
         let radio = &self.radio;
         let Some(frames) = self.tx.take_ready(
             now,
-            || !radio.lock().unwrap().carrier_detected(),
+            || !radio.locked().carrier_detected(),
             &mut crate::rng::random_range,
         ) else {
             return Ok(());
@@ -449,9 +447,9 @@ impl<T: BridgeTransport> RNodeBridge<T> {
         for frame in frames {
             log::debug!("RNode: TX {} bytes over LoRa", frame.len());
             if let Some(ref stats) = self.stats {
-                stats.lock().unwrap().bridge_tx_bytes += frame.len() as u32;
+                stats.locked().bridge_tx_bytes += frame.len() as u32;
             }
-            let result = self.radio.lock().unwrap().send(&frame);
+            let result = self.radio.locked().send(&frame);
             let sent_at = self.now_ms();
             self.tx.record_sent(sent_at, &frame);
             self.tx_count = self.tx_count.wrapping_add(1);
@@ -463,7 +461,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                 Err(e) => log::error!("RNode: LoRa TX failed: {}", e),
             }
         }
-        self.radio.lock().unwrap().set_rx_continuous();
+        self.radio.locked().set_rx_continuous();
         // As upstream after a flush: report the airtime it added.
         self.report_channel_stats()
     }
@@ -479,7 +477,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             return Ok(());
         }
         let (carrier, rssi) = {
-            let mut radio = self.radio.lock().unwrap();
+            let mut radio = self.radio.locked();
             (radio.carrier_detected(), radio.current_rssi())
         };
         let (airtime_short, _) = self.tx.airtime(now);
@@ -548,7 +546,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
         if let Err(err) = validate_radio_config(config) {
             log::warn!("RNode: rejecting invalid radio config: {}", err);
             if let Some(ref stats) = self.stats {
-                stats.lock().unwrap().set_status("Invalid radio cfg");
+                stats.locked().set_status("Invalid radio cfg");
             }
             return false;
         }
@@ -559,7 +557,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
             config.bandwidth,
             config.coding_rate,
         );
-        let mut radio = self.radio.lock().unwrap();
+        let mut radio = self.radio.locked();
         radio.reconfigure(
             config.frequency,
             config.bandwidth,
@@ -569,7 +567,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
         );
 
         if let Some(ref stats) = self.stats {
-            let mut s = stats.lock().unwrap();
+            let mut s = stats.locked();
             s.bridge_freq = Some(config.frequency);
             s.bridge_bw = Some(config.bandwidth);
             s.bridge_sf = Some(config.spreading_factor);
@@ -582,14 +580,14 @@ impl<T: BridgeTransport> RNodeBridge<T> {
     }
 }
 
-pub struct BridgeDetectState {
+pub(crate) struct BridgeDetectState {
     detector: DetectBuffer,
     rx_buf: [u8; 256],
     replies: Vec<u8>,
 }
 
 impl BridgeDetectState {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             detector: DetectBuffer::new(),
             rx_buf: [0u8; 256],
@@ -599,7 +597,7 @@ impl BridgeDetectState {
 
     /// Returns the frames to hand to the bridge once a host sends DETECT,
     /// answering identity queries that come without one.
-    pub fn poll(&mut self, uart: &UartDriver<'_>) -> Option<Vec<KissFrame>> {
+    pub(crate) fn poll(&mut self, uart: &UartDriver<'_>) -> Option<Vec<KissFrame>> {
         let n = match uart.read(&mut self.rx_buf, DETECT_POLL_MS) {
             Ok(n) if n > 0 => n,
             _ => return None,
@@ -616,8 +614,8 @@ impl BridgeDetectState {
 }
 
 /// Restore the radio to a standalone configuration.
-pub fn restore_radio_config(radio: &SharedRadio, config: RadioConfig) {
-    let mut r = radio.lock().unwrap();
+pub(crate) fn restore_radio_config(radio: &SharedRadio, config: RadioConfig) {
+    let mut r = radio.locked();
     r.reconfigure(
         config.frequency,
         config.bandwidth,

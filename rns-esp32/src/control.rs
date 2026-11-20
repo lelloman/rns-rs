@@ -332,16 +332,18 @@ fn encode_radio_config(config: RadioConfig) -> [u8; RADIO_CONFIG_ENCODED_LEN] {
 }
 
 fn decode_radio_config(body: &[u8]) -> Result<RadioConfig, ControlParseError> {
-    if body.len() != RADIO_CONFIG_ENCODED_LEN {
+    let Ok(&[f0, f1, f2, f3, b0, b1, b2, b3, spreading_factor, coding_rate, tx_power]) =
+        <&[u8; RADIO_CONFIG_ENCODED_LEN]>::try_from(body)
+    else {
         return Err(ControlParseError::InvalidBodyLength);
-    }
+    };
 
     let config = RadioConfig {
-        frequency: u32::from_be_bytes(body[..4].try_into().unwrap()),
-        bandwidth: u32::from_be_bytes(body[4..8].try_into().unwrap()),
-        spreading_factor: body[8],
-        coding_rate: body[9],
-        tx_power: body[10] as i8,
+        frequency: u32::from_be_bytes([f0, f1, f2, f3]),
+        bandwidth: u32::from_be_bytes([b0, b1, b2, b3]),
+        spreading_factor,
+        coding_rate,
+        tx_power: tx_power as i8,
     };
     validate_radio_config(config).map_err(|_| ControlParseError::InvalidRadioConfig)?;
     Ok(config)

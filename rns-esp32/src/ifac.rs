@@ -50,6 +50,10 @@ pub fn derive_ifac(netname: Option<&str>, netkey: Option<&str>, size: usize) -> 
     }
 
     let ifac_origin_hash = sha256::sha256(&ifac_origin);
+    #[allow(
+        clippy::expect_used,
+        reason = "HKDF fails only for a zero output length, and this one is 64"
+    )]
     let ifac_key_vec = hkdf::hkdf(64, &ifac_origin_hash, Some(&IFAC_SALT), None)
         .expect("HKDF should not fail with valid inputs");
 
@@ -78,15 +82,23 @@ pub fn mask_outbound(raw: &[u8], state: &IfacState) -> Vec<u8> {
     }
 
     // Calculate IFAC: last `size` bytes of the Ed25519 signature
-    let sig = state
-        .identity
-        .sign(raw)
-        .expect("IFAC identity must have private key");
+    let sig = match state.identity.sign(raw) {
+        Ok(sig) => sig,
+        Err(err) => {
+            log::warn!("failed to sign outbound IFAC packet: {}", err);
+            return raw.to_vec();
+        }
+    };
     let ifac = &sig[64 - state.size..];
 
     // Generate mask
-    let mask = hkdf::hkdf(raw.len() + state.size, ifac, Some(&state.key), None)
-        .expect("HKDF should not fail");
+    let mask = match hkdf::hkdf(raw.len() + state.size, ifac, Some(&state.key), None) {
+        Ok(mask) => mask,
+        Err(err) => {
+            log::warn!("failed to derive outbound IFAC mask: {}", err);
+            return raw.to_vec();
+        }
+    };
 
     // Build new_raw: [flags|0x80, hops] + ifac + raw[2..]
     let mut new_raw = Vec::with_capacity(raw.len() + state.size);
@@ -131,7 +143,13 @@ pub fn unmask_inbound(raw: &[u8], state: &IfacState) -> Option<Vec<u8>> {
     let ifac = &raw[2..2 + state.size];
 
     // Generate mask
-    let mask = hkdf::hkdf(raw.len(), ifac, Some(&state.key), None).expect("HKDF should not fail");
+    let mask = match hkdf::hkdf(raw.len(), ifac, Some(&state.key), None) {
+        Ok(mask) => mask,
+        Err(err) => {
+            log::warn!("failed to derive inbound IFAC mask: {}", err);
+            return None;
+        }
+    };
 
     // Unmask: header bytes and payload are unmasked, IFAC is left as-is
     let mut unmasked = Vec::with_capacity(raw.len());
@@ -156,10 +174,13 @@ pub fn unmask_inbound(raw: &[u8], state: &IfacState) -> Option<Vec<u8>> {
     new_raw.extend_from_slice(&unmasked[2 + state.size..]);
 
     // Verify IFAC: expected = identity.sign(new_raw)[-ifac_size:]
-    let expected_sig = state
-        .identity
-        .sign(&new_raw)
-        .expect("IFAC identity must have private key");
+    let expected_sig = match state.identity.sign(&new_raw) {
+        Ok(sig) => sig,
+        Err(err) => {
+            log::warn!("failed to verify inbound IFAC packet: {}", err);
+            return None;
+        }
+    };
     let expected_ifac = &expected_sig[64 - state.size..];
 
     if ifac == expected_ifac {

@@ -16,14 +16,17 @@ const COMMAND_CONTROL_BYTE: u8 = 0x00;
 const DATA_CONTROL_BYTE: u8 = 0x40;
 const FRAMEBUFFER_LEN: usize = 128 * 64 / 8;
 
+/// The I2C writes recorded so far: each one's address and bytes.
+type Writes = Rc<RefCell<Vec<(u8, Vec<u8>)>>>;
+
 #[derive(Clone, Debug)]
 struct RecordingI2c {
-    writes: Rc<RefCell<Vec<(u8, Vec<u8>)>>>,
+    writes: Writes,
     fail_after: Option<usize>,
 }
 
 impl RecordingI2c {
-    fn new() -> (Self, Rc<RefCell<Vec<(u8, Vec<u8>)>>>) {
+    fn new() -> (Self, Writes) {
         let writes = Rc::new(RefCell::new(Vec::new()));
         (
             Self {

@@ -13,6 +13,7 @@ use esp_idf_hal::gpio::{Input, PinDriver};
 
 use crate::display::SharedStats;
 use crate::driver::Event;
+use crate::util::LockExt;
 
 const DEBOUNCE_MS: u64 = 50;
 const LONG_PRESS_MS: u64 = 800;
@@ -22,7 +23,11 @@ const MULTI_PRESS_WINDOW_MS: u64 = 400;
 ///
 /// Short press cycles the display page directly via shared stats.
 /// Long press, double press, and triple press send events to the driver channel.
-pub fn button_loop(pin: PinDriver<'static, Input>, tx: mpsc::Sender<Event>, stats: SharedStats) {
+pub(crate) fn button_loop(
+    pin: PinDriver<'static, Input>,
+    tx: mpsc::Sender<Event>,
+    stats: SharedStats,
+) {
     let mut press_start: Option<Instant> = None;
     let mut was_low = false;
     // Track consecutive short presses for multi-press gestures
@@ -85,7 +90,7 @@ fn commit_pending_presses(count: u8, tx: &mpsc::Sender<Event>, stats: &SharedSta
         0 => {}
         1 => {
             // Single press → cycle display page
-            stats.lock().unwrap().cycle_page();
+            stats.locked().cycle_page();
         }
         2 => {
             // Double press → send ping

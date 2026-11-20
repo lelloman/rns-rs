@@ -43,6 +43,7 @@ jobs:
       armv7: ${{ steps.select.outputs.armv7 }}
       ctl_tls: ${{ steps.select.outputs.ctl_tls }}
       esp32: ${{ steps.select.outputs.esp32 }}
+      esp32_lint: ${{ steps.select.outputs.esp32_lint }}
       web_smoke: ${{ steps.select.outputs.web_smoke }}
 
     steps:
@@ -251,6 +252,87 @@ jobs:
       # Espressif toolchain, which is not needed to resolve the lock file.
       - name: Check rns-esp32/Cargo.lock is up to date
         run: cargo metadata --locked --manifest-path rns-esp32/Cargo.toml --format-version 1 > /dev/null
+
+  # rns-esp32 is outside the workspace, so scripts/lint-host.sh does not
+  # reach it; its Cargo.toml carries a copy of the workspace lints.
+  esp32-host:
+    name: ESP32 Host Clippy and Tests
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.esp32_lint != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust with Clippy
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: clippy
+
+      # Run from the repository root: rns-esp32/rust-toolchain.toml selects
+      # the Espressif toolchain, which the host-side parts do not need.
+      - name: Run Clippy on the host-side library
+        run: |
+          cargo clippy --locked --manifest-path rns-esp32/Cargo.toml --lib -- -D warnings
+          cargo clippy --locked --manifest-path rns-esp32/Cargo.toml --lib --tests -- -D warnings \
+            -A unsafe_code -A clippy::undocumented_unsafe_blocks -A clippy::panic \
+            -A clippy::unwrap_used -A clippy::expect_used -A unreachable_pub
+
+      - name: Run host-side tests
+        run: cargo test --locked --manifest-path rns-esp32/Cargo.toml
+
+  esp32-firmware-clippy:
+    name: ESP32 Firmware Clippy
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.esp32_lint != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # As in esp32-release.yml; bump the two together.
+      ESPUP_VERSION: v0.17.1
+      ESPUP_SHA256: dbe54e9907b687809dbe1b955731569ed6df2b525362710d676256c5c8cf9ccd
+      LDPROXY_VERSION: 0.3.5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake python3 python3-venv \
+            libusb-1.0-0 pkg-config libudev-dev
+
+      - name: Install espup and Espressif Rust toolchain
+        run: |
+          curl -fsSL "https://github.com/esp-rs/espup/releases/download/${ESPUP_VERSION}/espup-x86_64-unknown-linux-gnu" -o espup
+          echo "${ESPUP_SHA256}  espup" | sha256sum --check --strict
+          chmod +x espup
+          ./espup install --targets esp32s3
+          rm espup
+
+      - name: Persist ESP environment
+        run: cat "$HOME/export-esp.sh" >> "$GITHUB_ENV"
+
+      - name: Install ldproxy
+        run: cargo install ldproxy --version "${LDPROXY_VERSION}" --locked
+
+      - name: Cache ESP-IDF and build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            rns-esp32/.embuild
+            rns-esp32/target
+          key: esp32-clippy-${{ hashFiles('rns-esp32/Cargo.lock', 'rns-esp32/sdkconfig.defaults') }}
+          restore-keys: esp32-clippy-
+
+      # From rns-esp32/, with its own target directory: the firmware build
+      # keeps its sdkconfig there.
+      - name: Run Clippy on the firmware
+        working-directory: rns-esp32
+        run: cargo clippy --locked --features firmware --target xtensa-esp32s3-espidf --release -- -D warnings
 
   reticulum-interop:
     name: Reticulum ${{ matrix.reticulum.version }} Interop

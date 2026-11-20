@@ -20,6 +20,7 @@ use rns_esp32::airframe::{self, Reassembler};
 use rns_esp32::modem;
 
 use crate::config;
+use crate::util::LockExt;
 use rns_esp32::protocol::RadioConfig;
 
 // SX1262 opcodes
@@ -80,7 +81,7 @@ const STANDBY_RC: u8 = 0x00;
 const PACKET_TYPE_LORA: u8 = 0x01;
 
 /// Opaque handle to the SX1262 radio behind a mutex.
-pub struct Radio {
+pub(crate) struct Radio {
     spi: SpiDeviceDriver<'static, SpiDriver<'static>>,
     cs: PinDriver<'static, Output>,
     rst: PinDriver<'static, Output>,
@@ -310,7 +311,7 @@ impl Radio {
     }
 
     /// Enter continuous RX mode with proper packet params.
-    pub fn set_rx_continuous(&mut self) {
+    pub(crate) fn set_rx_continuous(&mut self) {
         self.set_rx_packet_params();
         // timeout = 0xFFFFFF means continuous
         self.cmd(OPCODE_SET_RX, &[0xFF, 0xFF, 0xFF]);
@@ -328,7 +329,7 @@ impl Radio {
     }
 
     /// Transmit a frame. Sets packet params, writes buffer, triggers TX, waits for TxDone.
-    pub fn transmit(&mut self, data: &[u8]) -> std::io::Result<()> {
+    pub(crate) fn transmit(&mut self, data: &[u8]) -> std::io::Result<()> {
         if data.len() > config::LORA_MTU as usize {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -375,7 +376,7 @@ impl Radio {
     /// Reconfigure the radio with new parameters from the PC (RNode bridge mode).
     /// Puts the radio in standby, applies new modulation/frequency/power settings,
     /// then enters continuous RX.
-    pub fn reconfigure(
+    pub(crate) fn reconfigure(
         &mut self,
         frequency: u32,
         bandwidth: u32,
@@ -421,8 +422,9 @@ impl Radio {
 
     /// Send one frame with RNode on-air framing: a header byte, and two
     /// packets for a frame over 254 bytes.
-    pub fn send(&mut self, frame: &[u8]) -> std::io::Result<()> {
+    pub(crate) fn send(&mut self, frame: &[u8]) -> std::io::Result<()> {
         // SAFETY: esp_random reads the hardware random number generator.
+        #[allow(unsafe_code, reason = "the hardware RNG is a C call")]
         let random = unsafe { esp_idf_sys::esp_random() } as u8;
         let packets = airframe::packets(frame, random).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, "frame exceeds RNode MTU")
@@ -440,7 +442,7 @@ impl Radio {
     /// demodulator may stay locked on it and miss real packets. A header
     /// whose packet never completes within two full frames is dropped the
     /// same way.
-    pub fn carrier_detected(&mut self) -> bool {
+    pub(crate) fn carrier_detected(&mut self) -> bool {
         let irq = self.get_irq_status();
         let now = std::time::Instant::now();
         let symbol_ms = modem::symbol_time_ms(self.spreading_factor, self.bandwidth);
@@ -480,25 +482,25 @@ impl Radio {
     }
 
     /// Signal strength on the channel right now, in dBm (GetRssiInst).
-    pub fn current_rssi(&mut self) -> i16 {
+    pub(crate) fn current_rssi(&mut self) -> i16 {
         let rssi = self.cmd_read(OPCODE_GET_RSSI_INST, &[], 1);
         -(rssi[0] as i16) / 2
     }
 
     /// RSSI (dBm) and raw SNR (quarter dB) of the last packet received; for
     /// a frame split over two packets, of its second, as upstream firmware.
-    pub fn last_packet_stats(&self) -> (i16, i8) {
+    pub(crate) fn last_packet_stats(&self) -> (i16, i8) {
         self.last_packet_stats
     }
 
     /// A received frame, once all of its LoRa packets are in.
-    pub fn receive(&mut self) -> Option<Vec<u8>> {
+    pub(crate) fn receive(&mut self) -> Option<Vec<u8>> {
         let packet = self.try_receive()?;
         self.reassembler.feed(&packet)
     }
 
     /// Try to receive one LoRa packet. Returns Some(data) if RxDone, None otherwise.
-    pub fn try_receive(&mut self) -> Option<Vec<u8>> {
+    pub(crate) fn try_receive(&mut self) -> Option<Vec<u8>> {
         let irq = self.get_irq_status();
 
         if irq & IRQ_RX_DONE != 0 {
@@ -546,30 +548,30 @@ impl Radio {
 }
 
 /// Shared radio handle.
-pub type SharedRadio = Arc<Mutex<Radio>>;
+pub(crate) type SharedRadio = Arc<Mutex<Radio>>;
 
 /// Writer end: sends frames over LoRa.
-pub struct LoRaWriter {
+pub(crate) struct LoRaWriter {
     radio: SharedRadio,
 }
 
 impl LoRaWriter {
     /// Whether a LoRa transmission is on the channel (preamble or header
     /// detected), for listen before talk.
-    pub fn carrier_detected(&self) -> bool {
-        self.radio.lock().unwrap().carrier_detected()
+    pub(crate) fn carrier_detected(&self) -> bool {
+        self.radio.locked().carrier_detected()
     }
 
-    pub fn send_frame(&mut self, data: &[u8]) -> std::io::Result<()> {
-        let mut radio = self.radio.lock().unwrap();
+    pub(crate) fn send_frame(&mut self, data: &[u8]) -> std::io::Result<()> {
+        let mut radio = self.radio.locked();
         let result = radio.send(data);
         // Return to RX after transmitting
         radio.set_rx_continuous();
         result
     }
 
-    pub fn apply_config(&mut self, config: RadioConfig) {
-        let mut radio = self.radio.lock().unwrap();
+    pub(crate) fn apply_config(&mut self, config: RadioConfig) {
+        let mut radio = self.radio.locked();
         radio.reconfigure(
             config.frequency,
             config.bandwidth,
@@ -583,7 +585,7 @@ impl LoRaWriter {
 /// Initialize the SX1262 radio and return (SharedRadio, LoRaWriter).
 ///
 /// The caller should spawn a reader thread using `reader_loop()`.
-pub fn init(
+pub(crate) fn init(
     spi_driver: SpiDriver<'static>,
     cs: PinDriver<'static, Output>,
     rst: PinDriver<'static, Output>,
@@ -594,7 +596,7 @@ pub fn init(
         .data_mode(esp_idf_hal::spi::config::MODE_0);
 
     let spi_device = SpiDeviceDriver::new(spi_driver, Option::<AnyIOPin>::None, &spi_config)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("SPI init: {e}")))?;
+        .map_err(|e| std::io::Error::other(format!("SPI init: {e}")))?;
 
     let mut radio = Radio {
         spi: spi_device,
@@ -637,7 +639,7 @@ pub fn init(
 /// Reader loop: polls for received frames and sends them to the event channel.
 /// Run this in a dedicated thread. Exits when `shutdown` is set to true and
 /// returns the DIO1 pin to the caller for reuse in bridge mode.
-pub fn reader_loop(
+pub(crate) fn reader_loop(
     radio: SharedRadio,
     tx: std::sync::mpsc::Sender<crate::driver::Event>,
     interface_id: rns_core::transport::types::InterfaceId,
@@ -650,9 +652,12 @@ pub fn reader_loop(
     let notifier = notification.notifier();
 
     dio1.set_interrupt_type(InterruptType::PosEdge).ok();
+    // SAFETY: the callback owns everything it uses (the notifier), and the
+    // subscription is removed before this function returns the pin.
+    #[allow(unsafe_code, reason = "a non-static GPIO interrupt subscription")]
     unsafe {
         dio1.subscribe_nonstatic(move || {
-            let _ = notifier.notify(NonZeroU32::new(1).unwrap());
+            let _ = notifier.notify(NonZeroU32::MIN);
         })
         .ok();
     }
@@ -664,7 +669,7 @@ pub fn reader_loop(
         }
 
         let frame = {
-            let mut r = radio.lock().unwrap();
+            let mut r = radio.locked();
             r.receive()
         };
 
