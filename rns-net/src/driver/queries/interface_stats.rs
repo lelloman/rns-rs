@@ -81,6 +81,8 @@ impl Driver {
         self.interface_priority = order.into_iter().map(|(id, _)| id).collect();
     }
 
+    /// Every interface's statistics and the node's totals, as upstream's
+    /// `interface_stats` reports them.
     pub(crate) fn interface_stats(&self) -> InterfaceStatsResponse {
         let now = time::now();
         let mut interfaces = Vec::new();
@@ -113,232 +115,11 @@ impl Driver {
             if self.subinterface_without_device(entry) {
                 continue;
             }
-            let interface_id = entry.info.id;
-            interfaces.push(SingleInterfaceStat {
-                id: interface_id.0,
-                name: self
-                    .interface_short_names
-                    .get(&interface_id)
-                    .cloned()
-                    .unwrap_or_else(|| entry.info.name.clone()),
-                display_name: self.interface_display_name(entry),
-                parent_display_name: self.parent_display_name(entry),
-                tunnel_id: self
-                    .engine
-                    .interface_info(&interface_id)
-                    .and_then(|info| info.tunnel_id)
-                    // Upstream 3281e283: else the tunnel this node synthesized.
-                    .or_else(|| self.engine.local_tunnel_id(&interface_id)),
-                remote_transport_id: self.engine.remote_transport(&interface_id),
-                remote_transport_info: (!crate::interface::shared_medium_hint(
-                    &entry.interface_type,
-                ))
-                .then(|| self.engine.remote_transport_info(&interface_id).cloned())
-                .flatten(),
-                status: entry.online && entry.enabled,
-                mode: entry.info.mode,
-                gravity: entry.info.gravity,
-                announces_to_internal: entry.info.announces_to_internal,
-                rxb: entry.stats.rxb,
-                txb: entry.stats.txb,
-                tx_drops: entry
-                    .async_writer_metrics
-                    .as_ref()
-                    .map(crate::interface::AsyncWriterMetrics::tx_drops)
-                    .unwrap_or(0),
-                tx_dropped_bytes: entry
-                    .async_writer_metrics
-                    .as_ref()
-                    .map(crate::interface::AsyncWriterMetrics::tx_dropped_bytes)
-                    .unwrap_or(0),
-                tx_stalled: entry
-                    .async_writer_metrics
-                    .as_ref()
-                    .is_some_and(crate::interface::AsyncWriterMetrics::tx_stalled),
-                tx_buffered: entry
-                    .async_writer_metrics
-                    .as_ref()
-                    .map(crate::interface::AsyncWriterMetrics::tx_buffered)
-                    .unwrap_or(0),
-                traffic,
-                protocol_violations: entry.stats.protocol_violations,
-                ifac_violations: entry.stats.ifac_violations,
-                packet_filter_hits: entry.stats.packet_filter_hits,
-                hop_limiter_hits: entry.stats.hop_limiter_hits,
-                stamped_path_requests: entry.stats.stamped_path_requests,
-                rx_packets: entry.stats.rx_packets,
-                tx_packets: entry.stats.tx_packets,
-                cpu_load: entry.stats.cpu_load,
-                mem_load: entry.stats.mem_load,
-                switch_id: entry.stats.switch_id,
-                endpoint_id: entry.stats.endpoint_id,
-                via_switch_id: entry.stats.via_switch_id,
-                peers: entry.stats.peers,
-                rssi: entry.stats.rssi,
-                snr: entry.stats.snr,
-                signal_quality: entry.stats.signal_quality,
-                frequency: entry.stats.frequency,
-                bandwidth: entry.stats.bandwidth,
-                txpower: entry.stats.txpower,
-                spreading_factor: entry.stats.spreading_factor,
-                coding_rate: entry.stats.coding_rate,
-                channel: entry.stats.channel,
-                modulation: entry.stats.modulation.clone(),
-                radio: entry.stats.radio,
-                bitrate: entry.info.bitrate,
-                bitrate_is_float: self.is_autoconnected(interface_id),
-                mtu: Some(entry.info.mtu),
-                ifac_size: entry.ifac.as_ref().map(|s| s.size),
-                started: entry.stats.started,
-                ia_freq: entry.stats.incoming_announce_freq(now),
-                oa_freq: entry.stats.outgoing_announce_freq(now),
-                ip_freq: entry.stats.incoming_path_request_freq(now),
-                op_freq: entry.stats.outgoing_path_request_freq(now),
-                op_samples: entry.stats.outgoing_path_request_samples(),
-                burst_active: self.engine.burst_active(&interface_id),
-                burst_activated: self.engine.burst_activated(&interface_id),
-                pr_burst_active: self.engine.pr_burst_active(&interface_id),
-                pr_burst_activated: self.engine.pr_burst_activated(&interface_id),
-                clients: None,
-                blocked_ips: None,
-                blocked_ip_list: None,
-                i2p: None,
-                i2p_tunnel_state: self.i2p_tunnel_state(entry),
-                autoconnect_source: self.autoconnect_source(interface_id),
-                announce_rate_target: entry.info.announce_rate_target,
-                announce_rate_grace: entry.info.announce_rate_grace,
-                announce_rate_penalty: entry.info.announce_rate_penalty,
-                interface_type: entry.interface_type.clone(),
-                held_announces: self.engine.held_announce_count(&interface_id),
-                announce_queue: self.engine.queued_announce_count_for(&interface_id),
-                ifac_netname: entry.ifac.as_ref().and_then(|s| s.netname.clone()),
-                ifac_signature: entry.ifac.as_ref().map(|s| s.signature),
-            });
+            interfaces.push(self.single_interface_stat(entry, traffic, now));
         }
         #[cfg(feature = "iface-backbone")]
         for handle in self.backbone_peer_state.values() {
-            let clients = recover_mutex_guard(&handle.peer_state, "backbone peer state")
-                .list(&handle.interface_name)
-                .into_iter()
-                .map(|entry| entry.connected_count as u64)
-                .sum();
-            let blocked_ip_list =
-                recover_mutex_guard(&handle.fast_flap_state, "backbone fast-flap state")
-                    .blocked_ip_list(&handle.fast_flap, std::time::Instant::now())
-                    .into_iter()
-                    .map(|peer_ip| peer_ip.to_string())
-                    .collect::<Vec<_>>();
-            let blocked_ips = blocked_ip_list.len() as u64;
-            let mut traffic = TrafficDetail::default();
-            let mut protocol_violations = 0;
-            let mut ifac_violations = 0;
-            let mut packet_filter_hits = 0;
-            let mut hop_limiter_hits = 0;
-            let mut stamped_path_requests = 0;
-            let mut tx_drops = 0;
-            let mut tx_dropped_bytes = 0;
-            let mut tx_stalled = false;
-            let mut tx_buffered = 0;
-            for (child_id, parent_id) in &self.dynamic_interface_parents {
-                if *parent_id == handle.interface_id {
-                    if let Some(child) = self.interfaces.get(child_id) {
-                        add_traffic(&mut traffic, traffic_detail(&child.stats, now));
-                        protocol_violations += child.stats.protocol_violations;
-                        ifac_violations += child.stats.ifac_violations;
-                        packet_filter_hits += child.stats.packet_filter_hits;
-                        hop_limiter_hits += child.stats.hop_limiter_hits;
-                        stamped_path_requests += child.stats.stamped_path_requests;
-                        if let Some(metrics) = &child.async_writer_metrics {
-                            tx_drops += metrics.tx_drops();
-                            tx_dropped_bytes += metrics.tx_dropped_bytes();
-                            tx_stalled |= metrics.tx_stalled();
-                            tx_buffered += metrics.tx_buffered();
-                        }
-                    }
-                }
-            }
-            interfaces.push(SingleInterfaceStat {
-                id: handle.interface_id.0,
-                name: handle.interface_name.clone(),
-                display_name: self
-                    .interface_display_names
-                    .get(&handle.interface_id)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        crate::interface::display::typed(
-                            "BackboneInterface",
-                            &handle.interface_name,
-                        )
-                    }),
-                parent_display_name: None,
-                // A listener's tunnels belong to its spawned clients.
-                tunnel_id: None,
-                remote_transport_id: None,
-                remote_transport_info: None,
-                status: true,
-                mode: handle.mode,
-                gravity: handle.gravity,
-                announces_to_internal: handle.announces_to_internal,
-                rxb: 0,
-                txb: 0,
-                tx_drops,
-                tx_dropped_bytes,
-                tx_stalled,
-                tx_buffered,
-                traffic,
-                protocol_violations,
-                ifac_violations,
-                packet_filter_hits,
-                hop_limiter_hits,
-                stamped_path_requests,
-                rx_packets: 0,
-                tx_packets: 0,
-                cpu_load: None,
-                mem_load: None,
-                switch_id: None,
-                endpoint_id: None,
-                via_switch_id: None,
-                peers: None,
-                rssi: None,
-                snr: None,
-                signal_quality: None,
-                frequency: None,
-                bandwidth: None,
-                txpower: None,
-                spreading_factor: None,
-                coding_rate: None,
-                channel: None,
-                modulation: None,
-                radio: None,
-                bitrate: Some(crate::interface::backbone::SERVER_BITRATE_GUESS),
-                bitrate_is_float: false,
-                mtu: Some(crate::interface::backbone::HW_MTU as u32),
-                ifac_size: None,
-                started: self.started,
-                ia_freq: 0.0,
-                oa_freq: 0.0,
-                ip_freq: 0.0,
-                op_freq: 0.0,
-                op_samples: 0,
-                burst_active: false,
-                burst_activated: 0.0,
-                pr_burst_active: false,
-                pr_burst_activated: 0.0,
-                clients: Some(clients),
-                blocked_ips: Some(blocked_ips),
-                blocked_ip_list: Some(blocked_ip_list),
-                i2p: None,
-                i2p_tunnel_state: None,
-                autoconnect_source: None,
-                announce_rate_target: None,
-                announce_rate_grace: 0,
-                announce_rate_penalty: 0.0,
-                interface_type: "BackboneInterface".into(),
-                held_announces: self.engine.held_announce_count(&handle.interface_id),
-                announce_queue: self.engine.queued_announce_count_for(&handle.interface_id),
-                ifac_netname: None,
-                ifac_signature: None,
-            });
+            interfaces.push(self.backbone_listener_stat(handle, now));
         }
         for listener in &self.listener_stats {
             interfaces.push(self.listener_interface_stat(listener));
@@ -391,4 +172,267 @@ impl Driver {
             backbone_peer_pool: None,
         }
     }
+
+    /// The statistics of one interface the driver runs.
+    fn single_interface_stat(
+        &self,
+        entry: &InterfaceEntry,
+        traffic: TrafficDetail,
+        now: f64,
+    ) -> SingleInterfaceStat {
+        let interface_id = entry.info.id;
+        SingleInterfaceStat {
+            id: interface_id.0,
+            name: self
+                .interface_short_names
+                .get(&interface_id)
+                .cloned()
+                .unwrap_or_else(|| entry.info.name.clone()),
+            display_name: self.interface_display_name(entry),
+            parent_display_name: self.parent_display_name(entry),
+            tunnel_id: self
+                .engine
+                .interface_info(&interface_id)
+                .and_then(|info| info.tunnel_id)
+                // Upstream 3281e283: else the tunnel this node synthesized.
+                .or_else(|| self.engine.local_tunnel_id(&interface_id)),
+            remote_transport_id: self.engine.remote_transport(&interface_id),
+            remote_transport_info: (!crate::interface::shared_medium_hint(&entry.interface_type))
+                .then(|| self.engine.remote_transport_info(&interface_id).cloned())
+                .flatten(),
+            status: entry.online && entry.enabled,
+            mode: entry.info.mode,
+            gravity: entry.info.gravity,
+            announces_to_internal: entry.info.announces_to_internal,
+            rxb: entry.stats.rxb,
+            txb: entry.stats.txb,
+            tx_drops: entry
+                .async_writer_metrics
+                .as_ref()
+                .map(crate::interface::AsyncWriterMetrics::tx_drops)
+                .unwrap_or(0),
+            tx_dropped_bytes: entry
+                .async_writer_metrics
+                .as_ref()
+                .map(crate::interface::AsyncWriterMetrics::tx_dropped_bytes)
+                .unwrap_or(0),
+            tx_stalled: entry
+                .async_writer_metrics
+                .as_ref()
+                .is_some_and(crate::interface::AsyncWriterMetrics::tx_stalled),
+            tx_buffered: entry
+                .async_writer_metrics
+                .as_ref()
+                .map(crate::interface::AsyncWriterMetrics::tx_buffered)
+                .unwrap_or(0),
+            traffic,
+            protocol_violations: entry.stats.protocol_violations,
+            ifac_violations: entry.stats.ifac_violations,
+            packet_filter_hits: entry.stats.packet_filter_hits,
+            hop_limiter_hits: entry.stats.hop_limiter_hits,
+            stamped_path_requests: entry.stats.stamped_path_requests,
+            rx_packets: entry.stats.rx_packets,
+            tx_packets: entry.stats.tx_packets,
+            cpu_load: entry.stats.cpu_load,
+            mem_load: entry.stats.mem_load,
+            switch_id: entry.stats.switch_id,
+            endpoint_id: entry.stats.endpoint_id,
+            via_switch_id: entry.stats.via_switch_id,
+            peers: entry.stats.peers,
+            rssi: entry.stats.rssi,
+            snr: entry.stats.snr,
+            signal_quality: entry.stats.signal_quality,
+            frequency: entry.stats.frequency,
+            bandwidth: entry.stats.bandwidth,
+            txpower: entry.stats.txpower,
+            spreading_factor: entry.stats.spreading_factor,
+            coding_rate: entry.stats.coding_rate,
+            channel: entry.stats.channel,
+            modulation: entry.stats.modulation.clone(),
+            radio: entry.stats.radio,
+            bitrate: entry.info.bitrate,
+            bitrate_is_float: self.is_autoconnected(interface_id),
+            mtu: Some(entry.info.mtu),
+            ifac_size: entry.ifac.as_ref().map(|s| s.size),
+            started: entry.stats.started,
+            ia_freq: entry.stats.incoming_announce_freq(now),
+            oa_freq: entry.stats.outgoing_announce_freq(now),
+            ip_freq: entry.stats.incoming_path_request_freq(now),
+            op_freq: entry.stats.outgoing_path_request_freq(now),
+            op_samples: entry.stats.outgoing_path_request_samples(),
+            burst_active: self.engine.burst_active(&interface_id),
+            burst_activated: self.engine.burst_activated(&interface_id),
+            pr_burst_active: self.engine.pr_burst_active(&interface_id),
+            pr_burst_activated: self.engine.pr_burst_activated(&interface_id),
+            clients: None,
+            blocked_ips: None,
+            blocked_ip_list: None,
+            i2p: None,
+            i2p_tunnel_state: self.i2p_tunnel_state(entry),
+            autoconnect_source: self.autoconnect_source(interface_id),
+            announce_rate_target: entry.info.announce_rate_target,
+            announce_rate_grace: entry.info.announce_rate_grace,
+            announce_rate_penalty: entry.info.announce_rate_penalty,
+            interface_type: entry.interface_type.clone(),
+            held_announces: self.engine.held_announce_count(&interface_id),
+            announce_queue: self.engine.queued_announce_count_for(&interface_id),
+            ifac_netname: entry.ifac.as_ref().and_then(|s| s.netname.clone()),
+            ifac_signature: entry.ifac.as_ref().map(|s| s.signature),
+        }
+    }
+
+    /// The statistics of a Backbone listener: its spawned clients' traffic,
+    /// counters and transmit queues summed, with its peer and blocked
+    /// address counts.
+    #[cfg(feature = "iface-backbone")]
+    fn backbone_listener_stat(
+        &self,
+        handle: &BackbonePeerStateHandle,
+        now: f64,
+    ) -> SingleInterfaceStat {
+        let clients = recover_mutex_guard(&handle.peer_state, "backbone peer state")
+            .list(&handle.interface_name)
+            .into_iter()
+            .map(|entry| entry.connected_count as u64)
+            .sum();
+        let blocked_ip_list =
+            recover_mutex_guard(&handle.fast_flap_state, "backbone fast-flap state")
+                .blocked_ip_list(&handle.fast_flap, std::time::Instant::now())
+                .into_iter()
+                .map(|peer_ip| peer_ip.to_string())
+                .collect::<Vec<_>>();
+        let blocked_ips = blocked_ip_list.len() as u64;
+        let BackboneChildTotals {
+            traffic,
+            protocol_violations,
+            ifac_violations,
+            packet_filter_hits,
+            hop_limiter_hits,
+            stamped_path_requests,
+            tx_drops,
+            tx_dropped_bytes,
+            tx_stalled,
+            tx_buffered,
+        } = self.backbone_child_totals(handle.interface_id, now);
+        SingleInterfaceStat {
+            id: handle.interface_id.0,
+            name: handle.interface_name.clone(),
+            display_name: self
+                .interface_display_names
+                .get(&handle.interface_id)
+                .cloned()
+                .unwrap_or_else(|| {
+                    crate::interface::display::typed("BackboneInterface", &handle.interface_name)
+                }),
+            parent_display_name: None,
+            // A listener's tunnels belong to its spawned clients.
+            tunnel_id: None,
+            remote_transport_id: None,
+            remote_transport_info: None,
+            status: true,
+            mode: handle.mode,
+            gravity: handle.gravity,
+            announces_to_internal: handle.announces_to_internal,
+            rxb: 0,
+            txb: 0,
+            tx_drops,
+            tx_dropped_bytes,
+            tx_stalled,
+            tx_buffered,
+            traffic,
+            protocol_violations,
+            ifac_violations,
+            packet_filter_hits,
+            hop_limiter_hits,
+            stamped_path_requests,
+            rx_packets: 0,
+            tx_packets: 0,
+            cpu_load: None,
+            mem_load: None,
+            switch_id: None,
+            endpoint_id: None,
+            via_switch_id: None,
+            peers: None,
+            rssi: None,
+            snr: None,
+            signal_quality: None,
+            frequency: None,
+            bandwidth: None,
+            txpower: None,
+            spreading_factor: None,
+            coding_rate: None,
+            channel: None,
+            modulation: None,
+            radio: None,
+            bitrate: Some(crate::interface::backbone::SERVER_BITRATE_GUESS),
+            bitrate_is_float: false,
+            mtu: Some(crate::interface::backbone::HW_MTU as u32),
+            ifac_size: None,
+            started: self.started,
+            ia_freq: 0.0,
+            oa_freq: 0.0,
+            ip_freq: 0.0,
+            op_freq: 0.0,
+            op_samples: 0,
+            burst_active: false,
+            burst_activated: 0.0,
+            pr_burst_active: false,
+            pr_burst_activated: 0.0,
+            clients: Some(clients),
+            blocked_ips: Some(blocked_ips),
+            blocked_ip_list: Some(blocked_ip_list),
+            i2p: None,
+            i2p_tunnel_state: None,
+            autoconnect_source: None,
+            announce_rate_target: None,
+            announce_rate_grace: 0,
+            announce_rate_penalty: 0.0,
+            interface_type: "BackboneInterface".into(),
+            held_announces: self.engine.held_announce_count(&handle.interface_id),
+            announce_queue: self.engine.queued_announce_count_for(&handle.interface_id),
+            ifac_netname: None,
+            ifac_signature: None,
+        }
+    }
+
+    /// The summed statistics of the interfaces spawned by listener `parent`.
+    #[cfg(feature = "iface-backbone")]
+    fn backbone_child_totals(&self, parent: InterfaceId, now: f64) -> BackboneChildTotals {
+        let mut totals = BackboneChildTotals::default();
+        for (child_id, parent_id) in &self.dynamic_interface_parents {
+            if *parent_id == parent {
+                if let Some(child) = self.interfaces.get(child_id) {
+                    add_traffic(&mut totals.traffic, traffic_detail(&child.stats, now));
+                    totals.protocol_violations += child.stats.protocol_violations;
+                    totals.ifac_violations += child.stats.ifac_violations;
+                    totals.packet_filter_hits += child.stats.packet_filter_hits;
+                    totals.hop_limiter_hits += child.stats.hop_limiter_hits;
+                    totals.stamped_path_requests += child.stats.stamped_path_requests;
+                    if let Some(metrics) = &child.async_writer_metrics {
+                        totals.tx_drops += metrics.tx_drops();
+                        totals.tx_dropped_bytes += metrics.tx_dropped_bytes();
+                        totals.tx_stalled |= metrics.tx_stalled();
+                        totals.tx_buffered += metrics.tx_buffered();
+                    }
+                }
+            }
+        }
+        totals
+    }
+}
+
+/// What a Backbone listener reports for its spawned clients together.
+#[cfg(feature = "iface-backbone")]
+#[derive(Default)]
+struct BackboneChildTotals {
+    traffic: TrafficDetail,
+    protocol_violations: u64,
+    ifac_violations: u64,
+    packet_filter_hits: u64,
+    hop_limiter_hits: u64,
+    stamped_path_requests: u64,
+    tx_drops: u64,
+    tx_dropped_bytes: u64,
+    tx_stalled: bool,
+    tx_buffered: usize,
 }
