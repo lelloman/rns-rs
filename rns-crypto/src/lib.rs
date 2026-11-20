@@ -83,6 +83,9 @@ impl Rng for OsRng {
         // ESP-IDF: use hardware RNG via esp_fill_random
         #[cfg(target_os = "espidf")]
         {
+            // SAFETY: `dest` is valid for writes of `dest.len()` bytes, and
+            // `esp_fill_random` writes exactly `len` bytes to `buf` without
+            // retaining the pointer. Any byte pattern is a valid `u8`.
             unsafe {
                 esp_idf_sys::esp_fill_random(
                     dest.as_mut_ptr() as *mut core::ffi::c_void,
