@@ -162,8 +162,15 @@ With `-l` and `-t`, a `Links` section follows (upstream `ef3e8086`): the
 bytes of link packets this transport node relayed through its link table,
 received (every link packet of a validated relayed link, relayed or not)
 and transmitted (each one relayed), current rates, and each rate's share
-of the data flow, the totals less announces and path requests. Packets
-from and to local clients of a shared instance are not counted. The
+of the data flow, the totals less announces and path requests. Relayed
+packets from and to local clients of a shared instance are not counted.
+The same totals also count the links of the instance itself (upstream
+`01ffb98e`): every packet one of its links accepts (link data but cache
+requests, and resource proofs, on the link's interface, while the link is
+not closed) and every packet it sends on one of its links (from the link
+request proof and RTT on, including keepalives, proofs, resource parts
+and the closing packet, but not the link request, nor a channel message
+or resource part sent again). The
 instance reports them as `lrxb`, `ltxb`, `lrxs` and `ltxs`; the rates are
 the integer 0 until they are first measured, a second after start, and
 floats from then on. Where announces and path requests make up all of a

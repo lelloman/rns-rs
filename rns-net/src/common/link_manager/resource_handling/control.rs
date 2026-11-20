@@ -71,7 +71,7 @@ impl LinkManager {
         }
 
         if let Some(sender) = part_sender {
-            for &part in &parts {
+            for &(part, resent) in &parts {
                 if !self.resource_link_is_active(link_id) {
                     out.extend(self.abort_resources_on_inactive_link(link_id));
                     continue;
@@ -83,7 +83,11 @@ impl LinkManager {
                     .and_then(|sender| sender.part_data(part));
                 if let Some(data) = data {
                     // Parts are NOT link-encrypted — send raw as CONTEXT_RESOURCE
+                    let before = out.len();
                     self.build_link_packet_into(link_id, constants::CONTEXT_RESOURCE, data, out);
+                    if resent {
+                        self.count_resent_link_packet(out, before);
+                    }
                 }
             }
         }

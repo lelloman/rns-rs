@@ -15,6 +15,11 @@ pub enum ChannelAction {
         raw: Vec<u8>,
         /// Envelope sequence number.
         sequence: Sequence,
+        /// Whether this sends an envelope that went out before: upstream's
+        /// `LinkChannelOutlet.resend` (`Packet.resend()`), which unlike
+        /// the first `Packet.send()` does not count toward the link's
+        /// traffic (01ffb98e `Transport.link_txb`).
+        resend: bool,
     },
     /// Message received and decoded.
     MessageReceived {

@@ -108,7 +108,8 @@ pub struct TrafficDetail {
 
 /// Upstream's link traffic totals and speeds (ef3e8086): the bytes of link
 /// packets received for and relayed through the link table, local
-/// clients' not counted.
+/// clients' not counted, and those the node's own links receive and send
+/// (01ffb98e).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct LinkTraffic {
     /// `Transport.link_rxb`.

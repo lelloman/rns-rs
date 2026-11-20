@@ -163,7 +163,7 @@ impl Driver {
             tx_pps,
             traffic: total_traffic,
             link_traffic: {
-                let (rxb, txb) = self.engine.link_traffic();
+                let (rxb, txb) = self.link_traffic();
                 crate::event::LinkTraffic {
                     rxb,
                     txb,

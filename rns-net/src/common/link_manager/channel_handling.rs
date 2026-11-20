@@ -54,7 +54,11 @@ impl LinkManager {
         let mut result = Vec::new();
         for action in actions {
             match action {
-                rns_core::channel::ChannelAction::SendOnLink { raw, sequence } => {
+                rns_core::channel::ChannelAction::SendOnLink {
+                    raw,
+                    sequence,
+                    resend,
+                } => {
                     // Encrypt and send as CHANNEL context, in a packet as
                     // large as the link MTU allows. If the packet cannot be
                     // emitted, remove the reserved channel sequence so receivers do
@@ -122,6 +126,9 @@ impl LinkManager {
                                 dest_type: constants::DESTINATION_LINK,
                                 attached_interface: None,
                             });
+                            if resend {
+                                self.count_resent_link_packet(&result, result.len() - 1);
+                            }
                         }
                         Err(_) => {
                             if let Some(link_mut) = self.links.get_mut(link_id) {

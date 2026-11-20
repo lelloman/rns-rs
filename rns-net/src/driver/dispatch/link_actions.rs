@@ -27,6 +27,11 @@ impl Driver {
                     // part requests and proofs are not hashed, since nothing
                     // reads their hashes.
                     let mut decoded = RawPacket::unpack_outbound_shared(raw);
+                    // Upstream's `Packet.send` counts the packet as packed,
+                    // before `Transport.outbound` routes it (or fails to).
+                    if let Ok(packet) = &decoded {
+                        self.link_manager.count_sent_link_packet(packet);
+                    }
                     // The outbound path records the hash for deduplication;
                     // start loading its bucket while routing runs.
                     if let Ok(packet) = &decoded {

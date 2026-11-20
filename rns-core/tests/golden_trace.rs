@@ -328,7 +328,7 @@ fn describe_link_action(a: &LinkAction) -> String {
 
 fn describe_channel_action(a: &ChannelAction) -> String {
     match a {
-        ChannelAction::SendOnLink { raw, sequence } => {
+        ChannelAction::SendOnLink { raw, sequence, .. } => {
             format!("SendOnLink seq={} envelope={}", sequence, hex(raw))
         }
         ChannelAction::MessageReceived {
@@ -1137,7 +1137,7 @@ fn run_trace() -> String {
     log_channel(&mut sim, "A", &actions);
     let mut sent = Vec::new();
     for action in actions {
-        if let ChannelAction::SendOnLink { raw, sequence } = action {
+        if let ChannelAction::SendOnLink { raw, sequence, .. } = action {
             let ciphertext = initiator.encrypt(&raw, &mut a_app_rng).unwrap();
             let packet = link_packet(
                 &link_id,

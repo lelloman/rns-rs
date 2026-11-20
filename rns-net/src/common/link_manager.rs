@@ -491,8 +491,19 @@ pub struct LinkManager {
     link_mtu_discovery: bool,
     /// Reused buffer for the resource actions of one packet.
     resource_scratch: Vec<rns_core::resource::ResourceAction>,
-    /// Reused list of requested part indices a sender answers with.
-    resource_part_scratch: Vec<usize>,
+    /// Reused list of requested part indices a sender answers with, and
+    /// whether each was sent before.
+    resource_part_scratch: Vec<(usize, bool)>,
+    /// Upstream's `Transport.link_rxb` for this node's own link endpoints
+    /// (01ffb98e): the raw length of every packet a link accepts, as
+    /// `Link.__receive` counts it. See [`Self::local_link_traffic`].
+    local_link_rxb: u64,
+    /// The raw length of every link packet handed to the driver to send,
+    /// counted by [`Self::count_sent_link_packet`].
+    local_link_sent: u64,
+    /// The part of `local_link_sent` that resends envelopes or resource
+    /// parts sent before, which upstream's `Packet.resend()` does not count.
+    local_link_resent: u64,
     /// Reused buffer for the plaintext of a received link packet.
     plaintext_scratch: Vec<u8>,
     /// Streams whose segment (link, original hash, index) is fully sent and

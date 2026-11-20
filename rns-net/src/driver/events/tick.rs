@@ -193,6 +193,15 @@ impl Driver {
         self.publish_state_snapshot();
     }
 
+    /// Upstream's `Transport.link_rxb` and `link_txb`: the link traffic the
+    /// transport engine relays (ef3e8086) and that this node's own link
+    /// endpoints receive and send (01ffb98e), in the same two totals.
+    pub(in crate::driver) fn link_traffic(&self) -> (u64, u64) {
+        let (relayed_rx, relayed_tx) = self.engine.link_traffic();
+        let (local_rx, local_tx) = self.link_manager.local_link_traffic();
+        (relayed_rx + local_rx, relayed_tx + local_tx)
+    }
+
     /// Upstream's traffic loop's link speeds (ef3e8086): a pass about once
     /// a second, the first a second after start.
     pub(in crate::driver) fn sample_link_traffic(&mut self, now: f64) {
@@ -204,7 +213,7 @@ impl Driver {
         if due {
             self.registry
                 .link_traffic
-                .sample(monotonic, self.started, self.engine.link_traffic());
+                .sample(monotonic, self.started, self.link_traffic());
         }
     }
 
