@@ -11,7 +11,8 @@ pub(super) fn initiate(opts: CliOptions) -> Result<i32, RnshError> {
             .ok_or_else(|| RnshError::Protocol("missing destination".into()))?,
     )
     .ok_or_else(|| RnshError::Protocol("destination must be 32 hexadecimal characters".into()))?;
-    let timeout = Duration::from_secs_f64(opts.timeout.unwrap_or(15.0));
+    let timeout =
+        Duration::try_from_secs_f64(opts.timeout.unwrap_or(15.0).max(0.0)).unwrap_or(Duration::MAX);
     let (event_tx, event_rx) = mpsc::channel();
     let home = home_dir();
     let rnsh_config = resolve_rnsh_config_dir(opts.rnsh_config.as_deref(), &home)?;

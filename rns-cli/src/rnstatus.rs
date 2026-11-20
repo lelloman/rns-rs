@@ -393,7 +393,7 @@ fn attach_to_instance(config_dir: &Path) -> Option<rns_net::RnsNode> {
 }
 
 fn monitor_sleep_duration(interval_secs: f64, elapsed: Duration) -> Duration {
-    let interval = Duration::from_secs_f64(interval_secs);
+    let interval = Duration::try_from_secs_f64(interval_secs.max(0.0)).unwrap_or(Duration::MAX);
     interval
         .checked_sub(elapsed)
         .unwrap_or(MONITOR_MIN_SLEEP)
@@ -479,7 +479,7 @@ fn remote_status(
         fail("Invalid destination entered. Check your input.");
     };
     let identity_path = crate::app::expand_path(identity_path);
-    let timeout = Duration::from_secs_f64(remote_timeout.max(0.2));
+    let timeout = Duration::try_from_secs_f64(remote_timeout.max(0.2)).unwrap_or(Duration::MAX);
     let mut client = match rns_net::remote_management::RemoteManagementClient::connect(
         config_path.map(Path::new),
         Some(identity_path.as_path()),
