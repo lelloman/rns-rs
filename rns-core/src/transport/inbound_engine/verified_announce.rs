@@ -178,15 +178,15 @@ impl TransportEngine {
         let expires = compute_path_expires(ctx.now, interface_mode);
 
         // Get existing random blobs from the matching path (same next_hop)
-        // or empty; the replaced path's when an unresponsive path is
-        // replaced as upstream does.
-        let replaces_unresponsive =
-            matches!(mp_decision, MultiPathDecision::ReplaceUnresponsive { .. });
+        // or empty; the replaced path's when the primary path is replaced
+        // as upstream does.
+        let replaces_as_upstream =
+            matches!(mp_decision, MultiPathDecision::ReplaceAsUpstream { .. });
         let existing_blobs = self
             .path_table
             .get(&ctx.packet.destination_hash)
             .and_then(|ps| {
-                if replaces_unresponsive {
+                if replaces_as_upstream {
                     ps.primary()
                 } else {
                     ps.find_by_next_hop(&ctx.received_from)
@@ -242,14 +242,14 @@ impl TransportEngine {
         let table_insertion_only = matches!(
             mp_decision,
             MultiPathDecision::RecoverUnresponsive
-                | MultiPathDecision::ReplaceUnresponsive { rebroadcast: false }
+                | MultiPathDecision::ReplaceAsUpstream { rebroadcast: false }
         );
 
         // Store path via upsert into PathSet
         match mp_decision {
             MultiPathDecision::ReplacePrimary | MultiPathDecision::RecoverUnresponsive => self
                 .upsert_primary_path_destination(ctx.packet.destination_hash, path_entry, ctx.now),
-            MultiPathDecision::ReplaceUnresponsive { .. } => self.replace_primary_path_destination(
+            MultiPathDecision::ReplaceAsUpstream { .. } => self.replace_primary_path_destination(
                 ctx.packet.destination_hash,
                 path_entry,
                 ctx.now,

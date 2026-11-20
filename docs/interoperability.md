@@ -89,30 +89,42 @@ differ:
 - "The same emission time" is the newest of the path's random blobs, where
   upstream scans them in order and stops at the first that reaches the
   announce's.
-- A newer announce through another next hop is added as an alternative
-  path; with one path per destination the shorter, unresponsive path is
-  kept.
 
 In both modes a replacement accepted only because the path is unresponsive
 is not rebroadcast.
 
-`unresponsive_path_recovery = upstream` decides an announce for an
-unresponsive path as upstream does, and an accepted announce replaces the
-path whatever its next hop, keeping the replaced path's random blobs. For
-a path that is not unresponsive both modes behave the same. Both keep this
-implementation's distrust of emission times implausibly far in the future
-(`MAX_EMISSION_TIME_SKEW_SECS` in `rns-core/src/transport/pathfinder.rs`).
+The native rules also differ from upstream for paths that are not
+unresponsive, because rns-rs keeps announces through another next hop as
+alternative paths:
+
+- A newer announce through another next hop is added as an alternative
+  path. With one path per destination it is kept only when it ranks first
+  (no more hops than the path), so a newer announce over more hops through
+  another neighbour leaves the path as it was (it is still rebroadcast);
+  upstream takes it.
+- An announce through another next hop emitted before the path's newest
+  random blob is rejected, even for an expired path, where upstream takes
+  any announce it has not heard.
+
+`unresponsive_path_recovery = upstream` decides every path update as
+upstream does, against the destination's primary path, and an accepted
+announce replaces that path whatever its next hop, keeping the replaced
+path's random blobs. Both keep this implementation's distrust of emission
+times implausibly far in the future (`MAX_EMISSION_TIME_SKEW_SECS` in
+`rns-core/src/transport/pathfinder.rs`).
 
 The rns-rs-only path options combine with it as follows:
 
-- `max_paths_per_destination` above 1: marking a path unresponsive promotes
-  an alternative when the destination has one, so a destination stays
-  unresponsive only while it has a single path. Under `upstream` an
-  accepted announce replaces that path instead of being stored beside it.
-- `prefer_shorter_path`: a strictly shorter announce is still taken for an
-  unresponsive path, in either mode, as it is for any path, and is
-  rebroadcast. Upstream has no such option, so with it set `upstream`
-  differs from upstream for these announces.
+- `max_paths_per_destination` above 1: under `upstream` announces only
+  replace the primary path, as upstream keeps one path, so they add no
+  alternatives, and announces that could not update the primary path are
+  prefiltered as upstream prefilters them. Paths already stored beside it
+  stay. Under `native`, marking a path unresponsive promotes an
+  alternative when the destination has one.
+- `prefer_shorter_path`: a strictly shorter announce is still taken, in
+  either mode, by rns-rs's own rules, and is rebroadcast. Upstream has no
+  such option, so with it set `upstream` differs from upstream for these
+  announces.
 
 ## Performance claims
 

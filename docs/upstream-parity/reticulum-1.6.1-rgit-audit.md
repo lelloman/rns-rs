@@ -1764,6 +1764,22 @@ utilities included.
    `rns-esp32/src/main.rs` gained the field in its `TransportConfig`
    literal but is outside the workspace and was not built.
 
+   Follow-up (`transport: decide every path update as upstream in upstream
+   mode`): `upstream` covered only unresponsive paths, so a newer announce
+   through another neighbour over more hops was still dropped with one
+   path per destination, where upstream takes it. `upstream` now decides
+   every path update as Transport.py's `inbound` at `cff4d03f`
+   (`upstream_path_decision`: the same-or-fewer-hops case with the
+   higher-gravity replacement, the expired-path, newer-emission and
+   unresponsive cases over more hops, and the random blob checks) against
+   the primary path, which an accepted announce replaces whatever its next
+   hop; announces add no alternative paths in this mode, so
+   `max_paths_per_destination` above 1 no longer disables the announce
+   prefilter there. `prefer_shorter_path` still takes a strictly shorter
+   announce by rns-rs's rules. Test:
+   `upstream_recovery_decides_every_path_update_as_upstream` (fails before
+   the change).
+
 ## Integration Plan
 
 All 34 commits are mapped, one mapping commit each in ancestry order, with
