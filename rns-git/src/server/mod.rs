@@ -165,157 +165,60 @@ pub(crate) fn register_repository_destination(
     Ok(destination)
 }
 
+/// A request handler answering with status bytes.
+type BytesHandler =
+    fn(&ServerConfig, &Access, &[u8], Option<&([u8; 16], [u8; 64])>) -> Result<Vec<u8>>;
+
+/// A request handler that may answer with a resource.
+type ResponseHandler =
+    fn(&ServerConfig, &Access, &[u8], Option<&([u8; 16], [u8; 64])>) -> Result<RequestResponse>;
+
 fn register_handlers(node: &RnsNode, config: ServerConfig, access: Access) -> Result<()> {
-    let list_config = config.clone();
-    let list_access = access.clone();
-    node.register_request_handler(
-        protocol::PATH_LIST,
-        None,
-        move |_link, _path, data, remote| {
+    let register_bytes = |path: &str, name: &str, handler: BytesHandler| {
+        let config = config.clone();
+        let access = access.clone();
+        node.register_request_handler(path, None, move |_link, _path, data, remote| {
+            Some(handler(&config, &access, data, remote).unwrap_or_else(error_response))
+        })
+        .map_err(|_| Error::msg(format!("failed to register {name} handler")))
+    };
+    let register_response = |path: &str, name: &str, handler: ResponseHandler| {
+        let config = config.clone();
+        let access = access.clone();
+        node.register_request_handler_response(path, None, move |_link, _path, data, remote| {
             Some(
-                handle_list(&list_config, &list_access, data, remote)
-                    .unwrap_or_else(error_response),
-            )
-        },
-    )
-    .map_err(|_| Error::msg("failed to register list handler"))?;
-
-    let fetch_config = config.clone();
-    let fetch_access = access.clone();
-    node.register_request_handler_response(
-        protocol::PATH_FETCH,
-        None,
-        move |_link, _path, data, remote| {
-            Some(
-                handle_fetch(&fetch_config, &fetch_access, data, remote)
+                handler(&config, &access, data, remote)
                     .unwrap_or_else(|err| RequestResponse::Bytes(error_response(err))),
             )
-        },
-    )
-    .map_err(|_| Error::msg("failed to register fetch handler"))?;
+        })
+        .map_err(|_| Error::msg(format!("failed to register {name} handler")))
+    };
 
-    let push_config = config.clone();
-    let push_access = access.clone();
-    node.register_request_handler(
-        protocol::PATH_PUSH,
-        None,
-        move |_link, _path, data, remote| {
-            Some(
-                handle_push(&push_config, &push_access, data, remote)
-                    .unwrap_or_else(error_response),
-            )
-        },
-    )
-    .map_err(|_| Error::msg("failed to register push handler"))?;
-
-    let create_config = config.clone();
-    let create_access = access.clone();
-    node.register_request_handler(
-        protocol::PATH_CREATE,
-        None,
-        move |_link, _path, data, remote| {
-            Some(
-                handle_create(&create_config, &create_access, data, remote)
-                    .unwrap_or_else(error_response),
-            )
-        },
-    )
-    .map_err(|_| Error::msg("failed to register create handler"))?;
-
-    let fork_config = config.clone();
-    let fork_access = access.clone();
-    node.register_request_handler(
-        protocol::PATH_FORK,
-        None,
-        move |_link, _path, data, remote| {
-            Some(
-                handle_fork(&fork_config, &fork_access, data, remote)
-                    .unwrap_or_else(error_response),
-            )
-        },
-    )
-    .map_err(|_| Error::msg("failed to register fork handler"))?;
-
-    let sync_config = config.clone();
-    let sync_access = access.clone();
-    node.register_request_handler(
-        protocol::PATH_SYNC,
-        None,
-        move |_link, _path, data, remote| {
-            Some(
-                handle_sync(&sync_config, &sync_access, data, remote)
-                    .unwrap_or_else(error_response),
-            )
-        },
-    )
-    .map_err(|_| Error::msg("failed to register sync handler"))?;
-
-    let mirror_config = config.clone();
-    let mirror_access = access.clone();
-    node.register_request_handler(
-        protocol::PATH_MIRROR,
-        None,
-        move |_link, _path, data, remote| {
-            Some(
-                handle_mirror(&mirror_config, &mirror_access, data, remote)
-                    .unwrap_or_else(error_response),
-            )
-        },
-    )
-    .map_err(|_| Error::msg("failed to register mirror handler"))?;
-
-    let release_config = config.clone();
-    let release_access = access.clone();
-    node.register_request_handler_response(
-        protocol::PATH_RELEASE,
-        None,
-        move |_link, _path, data, remote| {
-            Some(
-                handle_release_response(&release_config, &release_access, data, remote)
-                    .unwrap_or_else(|err| RequestResponse::Bytes(error_response(err))),
-            )
-        },
-    )
-    .map_err(|_| Error::msg("failed to register release handler"))?;
-
-    let work_config = config.clone();
-    let work_access = access.clone();
-    node.register_request_handler(
-        protocol::PATH_WORK,
-        None,
-        move |_link, _path, data, remote| {
-            Some(
-                handle_work(&work_config, &work_access, data, remote)
-                    .unwrap_or_else(error_response),
-            )
-        },
-    )
-    .map_err(|_| Error::msg("failed to register work handler"))?;
-
-    let perms_config = config.clone();
-    let perms_access = access.clone();
-    node.register_request_handler(
-        protocol::PATH_PERMS,
-        None,
-        move |_link, _path, data, remote| {
-            Some(msgpack::pack(&Value::Bin(
-                handle_perms(&perms_config, &perms_access, data, remote)
-                    .unwrap_or_else(error_response),
-            )))
-        },
-    )
-    .map_err(|_| Error::msg("failed to register permissions handler"))?;
-
-    node.register_request_handler(
-        protocol::PATH_DELETE,
-        None,
-        move |_link, _path, data, remote| {
-            Some(handle_delete(&config, &access, data, remote).unwrap_or_else(error_response))
-        },
-    )
-    .map_err(|_| Error::msg("failed to register delete handler"))?;
-
+    register_bytes(protocol::PATH_LIST, "list", handle_list)?;
+    register_response(protocol::PATH_FETCH, "fetch", handle_fetch)?;
+    register_bytes(protocol::PATH_PUSH, "push", handle_push)?;
+    register_bytes(protocol::PATH_CREATE, "create", handle_create)?;
+    register_bytes(protocol::PATH_FORK, "fork", handle_fork)?;
+    register_bytes(protocol::PATH_SYNC, "sync", handle_sync)?;
+    register_bytes(protocol::PATH_MIRROR, "mirror", handle_mirror)?;
+    register_response(protocol::PATH_RELEASE, "release", handle_release_response)?;
+    register_bytes(protocol::PATH_WORK, "work", handle_work)?;
+    register_bytes(protocol::PATH_PERMS, "permissions", handle_perms_packed)?;
+    register_bytes(protocol::PATH_DELETE, "delete", handle_delete)?;
     Ok(())
+}
+
+/// [`handle_perms`] with its status response, errors included, wrapped in a
+/// msgpack bin as the permissions protocol expects.
+fn handle_perms_packed(
+    config: &ServerConfig,
+    access: &Access,
+    data: &[u8],
+    remote: Option<&([u8; 16], [u8; 64])>,
+) -> Result<Vec<u8>> {
+    Ok(msgpack::pack(&Value::Bin(
+        handle_perms(config, access, data, remote).unwrap_or_else(error_response),
+    )))
 }
 
 fn error_response(err: Error) -> Vec<u8> {
