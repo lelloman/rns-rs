@@ -37,6 +37,7 @@ fn device(eeprom: Vec<u8>) -> Device {
         platform: PLATFORM_ESP32,
         mcu: MCU_ESP32,
         board: BOARD_LORA32_V2_1,
+        error: None,
     }
 }
 
@@ -293,9 +294,21 @@ fn tnc_mode_stores_the_radio_parameters() {
             &fake.path,
         ],
     );
-    assert!(lines(&out.stdout)
-        .iter()
-        .any(|l| l == "Device set to TNC operating mode"));
+    let lines = lines(&out.stdout);
+    // The device reports each parameter back as it takes it.
+    for expected in [
+        "Radio reporting frequency is 868.0 MHz",
+        "Radio reporting bandwidth is 125.0 KHz",
+        "Radio reporting TX power is 14 dBm",
+        "Radio reporting spreading factor is 8",
+        "Radio reporting coding rate is 5",
+        "Device set to TNC operating mode",
+    ] {
+        assert!(
+            has_line(&lines, expected),
+            "missing {expected:?} in {lines:#?}"
+        );
+    }
     let frames = fake.received();
     let after_eeprom: Vec<Vec<u8>> = frames
         .iter()
@@ -336,8 +349,23 @@ fn normalize(out: &[u8], path: &str) -> Vec<String> {
     lines(out)
         .into_iter()
         .filter(|l| !l.starts_with("Exiting: Code"))
-        .map(|l| l.replace(path, "PORT"))
+        .map(|l| without_address(&l.replace(path, "PORT")))
         .collect()
+}
+
+/// A line with the address in an object's `str()`, `<... object at
+/// 0x7f...>`, left out.
+fn without_address(line: &str) -> String {
+    match line.find(" object at 0x") {
+        Some(at) => {
+            let start = at + " object at 0x".len();
+            let end = line[start..]
+                .find(|c: char| !c.is_ascii_hexdigit())
+                .map_or(line.len(), |i| start + i);
+            format!("{}ADDR{}", &line[..start - 2], &line[end..])
+        }
+        None => line.to_string(),
+    }
 }
 
 /// Run upstream's `rnodeconf` and ours, each against its own fake device
@@ -1057,6 +1085,7 @@ fn bluetooth_controls() {
         "Enabling Bluetooth...",
         "Disabling Bluetooth...",
         "Putting device into Bluetooth pairing mode. Press enter to exit when done.",
+        "Bluetooth pairing PIN is: 123456",
     ] {
         assert!(has_line(&lines, expected), "missing {expected:?}");
     }
@@ -1212,6 +1241,45 @@ fn python_comparison_display_and_neopixel() {
         &["--display-addr", "0x3d", "-i"],
     );
     compare_with_python(provisioned(), home.path(), &["--display-addr", "zz"]);
+}
+
+#[test]
+fn hardware_errors_are_reported() {
+    let home = tempfile::tempdir().unwrap();
+    for (code, expected) in [
+        (0x01, "hardware initialisation error (code 01)"),
+        (0x02, "hardware TX error (code 02)"),
+        (0x07, "hardware error (code 07)"),
+    ] {
+        let fake = FakeRNode::start(Device {
+            error: Some(code),
+            ..device(provisioned())
+        });
+        let out = rust_rnodeconf(home.path(), &["-i", &fake.path]);
+        let expected = format!("<RNS.Utilities.rnodeconf.RNode object at ADDR> {expected}");
+        assert!(
+            lines(&out.stdout)
+                .iter()
+                .any(|l| without_address(l) == expected),
+            "missing {expected:?}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_hardware_errors() {
+    let home = tempfile::tempdir().unwrap();
+    for code in [0x01, 0x02, 0x07] {
+        compare_device_with_python(
+            Device {
+                error: Some(code),
+                ..device(provisioned())
+            },
+            home.path(),
+            &["-i"],
+        );
+    }
 }
 
 #[test]

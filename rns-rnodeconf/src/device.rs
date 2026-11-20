@@ -35,6 +35,9 @@ pub(crate) struct Reported {
     pub r_state: Option<u8>,
     pub r_lock: Option<u8>,
     pub r_bt_pin: Option<u32>,
+    pub r_stat_rssi: Option<i16>,
+    pub r_stat_snr: Option<f64>,
+    pub r_random: Option<u8>,
 }
 
 impl Reported {
@@ -295,6 +298,12 @@ fn read_loop(mut reader: std::fs::File, state: Arc<Mutex<Reported>>, stop: Arc<A
     let mut command_buffer: Vec<u8> = Vec::new();
     let mut last_read = Instant::now();
     let mut buf = [0u8; 256];
+    // How upstream's log lines name the device: Python's default `str()`
+    // of its `RNode` object.
+    let name = format!(
+        "<RNS.Utilities.rnodeconf.RNode object at {:#x}>",
+        Arc::as_ptr(&state) as usize
+    );
 
     let unescape = |byte: u8, escape: &mut bool| -> Option<u8> {
         if byte == FESC {
@@ -325,6 +334,14 @@ fn read_loop(mut reader: std::fs::File, state: Arc<Mutex<Reported>>, stop: Arc<A
         };
         // SAFETY: one pollfd for a descriptor this thread owns.
         let ready = unsafe { libc::poll(&mut poll, 1, READ_POLL.as_millis() as libc::c_int) };
+        // upstream drops a partial frame after 100 ms without bytes.
+        if !data_buffer.is_empty() && last_read.elapsed() > Duration::from_millis(100) {
+            crate::log(&format!("{name} serial read timeout"));
+            data_buffer.clear();
+            in_frame = false;
+            command = CMD_UNKNOWN;
+            escape = false;
+        }
         if ready == 0
             || (ready < 0
                 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted)
@@ -335,13 +352,6 @@ fn read_loop(mut reader: std::fs::File, state: Arc<Mutex<Reported>>, stop: Arc<A
             Ok(0) | Err(_) => return,
             Ok(n) => n,
         };
-        // upstream drops a partial frame after 100 ms without bytes.
-        if !data_buffer.is_empty() && last_read.elapsed() > Duration::from_millis(100) {
-            data_buffer.clear();
-            in_frame = false;
-            command = CMD_UNKNOWN;
-            escape = false;
-        }
         last_read = Instant::now();
         let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
         for &byte in &buf[..n] {
@@ -380,9 +390,27 @@ fn read_loop(mut reader: std::fs::File, state: Arc<Mutex<Reported>>, stop: Arc<A
                                     command_buffer[3],
                                 ]);
                                 match command {
-                                    CMD_FREQUENCY => state.r_frequency = Some(v),
-                                    CMD_BANDWIDTH => state.r_bandwidth = Some(v),
-                                    CMD_BT_PIN => state.r_bt_pin = Some(v),
+                                    CMD_FREQUENCY => {
+                                        state.r_frequency = Some(v);
+                                        crate::log(&format!(
+                                            "Radio reporting frequency is {} MHz",
+                                            crate::py_float(v as f64 / 1_000_000.0)
+                                        ));
+                                    }
+                                    CMD_BANDWIDTH => {
+                                        state.r_bandwidth = Some(v);
+                                        crate::log(&format!(
+                                            "Radio reporting bandwidth is {} KHz",
+                                            crate::py_float(v as f64 / 1000.0)
+                                        ));
+                                    }
+                                    CMD_BT_PIN => {
+                                        state.r_bt_pin = Some(v);
+                                        crate::log(&format!("Bluetooth pairing PIN is: {v:06}"));
+                                    }
+                                    // upstream fails on the RX and TX
+                                    // counters, ending its reader; they are
+                                    // not kept here.
                                     _ => {}
                                 }
                             }
@@ -425,11 +453,32 @@ fn read_loop(mut reader: std::fs::File, state: Arc<Mutex<Reported>>, stop: Arc<A
                     CMD_BOARD => state.board = Some(byte),
                     CMD_PLATFORM => state.platform = Some(byte),
                     CMD_MCU => state.mcu = Some(byte),
-                    CMD_TXPOWER => state.r_txpower = Some(byte),
-                    CMD_SF => state.r_sf = Some(byte),
-                    CMD_CR => state.r_cr = Some(byte),
+                    CMD_TXPOWER => {
+                        state.r_txpower = Some(byte);
+                        crate::log(&format!("Radio reporting TX power is {byte} dBm"));
+                    }
+                    CMD_SF => {
+                        state.r_sf = Some(byte);
+                        crate::log(&format!("Radio reporting spreading factor is {byte}"));
+                    }
+                    CMD_CR => {
+                        state.r_cr = Some(byte);
+                        crate::log(&format!("Radio reporting coding rate is {byte}"));
+                    }
                     CMD_RADIO_STATE => state.r_state = Some(byte),
                     CMD_RADIO_LOCK => state.r_lock = Some(byte),
+                    // The RSSI offset.
+                    CMD_STAT_RSSI => state.r_stat_rssi = Some(i16::from(byte) - 157),
+                    CMD_STAT_SNR => state.r_stat_snr = Some(f64::from(byte as i8) * 0.25),
+                    CMD_RANDOM => state.r_random = Some(byte),
+                    CMD_ERROR => {
+                        let kind = match byte {
+                            ERROR_INITRADIO => "hardware initialisation error",
+                            ERROR_TXFAILED => "hardware TX error",
+                            _ => "hardware error",
+                        };
+                        crate::log(&format!("{name} {kind} (code {byte:02x})"));
+                    }
                     CMD_DETECT => state.detected = Some(byte == DETECT_RESP),
                     _ => {}
                 }

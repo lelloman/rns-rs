@@ -22,6 +22,8 @@ pub const CMD_DETECT: u8 = 0x08;
 pub const CMD_LEAVE: u8 = 0x0A;
 pub const CMD_DISP_INT: u8 = 0x45;
 pub const CMD_BT_CTRL: u8 = 0x46;
+pub const CMD_BT_PIN: u8 = 0x62;
+pub const CMD_ERROR: u8 = 0x90;
 pub const CMD_DISP_ADR: u8 = 0x63;
 pub const CMD_DISP_BLNK: u8 = 0x64;
 pub const CMD_NP_INT: u8 = 0x65;
@@ -60,7 +62,13 @@ pub struct Device {
     pub platform: u8,
     pub mcu: u8,
     pub board: u8,
+    /// An error code the device reports right after answering the detect
+    /// request, as firmware does when its radio fails to start.
+    pub error: Option<u8>,
 }
+
+/// The Bluetooth pairing PIN the fake device shows.
+pub const BT_PIN: u32 = 123_456;
 
 /// A running fake RNode.
 pub struct FakeRNode {
@@ -208,7 +216,18 @@ fn serve(mut master: std::fs::File, device: Arc<Mutex<Device>>, frames: Arc<Mute
 fn respond(device: &mut Device, frame: &[u8]) -> Vec<u8> {
     let (&command, payload) = frame.split_first().unwrap();
     match command {
-        CMD_DETECT => reply(CMD_DETECT, &[0x46]),
+        CMD_DETECT => {
+            let mut out = reply(CMD_DETECT, &[0x46]);
+            if let Some(code) = device.error {
+                out.extend(reply(CMD_ERROR, &[code]));
+            }
+            out
+        }
+        // Firmware reports each radio parameter back once it is set.
+        CMD_FREQUENCY | CMD_BANDWIDTH | CMD_TXPOWER | CMD_SF | CMD_CR | CMD_RADIO_STATE => {
+            reply(command, payload)
+        }
+        CMD_BT_CTRL if payload == [0x02] => reply(CMD_BT_PIN, &BT_PIN.to_be_bytes()),
         CMD_FW_VERSION => reply(CMD_FW_VERSION, &[device.version.0, device.version.1]),
         CMD_PLATFORM => reply(CMD_PLATFORM, &[device.platform]),
         CMD_MCU => reply(CMD_MCU, &[device.mcu]),
