@@ -98,7 +98,6 @@ impl InterfaceFactory for AutoFactory {
             configured_bitrate,
             max_peers,
             interface_id: id,
-            ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(AutoRuntime::default())),
         }))
     }
@@ -108,11 +107,10 @@ impl InterfaceFactory for AutoFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> std::io::Result<StartResult> {
-        let mut auto_config = *config.into_any().downcast::<AutoConfig>().map_err(|_| {
+        let auto_config = *config.into_any().downcast::<AutoConfig>().map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
         })?;
 
-        auto_config.ingress_control = ctx.ingress_control;
         let parent_id = auto_config.interface_id;
         let control = start_with_template(
             auto_config,

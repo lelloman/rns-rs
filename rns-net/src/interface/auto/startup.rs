@@ -56,7 +56,6 @@ pub(super) fn start_with_template(
         data_port: config.data_port,
         name: config.name.clone(),
         configured_bitrate: config.configured_bitrate,
-        ingress_control: config.ingress_control,
         runtime: runtime.clone(),
         shared: shared.clone(),
         tx: tx.clone(),
