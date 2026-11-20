@@ -851,6 +851,7 @@ impl PeerSource {
         }
 
         let connected_for = client.connected_at.elapsed();
+        let mut penalty = None;
         if let Some(record) = lock_or_recover(&server.fast_flap_state, "backbone fast-flap state")
             .record_disconnect(
                 client.peer_ip,
@@ -887,6 +888,14 @@ impl PeerSource {
                         name,
                         client.peer_ip,
                     );
+                    // A block is a penalty: report it to the
+                    // `BackbonePeerPenalty` hook. Fast flapping has no levels.
+                    penalty = Some(Event::BackbonePeerPenalty {
+                        server_interface_id: server.server_interface_id,
+                        peer_ip: client.peer_ip,
+                        penalty_level: 0,
+                        blacklist_for: server.fast_flap.block_duration,
+                    });
                 }
             }
         }
@@ -915,6 +924,7 @@ impl PeerSource {
             }),
             DisconnectReason::RemoteClosed => {}
         }
+        events.extend(penalty);
 
         if let Some(peer) = state.peers.get_mut(&client.peer_ip) {
             peer.connected_count = peer.connected_count.saturating_sub(1);
