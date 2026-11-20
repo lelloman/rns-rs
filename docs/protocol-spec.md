@@ -328,12 +328,12 @@ Defined link modes:
 - `AES256_CBC = 0x01`
 - `0x02` through `0x07` are reserved in `RNS-Compat/1`
 
-The current interoperable profile enables:
+The current interoperable profile enables only `AES256_CBC`, as upstream's
+`Link.ENABLED_MODES`. A LINKREQUEST without signalling bytes uses it.
 
-- `AES128_CBC`
-- `AES256_CBC`
-
-Receivers implementing `RNS-Compat/1` MUST reject unknown mode values.
+An initiator MUST NOT create a link in any other mode. A responder MUST drop a
+LINKREQUEST that signals any other mode, `AES128_CBC` included, without sending
+an LRPROOF, and receivers MUST reject unknown mode values.
 
 ### 11.2 LINKREQUEST
 
@@ -943,7 +943,7 @@ This document currently specifies the `RNS-Compat/1` profile:
 - announce format as defined in Section 10
 - packet layout as defined in Section 6
 - explicit proofs
-- AES-256-CBC link mode enabled by default
+- AES-256-CBC, the only enabled link mode
 - transport heuristics as defined in Section 15
 
 Future profiles may define distinct packet layouts, AEAD-based framing, revised

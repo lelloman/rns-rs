@@ -25,6 +25,10 @@ pub fn compute_link_id(hashable_part: &[u8], extra_bytes_len: usize) -> LinkId {
 ///
 /// Format: `(mtu & 0x1FFFFF) + (((mode << 5) & 0xE0) << 16)`, packed as big-endian u32,
 /// then take the last 3 bytes.
+///
+/// This encodes any defined mode, so tests can build what another
+/// implementation might send; [`super::LinkEngine`] only creates and accepts
+/// links in an [enabled](LinkMode::is_enabled) mode.
 pub fn build_signalling_bytes(mtu: u32, mode: LinkMode) -> [u8; 3] {
     let mode_bits = ((mode.mode_byte() << 5) & LINK_MODE_BYTEMASK) as u32;
     let signalling_value = (mtu & LINK_MTU_BYTEMASK) + (mode_bits << 16);

@@ -130,6 +130,75 @@ fn every_outbound_link_request_signals_aes_256_cbc() {
 }
 
 #[test]
+fn an_aes_128_link_request_is_dropped_without_a_proof() {
+    let mut manager = LinkManager::new();
+    let mut rng = make_rng(0x1A);
+    let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
+    let destination = [0x1A; 16];
+    manager.register_link_destination(
+        destination,
+        sig_prv,
+        sig_pub_bytes,
+        ResourceStrategy::AcceptNone,
+    );
+    let request_for = |mode| {
+        let data = rns_core::link::handshake::build_linkrequest_data(
+            &X25519PrivateKey::generate(&mut OsRng)
+                .public_key()
+                .public_bytes(),
+            &Ed25519PrivateKey::generate(&mut OsRng)
+                .public_key()
+                .public_bytes(),
+            Some(constants::MTU as u32),
+            mode,
+        );
+        RawPacket::pack(
+            rns_core::packet::PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_SINGLE,
+                packet_type: constants::PACKET_TYPE_LINKREQUEST,
+            },
+            0,
+            &destination,
+            None,
+            constants::CONTEXT_NONE,
+            &data,
+        )
+        .unwrap()
+    };
+    let interface = rns_core::transport::types::InterfaceId(7);
+
+    // Upstream's validate_request drops it in prove(): no proof, no link,
+    // and it is not a malformed request.
+    let packet = request_for(LinkMode::Aes128Cbc);
+    let actions = manager.handle_local_delivery(
+        destination,
+        &packet.raw,
+        packet.packet_hash,
+        interface,
+        &mut rng,
+    );
+    assert!(actions.is_empty(), "{actions:?}");
+    assert_eq!(manager.link_count(), 0);
+
+    // The same request in AES-256-CBC is proved.
+    let packet = request_for(LinkMode::Aes256Cbc);
+    let actions = manager.handle_local_delivery(
+        destination,
+        &packet.raw,
+        packet.packet_hash,
+        interface,
+        &mut rng,
+    );
+    assert!(actions
+        .iter()
+        .any(|action| matches!(action, LinkManagerAction::SendPacket { .. })));
+    assert_eq!(manager.link_count(), 1);
+}
+
+#[test]
 fn malformed_linkrequest_reports_protocol_violation() {
     let mut manager = LinkManager::new();
     let mut rng = make_rng(0x19);

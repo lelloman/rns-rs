@@ -99,7 +99,9 @@ impl LinkEngine {
     /// Create a new initiator-side link engine.
     ///
     /// Returns `(engine, linkrequest_data)` — the caller must pack linkrequest_data
-    /// into a LINKREQUEST packet and send it.
+    /// into a LINKREQUEST packet and send it. A mode that is not
+    /// [enabled](LinkMode::is_enabled) fails with
+    /// [`LinkError::ModeNotEnabled`], as upstream's `Link.__init__` raises.
     pub fn new_initiator(
         dest_hash: &[u8; 16],
         hops: u8,
@@ -107,7 +109,8 @@ impl LinkEngine {
         mtu: Option<u32>,
         now: f64,
         rng: &mut dyn Rng,
-    ) -> (Self, Vec<u8>) {
+    ) -> Result<(Self, Vec<u8>), LinkError> {
+        check_mode_enabled(mode)?;
         let prv = X25519PrivateKey::generate(rng);
         let sig_prv = Ed25519PrivateKey::generate(rng);
         Self::new_initiator_with_keys(dest_hash, hops, mode, mtu, now, prv, sig_prv)
@@ -115,6 +118,7 @@ impl LinkEngine {
 
     /// Create an initiator link whose X25519 public key carries a stamp of at
     /// least `stamp_cost` over `destination_hash || ed25519_public_key`.
+    /// A mode that is not enabled fails before any stamp work.
     pub fn new_initiator_stamped(
         dest_hash: &[u8; 16],
         hops: u8,
@@ -123,7 +127,8 @@ impl LinkEngine {
         now: f64,
         rng: &mut dyn Rng,
         stamp_cost: crate::stamp::StampCost,
-    ) -> (Self, Vec<u8>) {
+    ) -> Result<(Self, Vec<u8>), LinkError> {
+        check_mode_enabled(mode)?;
         let sig_prv = Ed25519PrivateKey::generate(rng);
         let sig_pub_bytes = sig_prv.public_key().public_bytes();
         let mut material = [0u8; 48];
@@ -150,7 +155,8 @@ impl LinkEngine {
         now: f64,
         prv: X25519PrivateKey,
         sig_prv: Ed25519PrivateKey,
-    ) -> (Self, Vec<u8>) {
+    ) -> Result<(Self, Vec<u8>), LinkError> {
+        check_mode_enabled(mode)?;
         let pub_bytes = prv.public_key().public_bytes();
         let sig_pub_bytes = sig_prv.public_key().public_bytes();
 
@@ -201,7 +207,7 @@ impl LinkEngine {
             mdu: compute_mdu(link_mtu as usize),
         };
 
-        (engine, request_data)
+        Ok((engine, request_data))
     }
 
     /// Set link_id from the hashable part of the packed LINKREQUEST packet.
@@ -232,6 +238,10 @@ impl LinkEngine {
         rng: &mut dyn Rng,
     ) -> Result<(Self, Vec<u8>), LinkError> {
         let (peer_pub, peer_sig_pub, peer_mtu, mode) = parse_linkrequest_data(linkrequest_data)?;
+        // Upstream's `Link.validate_request` reads any mode, but its
+        // `prove()` refuses one outside `ENABLED_MODES`, so the request is
+        // dropped and no proof is sent.
+        check_mode_enabled(mode)?;
 
         let extra = linkrequest_data.len().saturating_sub(LINK_ECPUBSIZE);
         let link_id = compute_link_id(hashable_part, extra);
@@ -909,6 +919,16 @@ pub fn compute_mdu(mtu: usize) -> usize {
 /// Resolve the link MTU from the signalled value: absent or 0 means the
 /// default Reticulum MTU; anything else is clamped to
 /// `[LINK_MTU_MIN, LINK_MTU_MAX]`.
+/// Upstream's `ENABLED_MODES` check: a mode that is not enabled fails with
+/// [`LinkError::ModeNotEnabled`].
+fn check_mode_enabled(mode: LinkMode) -> Result<(), LinkError> {
+    if mode.is_enabled() {
+        Ok(())
+    } else {
+        Err(LinkError::ModeNotEnabled(mode))
+    }
+}
+
 fn effective_link_mtu(signalled_mtu: Option<u32>) -> u32 {
     signalled_mtu
         .filter(|mtu| *mtu != 0)
@@ -941,7 +961,8 @@ mod tests {
             Some(500),
             100.0,
             &mut rng_init,
-        );
+        )
+        .unwrap();
         let mut hashable = vec![0x00, 0x00];
         hashable.extend_from_slice(&dest_hash);
         hashable.push(0x00);
@@ -989,7 +1010,8 @@ mod tests {
             Some(0),
             100.0,
             &mut rng_init,
-        );
+        )
+        .unwrap();
         let mut hashable = vec![0x00, 0x00];
         hashable.extend_from_slice(&dest_hash);
         hashable.push(0x00);
@@ -1033,7 +1055,8 @@ mod tests {
         // Step 1: Initiator creates link request
         let mut rng_init = make_rng(0x10);
         let (mut initiator, request_data) =
-            LinkEngine::new_initiator(&dest_hash, 1, mode, Some(500), 100.0, &mut rng_init);
+            LinkEngine::new_initiator(&dest_hash, 1, mode, Some(500), 100.0, &mut rng_init)
+                .unwrap();
         assert_eq!(initiator.state(), LinkState::Pending);
 
         // Simulate packet packing: build a fake hashable part
@@ -1171,7 +1194,8 @@ mod tests {
             Some(500),
             100.0,
             &mut rng_init,
-        );
+        )
+        .unwrap();
         let mut hashable = Vec::new();
         hashable.push(0x00);
         hashable.push(0x00);
@@ -1218,7 +1242,8 @@ mod tests {
         let mut rng = make_rng(0x10);
         let dest_hash = [0xDD; 16];
         let (mut engine, _) =
-            LinkEngine::new_initiator(&dest_hash, 1, LinkMode::Aes256Cbc, None, 100.0, &mut rng);
+            LinkEngine::new_initiator(&dest_hash, 1, LinkMode::Aes256Cbc, None, 100.0, &mut rng)
+                .unwrap();
         // Timeout = 6.0 + 6.0 * 1 = 12.0s → expires at 112.0
 
         // Before timeout — no state change
@@ -1544,7 +1569,8 @@ mod tests {
     fn test_teardown() {
         let mut rng = make_rng(0x10);
         let (mut engine, _) =
-            LinkEngine::new_initiator(&[0xDD; 16], 1, LinkMode::Aes256Cbc, None, 100.0, &mut rng);
+            LinkEngine::new_initiator(&[0xDD; 16], 1, LinkMode::Aes256Cbc, None, 100.0, &mut rng)
+                .unwrap();
         let actions = engine.teardown();
         assert_eq!(engine.state(), LinkState::Closed);
         assert_eq!(actions.len(), 1);
@@ -1558,7 +1584,8 @@ mod tests {
     fn test_handle_teardown() {
         let mut rng = make_rng(0x10);
         let (mut engine, _) =
-            LinkEngine::new_initiator(&[0xDD; 16], 1, LinkMode::Aes256Cbc, None, 100.0, &mut rng);
+            LinkEngine::new_initiator(&[0xDD; 16], 1, LinkMode::Aes256Cbc, None, 100.0, &mut rng)
+                .unwrap();
         let actions = engine.handle_teardown();
         assert_eq!(engine.state(), LinkState::Closed);
         assert_eq!(actions.len(), 1);
@@ -1585,7 +1612,8 @@ mod tests {
             Some(500),
             100.0,
             &mut rng_init,
-        );
+        )
+        .unwrap();
         let mut hashable = Vec::new();
         hashable.push(0x00);
         hashable.push(0x00);
@@ -1670,57 +1698,87 @@ mod tests {
     }
 
     #[test]
-    fn test_aes128_mode_handshake() {
+    fn an_aes_128_link_is_refused_by_initiator_and_responder() {
+        let dest_hash = [0xDD; 16];
+        let refused = Err(LinkError::ModeNotEnabled(LinkMode::Aes128Cbc));
+
+        // Upstream's Link.__init__ raises for a mode outside ENABLED_MODES.
+        let mut rng_init = make_rng(0x10);
+        assert_eq!(
+            LinkEngine::new_initiator(
+                &dest_hash,
+                1,
+                LinkMode::Aes128Cbc,
+                Some(500),
+                100.0,
+                &mut rng_init
+            )
+            .map(|_| ()),
+            refused
+        );
+        assert_eq!(
+            LinkEngine::new_initiator_stamped(
+                &dest_hash,
+                1,
+                LinkMode::Aes128Cbc,
+                Some(500),
+                100.0,
+                &mut rng_init,
+                crate::stamp::StampCost::from_whole(8),
+            )
+            .map(|_| ()),
+            refused
+        );
+        assert_eq!(
+            LinkEngine::new_initiator_with_keys(
+                &dest_hash,
+                1,
+                LinkMode::Aes128Cbc,
+                Some(500),
+                100.0,
+                X25519PrivateKey::generate(&mut rng_init),
+                Ed25519PrivateKey::generate(&mut rng_init),
+            )
+            .map(|_| ()),
+            refused
+        );
+
+        // A request that signals AES-128-CBC, as another implementation
+        // could send, gets no proof: upstream's prove() refuses the mode.
         let mut rng_id = make_rng(0x01);
         let dest_sig_prv = Ed25519PrivateKey::generate(&mut rng_id);
         let dest_sig_pub_bytes = dest_sig_prv.public_key().public_bytes();
-        let dest_hash = [0xDD; 16];
-
-        let mut rng_init = make_rng(0x10);
-        let (mut initiator, request_data) = LinkEngine::new_initiator(
-            &dest_hash,
-            1,
-            LinkMode::Aes128Cbc,
+        let pub_bytes = X25519PrivateKey::generate(&mut rng_init)
+            .public_key()
+            .public_bytes();
+        let sig_pub_bytes = Ed25519PrivateKey::generate(&mut rng_init)
+            .public_key()
+            .public_bytes();
+        let request_data = handshake::build_linkrequest_data(
+            &pub_bytes,
+            &sig_pub_bytes,
             Some(500),
-            100.0,
-            &mut rng_init,
+            LinkMode::Aes128Cbc,
         );
-        let mut hashable = Vec::new();
-        hashable.push(0x00);
-        hashable.push(0x00);
+        let mut hashable = vec![0x00, 0x00];
         hashable.extend_from_slice(&dest_hash);
         hashable.push(0x00);
         hashable.extend_from_slice(&request_data);
-        initiator.set_link_id_from_hashable(&hashable, request_data.len());
-
         let mut rng_resp = make_rng(0x20);
-        let (mut responder, lrproof_data) = LinkEngine::new_responder(
-            &dest_sig_prv,
-            &dest_sig_pub_bytes,
-            &request_data,
-            &hashable,
-            &dest_hash,
-            1,
-            100.5,
-            &mut rng_resp,
-        )
-        .unwrap();
-
-        let mut rng_lrrtt = make_rng(0x30);
-        let (lrrtt_encrypted, _) = initiator
-            .handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt)
-            .unwrap();
-        responder.handle_lrrtt(&lrrtt_encrypted, 101.0).unwrap();
-
-        assert_eq!(initiator.state(), LinkState::Active);
-        assert_eq!(responder.state(), LinkState::Active);
-        assert_eq!(initiator.mode(), LinkMode::Aes128Cbc);
-
-        // Verify encrypt/decrypt works
-        let mut rng_enc = make_rng(0x40);
-        let ct = initiator.encrypt(b"AES128 test", &mut rng_enc).unwrap();
-        let pt = responder.decrypt(&ct).unwrap();
-        assert_eq!(pt, b"AES128 test");
+        assert_eq!(
+            LinkEngine::new_responder(
+                &dest_sig_prv,
+                &dest_sig_pub_bytes,
+                &request_data,
+                &hashable,
+                &dest_hash,
+                1,
+                100.5,
+                &mut rng_resp,
+            )
+            .map(|_| ()),
+            refused
+        );
     }
 
     /// Run LINKREQUEST + LRPROOF with the given signalled MTU. Returns the
@@ -1739,7 +1797,8 @@ mod tests {
             mtu,
             100.0,
             &mut rng_init,
-        );
+        )
+        .unwrap();
         let mut hashable = vec![0x00, 0x00];
         hashable.extend_from_slice(&dest_hash);
         hashable.push(0x00);
@@ -1909,7 +1968,8 @@ mod tests {
             0.0,
             &mut rng,
             crate::stamp::StampCost::from_whole(4),
-        );
+        )
+        .unwrap();
         let value = handshake::link_request_stamp_value(&dest_hash, &data).unwrap();
         assert!(value.meets(crate::stamp::StampCost::from_whole(4)));
     }
@@ -1931,7 +1991,8 @@ mod tests {
             0.0,
             prv,
             sig_prv,
-        );
+        )
+        .unwrap();
         let (peer_pub, peer_sig_pub, mtu, mode) = handshake::parse_linkrequest_data(&data).unwrap();
         assert_eq!(peer_pub, expected_pub);
         assert_eq!(peer_sig_pub, expected_sig_pub);
@@ -1956,7 +2017,8 @@ mod tests {
             Some(500),
             100.0,
             &mut rng_init,
-        );
+        )
+        .unwrap();
         let mut hashable = vec![0x00, 0x00];
         hashable.extend_from_slice(&dest_hash);
         hashable.push(0x00);
@@ -2126,7 +2188,8 @@ mod tests {
             0.0,
             &mut rng,
             cost,
-        );
+        )
+        .unwrap();
         assert_eq!(
             handshake::link_request_stamp_valid(&dest_hash, &data, cost),
             Some(true)
