@@ -1,6 +1,8 @@
 //! Repository request handlers: list, fetch, push, create, fork, mirror,
 //! sync and delete.
 
+use std::path::PathBuf;
+
 use rns_net::RequestResponse;
 
 use super::remote_error_response;
@@ -172,59 +174,17 @@ pub(crate) fn handle_create(
         ));
     };
     let repo = protocol::repository_from_request(data)?;
-    let Some((group, name)) = repo.split_once('/') else {
-        return Ok(protocol::status_bytes(
-            protocol::RES_INVALID_REQ,
-            b"invalid request",
-        ));
+    let repository_path = match new_repository_path(config, access, &repo, remote_hash)? {
+        Ok(path) => path,
+        Err(refusal) => return Ok(refusal),
     };
-    if group.is_empty() || name.is_empty() || name.contains('/') {
-        return Ok(protocol::status_bytes(
-            protocol::RES_INVALID_REQ,
-            b"invalid request",
-        ));
-    }
-
-    let group_path = config.repositories_dir.join(group);
-    if !group_path.is_dir() {
-        return Ok(protocol::status_bytes(
-            protocol::RES_NOT_FOUND,
-            b"not found",
-        ));
-    }
-
-    let read_access = access.allows(Operation::Read, &repo, Some(remote_hash))?;
-    let create_access = access.allows(Operation::Create, &repo, Some(remote_hash))?;
-    if !create_access {
-        let (code, message) = if read_access {
-            (protocol::RES_DISALLOWED, b"not allowed".as_slice())
-        } else {
-            (protocol::RES_NOT_FOUND, b"not found".as_slice())
-        };
-        return Ok(protocol::status_bytes(code, message));
-    }
-
-    let repository_path = git::repository_path(&config.repositories_dir, &repo)?;
-    if repository_path.exists() {
-        let (code, message) = if read_access {
-            (
-                protocol::RES_DISALLOWED,
-                b"repository already exists".as_slice(),
-            )
-        } else {
-            (protocol::RES_NOT_FOUND, b"not found".as_slice())
-        };
-        return Ok(protocol::status_bytes(code, message));
-    }
 
     if let Err(err) = git::ensure_bare_repository(&repository_path) {
         let _ = std::fs::remove_dir_all(&repository_path);
         return Ok(remote_error_response("create", &repo, err));
     }
 
-    let allowed_path = config.repositories_dir.join(format!("{repo}.allowed"));
-    let permissions = format!("adm:{}\n", hex(remote_hash));
-    if let Err(err) = std::fs::write(&allowed_path, permissions) {
+    if let Err(err) = grant_creator_admin(config, &repo, remote_hash) {
         let _ = std::fs::remove_dir_all(&repository_path);
         return Ok(remote_error_response("create", &repo, err));
     }
@@ -272,39 +232,66 @@ fn handle_remote_clone(
             ));
         }
     };
+    let repository_path = match new_repository_path(config, access, &repo, remote_hash)? {
+        Ok(path) => path,
+        Err(refusal) => return Ok(refusal),
+    };
+
+    if let Err(err) = git::clone_remote_bare(&source, &repository_path, repository_type) {
+        let _ = std::fs::remove_dir_all(&repository_path);
+        return Ok(remote_error_response(repository_type, &repo, err));
+    }
+
+    if let Err(err) = grant_creator_admin(config, &repo, remote_hash) {
+        let _ = std::fs::remove_dir_all(&repository_path);
+        return Ok(remote_error_response(repository_type, &repo, err));
+    }
+
+    Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
+}
+
+/// Checks that `repo` names a repository the peer may create: a valid
+/// `group/name` in an existing group, with create access, not yet present.
+/// Returns its path, or the status response refusing the request.
+fn new_repository_path(
+    config: &ServerConfig,
+    access: &Access,
+    repo: &str,
+    remote_hash: &[u8; 16],
+) -> Result<std::result::Result<PathBuf, Vec<u8>>> {
     let Some((group, name)) = repo.split_once('/') else {
-        return Ok(protocol::status_bytes(
+        return Ok(Err(protocol::status_bytes(
             protocol::RES_INVALID_REQ,
             b"invalid request",
-        ));
+        )));
     };
     if group.is_empty() || name.is_empty() || name.contains('/') {
-        return Ok(protocol::status_bytes(
+        return Ok(Err(protocol::status_bytes(
             protocol::RES_INVALID_REQ,
             b"invalid request",
-        ));
+        )));
     }
 
     let group_path = config.repositories_dir.join(group);
     if !group_path.is_dir() {
-        return Ok(protocol::status_bytes(
+        return Ok(Err(protocol::status_bytes(
             protocol::RES_NOT_FOUND,
             b"not found",
-        ));
+        )));
     }
 
-    let read_access = access.allows(Operation::Read, &repo, Some(remote_hash))?;
-    let create_access = access.allows(Operation::Create, &repo, Some(remote_hash))?;
+    let read_access = access.allows(Operation::Read, repo, Some(remote_hash))?;
+    let create_access = access.allows(Operation::Create, repo, Some(remote_hash))?;
     if !create_access {
         let (code, message) = if read_access {
             (protocol::RES_DISALLOWED, b"not allowed".as_slice())
         } else {
             (protocol::RES_NOT_FOUND, b"not found".as_slice())
         };
-        return Ok(protocol::status_bytes(code, message));
+        return Ok(Err(protocol::status_bytes(code, message)));
     }
 
-    let repository_path = git::repository_path(&config.repositories_dir, &repo)?;
+    let repository_path = git::repository_path(&config.repositories_dir, repo)?;
     if repository_path.exists() {
         let (code, message) = if read_access {
             (
@@ -314,22 +301,20 @@ fn handle_remote_clone(
         } else {
             (protocol::RES_NOT_FOUND, b"not found".as_slice())
         };
-        return Ok(protocol::status_bytes(code, message));
+        return Ok(Err(protocol::status_bytes(code, message)));
     }
+    Ok(Ok(repository_path))
+}
 
-    if let Err(err) = git::clone_remote_bare(&source, &repository_path, repository_type) {
-        let _ = std::fs::remove_dir_all(&repository_path);
-        return Ok(remote_error_response(repository_type, &repo, err));
-    }
-
+/// Writes the new repository's access list, granting its creator admin.
+fn grant_creator_admin(
+    config: &ServerConfig,
+    repo: &str,
+    remote_hash: &[u8; 16],
+) -> std::io::Result<()> {
     let allowed_path = config.repositories_dir.join(format!("{repo}.allowed"));
     let permissions = format!("adm:{}\n", hex(remote_hash));
-    if let Err(err) = std::fs::write(&allowed_path, permissions) {
-        let _ = std::fs::remove_dir_all(&repository_path);
-        return Ok(remote_error_response(repository_type, &repo, err));
-    }
-
-    Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
+    std::fs::write(&allowed_path, permissions)
 }
 
 pub(crate) fn handle_sync(
