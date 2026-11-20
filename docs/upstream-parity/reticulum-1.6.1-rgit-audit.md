@@ -1780,6 +1780,16 @@ utilities included.
    `upstream_recovery_decides_every_path_update_as_upstream` (fails before
    the change).
 
+   Follow-up (`transport: trust future emission times in upstream mode`):
+   upstream has no emission-time plausibility filter, so under `upstream`
+   rns-rs no longer applies `MAX_EMISSION_TIME_SKEW_SECS`: path decisions,
+   the higher-gravity replacement, the announce prefilter and tunnel path
+   restoration compare raw emission times, as Transport.py does. `native`
+   keeps the filter. Tests: `future_emission_time_filter_only_in_native_mode`,
+   `tunnel_reattach_emission_time_filter_only_in_native_mode` (both fail
+   before the change), and the `upstream` cases of
+   `announce_prefilter_keeps_only_announces_that_could_update_the_path`.
+
 ## Integration Plan
 
 All 34 commits are mapped, one mapping commit each in ancestry order, with

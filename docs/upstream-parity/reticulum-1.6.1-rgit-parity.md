@@ -100,9 +100,11 @@ and the rebase.
   alternative paths), except that `prefer_shorter_path` still takes a
   strictly shorter announce. Documented in `docs/interoperability.md` and
   `docs/configuration.md`.
-- In both modes rns-rs keeps distrusting announce emission times
-  implausibly far in the future (`MAX_EMISSION_TIME_SKEW_SECS`), which
-  upstream does not.
+- With `unresponsive_path_recovery = native` rns-rs distrusts announce
+  emission times implausibly far in the future
+  (`MAX_EMISSION_TIME_SKEW_SECS`) in path selection, the announce
+  prefilter and tunnel path restoration, which upstream does not;
+  `upstream` trusts them as upstream does.
 - `rnpath -t` prints ` (?)` for a path entry without `state` (from an older
   daemon) where upstream raises `KeyError`.
 - Link modes now match upstream (only AES-256-CBC, AES-128 and reserved

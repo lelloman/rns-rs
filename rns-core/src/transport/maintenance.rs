@@ -46,6 +46,7 @@ pub(super) fn announce_passes_prefilter(
         gravity(&existing.receiving_interface),
         path_states.get(destination_hash) == Some(&constants::STATE_UNRESPONSIVE),
         now,
+        config.unresponsive_path_recovery,
     )
 }
 

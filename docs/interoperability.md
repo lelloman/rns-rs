@@ -109,9 +109,15 @@ alternative paths:
 `unresponsive_path_recovery = upstream` decides every path update as
 upstream does, against the destination's primary path, and an accepted
 announce replaces that path whatever its next hop, keeping the replaced
-path's random blobs. Both keep this implementation's distrust of emission
-times implausibly far in the future (`MAX_EMISSION_TIME_SKEW_SECS` in
-`rns-core/src/transport/pathfinder.rs`).
+path's random blobs.
+
+Emission times implausibly far in the future: `native` distrusts them
+(`MAX_EMISSION_TIME_SKEW_SECS` in `rns-core/src/transport/pathfinder.rs`,
+one day), so an announce emitted more than a day ahead of this node's clock
+cannot win on its emission time, and a path learnt from one does not block
+newer genuine announces; this covers path selection, the announce
+prefilter and the restoration of tunnel paths. Upstream has no such
+filter, and `upstream` trusts any emission time as upstream does.
 
 The rns-rs-only path options combine with it as follows:
 

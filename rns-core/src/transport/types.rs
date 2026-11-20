@@ -531,7 +531,9 @@ pub enum UnresponsivePathRecovery {
     /// through another next hop it is rejected. A replacement accepted only
     /// because the path is unresponsive is not rebroadcast. An announce
     /// through another next hop is stored as an alternative path, which a
-    /// single-path table keeps only when it ranks first.
+    /// single-path table keeps only when it ranks first. Emission times
+    /// more than `MAX_EMISSION_TIME_SKEW_SECS` in the future are
+    /// distrusted.
     #[default]
     Native,
     /// Upstream Transport.py's rules for every path update: an announce is
@@ -541,7 +543,8 @@ pub enum UnresponsivePathRecovery {
     /// an already-heard announce over more hops replaces it without being
     /// rebroadcast; one over the same or fewer hops does not.
     /// `prefer_shorter_path` still takes a strictly shorter announce by
-    /// rns-rs's rules.
+    /// rns-rs's rules. Emission times are trusted as upstream trusts them,
+    /// with no `MAX_EMISSION_TIME_SKEW_SECS` filter.
     Upstream,
 }
 
