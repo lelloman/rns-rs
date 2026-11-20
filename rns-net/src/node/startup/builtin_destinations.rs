@@ -3,6 +3,43 @@
 
 use super::*;
 
+/// Register the transport identity's built-in destinations the config
+/// enables, logging the tables restored from `transport_state_dir` among
+/// them where upstream does, and announce that a transport instance
+/// started.
+pub(super) fn enable_builtin_destinations(
+    driver: &mut Driver,
+    config: &NodeConfig,
+    restored_tables: Option<rns_core::transport::persistence::RestoreStats>,
+    transport_state_dir: Option<&Path>,
+) {
+    // The management destinations belong to the transport identity,
+    // `Transport.identity`: on an instance without transport and
+    // without static_transport_identity, the ephemeral one.
+    let transport_id = Identity::from_private_key(
+        &driver
+            .transport_identity
+            .as_ref()
+            .and_then(|identity| identity.get_private_key())
+            .expect("the node has a transport identity"),
+    );
+    if config.management.enable_remote_management {
+        enable_remote_management(driver, &transport_id, &config.management);
+    }
+    if config.management.publish_blackhole {
+        enable_blackhole_publishing(driver, &transport_id);
+    }
+    if let (Some(stats), Some(storage_dir)) = (restored_tables, transport_state_dir) {
+        log_restored_tables(&stats, storage_dir);
+    }
+    if config.respond_to_probes && config.transport_enabled {
+        enable_probe_responder(driver, &transport_id);
+    }
+    if config.transport_enabled {
+        log::info!("Transport instance <{}> started", hex(transport_id.hash()));
+    }
+}
+
 /// Register `dest` as a built-in SINGLE destination taking links, signed
 /// with the Ed25519 half of `prv_key`, as the management destinations are.
 pub(super) fn register_builtin_link_destination(
