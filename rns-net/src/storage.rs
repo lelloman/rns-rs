@@ -448,10 +448,14 @@ pub fn ensure_config_file(config_dir: &Path) -> io::Result<bool> {
     if config_file.exists() {
         return Ok(false);
     }
-    log::info!("Could not load config file, creating default configuration file...");
+    log::info!(
+        target: crate::logging::NOTICE_TARGET,
+        "Could not load config file, creating default configuration file..."
+    );
     fs::create_dir_all(config_dir)?;
     fs::write(&config_file, DEFAULT_CONFIG)?;
     log::info!(
+        target: crate::logging::NOTICE_TARGET,
         "Default config file created. Make any necessary changes in {}/config and restart Reticulum if needed.",
         config_dir.display()
     );
