@@ -51,7 +51,11 @@ pub(crate) fn choose_board(detected: bool) -> Board {
 /// The first question: what kind of device this is, and upstream's
 /// `c_mod`: whether it is the LilyGO LoRa T3S3, an RNode product whose
 /// models are asked from their own list.
-#[allow(unused_assignments, clippy::all)]
+#[allow(
+    unused_assignments,
+    clippy::all,
+    reason = "follows upstream's question flow line by line, keeping its assignments and control flow as written there"
+)]
 #[rustfmt::skip]
 fn choose_product(detected: bool) -> (Option<u8>, bool) {
     let mut selected_product: Option<u8> = None;
@@ -339,7 +343,11 @@ fn choose_product(detected: bool) -> (Option<u8>, bool) {
 
 /// The questions that follow: the model, board or microcontroller of
 /// `selected_product`, and the firmware for it.
-#[allow(unused_assignments, clippy::all)]
+#[allow(
+    unused_assignments,
+    clippy::all,
+    reason = "follows upstream's question flow line by line, keeping its assignments and control flow as written there"
+)]
 #[rustfmt::skip]
 fn choose_model(selected_product: Option<u8>, c_mod: bool) -> Board {
     let mut selected_model: Option<u8> = None;

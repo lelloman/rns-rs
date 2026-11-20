@@ -1,4 +1,7 @@
-#![allow(dead_code)] // The full table; later stages use the rest.
+#![allow(
+    dead_code,
+    reason = "the full ROM table as the firmware defines it; not every product, board or model is matched yet"
+)]
 //! Device identification constants and tables, as upstream `rnodeconf.py`'s
 //! `ROM` class and its `products`, `platforms`, `mcus` and `models` define
 //! them.
