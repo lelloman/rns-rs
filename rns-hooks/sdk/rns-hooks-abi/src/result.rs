@@ -1,3 +1,5 @@
+//! The verdict and result a hook returns.
+
 /// Verdict returned by a hook program.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,10 +27,13 @@ impl Verdict {
     }
 }
 
-/// Verdict constants for `no_std` contexts where the enum cannot be used directly.
+/// [`Verdict::Continue`] as the raw value of [`HookResult::verdict`].
 pub const VERDICT_CONTINUE: u32 = Verdict::Continue as u32;
+/// [`Verdict::Drop`] as the raw value of [`HookResult::verdict`].
 pub const VERDICT_DROP: u32 = Verdict::Drop as u32;
+/// [`Verdict::Modify`] as the raw value of [`HookResult::verdict`].
 pub const VERDICT_MODIFY: u32 = Verdict::Modify as u32;
+/// [`Verdict::Halt`] as the raw value of [`HookResult::verdict`].
 pub const VERDICT_HALT: u32 = Verdict::Halt as u32;
 
 /// Result returned from a hook invocation.
@@ -39,14 +44,22 @@ pub const VERDICT_HALT: u32 = Verdict::Halt as u32;
 pub struct HookResult {
     /// Verdict as `u32` discriminant (see [`Verdict`]).
     pub verdict: u32,
+    /// Address in the WASM guest's linear memory of the replacement bytes
+    /// for a `Modify` verdict. Native hooks pass the bytes through
+    /// [`RnsNativeHostApi::set_modified_data`](crate::native::RnsNativeHostApi::set_modified_data)
+    /// instead, and the host ignores this field for them.
     pub modified_data_offset: u32,
     /// Length of modified data. 0 if no modification.
     pub modified_data_len: u32,
+    /// Reserved and ignored by the host: hooks inject actions through the
+    /// `inject_action` host function.
     pub inject_actions_offset: u32,
-    /// Number of injected actions. 0 if no injections.
+    /// Reserved and ignored by the host, like `inject_actions_offset`.
     pub inject_actions_count: u32,
+    /// Reserved and ignored by the host: hooks log through the `log` host
+    /// function.
     pub log_offset: u32,
-    /// Length of log message. 0 if no log message.
+    /// Reserved and ignored by the host, like `log_offset`.
     pub log_len: u32,
 }
 

@@ -1,38 +1,68 @@
+//! Provider event payload the sentinel hook emits for backbone peer events.
+
+/// Provider event payload type of an encoded [`BackbonePeerPayload`].
 pub const BACKBONE_PEER_PAYLOAD_TYPE: &str = "sentinel.backbone_peer.v1";
+/// Capacity of [`BackbonePeerPayload::server_interface_name`], in bytes.
 pub const BACKBONE_PEER_INTERFACE_NAME_MAX: usize = 96;
 
+/// Length of an encoded [`BackbonePeerPayload`]:
 /// peer_ip_family:1 + peer_ip:16 + peer_port:2 + server_interface_id:8 +
 /// peer_interface_id:8 + connected_for_secs:8 + had_received_data:1 +
 /// penalty_level:1 + blacklist_for_secs:8 + event_kind:1 +
 /// interface_name_len:1 + interface_name:96 = 151
 pub const BACKBONE_PEER_ENCODED_LEN: usize = 151;
 
-/// Event kind discriminants matching the 5 `BackbonePeer*` hook points.
+/// [`BackbonePeerPayload::event_kind`] for a peer that connected.
 pub const EVENT_CONNECTED: u8 = 0;
+/// [`BackbonePeerPayload::event_kind`] for a peer that disconnected.
 pub const EVENT_DISCONNECTED: u8 = 1;
+/// [`BackbonePeerPayload::event_kind`] for a peer dropped as idle.
 pub const EVENT_IDLE_TIMEOUT: u8 = 2;
+/// [`BackbonePeerPayload::event_kind`] for a peer whose writes stalled.
 pub const EVENT_WRITE_STALL: u8 = 3;
+/// [`BackbonePeerPayload::event_kind`] for a peer IP that was penalized.
 pub const EVENT_PENALTY: u8 = 4;
 
+/// A backbone peer event, as the sentinel hook reports it.
+///
+/// The fields mirror [`BackbonePeerContext`](crate::context::BackbonePeerContext),
+/// plus the server interface's name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackbonePeerPayload {
     /// 4 = IPv4, 6 = IPv6
     pub peer_ip_family: u8,
-    /// IPv4-mapped-to-16 or raw IPv6
+    /// The 16 bytes of an IPv6 address; for IPv4, either the IPv4-mapped
+    /// form (`::ffff:a.b.c.d`) or the 4 octets followed by zeroes, depending
+    /// on the producer.
     pub peer_ip: [u8; 16],
+    /// The peer's TCP port; 0 for a penalty.
     pub peer_port: u16,
+    /// The backbone server interface the peer connected to.
     pub server_interface_id: u64,
+    /// The interface spawned for the peer; 0 for a penalty.
     pub peer_interface_id: u64,
+    /// How long the connection lasted, in seconds; 0 when the event has none.
     pub connected_for_secs: u64,
+    /// The peer sent data before it disconnected.
     pub had_received_data: bool,
+    /// Penalty level of a penalty event; 0 for the other events.
     pub penalty_level: u8,
+    /// How long the peer's IP is blacklisted, in seconds, for a penalty
+    /// event; 0 for the other events.
     pub blacklist_for_secs: u64,
+    /// One of the `EVENT_*` values. The bundled hooks leave it 0: the event
+    /// envelope's attach point already names the event.
     pub event_kind: u8,
+    /// Number of valid bytes at the start of `server_interface_name`, at
+    /// most [`BACKBONE_PEER_INTERFACE_NAME_MAX`].
     pub server_interface_name_len: u8,
+    /// UTF-8 name of the server interface, zero-padded; possibly truncated.
     pub server_interface_name: [u8; BACKBONE_PEER_INTERFACE_NAME_MAX],
 }
 
 impl BackbonePeerPayload {
+    /// Encodes the payload into its fixed-size wire form, clamping the name
+    /// length to [`BACKBONE_PEER_INTERFACE_NAME_MAX`].
     pub fn encode(&self) -> [u8; BACKBONE_PEER_ENCODED_LEN] {
         let mut buf = [0u8; BACKBONE_PEER_ENCODED_LEN];
         buf[0] = self.peer_ip_family;
@@ -52,6 +82,8 @@ impl BackbonePeerPayload {
         buf
     }
 
+    /// Decodes a payload; `None` unless `bytes` is exactly
+    /// [`BACKBONE_PEER_ENCODED_LEN`] long. The name length is clamped.
     pub fn decode(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != BACKBONE_PEER_ENCODED_LEN {
             return None;
@@ -86,7 +118,9 @@ impl BackbonePeerPayload {
         })
     }
 
-    /// Extract IPv4 address bytes if peer_ip_family == 4.
+    /// The IPv4 address from the last 4 bytes of `peer_ip` (the IPv4-mapped
+    /// form), or `None` unless `peer_ip_family` is 4. Gives zeroes for an
+    /// address stored in the first 4 bytes.
     pub fn ipv4_octets(&self) -> Option<[u8; 4]> {
         if self.peer_ip_family == 4 {
             let mut octets = [0u8; 4];
@@ -97,6 +131,8 @@ impl BackbonePeerPayload {
         }
     }
 
+    /// The server interface's name, or `None` if its bytes are not UTF-8
+    /// (a truncation can split a character).
     pub fn server_interface_name(&self) -> Option<&str> {
         let len = self.server_interface_name_len as usize;
         core::str::from_utf8(&self.server_interface_name[..len]).ok()

@@ -1,22 +1,38 @@
+//! Provider event payloads the stats hook emits.
+//!
+//! Each payload has a fixed-size little-endian encoding, and `decode`
+//! rejects any input whose length is not exactly the encoded length.
+
+/// Provider event payload type of an encoded [`PacketStatsPayload`].
 pub const PACKET_STATS_PAYLOAD_TYPE: &str = "stats.packet.v1";
+/// Length of an encoded [`PacketStatsPayload`]: flags:1 + packet_len:4 +
+/// interface_id:8 = 13
 pub const PACKET_STATS_ENCODED_LEN: usize = 13;
 
+/// Provider event payload type of an encoded [`AnnounceStatsPayload`].
 pub const ANNOUNCE_STATS_PAYLOAD_TYPE: &str = "stats.announce.v1";
-/// identity_hash:16 + destination_hash:16 + name_hash:10 + random_hash:10 + hops:1 + interface_id:8 = 61
+/// Length of an encoded [`AnnounceStatsPayload`]: identity_hash:16 + destination_hash:16 + name_hash:10 + random_hash:10 + hops:1 + interface_id:8 = 61
 pub const ANNOUNCE_STATS_ENCODED_LEN: usize = 61;
 
+/// Provider event payload type of an encoded [`LinkStatsPayload`].
 pub const LINK_STATS_PAYLOAD_TYPE: &str = "stats.link.v1";
-/// link_id:16 + interface_id:8 = 24
+/// Length of an encoded [`LinkStatsPayload`]: link_id:16 + interface_id:8 = 24
 pub const LINK_STATS_ENCODED_LEN: usize = 24;
 
+/// A packet seen at a packet hook point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PacketStatsPayload {
+    /// The packet's first header byte, as in
+    /// [`PacketContext::flags`](crate::context::PacketContext::flags).
     pub flags: u8,
+    /// The packet's length, in bytes.
     pub packet_len: u32,
+    /// Interface the packet arrived on or is leaving through.
     pub interface_id: u64,
 }
 
 impl PacketStatsPayload {
+    /// Encodes the payload into its wire form.
     pub fn encode(&self) -> [u8; PACKET_STATS_ENCODED_LEN] {
         let mut buf = [0u8; PACKET_STATS_ENCODED_LEN];
         buf[0] = self.flags;
@@ -25,6 +41,7 @@ impl PacketStatsPayload {
         buf
     }
 
+    /// Decodes a payload; `None` if `bytes` has the wrong length.
     pub fn decode(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != PACKET_STATS_ENCODED_LEN {
             return None;
@@ -41,17 +58,25 @@ impl PacketStatsPayload {
     }
 }
 
+/// A received announce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnnounceStatsPayload {
+    /// Hash of the announcing identity.
     pub identity_hash: [u8; 16],
+    /// The announced destination.
     pub destination_hash: [u8; 16],
+    /// Name hash of the announced destination.
     pub name_hash: [u8; 10],
+    /// The announce's random hash.
     pub random_hash: [u8; 10],
+    /// Hop count of the announce.
     pub hops: u8,
+    /// Interface the announce arrived on.
     pub interface_id: u64,
 }
 
 impl AnnounceStatsPayload {
+    /// Encodes the payload into its wire form.
     pub fn encode(&self) -> [u8; ANNOUNCE_STATS_ENCODED_LEN] {
         let mut buf = [0u8; ANNOUNCE_STATS_ENCODED_LEN];
         buf[0..16].copy_from_slice(&self.identity_hash);
@@ -63,6 +88,7 @@ impl AnnounceStatsPayload {
         buf
     }
 
+    /// Decodes a payload; `None` if `bytes` has the wrong length.
     pub fn decode(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != ANNOUNCE_STATS_ENCODED_LEN {
             return None;
@@ -89,13 +115,17 @@ impl AnnounceStatsPayload {
     }
 }
 
+/// A link lifecycle event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinkStatsPayload {
+    /// The link's id.
     pub link_id: [u8; 16],
+    /// Interface the link runs over; 0 when unknown.
     pub interface_id: u64,
 }
 
 impl LinkStatsPayload {
+    /// Encodes the payload into its wire form.
     pub fn encode(&self) -> [u8; LINK_STATS_ENCODED_LEN] {
         let mut buf = [0u8; LINK_STATS_ENCODED_LEN];
         buf[0..16].copy_from_slice(&self.link_id);
@@ -103,6 +133,7 @@ impl LinkStatsPayload {
         buf
     }
 
+    /// Decodes a payload; `None` if `bytes` has the wrong length.
     pub fn decode(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != LINK_STATS_ENCODED_LEN {
             return None;
