@@ -1823,6 +1823,7 @@ mod tests {
 
     /// A source that fires a timer every `interval`, queueing a tick each
     /// time, and holds itself unwatched after its first read.
+    #[cfg(feature = "iface-backbone")]
     struct TimerSource {
         stream: std::os::unix::net::UnixStream,
         tx: EventSender,
@@ -1832,6 +1833,7 @@ mod tests {
         reads: Arc<AtomicUsize>,
     }
 
+    #[cfg(feature = "iface-backbone")]
     impl LoopSource for TimerSource {
         fn fd(&self) -> std::os::fd::RawFd {
             std::os::fd::AsRawFd::as_raw_fd(&self.stream)
@@ -1854,6 +1856,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "iface-backbone")]
     fn source_timers_wake_the_receiver_and_held_sources_stay_unwatched() {
         use std::io::Write;
         let (tx, rx) = channel();
@@ -1895,6 +1898,12 @@ mod tests {
 
     /// A loop source that never reads its socket and pauses on every pass,
     /// so the socket stays readable; counts how often it is served.
+    #[cfg(any(
+        feature = "iface-tcp",
+        feature = "iface-local",
+        feature = "iface-auto",
+        feature = "iface-backbone"
+    ))]
     struct PausingSource {
         stream: std::os::unix::net::UnixStream,
         served: Arc<Mutex<usize>>,
@@ -1902,6 +1911,12 @@ mod tests {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
 
+    #[cfg(any(
+        feature = "iface-tcp",
+        feature = "iface-local",
+        feature = "iface-auto",
+        feature = "iface-backbone"
+    ))]
     impl LoopSource for PausingSource {
         fn fd(&self) -> std::os::fd::RawFd {
             std::os::fd::AsRawFd::as_raw_fd(&self.stream)
@@ -1918,6 +1933,12 @@ mod tests {
         }
     }
 
+    #[cfg(any(
+        feature = "iface-tcp",
+        feature = "iface-local",
+        feature = "iface-auto",
+        feature = "iface-backbone"
+    ))]
     struct PausingPair {
         peer: std::os::unix::net::UnixStream,
         served: Arc<Mutex<usize>>,
@@ -1925,6 +1946,12 @@ mod tests {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
 
+    #[cfg(any(
+        feature = "iface-tcp",
+        feature = "iface-local",
+        feature = "iface-auto",
+        feature = "iface-backbone"
+    ))]
     fn pausing_source(tx: &EventSender) -> PausingPair {
         use std::io::Write;
         let (ours, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
@@ -1950,6 +1977,12 @@ mod tests {
         }
     }
 
+    #[cfg(any(
+        feature = "iface-tcp",
+        feature = "iface-local",
+        feature = "iface-auto",
+        feature = "iface-backbone"
+    ))]
     fn serve_once(rx: &EventReceiver) {
         let mut ready = crate::poll::Events::new();
         rx.wait(&mut ready, Some(Duration::from_millis(20)))
@@ -1958,6 +1991,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(
+        feature = "iface-tcp",
+        feature = "iface-local",
+        feature = "iface-auto",
+        feature = "iface-backbone"
+    ))]
     fn a_paused_source_is_served_again_only_after_the_tick_resume() {
         let (tx, rx) = channel();
         let pair = pausing_source(&tx);
@@ -1980,6 +2019,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(
+        feature = "iface-tcp",
+        feature = "iface-local",
+        feature = "iface-auto",
+        feature = "iface-backbone"
+    ))]
     fn a_paused_source_that_stops_is_closed_at_the_next_sweep() {
         let (tx, rx) = channel();
         let pair = pausing_source(&tx);

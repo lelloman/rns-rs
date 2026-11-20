@@ -1091,8 +1091,10 @@ mod tests {
     }
 
     /// A socket writer that asks for egress rules.
+    #[cfg(feature = "iface-backbone")]
     struct Budgeted(TcpStream, Option<LoopEgress>);
 
+    #[cfg(feature = "iface-backbone")]
     impl Writer for Budgeted {
         fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
             unreachable!("the loop writer writes the descriptor itself")
@@ -1108,6 +1110,7 @@ mod tests {
     }
 
     /// A writer whose peer never reads, with a small send buffer.
+    #[cfg(feature = "iface-backbone")]
     fn budgeted(egress: LoopEgress) -> Fixture {
         let (tx, rx) = crate::event::channel();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1138,6 +1141,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "iface-backbone")]
     fn an_egress_budget_drops_frames_instead_of_waiting() {
         let control = EgressControl::new(EGRESS_HIGH_WATERMARK);
         let mut f = budgeted(LoopEgress::budget(control.clone()));
@@ -1167,6 +1171,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "iface-backbone")]
     fn a_stall_watched_peer_that_stops_reading_is_dropped_on_a_tick() {
         let control = EgressControl::new(EGRESS_HIGH_WATERMARK);
         let flag = Arc::new(AtomicBool::new(false));

@@ -1520,7 +1520,7 @@ pub struct StartContext {
 }
 
 /// A start context with default options, for factory tests.
-#[cfg(test)]
+#[cfg(all(test, any(feature = "iface-tcp", feature = "iface-backbone")))]
 pub(crate) fn test_start_context(tx: EventSender) -> StartContext {
     StartContext {
         tx,
@@ -1664,6 +1664,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "iface-rnode")]
     fn listener_control_finish_runs_hook_on_every_clone() {
         let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let seen = Arc::clone(&count);
@@ -1684,6 +1685,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "iface-tcp")]
     fn tcp_interfaces_take_upstream_bitrate_and_fixed_mtu_keys() {
         let params = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
             pairs
@@ -1727,6 +1729,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "iface-tcp")]
     fn tcp_interfaces_take_the_flush_after_key() {
         let params = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
             pairs
@@ -1764,6 +1767,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "iface-tcp")]
     fn tcp_hardware_mtu_follows_fixed_mtu_then_the_bitrate_tier() {
         // Unconfigured: upstream's 10 Mbps guess and its tier.
         assert_eq!(tcp_bitrate(None), 10_000_000);
@@ -2050,11 +2054,13 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "iface-backbone")]
     struct EgressControlledBlockingWriter {
         inner: BlockingWriter,
         control: EgressControl,
     }
 
+    #[cfg(feature = "iface-backbone")]
     impl Writer for EgressControlledBlockingWriter {
         fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
             self.inner.send_frame(data)
@@ -2244,6 +2250,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "iface-backbone")]
     fn async_writer_shares_exact_egress_byte_valve_and_stall_gate() {
         let (event_tx, _event_rx) = crate::event::channel();
         let (entered_tx, entered_rx) = mpsc::channel();

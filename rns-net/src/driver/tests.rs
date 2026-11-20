@@ -3804,6 +3804,7 @@ fn dynamic_interface_inherits_parent_announce_cap() {
     assert_eq!(registered.stamp_costs.pr_cost, Some(StampCost::ZERO));
 }
 
+#[cfg(feature = "iface-backbone")]
 #[test]
 fn dynamic_burst_counts_are_scoped_to_parent_and_cleaned_on_disconnect() {
     let (callbacks, ..) = MockCallbacks::new();
@@ -16854,6 +16855,7 @@ fn link_packet_proofs_checked_on_the_pool_complete_only_their_own_receipt() {
     assert!(!driver.proofs.sent_packets.contains_key(&hash));
 }
 
+#[cfg(all(feature = "iface-tcp", feature = "iface-local"))]
 #[test]
 fn interface_stats_report_upstream_display_names_and_listeners() {
     let (callbacks, ..) = MockCallbacks::new();
@@ -17010,7 +17012,7 @@ fn interface_stats_report_upstream_display_names_and_listeners() {
 
 /// Upstream lists the interfaces that spawn peers or subinterfaces as
 /// interfaces of their own.
-#[cfg(feature = "iface-i2p")]
+#[cfg(all(feature = "iface-i2p", feature = "iface-auto"))]
 #[test]
 fn interface_stats_report_peer_spawning_parents() {
     let (callbacks, ..) = MockCallbacks::new();

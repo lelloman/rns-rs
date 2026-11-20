@@ -284,11 +284,12 @@ impl Default for TransmitBuffer {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "iface-local", feature = "iface-backbone")))]
 mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "iface-backbone")]
     fn a_peer_that_was_idle_is_not_dead_on_its_first_evaluation() {
         // A loop writer stops evaluating while it has nothing buffered; the
         // first evaluation after a long idle spell must not read the whole
@@ -520,6 +521,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "iface-backbone")]
     fn egress_controller_gates_after_three_zero_drain_ticks_and_releases_below_mid() {
         let mut controller = EgressController::default();
         let buffered = EGRESS_MID_WATERMARK + 1;
@@ -540,6 +542,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "iface-backbone")]
     fn egress_controller_applies_eta_hysteresis() {
         let mut controller = EgressController::default();
         let buffered = EGRESS_MID_WATERMARK * 2;
@@ -561,6 +564,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "iface-backbone")]
     fn egress_controller_resets_empty_and_escalates_dead_peer() {
         let mut controller = EgressController::default();
         let buffered = EGRESS_MID_WATERMARK + 1;
@@ -616,6 +620,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "iface-backbone")]
     fn fresh_egress_state_does_not_immediately_reescalate_after_teardown() {
         let buffered = EGRESS_MID_WATERMARK + 1;
         {
