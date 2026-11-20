@@ -61,7 +61,6 @@ pub fn run_linux_client(
     let requested = requested_routes(client)?;
     let hello = ControlMessage::ClientHello {
         versions: vec![VERSION],
-        capabilities: 0,
         maximum_packet_size: client.tun_mtu.unwrap_or(1280),
         requested_routes: requested.clone(),
     };
@@ -316,7 +315,6 @@ fn reconnect(
         link_id,
         ControlMessage::ClientHello {
             versions: vec![VERSION],
-            capabilities: 0,
             maximum_packet_size: client.tun_mtu.unwrap_or(1280),
             requested_routes: requested.to_vec(),
         },

@@ -17,7 +17,7 @@ use crate::linux::LinuxConfigurator;
 use crate::packet::validate_ipv4;
 use crate::platform::{PacketDevice, TunnelConfig, TunnelConfigurator};
 use crate::policy::{ClientGrant, GatewayPolicy};
-use crate::protocol::{ControlMessage, VERSION};
+use crate::protocol::{ControlMessage, ProtocolError, VERSION};
 use crate::reticulum::{NodeEvent, PrivateNode};
 use crate::runtime::SharedStatus;
 use crate::session::{GatewaySession, GatewayState};
@@ -297,6 +297,15 @@ pub fn run_linux_gateway(
                     };
                     let message = match ControlMessage::decode(&payload) {
                         Ok(message) => message,
+                        Err(ProtocolError::UnsupportedVersion(version)) => {
+                            log::warn!(
+                                "rntun gateway rejected protocol version {version} (speaks {VERSION}): link={}",
+                                hex(&link_id)
+                            );
+                            reject(&private, link_id, 4, "unsupported protocol version");
+                            sessions.remove(&link_id);
+                            continue;
+                        }
                         Err(_) => {
                             log::warn!(
                                 "rntun gateway rejected malformed control message: link={}",
