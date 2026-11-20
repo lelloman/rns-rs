@@ -103,9 +103,9 @@ impl BridgeTransport for BleTransport {
     }
 }
 
-// Device identity
+// Device identity, as RNode firmware reports it on ESP32 boards
 const PLATFORM_ESP32: u8 = 0x80;
-const MCU_ESP32: u8 = 0x01;
+const MCU_ESP32: u8 = 0x81;
 
 const DETECT_POLL_MS: u32 = 5;
 
