@@ -8,20 +8,30 @@ use std::sync::{Arc, Mutex};
 
 use crate::status::RuntimeStatus;
 
+/// The live [`RuntimeStatus`], shared between the worker that updates it and
+/// the status server. Clones share the same status. A poisoned lock is
+/// recovered, not propagated.
 #[derive(Clone)]
 pub struct SharedStatus(pub Arc<Mutex<RuntimeStatus>>);
 impl SharedStatus {
+    /// Share `status`.
     pub fn new(status: RuntimeStatus) -> Self {
         Self(Arc::new(Mutex::new(status)))
     }
+    /// A copy of the current status.
     pub fn snapshot(&self) -> RuntimeStatus {
         self.0.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
+    /// Change the status under the lock.
     pub fn update(&self, update: impl FnOnce(&mut RuntimeStatus)) {
         update(&mut self.0.lock().unwrap_or_else(|p| p.into_inner()))
     }
 }
 
+/// The status Unix socket: a client writes one JSON [`StatusRequest`] line
+/// and reads back one JSON [`RuntimeStatus`] line.
+///
+/// [`StatusRequest`]: crate::status::StatusRequest
 #[cfg(unix)]
 pub mod status_socket {
     use std::fs;
@@ -36,6 +46,8 @@ pub mod status_socket {
     use super::SharedStatus;
     use crate::status::{RuntimeStatus, StatusRequest};
 
+    /// Serves status queries from a background thread until dropped. Drop
+    /// stops the thread (within about 50 ms) and removes the socket file.
     pub struct StatusServer {
         stop: Arc<AtomicBool>,
         thread: Option<JoinHandle<()>>,
@@ -43,6 +55,11 @@ pub mod status_socket {
     }
 
     impl StatusServer {
+        /// Bind the socket at `path` with mode 0600, creating parent
+        /// directories, and start serving `status`. A stale socket file is
+        /// replaced; one with a live listener fails with
+        /// [`io::ErrorKind::AddrInUse`]. Requests longer than 512 bytes or
+        /// not a valid status request get no answer.
         pub fn start(path: PathBuf, status: SharedStatus) -> io::Result<Self> {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
@@ -126,6 +143,8 @@ pub mod status_socket {
         }
     }
 
+    /// Ask the server at `path` for its status. Blocks until the server
+    /// answers or closes the connection.
     pub fn query(path: &Path) -> io::Result<RuntimeStatus> {
         let mut stream = UnixStream::connect(path)?;
         let request = StatusRequest {

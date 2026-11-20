@@ -1,3 +1,6 @@
+//! Linux backend: a `/dev/net/tun` device, configured with `ip` and
+//! `resolvectl`.
+
 #![allow(unsafe_code, reason = "OS calls through libc")]
 
 use std::ffi::CString;
@@ -23,12 +26,17 @@ struct IfReq {
     padding: [u8; 22],
 }
 
+/// A Linux TUN device (`IFF_TUN | IFF_NO_PI`): reads and writes are raw IP
+/// packets. Closed when dropped.
 pub struct TunDevice {
     file: File,
     name: String,
 }
 
 impl TunDevice {
+    /// Create or attach to the TUN interface `requested_name` (ASCII
+    /// letters, digits, `_` and `-`, shorter than `IFNAMSIZ`). Needs
+    /// `CAP_NET_ADMIN`. The device starts in blocking mode.
     pub fn open(requested_name: &str) -> io::Result<Self> {
         validate_interface_name(requested_name)?;
         let file = OpenOptions::new()
@@ -91,10 +99,14 @@ impl TunDevice {
         Ok(Self { file, name })
     }
 
+    /// Interface name.
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// A second handle on the same device (a duplicated descriptor), for
+    /// example to read on one thread and write on another. The blocking
+    /// mode is shared between the handles.
     pub fn try_clone(&self) -> io::Result<Self> {
         Ok(Self {
             file: self.file.try_clone()?,
@@ -102,6 +114,7 @@ impl TunDevice {
         })
     }
 
+    /// Switch the descriptor between blocking and non-blocking mode.
     pub fn set_nonblocking(&self, enabled: bool) -> io::Result<()> {
         // SAFETY: F_GETFL takes no pointer argument; the fd belongs to `self.file`,
         // open while `self` is borrowed.
@@ -206,6 +219,13 @@ pub struct LinuxConfigurator {
 }
 
 impl LinuxConfigurator {
+    /// A configurator whose underlay traffic carries firewall mark
+    /// `underlay_mark` (nonzero) and uses `physical_table`, while tunnel
+    /// routes go in `routing_table`. Policy rules are installed at
+    /// `underlay_priority`, which must be below `tunnel_priority`. The
+    /// ownership journal, which records how to undo each change, lives at
+    /// `journal_path`. Fails with [`io::ErrorKind::InvalidInput`] on a zero
+    /// mark or inverted priorities.
     pub fn new(
         underlay_mark: u32,
         routing_table: u32,
@@ -232,11 +252,16 @@ impl LinuxConfigurator {
         })
     }
 
+    /// Use the already-configured TUN descriptor `fd` on the next
+    /// [`TunnelConfigurator::apply`] instead of opening a new device.
     pub fn with_tun_fd(mut self, fd: OwnedFd) -> Self {
         self.inherited_fd = Some(fd);
         self
     }
 
+    /// Undo the changes recorded in the ownership journal, if one exists,
+    /// and delete it. Refuses with [`io::ErrorKind::WouldBlock`] while the
+    /// process that wrote the journal is still alive.
     pub fn cleanup_stale(&mut self) -> io::Result<()> {
         if !self.journal_path.exists() {
             return Ok(());

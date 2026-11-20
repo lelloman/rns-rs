@@ -1,3 +1,5 @@
+//! The private Reticulum node rntun runs, and the events it reports.
+
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,32 +13,55 @@ use rns_net::{Callbacks, Destination, RnsNode};
 
 use crate::identity::{load_or_create, signature_keys};
 
+/// Events the node queues for [`PrivateNode::events`] before further ones
+/// are dropped and counted (see [`PrivateNode::dropped_callbacks`]).
 pub const CALLBACK_QUEUE_CAPACITY: usize = 256;
+/// Application name of the gateway destination.
 pub const APP_NAME: &str = "rntun";
+/// Aspect of the gateway destination (`rntun.gateway`).
 pub const GATEWAY_ASPECT: &str = "gateway";
 
+/// A node callback, queued for the rntun worker. Link ids, destination
+/// hashes and identity hashes are raw 16-byte values.
 #[derive(Debug)]
 pub enum NodeEvent {
+    /// An announce was received.
     Announce(rns_net::AnnouncedIdentity),
+    /// The path to this destination hash changed.
     PathUpdated([u8; 16]),
+    /// A Link came up; `initiator` is true for Links this node opened.
     LinkEstablished {
+        /// The Link.
         link_id: [u8; 16],
+        /// Whether this node opened the Link.
         initiator: bool,
     },
+    /// A Link went down.
     LinkClosed {
+        /// The Link.
         link_id: [u8; 16],
+        /// Why, when known.
         reason: Option<rns_core::link::TeardownReason>,
     },
+    /// The peer on a Link proved its identity.
     RemoteIdentified {
+        /// The Link.
         link_id: [u8; 16],
+        /// The peer's identity hash.
         identity: [u8; 16],
     },
+    /// An rntun control frame arrived on a Link's Channel.
     Control {
+        /// The Link.
         link_id: [u8; 16],
+        /// The encoded [`ControlMessage`](crate::ControlMessage).
         payload: Vec<u8>,
     },
+    /// An rntun packet fragment arrived on a Link.
     PacketData {
+        /// The Link.
         link_id: [u8; 16],
+        /// The encoded [`PacketFragment`](crate::PacketFragment).
         payload: Vec<u8>,
     },
 }
@@ -98,14 +123,24 @@ impl Callbacks for NodeCallbacks {
     }
 }
 
+/// An application-private Reticulum node with the rntun identity and a
+/// bounded event queue.
 pub struct PrivateNode {
+    /// The running node.
     pub node: RnsNode,
+    /// This host's rntun identity (not the node's transport identity).
     pub identity: Identity,
+    /// Node events, oldest first.
     pub events: Receiver<NodeEvent>,
     dropped_callbacks: Arc<AtomicU64>,
 }
 
 impl PrivateNode {
+    /// Load or create the identity at `identity_file` and start a private
+    /// node from the Reticulum config in `node_config_dir`, keeping its state
+    /// under `state_dir/reticulum`. `underlay_mark`, when set, overrides the
+    /// configured socket mark. Fails when the identity or the node cannot be
+    /// set up.
     pub fn start(
         node_config_dir: &Path,
         state_dir: &Path,
@@ -133,10 +168,13 @@ impl PrivateNode {
         })
     }
 
+    /// Events dropped so far because the queue was full.
     pub fn dropped_callbacks(&self) -> u64 {
         self.dropped_callbacks.load(Ordering::Relaxed)
     }
 
+    /// Register the inbound `rntun.gateway` destination for this identity
+    /// and accept Links to it.
     pub fn register_gateway(&self) -> io::Result<Destination> {
         let destination = Destination::single_in(
             APP_NAME,
@@ -153,6 +191,8 @@ impl PrivateNode {
         Ok(destination)
     }
 
+    /// Queue an announce of the gateway destination with app data
+    /// `RNTU\x01`.
     pub fn announce_gateway(&self, destination: &Destination) -> io::Result<()> {
         self.node
             .announce_queued(destination, &self.identity, Some(b"RNTU\x01"))
@@ -160,13 +200,17 @@ impl PrivateNode {
             .map_err(node_error)
     }
 
+    /// Open a Link to the gateway `destination` and identify on it, blocking
+    /// for up to `timeout`. Requests a path first when none is known. Returns
+    /// the Link id. Other events that arrive meanwhile are consumed and lost.
     pub fn connect(&self, destination: [u8; 16], timeout: Duration) -> io::Result<[u8; 16]> {
         self.connect_with_cancel(destination, timeout, || false)
     }
 
     /// Establish and identify a Link while periodically checking cancellation.
     /// This is used by embedded hosts whose service lifecycle must not wait for
-    /// the complete path or Link timeout before shutting down.
+    /// the complete path or Link timeout before shutting down. Fails with
+    /// [`io::ErrorKind::Interrupted`] once `cancelled` is set.
     pub fn connect_cancellable(
         &self,
         destination: [u8; 16],

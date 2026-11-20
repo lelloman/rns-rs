@@ -1,3 +1,5 @@
+//! The Linux client: connects to a gateway and runs the tunnel.
+
 use rns_core::display::hex;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,6 +23,12 @@ use crate::{RNTUN_CHANNEL_MSGTYPE, RNTUN_LINK_CONTEXT};
 const SETUP_TIMEOUT: Duration = Duration::from_secs(60);
 const SEND_ADMISSION_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Run a client session to the gateway at `destination` until `stop` is
+/// set, reconnecting when the Link drops, and keep `status` current. Blocks
+/// the calling thread. Needs the `[client]` section, root privileges for the
+/// TUN device and routing, and `ip` and (for a full tunnel) `resolvectl`.
+/// The host configuration is torn down before returning; an error during
+/// setup or teardown is returned.
 pub fn run_linux_client(
     config: &Config,
     destination: [u8; 16],
@@ -397,6 +405,8 @@ fn random_packet_id() -> u64 {
     }
 }
 
+/// Undo the interface, routing and DNS changes left by a client that exited uncleanly (see
+/// [`LinuxConfigurator::cleanup_stale`]). Needs the `[client]` section.
 pub fn cleanup_linux(config: &Config) -> io::Result<()> {
     let client = config
         .client

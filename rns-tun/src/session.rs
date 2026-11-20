@@ -1,3 +1,7 @@
+//! Handshake state machines for the two ends of a session. They do no I/O:
+//! the caller sends and receives the messages and feeds in a monotonic
+//! clock (`now`, a `Duration` since a fixed start of its choosing).
+
 use std::fmt;
 use std::net::Ipv4Addr;
 use std::time::Duration;
@@ -5,33 +9,55 @@ use std::time::Duration;
 use crate::policy::Cidr;
 use crate::protocol::ControlMessage;
 
+/// Where a [`ClientSession`] is in the handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientState {
+    /// Waiting for the Link to the gateway.
     PendingLink,
+    /// Link up and identified to the gateway; hello not yet sent.
     Identified,
+    /// Hello sent; waiting for the gateway's accept.
     Negotiating,
+    /// Accept received; configuring the tunnel interface.
     DeviceSetup,
+    /// `ClientReady` sent; waiting for `ServerReady`.
     AwaitingServerReady,
+    /// Packets may flow.
     Active,
+    /// Closing after a timeout or a local close.
     Closing,
+    /// Closed. No method of [`ClientSession`] enters this state.
     Closed,
 }
+/// Where a [`GatewaySession`] is in the handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GatewayState {
+    /// Link up; waiting for the client to identify itself.
     PendingIdentity,
+    /// Identified; the hello is being answered.
     Negotiating,
+    /// Accept sent; waiting for `ClientReady`.
     DeviceSetup,
+    /// Packets may flow.
     Active,
+    /// Closing after a timeout.
     Closing,
+    /// Closed. No method of [`GatewaySession`] enters this state.
     Closed,
 }
 
+/// A handshake step that the state machine refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionError {
+    /// The step is not allowed in the current state.
     InvalidState,
+    /// The message names a different session epoch.
     EpochMismatch,
+    /// A second, different hello arrived before identification.
     ConflictingDuplicate,
+    /// A handshake deadline passed; the session is now closing.
     Timeout,
+    /// The message is not the kind this step expects.
     ProtocolViolation,
 }
 impl fmt::Display for SessionError {
@@ -41,24 +67,38 @@ impl fmt::Display for SessionError {
 }
 impl std::error::Error for SessionError {}
 
+/// The session terms from a gateway's `ServerAccept`, as the client took
+/// them. Not validated here; the caller checks them against its own
+/// configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcceptedConfig {
+    /// Session epoch.
     pub epoch: u64,
+    /// The client's tunnel address.
     pub address: Ipv4Addr,
+    /// Prefix length of the tunnel subnet.
     pub prefix_len: u8,
+    /// The gateway's tunnel address.
     pub gateway: Ipv4Addr,
+    /// Routes granted through the tunnel.
     pub routes: Vec<Cidr>,
+    /// Resolvers to install; non-empty for a full tunnel.
     pub dns_servers: Vec<Ipv4Addr>,
+    /// Largest packet in bytes.
     pub mtu: u16,
+    /// Time allowed from the accept to `ServerReady`.
     pub setup_timeout: Duration,
 }
 
+/// Client side of the handshake. Each method is one step and fails with
+/// [`SessionError::InvalidState`] when called out of order.
 pub struct ClientSession {
     state: ClientState,
     accepted: Option<AcceptedConfig>,
     deadline: Option<Duration>,
 }
 impl ClientSession {
+    /// A session in [`ClientState::PendingLink`].
     pub fn new() -> Self {
         Self {
             state: ClientState::PendingLink,
@@ -66,12 +106,15 @@ impl ClientSession {
             deadline: None,
         }
     }
+    /// Current state.
     pub fn state(&self) -> ClientState {
         self.state
     }
+    /// The accepted terms, once [`ClientSession::accept`] has succeeded.
     pub fn accepted(&self) -> Option<&AcceptedConfig> {
         self.accepted.as_ref()
     }
+    /// The Link is up and the client has identified on it.
     pub fn link_established(&mut self) -> Result<(), SessionError> {
         if self.state != ClientState::PendingLink {
             return Err(SessionError::InvalidState);
@@ -79,6 +122,7 @@ impl ClientSession {
         self.state = ClientState::Identified;
         Ok(())
     }
+    /// The `ClientHello` has been sent.
     pub fn hello_sent(&mut self) -> Result<(), SessionError> {
         if self.state != ClientState::Identified {
             return Err(SessionError::InvalidState);
@@ -87,6 +131,8 @@ impl ClientSession {
         Ok(())
     }
     /// Take the server's accept, returning the configuration it grants.
+    /// Starts the setup deadline from `now`. Fails with
+    /// [`SessionError::ProtocolViolation`] for any other message.
     pub fn accept(
         &mut self,
         message: &ControlMessage,
@@ -122,6 +168,8 @@ impl ClientSession {
             setup_timeout: Duration::from_secs(*setup_timeout_secs as u64),
         }))
     }
+    /// The tunnel interface is configured with `applied_dns`. Returns the
+    /// `ClientReady` message to send.
     pub fn device_ready(
         &mut self,
         applied_dns: Vec<Ipv4Addr>,
@@ -140,6 +188,9 @@ impl ClientSession {
             dns_servers: applied_dns,
         })
     }
+    /// The gateway's `ServerReady` for `epoch` arrived; the session becomes
+    /// active and the deadline is cleared. A repeat for the active epoch is
+    /// accepted again.
     pub fn server_ready(&mut self, epoch: u64) -> Result<(), SessionError> {
         if self.state == ClientState::Active
             && self.accepted.as_ref().is_some_and(|a| a.epoch == epoch)
@@ -156,6 +207,8 @@ impl ClientSession {
         self.deadline = None;
         Ok(())
     }
+    /// Fail with [`SessionError::Timeout`], moving to
+    /// [`ClientState::Closing`], once the setup deadline has passed.
     pub fn check_timeout(&mut self, now: Duration) -> Result<(), SessionError> {
         if self.deadline.is_some_and(|d| now >= d) {
             self.state = ClientState::Closing;
@@ -163,6 +216,9 @@ impl ClientSession {
         }
         Ok(())
     }
+    /// Move to [`ClientState::Closing`] and return the `Close` message to
+    /// send. Before an accept the message has epoch 0, which does not
+    /// encode.
     pub fn begin_close(
         &mut self,
         reason: u16,
@@ -185,6 +241,9 @@ impl Default for ClientSession {
     }
 }
 
+/// Gateway side of the handshake for one incoming Link. Each method is one
+/// step and fails with [`SessionError::InvalidState`] when called out of
+/// order.
 pub struct GatewaySession {
     state: GatewayState,
     identity: Option<[u8; 16]>,
@@ -194,6 +253,8 @@ pub struct GatewaySession {
     setup_deadline: Option<Duration>,
 }
 impl GatewaySession {
+    /// A session for a Link that came up at `now`; the client must identify
+    /// within `identify_timeout`.
     pub fn new(now: Duration, identify_timeout: Duration) -> Self {
         Self {
             state: GatewayState::PendingIdentity,
@@ -204,12 +265,18 @@ impl GatewaySession {
             setup_deadline: None,
         }
     }
+    /// Current state.
     pub fn state(&self) -> GatewayState {
         self.state
     }
+    /// The client's identity hash, once identified.
     pub fn identity(&self) -> Option<[u8; 16]> {
         self.identity
     }
+    /// Hold an encoded hello that arrived before the client identified, to
+    /// be handled after [`GatewaySession::identified`]. An identical repeat
+    /// is ignored; a different one fails with
+    /// [`SessionError::ConflictingDuplicate`].
     pub fn receive_preidentify_hello(&mut self, encoded: Vec<u8>) -> Result<(), SessionError> {
         if self.state != GatewayState::PendingIdentity {
             return Err(SessionError::InvalidState);
@@ -223,6 +290,8 @@ impl GatewaySession {
             Some(_) => Err(SessionError::ConflictingDuplicate),
         }
     }
+    /// The client identified as `identity`. Returns the hello held by
+    /// [`GatewaySession::receive_preidentify_hello`], if any.
     pub fn identified(&mut self, identity: [u8; 16]) -> Result<Option<Vec<u8>>, SessionError> {
         if self.state != GatewayState::PendingIdentity {
             return Err(SessionError::InvalidState);
@@ -231,6 +300,8 @@ impl GatewaySession {
         self.state = GatewayState::Negotiating;
         Ok(self.buffered_hello.take())
     }
+    /// A `ServerAccept` with `epoch` (nonzero) was sent at `now`; the client
+    /// has `setup_timeout` to answer with `ClientReady`.
     pub fn accepted(
         &mut self,
         epoch: u64,
@@ -245,6 +316,9 @@ impl GatewaySession {
         self.state = GatewayState::DeviceSetup;
         Ok(())
     }
+    /// The client's `ClientReady` for `epoch` arrived; the session becomes
+    /// active. Returns the `ServerReady` to send, also for a repeat on the
+    /// active epoch.
     pub fn client_ready(&mut self, epoch: u64) -> Result<ControlMessage, SessionError> {
         if self.state == GatewayState::Active && self.epoch == Some(epoch) {
             return Ok(ControlMessage::ServerReady {
@@ -263,9 +337,13 @@ impl GatewaySession {
             session_epoch: epoch,
         })
     }
+    /// Whether packet fragments may be accepted (the session is active).
     pub fn permits_packet_data(&self) -> bool {
         self.state == GatewayState::Active
     }
+    /// Fail with [`SessionError::Timeout`], moving to
+    /// [`GatewayState::Closing`], once the identify or setup deadline has
+    /// passed.
     pub fn check_timeout(&mut self, now: Duration) -> Result<(), SessionError> {
         if self.state == GatewayState::PendingIdentity && now >= self.identify_deadline
             || self.setup_deadline.is_some_and(|d| now >= d)

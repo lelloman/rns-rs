@@ -1,3 +1,5 @@
+//! IPv4 CIDRs and the gateway's per-client access policy.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::Ipv4Addr;
@@ -7,6 +9,8 @@ use serde::Deserialize;
 
 use crate::protocol::ROUTE_MAX;
 
+/// An IPv4 network: a network address with its host bits cleared and a
+/// prefix length of 0..=32. Parses from and displays as `a.b.c.d/n`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Cidr {
     network: Ipv4Addr,
@@ -14,6 +18,9 @@ pub struct Cidr {
 }
 
 impl Cidr {
+    /// The network of `prefix_len` bits containing `address`; host bits are
+    /// cleared. Fails with [`PolicyError::InvalidCidr`] when `prefix_len`
+    /// exceeds 32.
     pub fn new(address: Ipv4Addr, prefix_len: u8) -> Result<Self, PolicyError> {
         if prefix_len > 32 {
             return Err(PolicyError::InvalidCidr);
@@ -24,18 +31,24 @@ impl Cidr {
             prefix_len,
         })
     }
+    /// Network address (host bits zero).
     pub fn network(self) -> Ipv4Addr {
         self.network
     }
+    /// Prefix length in bits, 0..=32.
     pub fn prefix_len(self) -> u8 {
         self.prefix_len
     }
+    /// Whether `address` lies in this network.
     pub fn contains(self, address: Ipv4Addr) -> bool {
         (u32::from(address) & prefix_mask(self.prefix_len)) == u32::from(self.network)
     }
+    /// Whether `other` lies entirely within this network.
     pub fn contains_cidr(self, other: Cidr) -> bool {
         self.prefix_len <= other.prefix_len && self.contains(other.network)
     }
+    /// The narrower of the two networks when one contains the other, `None`
+    /// when they are disjoint (two CIDRs never partly overlap).
     pub fn intersection(self, other: Cidr) -> Option<Cidr> {
         if self.contains_cidr(other) {
             Some(other)
@@ -45,6 +58,7 @@ impl Cidr {
             None
         }
     }
+    /// Last address of the network (all host bits set).
     pub fn broadcast(self) -> Ipv4Addr {
         Ipv4Addr::from(u32::from(self.network) | !prefix_mask(self.prefix_len))
     }
@@ -73,15 +87,28 @@ fn prefix_mask(prefix: u8) -> u32 {
     }
 }
 
+/// Why a CIDR or a policy file was rejected. Variants carrying a `String`
+/// name the client identity hash as written in the file, except
+/// `InvalidToml`, which carries the parser's message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyError {
+    /// Not an `a.b.c.d/n` network with `n` at most 32.
     InvalidCidr,
+    /// An identity hash is not 32 hex characters, or a client is listed
+    /// twice.
     InvalidIdentity,
+    /// The gateway address is not a CIDR with prefix /1 through /30.
     InvalidGatewaySubnet,
+    /// A client address is unparsable, outside the gateway subnet, or the
+    /// subnet's network, broadcast or gateway address.
     InvalidClientAddress(String),
+    /// Two clients share this address.
     DuplicateAddress(Ipv4Addr),
+    /// A client's routes include `0.0.0.0/0` but `allow_internet` is false.
     ContradictoryInternetGrant(String),
+    /// A client lists more routes than the protocol can carry.
     TooManyRoutes(String),
+    /// The file is not valid TOML or does not match the policy schema.
     InvalidToml(String),
 }
 
@@ -105,24 +132,42 @@ impl fmt::Display for PolicyError {
 }
 impl std::error::Error for PolicyError {}
 
+/// What the policy grants one client identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientGrant {
+    /// A disabled client is treated as absent; defaults to true.
     pub enabled: bool,
+    /// Tunnel address assigned to the client, inside the gateway subnet.
     pub address: Ipv4Addr,
+    /// Networks the client may route through the gateway, canonicalized.
     pub allow_routes: Vec<Cidr>,
+    /// Whether the client may take the default route `0.0.0.0/0`.
     pub allow_internet: bool,
+    /// Identity hashes of the clients this client may reach directly.
+    /// One-way: the peer needs its own entry to reach back.
     pub allow_peers: BTreeSet<[u8; 16]>,
+    /// Seconds without traffic after which an active session is closed;
+    /// `None` never closes it for idleness.
     pub idle_timeout_secs: Option<u32>,
 }
 
+/// A parsed gateway policy file: the gateway subnet and the clients allowed
+/// to connect, keyed by identity hash. Unlisted identities are refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatewayPolicy {
+    /// The gateway subnet.
     pub gateway: Cidr,
+    /// The gateway's own address in that subnet.
     pub gateway_address: Ipv4Addr,
+    /// Grants by client identity hash, disabled ones included.
     pub clients: BTreeMap<[u8; 16], ClientGrant>,
 }
 
 impl GatewayPolicy {
+    /// Parse a policy file: a `[gateway]` table with `address` (CIDR such
+    /// as `10.77.0.1/24`) and a `[clients.<identity hash>]` table per client
+    /// with `address` and optional `enabled`, `allow_routes`,
+    /// `allow_internet`, `allow_peers` and `idle_timeout_seconds`.
     pub fn parse_toml(input: &str) -> Result<Self, PolicyError> {
         let raw: RawPolicy =
             toml::from_str(input).map_err(|e| PolicyError::InvalidToml(e.to_string()))?;
@@ -193,10 +238,16 @@ impl GatewayPolicy {
         })
     }
 
+    /// The grant of `identity`, `None` when it is unlisted or disabled.
     pub fn grant(&self, identity: &[u8; 16]) -> Option<&ClientGrant> {
         self.clients.get(identity).filter(|g| g.enabled)
     }
 
+    /// The routes to grant `identity` for its `requested` ones: each request
+    /// narrowed to the allowed routes it overlaps (the default route only
+    /// with `allow_internet`), plus the /32 of each enabled peer it may reach
+    /// that falls within a request. Canonicalized; empty for an unknown or
+    /// disabled identity.
     pub fn accepted_routes(&self, identity: &[u8; 16], requested: &[Cidr]) -> Vec<Cidr> {
         let Some(grant) = self.grant(identity) else {
             return Vec::new();
@@ -226,6 +277,8 @@ impl GatewayPolicy {
         canonicalize_routes(accepted)
     }
 
+    /// Whether `source` may reach `destination` directly: both are enabled
+    /// and `destination` is in `source`'s peer list.
     pub fn peer_allowed(&self, source: &[u8; 16], destination: &[u8; 16]) -> bool {
         self.grant(source)
             .is_some_and(|grant| grant.allow_peers.contains(destination))
@@ -233,6 +286,7 @@ impl GatewayPolicy {
     }
 }
 
+/// Every overlap between a requested and an allowed network, canonicalized.
 pub fn intersect_route_sets(requested: &[Cidr], allowed: &[Cidr]) -> Vec<Cidr> {
     let mut result = Vec::new();
     for request in requested {
@@ -245,6 +299,8 @@ pub fn intersect_route_sets(requested: &[Cidr], allowed: &[Cidr]) -> Vec<Cidr> {
     canonicalize_routes(result)
 }
 
+/// Sort `routes`, drop duplicates and drop each network contained in
+/// another one of the list.
 pub fn canonicalize_routes(mut routes: Vec<Cidr>) -> Vec<Cidr> {
     routes.sort();
     routes.dedup();
@@ -260,7 +316,7 @@ pub fn canonicalize_routes(mut routes: Vec<Cidr>) -> Vec<Cidr> {
     result
 }
 
-pub fn parse_identity_hash(value: &str) -> Result<[u8; 16], PolicyError> {
+pub(crate) fn parse_identity_hash(value: &str) -> Result<[u8; 16], PolicyError> {
     if value.len() != 32 {
         return Err(PolicyError::InvalidIdentity);
     }
@@ -272,6 +328,9 @@ pub fn parse_identity_hash(value: &str) -> Result<[u8; 16], PolicyError> {
     Ok(out)
 }
 
+/// Whether `address` is one that must never be tunnelled or assigned:
+/// `0.0.0.0/8`, loopback `127.0.0.0/8`, link-local `169.254.0.0/16`,
+/// multicast `224.0.0.0/4` or reserved `240.0.0.0/4` (broadcast included).
 pub fn is_forbidden_special(address: Ipv4Addr) -> bool {
     let value = u32::from(address);
     (value & 0xff00_0000) == 0

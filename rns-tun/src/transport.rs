@@ -1,3 +1,6 @@
+//! Per-session packet transport: validates and authorizes IPv4 packets and
+//! turns them into encoded fragments and back.
+
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::net::Ipv4Addr;
@@ -10,21 +13,36 @@ use crate::packet::{
 use crate::policy::Cidr;
 use crate::protocol::{PacketFragment, ProtocolError, FRAGMENT_HEADER_LEN};
 
+/// Which way a packet travels; selects the address checks applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PacketDirection {
+    /// From the client into the tunnel: the source must be the client's
+    /// address and the destination inside an accepted route.
     ClientToGateway,
+    /// From the gateway to the client: the destination must be the client's
+    /// address and the source the gateway or inside an accepted route.
     GatewayToClient,
 }
 
+/// Why a packet or fragment was refused.
 #[derive(Debug)]
 pub enum TransportError {
+    /// The IPv4 packet or the reassembly failed.
     Packet(PacketError),
+    /// The fragment frame did not decode or encode.
     Protocol(ProtocolError),
+    /// The fragment belongs to another session epoch, or the transport was
+    /// created with epoch 0.
     WrongEpoch,
+    /// The source address is not allowed in this direction.
     UnauthorizedSource(Ipv4Addr),
+    /// The destination address is not allowed in this direction.
     UnauthorizedDestination(Ipv4Addr),
+    /// The Link MDU leaves no room for payload after the fragment header.
     LinkMduTooSmall,
+    /// Packet ids have run out; the session must be renegotiated.
     PacketIdExhausted,
+    /// A fragment of a recently delivered packet arrived again.
     Replay,
 }
 impl fmt::Display for TransportError {
@@ -44,6 +62,10 @@ impl From<ProtocolError> for TransportError {
     }
 }
 
+/// One session's packet path in both directions. Outgoing packets get
+/// increasing packet ids; incoming ones are reassembled (at most 32 pending
+/// packets, 48 000 bytes, 30 s idle expiry) and checked against the last
+/// 1024 delivered ids for replays.
 pub struct PacketTransport {
     epoch: u64,
     assigned: Ipv4Addr,
@@ -57,6 +79,10 @@ pub struct PacketTransport {
 }
 
 impl PacketTransport {
+    /// A transport for session `epoch` (nonzero) with the client at
+    /// `assigned`, the gateway at `gateway`, the accepted `routes` and the
+    /// negotiated `mtu` in bytes. Outgoing packet ids start at
+    /// `initial_packet_id`; pick it at random so ids differ across sessions.
     pub fn new(
         epoch: u64,
         assigned: Ipv4Addr,
@@ -81,6 +107,8 @@ impl PacketTransport {
         })
     }
 
+    /// Validate and authorize `packet` for `direction`, then split it into
+    /// encoded fragment frames that each fit in `link_mdu` bytes.
     pub fn packetize(
         &mut self,
         packet: &[u8],
@@ -104,6 +132,9 @@ impl PacketTransport {
             .collect()
     }
 
+    /// Take one encoded fragment received for `direction` at `now` (a
+    /// monotonic clock). Returns the packet once complete and authorized,
+    /// `None` while fragments are missing.
     pub fn receive(
         &mut self,
         encoded: &[u8],
