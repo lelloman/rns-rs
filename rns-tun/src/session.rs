@@ -26,8 +26,6 @@ pub enum ClientState {
     Active,
     /// Closing after a timeout or a local close.
     Closing,
-    /// Closed. No method of [`ClientSession`] enters this state.
-    Closed,
 }
 /// Where a [`GatewaySession`] is in the handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,8 +40,6 @@ pub enum GatewayState {
     Active,
     /// Closing after a timeout.
     Closing,
-    /// Closed. No method of [`GatewaySession`] enters this state.
-    Closed,
 }
 
 /// A handshake step that the state machine refused.
@@ -224,9 +220,9 @@ impl ClientSession {
         reason: u16,
         diagnostic: String,
     ) -> Result<ControlMessage, SessionError> {
-        if matches!(self.state, ClientState::Closed | ClientState::Closing) {
+        if self.state == ClientState::Closing {
             return Err(SessionError::InvalidState);
-        };
+        }
         self.state = ClientState::Closing;
         Ok(ControlMessage::Close {
             session_epoch: self.accepted.as_ref().map_or(0, |a| a.epoch),
