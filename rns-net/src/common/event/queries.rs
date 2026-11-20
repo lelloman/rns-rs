@@ -48,9 +48,6 @@ pub enum QueryRequest {
     ActiveLinkCount,
     /// Upstream's `Transport.link_distribution()`.
     LinkDistribution,
-    /// This node's destination type names (upstream
-    /// `Transport.destination_type_map` and `flagged_type_map`).
-    DestinationTypeNames,
     /// Drop a specific path.
     DropPath {
         /// The destination.
@@ -344,8 +341,6 @@ pub enum QueryResponse {
     ActiveLinkCount(usize),
     /// Link totals per destination.
     LinkDistribution(Vec<LinkDistributionEntry>),
-    /// This node's destination type names.
-    DestinationTypeNames(crate::destination_types::DestinationTypeNames),
     /// A path was dropped.
     DropPath(bool),
     /// Number of paths dropped.
