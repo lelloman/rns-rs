@@ -19,11 +19,9 @@ use std::time::{Duration, Instant};
 use rns_core::transport::types::InterfaceId;
 
 use super::{
-    compute_discovery_token, create_data_recv_socket, create_multicast_recv_socket,
-    create_unicast_recv_socket, enumerate_interfaces, handle_data, reconcile_auto_workers,
-    reconcile_worker_keys, take_peers_for_worker, AutoWorkerContext, AutoWorkerEntry,
-    AutoWorkerKey, DiscoveryHandler, PeerKey, RunningAutoWorker, SharedState,
-    WorkerReconcileAction, AUTO_RESCAN_INTERVAL, HW_MTU,
+    compute_discovery_token, cull_timed_out_peers, handle_data, log_worker_online,
+    open_worker_sockets, rescan_workers, take_peers_for_worker, AutoWorkerContext, AutoWorkerEntry,
+    AutoWorkerKey, DiscoveryHandler, RunningAutoWorker, SharedState, AUTO_RESCAN_INTERVAL, HW_MTU,
 };
 use crate::event::{Event, LoopContext, LoopSource, SourceStatus};
 use crate::interface::lock_or_recover;
@@ -143,40 +141,20 @@ impl Controller {
     /// interfaces and drop vanished ones.
     fn rescan(&mut self, cx: &mut LoopContext<'_>) {
         let context = &self.context;
-        let desired = enumerate_interfaces(&self.allowed, &self.ignored)
-            .iter()
-            .map(AutoWorkerKey::from_local_interface)
-            .collect::<Vec<_>>();
-        lock_or_recover(&context.shared, "auto shared state").link_local_addresses = desired
-            .iter()
-            .map(|key| PeerKey {
-                link_local_addr: key.link_local_addr.clone(),
-                if_index: key.if_index,
-            })
-            .collect();
-
-        let mut down = Vec::new();
-        for action in reconcile_worker_keys(self.workers.keys().cloned(), desired.clone()) {
-            if let WorkerReconcileAction::Remove(key) = action {
-                down.extend(take_peers_for_worker(&context.shared, &key));
-            }
-        }
-        if !down.is_empty() {
-            let _ = context
-                .tx
-                .push_from_loop(down.into_iter().map(Event::InterfaceDown));
-        }
-
-        if desired.is_empty() && self.workers.is_empty() {
-            log::warn!(
-                "[{}] No suitable IPv6 link-local interfaces found",
-                context.name
-            );
-        }
-
-        reconcile_auto_workers(&mut self.workers, desired, |key| {
-            start_worker(key, context, &self.running, cx)
-        });
+        rescan_workers(
+            context,
+            &self.allowed,
+            &self.ignored,
+            &mut self.workers,
+            |down| {
+                if !down.is_empty() {
+                    let _ = context
+                        .tx
+                        .push_from_loop(down.into_iter().map(Event::InterfaceDown));
+                }
+            },
+            |key| start_worker(key, context, &self.running, cx),
+        );
         let workers = &self.workers;
         self.senders
             .retain(|key, _| matches!(workers.get(key), Some(AutoWorkerEntry::Running(_))));
@@ -191,25 +169,13 @@ impl Controller {
     /// What the peer-jobs thread does: report peers gone silent as down.
     fn cull_peers(&self) {
         let context = &self.context;
-        let peer_timeout_secs = lock_or_recover(&context.runtime, "auto runtime").peer_timeout_secs;
-        let timed_out = lock_or_recover(&context.shared, "auto shared state")
-            .remove_timed_out_peers(crate::time::now(), peer_timeout_secs);
+        let timed_out = cull_timed_out_peers(&context.shared, &context.runtime, &context.name);
         if timed_out.is_empty() {
             return;
         }
-        for (peer_key, _) in &timed_out {
-            log::info!(
-                "[{}] Peer timed out: {}%{}",
-                context.name,
-                peer_key.link_local_addr,
-                peer_key.if_index
-            );
-        }
-        let _ = context.tx.push_from_loop(
-            timed_out
-                .into_iter()
-                .map(|(_, iface_id)| Event::InterfaceDown(iface_id)),
-        );
+        let _ = context
+            .tx
+            .push_from_loop(timed_out.into_iter().map(Event::InterfaceDown));
     }
 }
 
@@ -284,22 +250,7 @@ fn start_worker(
     running: &Arc<AtomicBool>,
     cx: &mut LoopContext<'_>,
 ) -> io::Result<RunningAutoWorker> {
-    let mark = context.underlay_mark;
-    let sockets = [
-        create_multicast_recv_socket(
-            &context.mcast_ip,
-            context.discovery_port,
-            key.if_index,
-            mark,
-        )?,
-        create_unicast_recv_socket(
-            &key.link_local_addr,
-            context.unicast_discovery_port,
-            key.if_index,
-            mark,
-        )?,
-        create_data_recv_socket(&key.link_local_addr, context.data_port, key.if_index, mark)?,
-    ];
+    let sockets = open_worker_sockets(key, context)?;
     for socket in &sockets {
         socket.set_nonblocking(true)?;
     }
@@ -335,13 +286,7 @@ fn start_worker(
             }),
         );
     }
-    log::info!(
-        "[{}] AutoInterface worker online on {} {}%{}",
-        context.name,
-        key.ifname,
-        key.link_local_addr,
-        key.if_index
-    );
+    log_worker_online(key, context);
     Ok(RunningAutoWorker {
         running: worker_running,
     })
@@ -412,6 +357,7 @@ impl LoopSource for AutoSocket {
 
 #[cfg(test)]
 mod tests {
+    use super::super::PeerKey;
     use super::*;
     use std::net::Ipv6Addr;
 

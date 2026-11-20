@@ -480,20 +480,35 @@ pub(super) fn peer_jobs_loop(
         );
         thread::sleep(interval);
 
-        let now = crate::time::now();
-        let peer_timeout_secs = lock_or_recover(&runtime, "auto runtime").peer_timeout_secs;
+        for iface_id in cull_timed_out_peers(&shared, &runtime, name) {
+            let _ = tx.send(Event::InterfaceDown(iface_id));
+        }
+    }
+}
 
-        let timed_out = lock_or_recover(&shared, "auto shared state")
-            .remove_timed_out_peers(now, peer_timeout_secs);
+/// Forget the peers not heard from within the peer timeout, for either I/O
+/// mode: returns their interfaces, to report down.
+pub(super) fn cull_timed_out_peers(
+    shared: &Mutex<SharedState>,
+    runtime: &Mutex<AutoRuntime>,
+    name: &str,
+) -> Vec<InterfaceId> {
+    let now = crate::time::now();
+    let peer_timeout_secs = lock_or_recover(runtime, "auto runtime").peer_timeout_secs;
 
-        for (peer_key, iface_id) in &timed_out {
+    let timed_out =
+        lock_or_recover(shared, "auto shared state").remove_timed_out_peers(now, peer_timeout_secs);
+
+    timed_out
+        .into_iter()
+        .map(|(peer_key, iface_id)| {
             log::info!(
                 "[{}] Peer timed out: {}%{}",
                 name,
                 peer_key.link_local_addr,
                 peer_key.if_index
             );
-            let _ = tx.send(Event::InterfaceDown(*iface_id));
-        }
-    }
+            iface_id
+        })
+        .collect()
 }

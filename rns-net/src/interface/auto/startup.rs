@@ -120,11 +120,10 @@ pub(super) fn start_threads(
         let allowed = config.allowed_interfaces.clone();
         let ignored = config.ignored_interfaces.clone();
         let running = running.clone();
-        let name = config.name.clone();
         thread::Builder::new()
-            .name(format!("auto-supervisor-{}", name))
+            .name(format!("auto-supervisor-{}", config.name))
             .spawn(move || {
-                auto_supervisor_loop(allowed, ignored, worker_context, running, &name);
+                auto_supervisor_loop(allowed, ignored, worker_context, running);
             })?;
     }
 

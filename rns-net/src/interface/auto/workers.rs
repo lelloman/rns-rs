@@ -147,51 +147,105 @@ pub(super) struct AutoWorkerContext {
     pub(super) underlay_mark: Option<u32>,
 }
 
+/// Adopt the host's network interfaces as they are now, for either I/O
+/// mode: note their addresses as ours, forget the peers found through
+/// interfaces that went away (`report_down` gets their interfaces, to
+/// report down), and start and stop workers to match.
+pub(super) fn rescan_workers(
+    context: &AutoWorkerContext,
+    allowed: &[String],
+    ignored: &[String],
+    workers: &mut HashMap<AutoWorkerKey, AutoWorkerEntry>,
+    report_down: impl FnOnce(Vec<InterfaceId>),
+    start_worker: impl FnMut(&AutoWorkerKey) -> io::Result<RunningAutoWorker>,
+) {
+    let desired = enumerate_interfaces(allowed, ignored)
+        .iter()
+        .map(AutoWorkerKey::from_local_interface)
+        .collect::<Vec<_>>();
+
+    lock_or_recover(&context.shared, "auto shared state").link_local_addresses = desired
+        .iter()
+        .map(|key| PeerKey {
+            link_local_addr: key.link_local_addr.clone(),
+            if_index: key.if_index,
+        })
+        .collect();
+
+    let mut down = Vec::new();
+    for action in reconcile_worker_keys(workers.keys().cloned(), desired.clone()) {
+        if let WorkerReconcileAction::Remove(key) = action {
+            down.extend(take_peers_for_worker(&context.shared, &key));
+        }
+    }
+    report_down(down);
+
+    if desired.is_empty() && workers.is_empty() {
+        log::warn!(
+            "[{}] No suitable IPv6 link-local interfaces found",
+            context.name
+        );
+    }
+
+    reconcile_auto_workers(workers, desired, start_worker);
+}
+
+/// Open a worker's receiving sockets: multicast discovery, unicast
+/// discovery and data.
+pub(super) fn open_worker_sockets(
+    key: &AutoWorkerKey,
+    context: &AutoWorkerContext,
+) -> io::Result<[UdpSocket; 3]> {
+    let mark = context.underlay_mark;
+    Ok([
+        create_multicast_recv_socket(
+            &context.mcast_ip,
+            context.discovery_port,
+            key.if_index,
+            mark,
+        )?,
+        create_unicast_recv_socket(
+            &key.link_local_addr,
+            context.unicast_discovery_port,
+            key.if_index,
+            mark,
+        )?,
+        create_data_recv_socket(&key.link_local_addr, context.data_port, key.if_index, mark)?,
+    ])
+}
+
+/// Say a worker is serving `key`.
+pub(super) fn log_worker_online(key: &AutoWorkerKey, context: &AutoWorkerContext) {
+    log::info!(
+        "[{}] AutoInterface worker online on {} {}%{}",
+        context.name,
+        key.ifname,
+        key.link_local_addr,
+        key.if_index
+    );
+}
+
 pub(super) fn auto_supervisor_loop(
     allowed_interfaces: Vec<String>,
     ignored_interfaces: Vec<String>,
     context: AutoWorkerContext,
     running: Arc<AtomicBool>,
-    name: &str,
 ) {
     let mut workers: HashMap<AutoWorkerKey, AutoWorkerEntry> = HashMap::new();
 
     while running.load(Ordering::Relaxed) {
-        let interfaces = enumerate_interfaces(&allowed_interfaces, &ignored_interfaces);
-        let desired = interfaces
-            .iter()
-            .map(AutoWorkerKey::from_local_interface)
-            .collect::<Vec<_>>();
-
-        {
-            let mut state = lock_or_recover(&context.shared, "auto shared state");
-            state.link_local_addresses = desired
-                .iter()
-                .map(|key| PeerKey {
-                    link_local_addr: key.link_local_addr.clone(),
-                    if_index: key.if_index,
-                })
-                .collect();
-        }
-
-        let removed_workers = reconcile_worker_keys(workers.keys().cloned(), desired.clone())
-            .into_iter()
-            .filter_map(|action| match action {
-                WorkerReconcileAction::Remove(key) => Some(key),
-                WorkerReconcileAction::Add(_) => None,
-            })
-            .collect::<Vec<_>>();
-        for key in &removed_workers {
-            remove_peers_for_worker(&context.shared, &context.tx, key);
-        }
-
-        if desired.is_empty() && workers.is_empty() {
-            log::warn!("[{}] No suitable IPv6 link-local interfaces found", name);
-        }
-
-        reconcile_auto_workers(&mut workers, desired, |key| {
-            start_auto_worker(key, &context)
-        });
+        rescan_workers(
+            &context,
+            &allowed_interfaces,
+            &ignored_interfaces,
+            &mut workers,
+            |down| {
+                for iface_id in down {
+                    let _ = context.tx.send(Event::InterfaceDown(iface_id));
+                }
+            },
+            |key| start_auto_worker(key, &context),
+        );
 
         thread::sleep(Duration::from_secs_f64(AUTO_RESCAN_INTERVAL));
     }
@@ -207,24 +261,7 @@ pub(super) fn start_auto_worker(
     context: &AutoWorkerContext,
 ) -> io::Result<RunningAutoWorker> {
     let underlay_mark = context.underlay_mark;
-    let mcast_socket = create_multicast_recv_socket(
-        &context.mcast_ip,
-        context.discovery_port,
-        key.if_index,
-        context.underlay_mark,
-    )?;
-    let unicast_socket = create_unicast_recv_socket(
-        &key.link_local_addr,
-        context.unicast_discovery_port,
-        key.if_index,
-        context.underlay_mark,
-    )?;
-    let data_socket = create_data_recv_socket(
-        &key.link_local_addr,
-        context.data_port,
-        key.if_index,
-        context.underlay_mark,
-    )?;
+    let [mcast_socket, unicast_socket, data_socket] = open_worker_sockets(key, context)?;
 
     let worker_running = Arc::new(AtomicBool::new(true));
 
@@ -280,13 +317,7 @@ pub(super) fn start_auto_worker(
             })?;
     }
 
-    log::info!(
-        "[{}] AutoInterface worker online on {} {}%{}",
-        context.name,
-        key.ifname,
-        key.link_local_addr,
-        key.if_index
-    );
+    log_worker_online(key, context);
 
     Ok(RunningAutoWorker {
         running: worker_running,
