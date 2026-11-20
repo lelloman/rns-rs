@@ -1,8 +1,6 @@
 //! `rns-statsd`: records traffic statistics of a running Reticulum instance,
 //! collected through a hook, into an SQLite database.
 
-#![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
-
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read};
@@ -1205,26 +1203,8 @@ fn now_unix_ms() -> u64 {
 }
 
 fn install_signal_handlers() {
-    // SAFETY: `signal_handler` is an `extern "C" fn(c_int)`, the shape `sighandler_t` expects,
-    // and only stores an atomic flag, which is async-signal-safe.
-    unsafe {
-        libc::signal(
-            libc::SIGINT,
-            signal_handler as *const () as libc::sighandler_t,
-        );
-        libc::signal(
-            libc::SIGTERM,
-            signal_handler as *const () as libc::sighandler_t,
-        );
-        libc::signal(
-            libc::SIGHUP,
-            signal_handler as *const () as libc::sighandler_t,
-        );
-    }
-}
-
-extern "C" fn signal_handler(_sig: libc::c_int) {
-    SHOULD_STOP.store(true, Ordering::Relaxed);
+    use crate::signals::{SIGHUP, SIGINT, SIGTERM};
+    crate::signals::set_flag_on(&[SIGINT, SIGTERM, SIGHUP], &SHOULD_STOP);
 }
 
 #[cfg(test)]

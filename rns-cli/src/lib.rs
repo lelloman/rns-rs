@@ -27,6 +27,7 @@ pub mod rnx;
 #[cfg(feature = "sidecars")]
 pub mod sentineld;
 pub mod shared_instance;
+pub mod signals;
 #[cfg(feature = "sidecars")]
 pub mod statsd;
 pub mod stdout;

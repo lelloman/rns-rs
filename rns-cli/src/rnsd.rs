@@ -1,14 +1,13 @@
 //! `rnsd`, the Reticulum daemon: runs a node from the config directory
 //! until it is signalled to stop.
 
-#![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
-
 use rns_core::encoding::hex;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::args::{Args, Opt, OptionSpec};
+use crate::signals::{self, PipeWriter, SignalPipe};
 use rns_net::storage;
 use rns_net::{Callbacks, InterfaceId, RnsNode};
 
@@ -241,35 +240,25 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
         log::info!(target: crate::pylog::NOTICE_TARGET, "Started rnsd version {}", VERSION);
     }
 
-    let stop_rx = match StopPipe::open() {
+    let stop_rx = match SignalPipe::new(false) {
         Ok(pipe) => pipe,
         Err(e) => {
             log::error!("Failed to set up signal handling: {}", e);
             std::process::exit(1);
         }
     };
-
-    // SAFETY: `signal_handler` is an `extern "C" fn(c_int)`, the shape `sighandler_t` expects,
-    // and only calls `wake`, which does an atomic load and a `write(2)` of a local byte: both
-    // async-signal-safe.
-    unsafe {
-        libc::signal(
-            libc::SIGINT,
-            signal_handler as *const () as libc::sighandler_t,
-        );
-        libc::signal(
-            libc::SIGTERM,
-            signal_handler as *const () as libc::sighandler_t,
-        );
-    }
+    stop_rx.route(&[signals::SIGINT, signals::SIGTERM], 1);
 
     if interactive {
-        std::thread::spawn(interactive_console);
+        let stop = stop_rx.writer();
+        std::thread::spawn(move || interactive_console(&stop));
     }
 
     // Until SIGINT or SIGTERM, or with -i the end of the console's input.
     // As upstream's signal handlers, SIGINT stops rnsd at the console too.
-    stop_rx.wait();
+    if let Err(error) = stop_rx.wait() {
+        log::warn!("signal pipe failed: {}; shutting down", error);
+    }
 
     log::debug!("Shutting down...");
     node.shutdown();
@@ -302,55 +291,6 @@ fn register_native_sidecar_hooks() -> Result<(), String> {
     Ok(())
 }
 
-/// The write end of the pipe that wakes the main thread on SIGINT or
-/// SIGTERM; -1 until it is set up.
-static STOP_WRITE_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
-
-/// A pipe a signal handler writes to and the main thread waits on. Writing
-/// to a pipe is async-signal-safe, unlike sending on a channel, whose wake
-/// can be lost when the handler interrupts the thread waiting on it.
-struct StopPipe {
-    read_fd: libc::c_int,
-}
-
-impl StopPipe {
-    fn open() -> std::io::Result<Self> {
-        let mut fds = [0 as libc::c_int; 2];
-        // SAFETY: `fds` has room for the two descriptors.
-        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        for fd in fds {
-            // SAFETY: `fd` was just opened; children must not inherit it.
-            unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
-        }
-        STOP_WRITE_FD.store(fds[1], std::sync::atomic::Ordering::SeqCst);
-        Ok(Self { read_fd: fds[0] })
-    }
-
-    /// Block until a signal handler or the console wrote to the pipe.
-    fn wait(&self) {
-        let mut byte = 0u8;
-        loop {
-            // SAFETY: one byte into a valid buffer.
-            let n = unsafe { libc::read(self.read_fd, (&mut byte as *mut u8).cast(), 1) };
-            if n > 0 {
-                return;
-            }
-            let error = std::io::Error::last_os_error();
-            if n < 0 && error.kind() == std::io::ErrorKind::Interrupted {
-                continue;
-            }
-            log::warn!("signal pipe failed: {}; shutting down", error);
-            return;
-        }
-    }
-}
-
-extern "C" fn signal_handler(_sig: libc::c_int) {
-    wake();
-}
-
 fn print_usage(usage_name: &str) {
     crate::argparse::print_help("rnsd", usage_name);
 }
@@ -362,7 +302,7 @@ const CONSOLE_PROMPT: &str = ">>> ";
 /// Reticulum is up and stops when the console ends. There is no Python
 /// interpreter here: the console keeps that lifecycle and its prompt,
 /// banner and exit message on stderr, and says so for each statement.
-fn interactive_console() {
+fn interactive_console(stop: &PipeWriter) {
     use std::io::BufRead;
     eprint!(
         "rnsd {VERSION} interactive console\n\
@@ -382,18 +322,7 @@ fn interactive_console() {
         }
     }
     eprint!("\nnow exiting InteractiveConsole...\n");
-    wake();
-}
-
-/// Wake the main thread to shut down. Async-signal-safe.
-fn wake() {
-    let fd = STOP_WRITE_FD.load(std::sync::atomic::Ordering::SeqCst);
-    if fd >= 0 {
-        let byte = 1u8;
-        // SAFETY: `write` is async-signal-safe; the descriptor stays open
-        // for the life of the process.
-        unsafe { libc::write(fd, (&byte as *const u8).cast(), 1) };
-    }
+    stop.write(1);
 }
 
 /// What upstream's `rnsd --exampleconfig` prints, byte for byte

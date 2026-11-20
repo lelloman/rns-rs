@@ -2,8 +2,6 @@
 //! through a hook and blacklists peers that stall, time out, flap or
 //! reconnect too often.
 
-#![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
-
 use std::collections::HashMap;
 use std::io::{self, Read};
 use std::net::IpAddr;
@@ -991,32 +989,12 @@ fn read_provider_envelope(stream: &mut UnixStream) -> io::Result<Option<Provider
 }
 
 fn install_signal_handlers() {
-    // SAFETY: `signal_handler` is an `extern "C" fn(c_int)`, the shape `sighandler_t` expects. It
-    // only makes async-signal-safe calls: a raw `write` and an atomic store.
-    unsafe {
-        libc::signal(
-            libc::SIGINT,
-            signal_handler as *const () as libc::sighandler_t,
-        );
-        libc::signal(
-            libc::SIGTERM,
-            signal_handler as *const () as libc::sighandler_t,
-        );
-        libc::signal(
-            libc::SIGHUP,
-            signal_handler as *const () as libc::sighandler_t,
-        );
-    }
-}
-
-extern "C" fn signal_handler(_sig: libc::c_int) {
-    // Only async-signal-safe calls here: a raw write, not eprintln!, which
-    // takes the stderr lock and may allocate.
-    const MESSAGE: &[u8] = b"rns-sentineld: received signal, requesting shutdown\n";
-    // SAFETY: `MESSAGE` is a static of `MESSAGE.len()` bytes; a closed
-    // stderr only makes the write fail.
-    unsafe { libc::write(2, MESSAGE.as_ptr().cast(), MESSAGE.len()) };
-    SHOULD_STOP.store(true, Ordering::Relaxed);
+    use crate::signals::{SIGHUP, SIGINT, SIGTERM};
+    crate::signals::set_flag_on_with_message(
+        &[SIGINT, SIGTERM, SIGHUP],
+        &SHOULD_STOP,
+        b"rns-sentineld: received signal, requesting shutdown\n",
+    );
 }
 
 #[cfg(test)]

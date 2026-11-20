@@ -1,7 +1,5 @@
 //! The initiator: connecting to a listener and relaying a command.
 
-#![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
-
 use super::*;
 
 pub(super) fn initiate(opts: CliOptions) -> Result<i32, RnshError> {
@@ -90,11 +88,7 @@ pub(super) fn initiate(opts: CliOptions) -> Result<i32, RnshError> {
     let tty = stdin_is_tty.then(|| {
         let restorer = TtyRestorer::new(0);
         restorer.raw();
-        // SAFETY: `sigwinch_handler` is an `extern "C" fn(c_int)` and only stores an atomic flag,
-        // which is async-signal-safe.
-        unsafe {
-            libc::signal(libc::SIGWINCH, sigwinch_handler as *const () as usize);
-        }
+        crate::signals::set_flag_on(&[crate::signals::SIGWINCH], &SIGWINCH_SEEN);
         restorer
     });
     let _keep_tty = tty;
