@@ -52,11 +52,10 @@ pub(super) fn not_iterable(value: &Value) -> String {
     format!("argument of type '{}' is not iterable", type_name(value))
 }
 
-pub(super) fn clone_identity(identity: &Identity) -> Identity {
-    match (identity.get_private_key(), identity.get_public_key()) {
-        (Some(private), _) => Identity::from_private_key(&private),
-        (None, Some(public)) => Identity::from_public_key(&public).expect("a loaded key"),
-        (None, None) => unreachable!("an identity holds a key"),
+pub(super) fn clone_identity(identity: &Identity) -> Option<Identity> {
+    match identity.get_private_key() {
+        Some(private) => Some(Identity::from_private_key(&private)),
+        None => Identity::from_public_key(&identity.get_public_key()?).ok(),
     }
 }
 
@@ -174,11 +173,12 @@ pub(super) fn validate_rsg(
     if rsg_data.len() == SIGLEN {
         return Err("Cannot validate legacy rsg format".into());
     }
-    if rsg_data.len() < SIGLEN + 1 {
+    let Some((signature, envelope)) = rsg_data
+        .split_first_chunk::<SIGLEN>()
+        .filter(|(_, envelope)| !envelope.is_empty())
+    else {
         return Ok((false, None, None));
-    }
-    let signature: &[u8; SIGLEN] = rsg_data[..SIGLEN].try_into().expect("length");
-    let envelope = &rsg_data[SIGLEN..];
+    };
     let Ok(signed_data) = msgpack::unpack_exact(envelope) else {
         return Ok((false, None, None));
     };
@@ -207,7 +207,10 @@ pub(super) fn validate_rsg(
         return Ok((false, None, None));
     };
     let signing_identity = match required_signer {
-        Signer::Identity(identity) => clone_identity(identity),
+        Signer::Identity(identity) => match clone_identity(identity) {
+            Some(identity) => identity,
+            None => return Ok((false, None, None)),
+        },
         _ => {
             let Value::Bin(pubkey) = pubkey else {
                 return Ok((false, None, None));

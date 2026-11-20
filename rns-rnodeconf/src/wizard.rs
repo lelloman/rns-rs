@@ -925,8 +925,10 @@ pub(crate) fn run(
         }
     };
     println!("\nProbing device...");
-    let (reader, writer) = match crate::open_serial(&port) {
-        Ok(handles) => handles,
+    let opened =
+        crate::open_serial(&port).and_then(|(reader, writer)| crate::RNode::new(reader, writer));
+    let mut rnode = match opened {
+        Ok(rnode) => rnode,
         Err(e) => {
             log("Could not open the specified serial port. The contained exception was:");
             log(&format!(
@@ -936,7 +938,6 @@ pub(crate) fn run(
             graceful_exit(0);
         }
     };
-    let mut rnode = crate::RNode::new(reader, writer);
     if rnode.device_probe().is_err() {
         log("No answer from device");
     } else {

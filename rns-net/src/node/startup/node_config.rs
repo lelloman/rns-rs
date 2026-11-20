@@ -64,11 +64,14 @@ pub(super) fn shared_rpc_auth_key(
     private: bool,
 ) -> Option<[u8; 32]> {
     if !private && rns_config.reticulum.share_instance {
-        Some(crate::rpc::derive_auth_key(
-            &identity
-                .get_private_key()
-                .expect("transport identity has private key"),
-        ))
+        #[allow(
+            clippy::expect_used,
+            reason = "the transport identity is always loaded from or created as a private key"
+        )]
+        let key = identity
+            .get_private_key()
+            .expect("transport identity has private key");
+        Some(crate::rpc::derive_auth_key(&key))
     } else {
         None
     }

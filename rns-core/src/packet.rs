@@ -357,6 +357,7 @@ impl RawPacket {
         }
         // SAFETY: all-zero bytes are valid u8 values.
         let mut shared = unsafe { Arc::<[u8]>::new_zeroed_slice(len).assume_init() };
+        #[allow(clippy::expect_used, reason = "a just-allocated Arc is unique")]
         let out = Arc::get_mut(&mut shared).expect("a new Arc is unique");
         out[0] = flags.pack();
         out[1] = hops;
@@ -393,6 +394,7 @@ impl RawPacket {
             return Err(PacketError::ExceedsMtu);
         }
         let mut shared = Arc::<[u8]>::new_uninit_slice(len);
+        #[allow(clippy::expect_used, reason = "a just-allocated Arc is unique")]
         let out = Arc::get_mut(&mut shared).expect("a new Arc is unique");
         let mut at = 0;
         let mut put = |bytes: &[u8]| {

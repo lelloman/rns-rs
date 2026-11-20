@@ -52,8 +52,9 @@ pub(super) fn open_serial(port: &str) -> std::io::Result<(std::fs::File, std::fs
 /// say).
 pub(super) fn connect(port: &str) -> (RNode, device::Reported, u8) {
     log(&format!("Opening serial port {port}..."));
-    let (reader, writer) = match open_serial(port) {
-        Ok(handles) => handles,
+    let opened = open_serial(port).and_then(|(reader, writer)| RNode::new(reader, writer));
+    let mut rnode = match opened {
+        Ok(rnode) => rnode,
         Err(e) => {
             log("Could not open the specified serial port. The contained exception was:");
             log(&format!(
@@ -63,7 +64,6 @@ pub(super) fn connect(port: &str) -> (RNode, device::Reported, u8) {
             graceful_exit(0);
         }
     };
-    let mut rnode = RNode::new(reader, writer);
     if let Err(e) = rnode.device_probe() {
         log("Serial port opened, but RNode did not respond. Is a valid firmware installed?");
         println!("{e}");

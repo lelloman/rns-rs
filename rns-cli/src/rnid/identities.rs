@@ -73,11 +73,10 @@ impl Rnid {
                 println!("Could not decode specified data to a valid {which} Reticulum Identity");
                 self.exit(R_INVALID_IDENTITY);
             };
-            let key: &[u8; KEYSIZE] = bytes.as_slice().try_into().expect("checked length");
             if private {
-                return Some(Identity::from_private_key(key));
+                return Some(Identity::from_private_key(&bytes));
             }
-            return match Identity::from_public_key(key) {
+            return match Identity::from_public_key(&bytes) {
                 Ok(identity) => Some(identity),
                 Err(e) => {
                     println!("Could not create Reticulum identity from specified data: {e:?}");
@@ -90,13 +89,13 @@ impl Rnid {
 
     /// The key bytes `-m`/`-M` names: a file of exactly the key's size,
     /// else hex, base32 or base64 text of it.
-    pub(super) fn import_bytes(&self, spec: &str) -> Option<Vec<u8>> {
+    pub(super) fn import_bytes(&self, spec: &str) -> Option<[u8; KEYSIZE]> {
         let import_path = expanduser(spec);
         if isfile(&import_path) {
             if let Ok(input) = fs::read(&import_path) {
-                if input.len() == KEYSIZE {
+                if let Ok(key) = <[u8; KEYSIZE]>::try_from(input) {
                     println!("Reticulum Identity imported from {import_path}");
-                    return Some(input);
+                    return Some(key);
                 }
             }
         }
@@ -106,17 +105,17 @@ impl Rnid {
                     println!("Reticulum Identity imported from hex input");
                     // Hex with spaces in it decodes to fewer bytes; upstream
                     // then fails creating the identity.
-                    return Some(bytes).filter(|b| b.len() == KEYSIZE);
+                    return bytes.try_into().ok();
                 }
             }
         }
-        if let Some(bytes) = b32decode(spec).filter(|b| b.len() == KEYSIZE) {
+        if let Some(key) = b32decode(spec).and_then(|b| b.try_into().ok()) {
             println!("Reticulum Identity imported from base32 input");
-            return Some(bytes);
+            return Some(key);
         }
-        if let Some(bytes) = urlsafe_b64decode(spec).filter(|b| b.len() == KEYSIZE) {
+        if let Some(key) = urlsafe_b64decode(spec).and_then(|b| b.try_into().ok()) {
             println!("Reticulum Identity imported from base64 input");
-            return Some(bytes);
+            return Some(key);
         }
         None
     }
@@ -224,7 +223,10 @@ impl Rnid {
             println!("Cannot announce this destination, since the private key is not held");
             self.exit(R_NO_PRVKEY);
         };
-        let node = self.node.as_ref().expect("started");
+        let node = self
+            .node
+            .as_ref()
+            .ok_or_else(|| "the instance is not running".to_string())?;
         let destination = rns_net::Destination::single_in(
             &app_name,
             &aspects,

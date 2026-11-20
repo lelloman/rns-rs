@@ -314,8 +314,9 @@ pub(super) fn route_via_link_table_shared<B: AsRef<[u8]>>(
     let outbound_interface =
         link_table_outbound_interface(packet, link_entry, receiving_interface)?;
     let mut raw: PacketBytes = packet.raw.as_ref().into();
-    Arc::get_mut(&mut raw).expect("fresh forwarding buffer is uniquely owned")[1] =
-        hop_rewrite.hop_byte(packet);
+    #[allow(clippy::expect_used, reason = "a just-allocated Arc is unique")]
+    let out = Arc::get_mut(&mut raw).expect("fresh forwarding buffer is uniquely owned");
+    out[1] = hop_rewrite.hop_byte(packet);
     Some((outbound_interface, raw))
 }
 

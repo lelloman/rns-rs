@@ -67,8 +67,11 @@ pub fn generate_stamped_key(
     material: &[u8],
     stamp_cost: StampCost,
 ) -> (X25519PrivateKey, X25519PublicKey, StampValue) {
-    generate_stamped_key_until(rng, material, stamp_cost, &mut || false)
-        .expect("stamped key generation without a stop condition always completes")
+    loop {
+        if let Some(key) = try_stamped_key(rng, material, stamp_cost) {
+            return key;
+        }
+    }
 }
 
 /// Like [`generate_stamped_key`], but gives up and returns `None` as soon as
@@ -85,17 +88,30 @@ pub fn generate_stamped_key_until(
         if should_stop() {
             return None;
         }
-        let prv = X25519PrivateKey::generate(rng);
-        let public = prv.public_key();
-        let mut input = Vec::with_capacity(material.len() + 32);
-        input.extend_from_slice(material);
-        input.extend_from_slice(&public.public_bytes());
-        let product = crate::sha256::sha256(&input);
-        if stamp_cost.admits(&product) {
-            let value = crate::stamp_value::value_of_product(&product);
-            return Some((prv, public, value));
+        if let Some(key) = try_stamped_key(rng, material, stamp_cost) {
+            return Some(key);
         }
     }
+}
+
+/// One attempt at a stamped key: a fresh keypair, if its public key meets
+/// `stamp_cost` over `material`.
+fn try_stamped_key(
+    rng: &mut dyn Rng,
+    material: &[u8],
+    stamp_cost: StampCost,
+) -> Option<(X25519PrivateKey, X25519PublicKey, StampValue)> {
+    let prv = X25519PrivateKey::generate(rng);
+    let public = prv.public_key();
+    let mut input = Vec::with_capacity(material.len() + 32);
+    input.extend_from_slice(material);
+    input.extend_from_slice(&public.public_bytes());
+    let product = crate::sha256::sha256(&input);
+    if !stamp_cost.admits(&product) {
+        return None;
+    }
+    let value = crate::stamp_value::value_of_product(&product);
+    Some((prv, public, value))
 }
 
 /// A Reticulum identity: an X25519 key for encryption and an Ed25519 key

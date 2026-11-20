@@ -366,7 +366,7 @@ pub fn run_linux_gateway(
                             let grant = entry
                                 .grant
                                 .as_ref()
-                                .expect("an identified session has its grant");
+                                .ok_or_else(|| io::Error::other("grant missing"))?;
                             entry.transport = Some(
                                 PacketTransport::new(
                                     session_epoch,

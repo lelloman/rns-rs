@@ -180,15 +180,15 @@ impl LinkManager {
                 }) {
                     Ok(assembly) => {
                         let generation = link.resource_generation.clone();
-                        match self.queue_folded_assembly(*link_id, generation, assembly) {
+                        match Self::queue_folded_assembly(
+                            &mut self.folded_assemblies,
+                            *link_id,
+                            generation,
+                            assembly,
+                        ) {
                             Ok(()) => Vec::new(),
                             Err(assembly) => {
-                                let link = self
-                                    .links
-                                    .get_mut(link_id)
-                                    .expect("queueing an assembly keeps its link");
-                                link.incoming_resources[idx]
-                                    .complete_assembly(assembly.run(&Bzip2Compressor))
+                                receiver.complete_assembly(assembly.run(&Bzip2Compressor))
                             }
                         }
                     }

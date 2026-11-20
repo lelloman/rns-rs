@@ -150,6 +150,10 @@ impl ReceivedResourceFile {
 
     /// Path of the managed temporary file.
     pub fn path(&self) -> &Path {
+        #[allow(
+            clippy::expect_used,
+            reason = "only persist clears the path, and it consumes the file"
+        )]
         self.path
             .as_deref()
             .expect("persisted resource has no path")
@@ -165,7 +169,7 @@ impl ReceivedResourceFile {
         overwrite: bool,
     ) -> io::Result<PathBuf> {
         let destination = destination.as_ref();
-        let source = self.path.as_ref().expect("persisted resource has no path");
+        let source = self.path();
         match rename_final(source, destination, overwrite) {
             Ok(()) => {
                 self.path = None;

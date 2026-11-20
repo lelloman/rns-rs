@@ -429,12 +429,11 @@ impl WeaveSession {
         // Upstream's switch identity is a full RNS.Identity, whose
         // creation it logs; the switch uses its signing key.
         let switch_identity = crate::node::create_identity();
-        let mut signing_key = [0u8; 32];
-        signing_key.copy_from_slice(
-            &switch_identity
-                .get_private_key()
-                .expect("a new identity has a private key")[32..],
-        );
+        #[allow(clippy::expect_used, reason = "a new identity has its private keys")]
+        let private_key = switch_identity
+            .get_private_key()
+            .expect("a new identity has a private key");
+        let (_, signing_key) = rns_crypto::identity::split_key(&private_key);
         let identity = Ed25519PrivateKey::from_bytes(&signing_key);
         let host_public = identity.public_key().public_bytes();
         Arc::new(Self {

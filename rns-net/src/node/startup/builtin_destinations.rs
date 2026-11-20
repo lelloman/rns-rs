@@ -16,13 +16,15 @@ pub(super) fn enable_builtin_destinations(
     // The management destinations belong to the transport identity,
     // `Transport.identity`: on an instance without transport and
     // without static_transport_identity, the ephemeral one.
-    let transport_id = Identity::from_private_key(
-        &driver
-            .transport_identity
-            .as_ref()
-            .and_then(|identity| identity.get_private_key())
-            .expect("the node has a transport identity"),
-    );
+    let Some(transport_key) = driver
+        .transport_identity
+        .as_ref()
+        .and_then(|identity| identity.get_private_key())
+    else {
+        log::error!("No private transport identity, built-in destinations are not enabled");
+        return;
+    };
+    let transport_id = Identity::from_private_key(&transport_key);
     if config.management.enable_remote_management {
         enable_remote_management(driver, &transport_id, &config.management);
     }
@@ -33,7 +35,7 @@ pub(super) fn enable_builtin_destinations(
         log_restored_tables(&stats, storage_dir);
     }
     if config.respond_to_probes && config.transport_enabled {
-        enable_probe_responder(driver, &transport_id);
+        enable_probe_responder(driver, &transport_id, &transport_key);
     }
     if config.transport_enabled {
         log::info!("Transport instance <{}> started", hex(transport_id.hash()));
@@ -123,9 +125,13 @@ pub(super) fn enable_blackhole_publishing(driver: &mut Driver, transport_id: &Id
     );
 }
 
-/// The probe destination of the transport identity `transport_id`, which
-/// proves every packet it receives.
-pub(super) fn enable_probe_responder(driver: &mut Driver, transport_id: &Identity) {
+/// The probe destination of the transport identity `transport_id`, whose
+/// private key is `transport_key`, which proves every packet it receives.
+pub(super) fn enable_probe_responder(
+    driver: &mut Driver,
+    transport_id: &Identity,
+    transport_key: &[u8; 64],
+) {
     let identity_hash = *transport_id.hash();
     let probe_dest = crate::management::probe_dest_hash(&identity_hash);
 
@@ -138,11 +144,7 @@ pub(super) fn enable_probe_responder(driver: &mut Driver, transport_id: &Identit
         .insert(probe_dest, rns_core::constants::DESTINATION_SINGLE);
 
     // Register PROVE_ALL proof strategy with transport identity
-    let probe_identity = rns_crypto::identity::Identity::from_private_key(
-        &transport_id
-            .get_private_key()
-            .expect("the transport identity was built from its private key"),
-    );
+    let probe_identity = rns_crypto::identity::Identity::from_private_key(transport_key);
     driver.proofs.strategies.insert(
         probe_dest,
         (

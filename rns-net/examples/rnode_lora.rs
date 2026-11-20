@@ -3,6 +3,8 @@
 //! Usage: cargo run --example rnode_lora -- [serial_port] [frequency_mhz]
 //! Default: /dev/ttyUSB0, 868 MHz
 
+#![allow(clippy::expect_used, reason = "an example stops at the first failure")]
+
 use std::env;
 use std::sync::mpsc;
 

@@ -58,7 +58,33 @@ impl Rnid {
                 self.exit(R_UNKNOWN_ERROR);
             }
         };
-        if rsg.len() != SIGLEN {
+        if let Ok(signature) = <&[u8; SIGLEN]>::try_from(rsg.as_slice()) {
+            let Target::Identity(identity) = target else {
+                println!(
+                    "Cannot validate legacy rsg signatures without an explicit required identity"
+                );
+                self.exit(R_NO_IDENTITY);
+            };
+            let data = match fs::read(&file_path) {
+                Ok(data) => data,
+                Err(e) => {
+                    println!("Could not validate signature: {}", io_error(&e, &file_path));
+                    self.exit(R_READ_ERROR);
+                }
+            };
+            if !identity.verify(signature, &data) {
+                println!(
+                    "Invalid signature {signature_path} for file {file_path}\nThis file was NOT signed by {}",
+                    id_str(identity)
+                );
+                self.exit(R_INVALID_SIGNATURE);
+            }
+            println!(
+                "Signature is valid, the file {file_path} was signed by {}",
+                id_str(identity)
+            );
+            self.exit(R_OK);
+        } else {
             let signer = self.signer_from(target);
             if let Err(e) = fs::File::open(&file_path) {
                 println!("Could not read {file_path}: {}", io_error(&e, &file_path));
@@ -87,33 +113,6 @@ impl Rnid {
                     );
                 }
             }
-        } else {
-            let Target::Identity(identity) = target else {
-                println!(
-                    "Cannot validate legacy rsg signatures without an explicit required identity"
-                );
-                self.exit(R_NO_IDENTITY);
-            };
-            let data = match fs::read(&file_path) {
-                Ok(data) => data,
-                Err(e) => {
-                    println!("Could not validate signature: {}", io_error(&e, &file_path));
-                    self.exit(R_READ_ERROR);
-                }
-            };
-            let signature: &[u8; SIGLEN] = rsg.as_slice().try_into().expect("legacy length");
-            if !identity.verify(signature, &data) {
-                println!(
-                    "Invalid signature {signature_path} for file {file_path}\nThis file was NOT signed by {}",
-                    id_str(identity)
-                );
-                self.exit(R_INVALID_SIGNATURE);
-            }
-            println!(
-                "Signature is valid, the file {file_path} was signed by {}",
-                id_str(identity)
-            );
-            self.exit(R_OK);
         }
     }
 
@@ -252,7 +251,10 @@ impl Rnid {
     }
 
     pub(super) fn sign_message(&mut self, identity: &Identity) -> ! {
-        let mut message = self.args.sign_message.clone().expect("checked");
+        let Some(mut message) = self.args.sign_message.clone() else {
+            println!("No message specified");
+            self.exit(R_INVALID_ARGS);
+        };
         let output = self.args.output();
         if output == "bin" && !truthy(&self.args.write) {
             println!("No write path specified");

@@ -55,20 +55,19 @@ pub(crate) struct RNode {
 
 impl RNode {
     /// Start reading `reader` in the background.
-    pub(crate) fn new(reader: std::fs::File, writer: std::fs::File) -> Self {
+    pub(crate) fn new(reader: std::fs::File, writer: std::fs::File) -> std::io::Result<Self> {
         let state = Arc::new(Mutex::new(Reported::default()));
         let shared = Arc::clone(&state);
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = Arc::clone(&stop);
         thread::Builder::new()
             .name("rnode-read".into())
-            .spawn(move || read_loop(reader, shared, stopped))
-            .expect("spawn serial reader");
-        Self {
+            .spawn(move || read_loop(reader, shared, stopped))?;
+        Ok(Self {
             writer,
             state,
             stop,
-        }
+        })
     }
 
     pub(crate) fn reported(&self) -> Reported {

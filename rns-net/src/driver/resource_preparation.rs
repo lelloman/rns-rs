@@ -143,6 +143,10 @@ impl Worker {
         let Some(next_id) = id.checked_add(1) else {
             return Err((data, metadata));
         };
+        // The sender is gone only once the worker is being dropped.
+        let Some(tx) = &self.tx else {
+            return Err((data, metadata));
+        };
         let cancelled = Arc::new(AtomicBool::new(false));
         let job = Job {
             id,
@@ -150,7 +154,7 @@ impl Worker {
             metadata,
             cancelled: cancelled.clone(),
         };
-        match self.tx.as_ref().expect("live worker sender").try_send(job) {
+        match tx.try_send(job) {
             Ok(()) => {
                 self.next_id = next_id;
                 self.pending.insert(
@@ -191,6 +195,10 @@ impl Worker {
                 }
             }
         };
+        #[allow(
+            clippy::expect_used,
+            reason = "the worker answers each submitted job once, and only here is it removed"
+        )]
         let pending = self
             .pending
             .remove(&ready.id)

@@ -641,10 +641,12 @@ impl TransportEngine {
     pub fn seed_table_hashing(&mut self, rng: &mut dyn Rng) {
         let mut seeds = [0u8; 16];
         rng.fill_bytes(&mut seeds);
-        let (reverse_seed, dedup_seed) = seeds.split_at(8);
-        let seed = |bytes: &[u8]| u64::from_le_bytes(bytes.try_into().expect("8 bytes"));
-        self.packet_hashlist.seed_hashing(seed(dedup_seed));
-        let hasher = foldhash::fast::FixedState::with_seed(seed(reverse_seed));
+        // The first eight bytes seed the reverse table, the last eight the
+        // deduplication table.
+        let seeds = u128::from_le_bytes(seeds);
+        let (reverse_seed, dedup_seed) = (seeds as u64, (seeds >> 64) as u64);
+        self.packet_hashlist.seed_hashing(dedup_seed);
+        let hasher = foldhash::fast::FixedState::with_seed(reverse_seed);
         let mut table =
             tables::ReverseTable::with_capacity_and_hasher(self.reverse_table.len(), hasher);
         table.extend(self.reverse_table.drain());

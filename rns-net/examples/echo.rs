@@ -6,6 +6,8 @@
 //!
 //! Usage: cargo run --example echo
 
+#![allow(clippy::expect_used, reason = "an example stops at the first failure")]
+
 use std::sync::mpsc;
 use std::time::Duration;
 

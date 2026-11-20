@@ -11,6 +11,18 @@ impl Rnid {
         process::exit(code)
     }
 
+    /// The working identity an operation needs. `main` exits before any
+    /// such operation when there is none.
+    fn required<'a>(&mut self, identity: Option<&'a Identity>) -> &'a Identity {
+        match identity {
+            Some(identity) => identity,
+            None => {
+                println!("Could not get working identity");
+                self.exit(R_NO_IDENTITY)
+            }
+        }
+    }
+
     pub(super) fn validate_args(&mut self) {
         let a = &self.args;
         let ops = [
@@ -77,15 +89,18 @@ impl Rnid {
         };
         let id = identity.as_ref();
         if self.args.print_identity {
-            self.print_identity_information(id.expect("required"));
+            let identity = self.required(id);
+            self.print_identity_information(identity);
             op = true;
         }
         if self.args.export_pub {
-            self.export_pub_identity(id.expect("required"));
+            let identity = self.required(id);
+            self.export_pub_identity(identity);
             op = true;
         }
         if self.args.export_prv {
-            self.export_prv_identity(id.expect("required"));
+            let identity = self.required(id);
+            self.export_prv_identity(identity);
             op = true;
         }
         if truthy(&self.args.hash) {
@@ -93,7 +108,8 @@ impl Rnid {
             op = true;
         }
         if truthy(&self.args.announce) {
-            self.announce(id.expect("required"));
+            let identity = self.required(id);
+            self.announce(identity);
             op = true;
         }
         if truthy_list(&self.args.validate) {
@@ -104,27 +120,32 @@ impl Rnid {
         }
         if truthy_list(&self.args.sign) {
             for path in self.args.sign.clone().unwrap_or_default() {
-                self.sign(&path, id.expect("required"));
+                let identity = self.required(id);
+                self.sign(&path, identity);
             }
             self.exit(R_OK);
         }
         if self.args.sign_message_truthy() {
-            self.sign_message(id.expect("required"));
+            let identity = self.required(id);
+            self.sign_message(identity);
         }
         if truthy_list(&self.args.encrypt) {
             for path in self.args.encrypt.clone().unwrap_or_default() {
-                self.encrypt(&path, id.expect("required"));
+                let identity = self.required(id);
+                self.encrypt(&path, identity);
             }
             self.exit(R_OK);
         }
         if truthy_list(&self.args.decrypt) {
             for path in self.args.decrypt.clone().unwrap_or_default() {
-                self.decrypt(&path, id.expect("required"));
+                let identity = self.required(id);
+                self.decrypt(&path, identity);
             }
             self.exit(R_OK);
         }
         if truthy(&self.args.write) {
-            self.write_identity(id.expect("required"));
+            let identity = self.required(id);
+            self.write_identity(identity);
             op = true;
         }
         if truthy(&self.args.generate) {

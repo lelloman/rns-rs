@@ -206,19 +206,16 @@ impl TransmitBuffer {
         loop {
             if self.chunks.is_empty() {
                 self.flush_tail();
-                if self.chunks.is_empty() {
-                    break;
-                }
             }
-
-            let write_result = {
-                let chunk = &self.chunks.front().expect("chunk queue is non-empty").data;
-                if self.head_offset >= chunk.len() {
-                    self.pop_head();
-                    continue;
-                }
-                writer.write(&chunk[self.head_offset..])
+            let Some(chunk) = self.chunks.front() else {
+                break;
             };
+            let chunk_len = chunk.data.len();
+            if self.head_offset >= chunk_len {
+                self.pop_head();
+                continue;
+            }
+            let write_result = writer.write(&chunk.data[self.head_offset..]);
 
             match write_result {
                 Ok(0) => break,
@@ -226,12 +223,6 @@ impl TransmitBuffer {
                     total_written += written;
                     self.sent_bytes = self.sent_bytes.saturating_add(written);
                     self.head_offset += written;
-                    let chunk_len = self
-                        .chunks
-                        .front()
-                        .expect("chunk remains queued")
-                        .data
-                        .len();
                     if self.head_offset >= chunk_len {
                         self.pop_head();
                     } else {

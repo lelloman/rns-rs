@@ -590,8 +590,20 @@ impl Rncp {
         }
     }
 
+    #[allow(
+        clippy::expect_used,
+        reason = "only called once start_reticulum has set the node"
+    )]
     fn node(&self) -> &RnsNode {
         self.node.as_ref().expect("Reticulum is running")
+    }
+
+    #[allow(
+        clippy::expect_used,
+        reason = "only called once start_reticulum has set the sender"
+    )]
+    fn event_sender(&self) -> mpsc::Sender<RncpEvent> {
+        self.tx.clone().expect("Reticulum is running")
     }
 
     fn config_dir(&self) -> std::path::PathBuf {
@@ -886,7 +898,7 @@ impl Rncp {
                 Some(allowed_identity_hashes.clone())
             };
             let jail = fetch_jail.clone();
-            let tx = self.tx.clone().expect("Reticulum is running");
+            let tx = self.event_sender();
             let _ = self.node().register_request_handler(
                 FETCH_PATH,
                 allowed_list,
