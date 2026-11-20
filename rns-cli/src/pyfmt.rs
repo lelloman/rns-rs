@@ -328,6 +328,14 @@ pub fn hexrep(data: &[u8]) -> String {
     rns_core::encoding::hex(data)
 }
 
+// Upstream f7b54ccc adds `RNS.prettynamehash(name_hash)`, which is
+// `f"<{RNS.Transport.destination_type_name(name_hash)}>"`: a type's name,
+// flagged name or bare hex from the calling process's own destination type
+// maps, in angle brackets. Nothing upstream calls it up to `cff4d03f`, so no
+// utility prints it and it has no counterpart here. The lookup it wraps is
+// `rns_net::destination_types::DestinationTypeNames::type_name`; a utility
+// that comes to print it would format that name as `prettyhexrep` does.
+
 #[cfg(test)]
 mod tests {
     use super::*;
