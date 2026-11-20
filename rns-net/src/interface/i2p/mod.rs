@@ -241,6 +241,7 @@ fn peer_info(
         announce_cap: constants::ANNOUNCE_CAP,
         is_local_client: false,
         wants_tunnel: outbound,
+        shared_medium: false,
         hop_limiter: None,
         tunnel_id: None,
         // Upstream's I2PInterfacePeer HW_MTU, which the HDLC decoder also

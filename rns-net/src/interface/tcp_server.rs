@@ -384,6 +384,7 @@ impl ListenerSource {
             announce_cap: constants::ANNOUNCE_CAP,
             is_local_client: false,
             wants_tunnel: false,
+            shared_medium: false,
             hop_limiter: None,
             tunnel_id: None,
             mtu: self.mtu,

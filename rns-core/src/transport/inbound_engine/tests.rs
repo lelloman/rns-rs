@@ -510,6 +510,8 @@ fn table_entry(hops: u8, retries: u8, retransmit_timeout: f64) -> AnnounceEntry 
         local_rebroadcasts: 0,
         block_rebroadcasts: false,
         attached_interface: None,
+        packet_hash: [0; 32],
+        blocked_interfaces: Default::default(),
     }
 }
 

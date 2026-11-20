@@ -690,6 +690,7 @@ impl InterfaceFactory for KissFactory {
             announce_cap: rns_core::constants::ANNOUNCE_CAP,
             is_local_client: false,
             wants_tunnel: false,
+            shared_medium: super::shared_medium_hint(&interface_type_name),
             hop_limiter: None,
             tunnel_id: None,
             mtu: rns_core::constants::MTU as u32,

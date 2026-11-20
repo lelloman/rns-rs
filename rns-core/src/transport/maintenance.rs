@@ -200,13 +200,16 @@ impl TransportEngine {
         self.cull_expired_announce_entries(ctx.now);
         self.enforce_announce_retention_cap(ctx.now);
         if let Some(identity_hash) = self.config.identity_hash {
+            let mut blocked_broadcasts = BTreeMap::new();
             let announce_actions = jobs::process_pending_announces(
                 &mut self.announce_table,
                 &mut self.held_announces,
                 &identity_hash,
                 ctx.now,
+                &mut blocked_broadcasts,
             );
-            let gated = self.gate_retransmit_actions(announce_actions, ctx.now);
+            let gated =
+                self.gate_retransmit_actions(announce_actions, &blocked_broadcasts, ctx.now);
             ctx.actions.extend(gated);
         }
         self.cull_expired_announce_entries(ctx.now);
@@ -338,6 +341,7 @@ impl TransportEngine {
     pub(super) fn gate_retransmit_actions(
         &mut self,
         actions: Vec<TransportAction>,
+        blocked_broadcasts: &BTreeMap<[u8; 16], BTreeSet<InterfaceId>>,
         now: f64,
     ) -> Vec<TransportAction> {
         let mut result = Vec::new();
@@ -369,6 +373,9 @@ impl TransportEngine {
                 }
                 TransportAction::BroadcastOnAllInterfaces { raw, exclude } => {
                     let (dest_hash, hops) = Self::extract_announce_info(&raw);
+                    // Upstream da368e05: interfaces the announce was heard
+                    // on again while it waited are left out.
+                    let blocked = blocked_broadcasts.get(&dest_hash);
                     // Expand to per-interface sends gated through queues,
                     // applying mode filtering (AP blocks non-local announces, etc.)
                     let iface_ids: Vec<(
@@ -391,6 +398,7 @@ impl TransportEngine {
                                 true
                             }
                         })
+                        .filter(|(id, _)| !blocked.is_some_and(|blocked| blocked.contains(id)))
                         .filter(|(_, info)| {
                             should_transmit_announce(
                                 info,

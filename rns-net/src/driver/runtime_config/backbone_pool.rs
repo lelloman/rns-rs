@@ -712,6 +712,7 @@ impl Driver {
             // Upstream's BackboneClientInterface, which discovery
             // auto-connects, synthesizes a tunnel on connect.
             wants_tunnel: interface_type_name == "BackboneClientInterface",
+            shared_medium: false,
             hop_limiter: None,
             tunnel_id: None,
             mtu: client.hw_mtu() as u32,

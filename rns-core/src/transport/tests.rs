@@ -48,6 +48,7 @@ pub(super) fn make_interface(id: u64, mode: u8) -> InterfaceInfo {
         announce_cap: constants::ANNOUNCE_CAP,
         is_local_client: false,
         wants_tunnel: false,
+        shared_medium: false,
         hop_limiter: None,
         tunnel_id: None,
         mtu: constants::MTU as u32,
@@ -76,6 +77,8 @@ fn make_announce_entry(dest_hash: [u8; 16], timestamp: f64, fill_len: usize) -> 
         local_rebroadcasts: 0,
         block_rebroadcasts: false,
         attached_interface: None,
+        packet_hash: [0; 32],
+        blocked_interfaces: Default::default(),
     }
 }
 
@@ -515,6 +518,124 @@ fn test_duplicate_announce_from_second_interface_uses_existing_path() {
         .and_then(|set| set.primary())
         .expect("higher-gravity reception should become primary");
     assert_eq!(path.receiving_interface, InterfaceId(2));
+}
+
+/// An announce relayed by `transport_id`, as a neighbour transport node
+/// rebroadcasts it: HEADER_2, one hop on the wire.
+fn relayed_dedup_announce(transport_id: [u8; 16], timebase: u64) -> ([u8; 16], Vec<u8>) {
+    use crate::announce::AnnounceData;
+    use crate::destination::{destination_hash, name_hash};
+
+    let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x71; 32]));
+    let dest_hash = destination_hash("dedup", &["rebroadcast"], Some(identity.hash()));
+    let name_h = name_hash("dedup", &["rebroadcast"]);
+    let (announce_data, _) = AnnounceData::pack(
+        &identity,
+        &dest_hash,
+        &name_h,
+        &make_random_blob(timebase),
+        None,
+        None,
+    )
+    .unwrap();
+    let packet = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_2,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_TRANSPORT,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_ANNOUNCE,
+        },
+        1,
+        &dest_hash,
+        Some(&transport_id),
+        constants::CONTEXT_NONE,
+        &announce_data,
+    )
+    .unwrap();
+    (dest_hash, packet.raw.to_vec())
+}
+
+/// Receive `raw` on `iface` at `now`.
+fn receive_on(engine: &mut TransportEngine, raw: &[u8], iface: u64, now: f64) {
+    let mut rng = rns_crypto::FixedRng::new(&[0x72; 32]);
+    engine.handle_inbound(
+        InboundFrame {
+            raw,
+            iface: InterfaceId(iface),
+            now,
+            rx: RxMetadata::default(),
+        },
+        &mut rng,
+    );
+}
+
+/// The interfaces the next announce retransmission goes out on.
+fn retransmitted_on(engine: &mut TransportEngine, now: f64) -> Vec<u64> {
+    let mut rng = rns_crypto::FixedRng::new(&[0x73; 32]);
+    let mut sent: Vec<u64> = engine
+        .tick(now, &mut rng)
+        .iter()
+        .filter_map(|action| match action {
+            TransportAction::SendOnInterface { interface, .. } => Some(interface.0),
+            _ => None,
+        })
+        .collect();
+    sent.sort_unstable();
+    sent
+}
+
+fn dedup_engine(shared_medium_iface: Option<u64>) -> TransportEngine {
+    let mut engine = TransportEngine::new(make_config(true));
+    for id in 1..=3 {
+        let mut info = make_interface(id, constants::MODE_FULL);
+        info.shared_medium = shared_medium_iface == Some(id);
+        engine.register_interface(info);
+    }
+    engine
+}
+
+// Upstream da368e05: a copy of an announce already waiting for rebroadcast,
+// heard on another interface, means the neighbour there has it; the
+// rebroadcast skips that interface.
+#[test]
+fn an_announce_heard_again_while_waiting_is_not_rebroadcast_to_that_interface() {
+    let mut engine = dedup_engine(None);
+    let (dest_hash, first) = relayed_dedup_announce([0xA1; 16], 1000);
+    let (_, second) = relayed_dedup_announce([0xB2; 16], 1000);
+
+    receive_on(&mut engine, &first, 1, 1000.0);
+    receive_on(&mut engine, &second, 2, 1000.1);
+
+    let path = engine.path_table[&dest_hash].primary().unwrap();
+    assert_eq!(path.receiving_interface, InterfaceId(1));
+    assert_eq!(retransmitted_on(&mut engine, 1010.0), vec![1, 3]);
+}
+
+#[test]
+fn an_announce_heard_again_on_a_shared_medium_is_still_rebroadcast_there() {
+    let mut engine = dedup_engine(Some(2));
+    let (_, first) = relayed_dedup_announce([0xA1; 16], 1000);
+    let (_, second) = relayed_dedup_announce([0xB2; 16], 1000);
+
+    receive_on(&mut engine, &first, 1, 1000.0);
+    receive_on(&mut engine, &second, 2, 1000.1);
+
+    assert_eq!(retransmitted_on(&mut engine, 1010.0), vec![1, 2, 3]);
+}
+
+#[test]
+fn a_newer_announce_replacing_the_waiting_one_starts_without_blocked_interfaces() {
+    let mut engine = dedup_engine(None);
+    let (_, first) = relayed_dedup_announce([0xA1; 16], 1000);
+    let (_, second) = relayed_dedup_announce([0xB2; 16], 1000);
+    let (_, newer) = relayed_dedup_announce([0xA1; 16], 1001);
+
+    receive_on(&mut engine, &first, 1, 1000.0);
+    receive_on(&mut engine, &second, 2, 1000.1);
+    receive_on(&mut engine, &newer, 1, 1000.2);
+
+    assert_eq!(retransmitted_on(&mut engine, 1010.0), vec![1, 2, 3]);
 }
 
 #[test]
@@ -1210,6 +1331,8 @@ fn test_tick_retransmits_announce() {
             local_rebroadcasts: 0,
             block_rebroadcasts: false,
             attached_interface: None,
+            packet_hash: [0; 32],
+            blocked_interfaces: Default::default(),
         },
         190.0,
     );
@@ -1244,6 +1367,7 @@ fn test_gate_retransmit_actions_expands_broadcast_to_matching_interfaces() {
             raw: raw.clone().into(),
             exclude: None,
         }],
+        &BTreeMap::new(),
         1000.0,
     );
 
@@ -1565,6 +1689,8 @@ fn test_async_announce_retransmit_cleanup_happens_before_queueing() {
             local_rebroadcasts: 0,
             block_rebroadcasts: false,
             attached_interface: None,
+            packet_hash: [0; 32],
+            blocked_interfaces: Default::default(),
         },
     );
 
@@ -2063,6 +2189,7 @@ pub(super) fn make_local_client_interface(id: u64) -> InterfaceInfo {
         announce_cap: constants::ANNOUNCE_CAP,
         is_local_client: true,
         wants_tunnel: false,
+        shared_medium: false,
         hop_limiter: None,
         tunnel_id: None,
         mtu: constants::MTU as u32,
@@ -2659,6 +2786,7 @@ pub(super) fn make_tunnel_interface(id: u64) -> InterfaceInfo {
         announce_cap: constants::ANNOUNCE_CAP,
         is_local_client: false,
         wants_tunnel: true,
+        shared_medium: false,
         hop_limiter: None,
         tunnel_id: None,
         mtu: constants::MTU as u32,

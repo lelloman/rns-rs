@@ -181,6 +181,8 @@ fn due_announce(engine: &mut TransportEngine, destination: [u8; 16], due: f64) {
             local_rebroadcasts: 0,
             block_rebroadcasts: false,
             attached_interface: None,
+            packet_hash: [0; 32],
+            blocked_interfaces: Default::default(),
         },
         due,
     );
@@ -251,6 +253,7 @@ fn rebroadcast_skips_the_excluded_interface() {
             raw: raw.into(),
             exclude: Some(InterfaceId(2)),
         }],
+        &BTreeMap::new(),
         1000.0,
     );
     let sent: Vec<_> = actions

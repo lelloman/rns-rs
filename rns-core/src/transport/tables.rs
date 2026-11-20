@@ -1,3 +1,4 @@
+use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 use super::types::InterfaceId;
@@ -52,6 +53,14 @@ pub struct AnnounceEntry {
     pub block_rebroadcasts: bool,
     /// Interface a path response goes out on; `None` broadcasts on all interfaces.
     pub attached_interface: Option<InterfaceId>,
+    /// Hash of the announce packet waiting here, which leaves out the hops
+    /// and transport id, so it matches copies relayed by other nodes.
+    pub packet_hash: [u8; 32],
+    /// Interfaces a copy of this announce was heard on while it waited, so
+    /// a neighbour there already has it: the broadcast skips them
+    /// (upstream da368e05 `IDX_AT_DEDUP_IFS`). Shared-medium interfaces are
+    /// never added. Bounded by the number of interfaces.
+    pub blocked_interfaces: BTreeSet<InterfaceId>,
 }
 
 /// Reverse-path entries keyed by truncated packet hash.

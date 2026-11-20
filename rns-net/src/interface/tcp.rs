@@ -518,6 +518,7 @@ impl InterfaceFactory for TcpClientFactory {
             // first frame (upstream ad6c709e writes it while connecting).
             // rns-rs has no KISS-framed TCP client, which upstream exempts.
             wants_tunnel: true,
+            shared_medium: false,
             hop_limiter: None,
             tunnel_id: None,
             mtu: super::tcp_hardware_mtu(tcp_config.bitrate, tcp_config.fixed_mtu),
