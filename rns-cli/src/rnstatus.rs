@@ -12,12 +12,11 @@ use crate::rnstatus_view::{
     render, render_discovered, render_discovered_json, upstream_discovery_record, Extras,
     ViewOptions,
 };
-use rns_net::config;
+use crate::shared_instance::LocalInstance;
 use rns_net::pickle::PickleValue;
-use rns_net::rpc::derive_auth_key;
 use rns_net::storage;
+use rns_net::RpcClient;
 use rns_net::TeardownReason;
-use rns_net::{RpcAddr, RpcClient};
 
 const VERSION: &str = env!("FULL_VERSION");
 const MONITOR_MIN_SLEEP: Duration = Duration::from_millis(200);
@@ -169,50 +168,16 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         // Load config to get RPC address and auth key
         let config_dir =
             storage::resolve_config_dir(config_path.as_ref().map(|s| Path::new(s.as_str())));
-        let config_file = config_dir.join("config");
-        let rns_config = if config_file.exists() {
-            match config::parse_file(&config_file) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Error reading config: {}", e);
-                    process::exit(1);
-                }
-            }
-        } else {
-            match config::parse("") {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    process::exit(1);
-                }
-            }
-        };
-
-        let paths = match storage::ensure_storage_dirs(&config_dir) {
-            Ok(p) => p,
+        let LocalInstance { paths, rpc, .. } = match LocalInstance::open(&config_dir) {
+            Ok(instance) => instance,
             Err(e) => {
-                eprintln!("Error: {}", e);
+                eprintln!("{e}");
                 process::exit(1);
             }
         };
-
-        let identity = match storage::load_rpc_identity(&paths) {
-            Ok(id) => id,
-            Err(e) => {
-                eprintln!("Error loading identity: {}", e);
-                process::exit(1);
-            }
-        };
-
-        let auth_key = rns_config
-            .reticulum
-            .rpc_key
-            .unwrap_or_else(|| derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64])));
-
-        let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
 
         let _instance_client = attach_to_instance(&config_dir);
-        let Ok(mut client) = RpcClient::connect(&rpc_addr, &auth_key) else {
+        let Ok(mut client) = rpc.connect() else {
             println!("No shared RNS instance available to get status from");
             process::exit(1);
         };
@@ -232,52 +197,17 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     // Load config to get RPC address and auth key
     let config_dir =
         storage::resolve_config_dir(config_path.as_ref().map(|s| Path::new(s.as_str())));
-    let config_file = config_dir.join("config");
-    let rns_config = if config_file.exists() {
-        match config::parse_file(&config_file) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Error reading config: {}", e);
-                process::exit(1);
-            }
-        }
-    } else {
-        match config::parse("") {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                process::exit(1);
-            }
-        }
-    };
-
-    // Load identity to derive auth key
-    let paths = match storage::ensure_storage_dirs(&config_dir) {
-        Ok(p) => p,
+    let rpc = match LocalInstance::open(&config_dir) {
+        Ok(instance) => instance.rpc,
         Err(e) => {
-            eprintln!("Error: {}", e);
+            eprintln!("{e}");
             process::exit(1);
         }
     };
-
-    let identity = match storage::load_rpc_identity(&paths) {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("Error loading identity: {}", e);
-            process::exit(1);
-        }
-    };
-
-    let auth_key = rns_config
-        .reticulum
-        .rpc_key
-        .unwrap_or_else(|| derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64])));
-
-    let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
 
     let _instance_client = attach_to_instance(&config_dir);
     if let Some((operation, name)) = management_actions.first().copied() {
-        let Ok(mut client) = RpcClient::connect(&rpc_addr, &auth_key) else {
+        let Ok(mut client) = rpc.connect() else {
             println!("No shared RNS instance available to get status from");
             process::exit(1);
         };
@@ -307,12 +237,12 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
 
     // Like upstream's client, each query is a connection of its own.
     let query = |what: &str| -> std::io::Result<PickleValue> {
-        RpcClient::connect(&rpc_addr, &auth_key)?.call(&PickleValue::Dict(vec![(
+        rpc.connect()?.call(&PickleValue::Dict(vec![(
             PickleValue::String("get".into()),
             PickleValue::String(what.into()),
         )]))
     };
-    if RpcClient::connect(&rpc_addr, &auth_key).is_err() {
+    if rpc.connect().is_err() {
         println!("No shared RNS instance available to get status from");
         process::exit(1);
     }

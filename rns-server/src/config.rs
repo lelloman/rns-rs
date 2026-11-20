@@ -703,11 +703,15 @@ impl ServerConfig {
 
     fn rnsd_drain_config(&self) -> Option<RnsdDrainConfig> {
         let paths = rns_net::storage::ensure_storage_dirs(&self.resolved_config_dir).ok()?;
-        let identity = rns_net::storage::load_rpc_identity(&paths).ok()?;
-        let private_key = identity.get_private_key()?;
+        // The key derived from the transport identity; a configured
+        // `rpc_key` is not read here.
+        let rpc = rns_net::SharedInstanceRpc::with_key(self.rnsd_rpc_addr.clone(), None, || {
+            rns_net::storage::load_rpc_identity(&paths)
+        })
+        .ok()?;
         Some(RnsdDrainConfig {
-            rpc_addr: self.rnsd_rpc_addr.clone(),
-            auth_key: rns_net::rpc::derive_auth_key(&private_key),
+            rpc_addr: rpc.addr,
+            auth_key: rpc.auth_key,
             timeout: std::time::Duration::from_secs(3),
             poll_interval: std::time::Duration::from_millis(100),
         })

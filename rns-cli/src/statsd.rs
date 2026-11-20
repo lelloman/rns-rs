@@ -16,17 +16,16 @@ use rns_hooks_abi::stats::{
     AnnounceStatsPayload, LinkStatsPayload, PacketStatsPayload, ANNOUNCE_STATS_PAYLOAD_TYPE,
     LINK_STATS_PAYLOAD_TYPE, PACKET_STATS_PAYLOAD_TYPE,
 };
-use rns_net::config;
 use rns_net::provider_bridge::{decode_provider_envelope, ProviderEnvelope, ProviderMessage};
-use rns_net::rpc::derive_auth_key;
 use rns_net::storage;
-use rns_net::{HookInfo, RpcAddr, RpcClient};
+use rns_net::{HookInfo, RpcClient, SharedInstanceRpc};
 use rusqlite::{params, Connection};
 
 use crate::argparse::{Parser, Ty};
 use crate::args::Args;
 use crate::native_cli::{self, Cli};
 use crate::readiness::ReadyFile;
+use crate::shared_instance::LocalInstance;
 
 const VERSION: &str = env!("FULL_VERSION");
 #[cfg(feature = "rns-hooks-wasm")]
@@ -240,7 +239,9 @@ fn run(args: Args) -> Result<(), String> {
     let runtime = RuntimeConfig::load(args.config_path().map(Path::new), args.get("socket"))?;
 
     let mut db = StatsDb::open(&db_path).map_err(|e| format!("sqlite open failed: {}", e))?;
-    let control = RpcControl::new(runtime.rpc_addr.clone(), runtime.auth_key);
+    let control = RpcControl {
+        rpc: runtime.rpc.clone(),
+    };
     wait_for_loaded_hooks(&control, priority)?;
     let hook_guard = HookGuard {
         control: control.clone(),
@@ -314,20 +315,17 @@ fn run(args: Args) -> Result<(), String> {
 
 #[derive(Clone)]
 struct RpcControl {
-    rpc_addr: RpcAddr,
-    auth_key: [u8; 32],
+    rpc: SharedInstanceRpc,
 }
 
 impl RpcControl {
-    fn new(rpc_addr: RpcAddr, auth_key: [u8; 32]) -> Self {
-        Self { rpc_addr, auth_key }
-    }
-
     fn with_client<T>(
         &self,
         op: impl FnOnce(&mut RpcClient) -> io::Result<T>,
     ) -> Result<T, String> {
-        let mut client = RpcClient::connect(&self.rpc_addr, &self.auth_key)
+        let mut client = self
+            .rpc
+            .connect()
             .map_err(|e| format!("rpc connect failed: {}", e))?;
         op(&mut client).map_err(|e| format!("rpc call failed: {}", e))
     }
@@ -374,30 +372,19 @@ impl Drop for HookGuard {
 }
 
 struct RuntimeConfig {
-    rpc_addr: RpcAddr,
-    auth_key: [u8; 32],
+    rpc: SharedInstanceRpc,
     provider_socket: PathBuf,
 }
 
 impl RuntimeConfig {
     fn load(config_path: Option<&Path>, socket_override: Option<&str>) -> Result<Self, String> {
         let config_dir = storage::resolve_config_dir(config_path);
-        let config_file = config_dir.join("config");
-        let rns_config = if config_file.exists() {
-            config::parse_file(&config_file).map_err(|e| e.to_string())?
-        } else {
-            config::parse("").map_err(|e| e.to_string())?
-        };
-        let paths = storage::ensure_storage_dirs(&config_dir).map_err(|e| e.to_string())?;
-        let identity = storage::load_rpc_identity(&paths).map_err(|e| e.to_string())?;
-        let auth_key = rns_config
-            .reticulum
-            .rpc_key
-            .unwrap_or_else(|| derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64])));
+        let LocalInstance { config, rpc, .. } =
+            LocalInstance::open(&config_dir).map_err(|e| e.cause().to_string())?;
         let provider_socket = socket_override
             .map(PathBuf::from)
             .or_else(|| {
-                rns_config
+                config
                     .reticulum
                     .provider_socket_path
                     .as_ref()
@@ -406,8 +393,7 @@ impl RuntimeConfig {
             .ok_or_else(|| "provider bridge socket is not configured".to_string())?;
 
         Ok(Self {
-            rpc_addr: RpcAddr::for_shared_instance(&rns_config.reticulum),
-            auth_key,
+            rpc,
             provider_socket,
         })
     }

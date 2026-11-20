@@ -12,11 +12,11 @@ use crate::args::{Args, Opt, OptionSpec};
 use crate::format::{
     prettycost, python_float, python_json, upstream_prettytime, upstream_prettytime_compact,
 };
+use crate::shared_instance;
 use rns_net::config;
 use rns_net::pickle::PickleValue;
-use rns_net::rpc::derive_auth_key;
 use rns_net::storage;
-use rns_net::{RpcAddr, RpcClient};
+use rns_net::{RpcClient, SharedInstanceRpc};
 
 const VERSION: &str = env!("FULL_VERSION");
 
@@ -210,12 +210,11 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let LocalInstance {
         rns_config,
         paths,
-        rpc_addr,
-        auth_key,
+        rpc,
         node,
     } = LocalInstance::open(config_path.as_deref());
 
-    let mut client = match RpcClient::connect(&rpc_addr, &auth_key) {
+    let mut client = match rpc.connect() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Could not connect to rnsd: {}", e);
@@ -234,7 +233,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     } else if analyze {
         drop(client);
         let status = analyze_tables(
-            &|| RpcClient::connect(&rpc_addr, &auth_key),
+            &|| rpc.connect(),
             capture.as_deref(),
             &mut std::io::stdout(),
         );
@@ -273,7 +272,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(rns_core::constants::PATH_REQUEST_TIMEOUT);
         drop(client);
-        let connect = || match RpcClient::connect(&rpc_addr, &auth_key) {
+        let connect = || match rpc.connect() {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("Could not connect to rnsd: {}", e);
@@ -361,8 +360,7 @@ fn analyze_tables(
 struct LocalInstance {
     rns_config: config::RnsConfig,
     paths: storage::StoragePaths,
-    rpc_addr: RpcAddr,
-    auth_key: [u8; 32],
+    rpc: SharedInstanceRpc,
     node: Option<rns_net::RnsNode>,
 }
 
@@ -370,49 +368,18 @@ impl LocalInstance {
     /// Load the config in `config_path` and connect a client to the shared
     /// instance; exits on an error.
     fn open(config_path: Option<&str>) -> LocalInstance {
-        // Load config
         let config_dir = storage::resolve_config_dir(config_path.map(Path::new));
-        let config_file = config_dir.join("config");
-        let rns_config = if config_file.exists() {
-            match config::parse_file(&config_file) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Error reading config: {}", e);
-                    process::exit(1);
-                }
-            }
-        } else {
-            match config::parse("") {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    process::exit(1);
-                }
-            }
-        };
-
-        let paths = match storage::ensure_storage_dirs(&config_dir) {
-            Ok(p) => p,
+        let shared_instance::LocalInstance {
+            config: rns_config,
+            paths,
+            rpc,
+        } = match shared_instance::LocalInstance::open(&config_dir) {
+            Ok(instance) => instance,
             Err(e) => {
-                eprintln!("Error: {}", e);
+                eprintln!("{e}");
                 process::exit(1);
             }
         };
-
-        let identity = match storage::load_rpc_identity(&paths) {
-            Ok(id) => id,
-            Err(e) => {
-                eprintln!("Error loading identity: {}", e);
-                process::exit(1);
-            }
-        };
-
-        let auth_key = rns_config
-            .reticulum
-            .rpc_key
-            .unwrap_or_else(|| derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64])));
-
-        let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
 
         // As upstream's rnpath, a Reticulum client for every local mode, which
         // logs its startup: whether a path is known, and its hops, also come
@@ -428,8 +395,7 @@ impl LocalInstance {
         LocalInstance {
             rns_config,
             paths,
-            rpc_addr,
-            auth_key,
+            rpc,
             node,
         }
     }
@@ -1611,7 +1577,7 @@ fn remote_path(
         RemoteAction::Analyze(capture) => {
             let local = LocalInstance::open(config_path);
             let status = analyze_tables(
-                &|| RpcClient::connect(&local.rpc_addr, &local.auth_key),
+                &|| local.rpc.connect(),
                 capture.as_deref(),
                 &mut std::io::stdout(),
             );
@@ -1634,6 +1600,8 @@ fn print_usage(usage_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rns_net::rpc::derive_auth_key;
+    use rns_net::RpcAddr;
 
     const HASH: &str = "0123456789abcdef0123456789abcdef";
 
