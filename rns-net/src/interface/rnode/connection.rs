@@ -133,19 +133,11 @@ pub(super) fn start_with_control(
     thread::Builder::new()
         .name(format!("rnode-keepalive-{}", config.base_interface_id.0))
         .spawn(move || {
-            let detect = rnode_kiss::detect_request();
             while keepalive_running.load(Ordering::Relaxed) {
-                if !wait_while_running(&keepalive_running, Duration::from_secs(15)) {
+                if !wait_while_running(&keepalive_running, KEEPALIVE_INTERVAL) {
                     break;
                 }
-                if let Err(e) =
-                    lock_or_recover(&keepalive_writer, "rnode shared writer").write_all(&detect)
-                {
-                    // Not while the device is away: that was said already.
-                    if e.kind() != io::ErrorKind::NotConnected {
-                        log::debug!("[{}] keepalive write failed: {}", keepalive_name, e);
-                    }
-                }
+                send_keepalive(&keepalive_writer, &keepalive_name);
             }
         })?;
 

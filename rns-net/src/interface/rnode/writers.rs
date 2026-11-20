@@ -34,8 +34,17 @@ impl SubFlowState {
         }
     }
 
-    /// Note that a frame of the interface's traffic was written.
-    fn wrote_frame(&mut self) {
+    /// Whether a frame would be written now rather than queued.
+    fn sends_now(&self, flow_control: bool) -> bool {
+        !flow_control || (self.ready && self.queue.is_empty())
+    }
+
+    /// Note that a frame of the interface's traffic is written now: with
+    /// flow control, nothing more is until the device reports ready.
+    fn transmit(&mut self, flow_control: bool) {
+        if flow_control {
+            self.ready = false;
+        }
         self.first_tx.get_or_insert_with(std::time::Instant::now);
     }
 
@@ -72,11 +81,7 @@ impl Writer for RNodeSubWriter {
         if !self.flow_control {
             return self.send_frame(data);
         }
-        self.confirmed_pending = Some(if self.multi {
-            rnode_kiss::rnode_multi_data_frame(self.index, data)
-        } else {
-            rnode_kiss::rnode_data_frame(self.index, data)
-        });
+        self.confirmed_pending = Some(self.frame(data));
         self.flush()
     }
 
@@ -85,37 +90,25 @@ impl Writer for RNodeSubWriter {
             return Ok(());
         };
         let mut state = lock_or_recover(&self.flow_state, "rnode flow state");
-        if !state.ready || !state.queue.is_empty() {
+        if !state.sends_now(true) {
             return Err(io::ErrorKind::WouldBlock.into());
         }
-        state.ready = false;
-        state.wrote_frame();
+        state.transmit(true);
         drop(state);
         let written = lock_or_recover(&self.writer, "rnode shared writer").write_all(frame);
         self.confirmed_pending = None;
         written
     }
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        let frame = if self.multi {
-            rnode_kiss::rnode_multi_data_frame(self.index, data)
-        } else {
-            rnode_kiss::rnode_data_frame(self.index, data)
-        };
-        if self.flow_control {
-            let mut state = lock_or_recover(&self.flow_state, "rnode flow state");
-            if state.ready {
-                state.ready = false;
-                state.wrote_frame();
-                drop(state);
-                lock_or_recover(&self.writer, "rnode shared writer").write_all(&frame)
-            } else {
-                state.queue.push_back(data.to_vec());
-                Ok(())
-            }
-        } else {
-            lock_or_recover(&self.flow_state, "rnode flow state").wrote_frame();
-            lock_or_recover(&self.writer, "rnode shared writer").write_all(&frame)
+        let mut state = lock_or_recover(&self.flow_state, "rnode flow state");
+        if !state.sends_now(self.flow_control) {
+            state.queue.push_back(data.to_vec());
+            return Ok(());
         }
+        state.transmit(self.flow_control);
+        drop(state);
+        let frame = self.frame(data);
+        lock_or_recover(&self.writer, "rnode shared writer").write_all(&frame)
     }
 
     fn enqueue_confirmed(
@@ -129,19 +122,14 @@ impl Writer for RNodeSubWriter {
         let frame = self.frame(data);
         let mut state = lock_or_recover(&self.flow_state, "rnode flow state");
         let mut writer = lock_or_recover(&self.writer, "rnode shared writer");
-        if (self.flow_control && (!state.ready || !state.queue.is_empty()))
-            || !writer.fits(frame.len())
-        {
+        if !state.sends_now(self.flow_control) || !writer.fits(frame.len()) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "RNode cannot take a frame yet",
             ));
         }
         writer.write_all(&frame)?;
-        if self.flow_control {
-            state.ready = false;
-        }
-        state.wrote_frame();
+        state.transmit(self.flow_control);
         drop((writer, state));
         if let Some(completion) = completion.take() {
             completion.finish(Ok(()));
@@ -161,11 +149,17 @@ impl Writer for RNodeSubWriter {
 
 impl RNodeSubWriter {
     pub(super) fn frame(&self, data: &[u8]) -> Vec<u8> {
-        if self.multi {
-            rnode_kiss::rnode_multi_data_frame(self.index, data)
-        } else {
-            rnode_kiss::rnode_data_frame(self.index, data)
-        }
+        data_frame(self.multi, self.index, data)
+    }
+}
+
+/// A data frame for the radio at `index`, addressed by virtual port on a
+/// multi-radio device.
+fn data_frame(multi: bool, index: u8, data: &[u8]) -> Vec<u8> {
+    if multi {
+        rnode_kiss::rnode_multi_data_frame(index, data)
+    } else {
+        rnode_kiss::rnode_data_frame(index, data)
     }
 }
 
@@ -191,11 +185,7 @@ pub(super) fn process_flow_queue(
         state.ready = false;
         state.wrote(&data);
         drop(state);
-        let frame = if multi {
-            rnode_kiss::rnode_multi_data_frame(index, &data)
-        } else {
-            rnode_kiss::rnode_data_frame(index, &data)
-        };
+        let frame = data_frame(multi, index, &data);
         // A device that fails is noticed and reopened by the reader.
         if let Err(e) = lock_or_recover(writer, "rnode shared writer").write_all(&frame) {
             log::debug!("rnode subinterface {index}: queued frame not written: {e}");
@@ -243,11 +233,7 @@ pub(super) fn identify_station(
             state.ready = false;
         }
         drop(state);
-        let frame = if config.multi {
-            rnode_kiss::rnode_multi_data_frame(sub.vport, callsign)
-        } else {
-            rnode_kiss::rnode_data_frame(sub.vport, callsign)
-        };
+        let frame = data_frame(config.multi, sub.vport, callsign);
         if let Err(e) = lock_or_recover(writer, "rnode shared writer").write_all(&frame) {
             log::debug!("[{}] station ID not written: {e}", config.name);
         }
