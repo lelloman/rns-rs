@@ -38,8 +38,15 @@ pub type DeferredRequestHandler =
     dyn Fn([u8; 16], &str, [u8; 16], &[u8], Option<&RequestRemoteIdentity>) + Send;
 
 /// Why loading, reloading, unloading or configuring a hook failed. It
-/// displays as the message the RPC and control API report.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// displays as the message the RPC and control API report; the hook
+/// system's own error, when there is one, is its [`source`].
+///
+/// Builds with hooks add the variants that carry those errors, so the enum
+/// is non-exhaustive.
+///
+/// [`source`]: std::error::Error::source
+#[derive(Debug)]
+#[non_exhaustive]
 pub enum HookOpError {
     /// The node was built without hooks.
     NotEnabled,
@@ -55,11 +62,14 @@ pub enum HookOpError {
         point: String,
     },
     /// The hook type names no backend this node has.
-    Backend(String),
+    #[cfg(feature = "hooks")]
+    Backend(rns_hooks::UnknownHookBackend),
     /// The hook's module did not compile.
-    Compile(String),
+    #[cfg(feature = "hooks")]
+    Compile(rns_hooks::HookError),
     /// The hook could not be loaded.
-    Load(String),
+    #[cfg(feature = "hooks")]
+    Load(rns_hooks::HookError),
 }
 
 impl fmt::Display for HookOpError {
@@ -71,14 +81,30 @@ impl fmt::Display for HookOpError {
             HookOpError::NotFound { name, point } => {
                 write!(f, "hook '{name}' not found at point '{point}'")
             }
-            HookOpError::Backend(error) => f.write_str(error),
+            #[cfg(feature = "hooks")]
+            HookOpError::Backend(error) => write!(f, "{error}"),
+            #[cfg(feature = "hooks")]
             HookOpError::Compile(error) => write!(f, "compile error: {error}"),
+            #[cfg(feature = "hooks")]
             HookOpError::Load(error) => write!(f, "load error: {error}"),
         }
     }
 }
 
-impl std::error::Error for HookOpError {}
+impl std::error::Error for HookOpError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            HookOpError::NotEnabled
+            | HookOpError::NoManager
+            | HookOpError::UnknownPoint(_)
+            | HookOpError::NotFound { .. } => None,
+            #[cfg(feature = "hooks")]
+            HookOpError::Backend(error) => Some(error),
+            #[cfg(feature = "hooks")]
+            HookOpError::Compile(error) | HookOpError::Load(error) => Some(error),
+        }
+    }
+}
 
 /// Why a best-effort link datagram could not be admitted by the node.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -24,7 +24,7 @@ impl Driver {
                         let mgr = self.hooks.manager.as_ref().ok_or(HookOpError::NoManager)?;
                         let program = mgr
                             .compile(name.clone(), &wasm_bytes, priority)
-                            .map_err(|e| HookOpError::Compile(e.to_string()))?;
+                            .map_err(HookOpError::Compile)?;
                         self.hooks.slots[point_idx].attach(program);
                         log::info!(
                             "Loaded hook '{}' at point {} (priority {})",
@@ -65,7 +65,7 @@ impl Driver {
                                 priority,
                                 backend,
                             )
-                            .map_err(|e| HookOpError::Load(e.to_string()))?;
+                            .map_err(HookOpError::Load)?;
                         self.hooks.slots[point_idx].attach(program);
                         log::info!(
                             "Loaded {} hook '{}' at point {} (priority {})",
@@ -99,7 +99,7 @@ impl Driver {
                         let mgr = self.hooks.manager.as_ref().ok_or(HookOpError::NoManager)?;
                         let program = mgr
                             .load_builtin(name.clone(), builtin_id.as_str(), priority)
-                            .map_err(|e| HookOpError::Load(e.to_string()))?;
+                            .map_err(HookOpError::Load)?;
                         self.hooks.slots[point_idx].attach(program);
                         log::info!(
                             "Loaded built-in hook '{}' ({}) at point {} (priority {})",
@@ -185,7 +185,7 @@ impl Driver {
                             }
                             Err(e) => {
                                 self.hooks.slots[point_idx].attach(old);
-                                Err(HookOpError::Compile(e.to_string()))
+                                Err(HookOpError::Compile(e))
                             }
                         }
                     })();
@@ -249,7 +249,7 @@ impl Driver {
                             }
                             Err(e) => {
                                 self.hooks.slots[point_idx].attach(old);
-                                Err(HookOpError::Load(e.to_string()))
+                                Err(HookOpError::Load(e))
                             }
                         }
                     })();
@@ -300,7 +300,7 @@ impl Driver {
                             }
                             Err(e) => {
                                 self.hooks.slots[point_idx].attach(old);
-                                Err(HookOpError::Load(e.to_string()))
+                                Err(HookOpError::Load(e))
                             }
                         }
                     })();
