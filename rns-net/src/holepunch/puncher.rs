@@ -275,7 +275,6 @@ pub(crate) fn start_udp_punch_on_loop(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn start_udp_punch_on_loop_with_limits(
     socket: UdpSocket,
     peer_endpoints: Vec<SocketAddr>,

@@ -932,7 +932,7 @@ fn load_instance_known_destinations(
 ) -> Vec<([u8; 16], storage::KnownDestination)> {
     let db = crate::storage_sqlite::default_path(storage_dir);
     if db.is_file() {
-        match crate::storage_sqlite::KnownDestinationsStore::open_read_only(&db, 16)
+        match crate::storage_sqlite::KnownDestinationsStore::open_read_only(&db)
             .and_then(|store| store.load_all())
         {
             Ok(entries) => {

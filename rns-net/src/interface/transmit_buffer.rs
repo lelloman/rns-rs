@@ -144,7 +144,7 @@ impl TransmitBuffer {
     }
 
     /// Append one finalized on-wire frame.
-    #[allow(dead_code)]
+    #[cfg(any(feature = "iface-local", test))]
     pub(crate) fn append(&mut self, frame: Vec<u8>) -> bool {
         self.append_with_limit(frame, None)
     }
@@ -266,12 +266,12 @@ impl TransmitBuffer {
         self.sent_bytes
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn buffered_frames(&self) -> usize {
         self.total_frames.saturating_sub(self.sent_frames)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn buffered_chunks(&self) -> usize {
         self.chunks.len()
     }

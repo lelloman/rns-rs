@@ -162,7 +162,6 @@ fn peer_refresh() {
         key.clone(),
         AutoPeer {
             interface_id: InterfaceId(100),
-            link_local_addr: key.link_local_addr.clone(),
             ifname: "eth0".to_string(),
             if_index: key.if_index,
             last_heard: 1000.0,
@@ -199,7 +198,6 @@ fn peer_key_distinguishes_same_link_local_on_different_interfaces() {
         eth.clone(),
         AutoPeer {
             interface_id: InterfaceId(100),
-            link_local_addr: eth.link_local_addr.clone(),
             ifname: "eth0".to_string(),
             if_index: eth.if_index,
             last_heard: 1000.0,
@@ -209,7 +207,6 @@ fn peer_key_distinguishes_same_link_local_on_different_interfaces() {
         wlan.clone(),
         AutoPeer {
             interface_id: InterfaceId(101),
-            link_local_addr: wlan.link_local_addr.clone(),
             ifname: "wlan0".to_string(),
             if_index: wlan.if_index,
             last_heard: 1000.0,
@@ -244,7 +241,6 @@ fn remove_peers_for_worker_emits_interface_down() {
             removed.clone(),
             AutoPeer {
                 interface_id: InterfaceId(100),
-                link_local_addr: removed.link_local_addr.clone(),
                 ifname: "wlan0".to_string(),
                 if_index: removed.if_index,
                 last_heard: 1000.0,
@@ -254,7 +250,6 @@ fn remove_peers_for_worker_emits_interface_down() {
             kept.clone(),
             AutoPeer {
                 interface_id: InterfaceId(101),
-                link_local_addr: kept.link_local_addr.clone(),
                 ifname: "wlan1".to_string(),
                 if_index: kept.if_index,
                 last_heard: 1000.0,
@@ -602,7 +597,6 @@ fn insert_peer(state: &mut SharedState, addr: &str, ifname: &str, last_heard: f6
         key.clone(),
         AutoPeer {
             interface_id: id,
-            link_local_addr: key.link_local_addr.clone(),
             ifname: ifname.to_string(),
             if_index: key.if_index,
             last_heard,

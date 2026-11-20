@@ -6,7 +6,11 @@
 //! Run:  cargo test -p rns-net --features rns-hooks-wasm --test e2e_hooks
 //! Debug: RUST_LOG=debug cargo test -p rns-net --features rns-hooks-wasm --test e2e_hooks -- --nocapture
 
-#![allow(unused_variables, dead_code)]
+#![allow(
+    unused_variables,
+    dead_code,
+    reason = "scenario scaffolding: not every test reads every handle, event field or helper"
+)]
 #![cfg(feature = "rns-hooks-wasm")]
 
 use std::path::PathBuf;

@@ -3,7 +3,6 @@
 
 use super::*;
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) struct AutoWorkerKey {
     pub(super) ifname: String,
@@ -11,7 +10,6 @@ pub(super) struct AutoWorkerKey {
     pub(super) link_local_addr: String,
 }
 
-#[allow(dead_code)]
 impl AutoWorkerKey {
     pub(super) fn from_local_interface(local: &LocalInterface) -> Self {
         Self {
@@ -22,14 +20,12 @@ impl AutoWorkerKey {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum WorkerReconcileAction {
     Add(AutoWorkerKey),
     Remove(AutoWorkerKey),
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn reconcile_worker_keys(
     active: impl IntoIterator<Item = AutoWorkerKey>,
     desired: impl IntoIterator<Item = AutoWorkerKey>,

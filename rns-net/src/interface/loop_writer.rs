@@ -1205,7 +1205,9 @@ mod tests {
     }
 
     /// Keeps the device open for the loop writer, which writes it itself.
-    struct Device(#[allow(dead_code)] std::fs::File);
+    struct Device {
+        _file: std::fs::File,
+    }
 
     impl Writer for Device {
         fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
@@ -1221,7 +1223,13 @@ mod tests {
         let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
         let slave = unsafe { std::fs::File::from_raw_fd(slave_fd) };
         let (tx, _rx) = crate::event::channel();
-        let (mut writer, _) = wrap(Box::new(Device(slave)), slave_fd, InterfaceId(5), "pty", tx);
+        let (mut writer, _) = wrap(
+            Box::new(Device { _file: slave }),
+            slave_fd,
+            InterfaceId(5),
+            "pty",
+            tx,
+        );
 
         // Nobody reads the far end: the pty fills, then the buffer, and
         // frames are refused well below a socket writer's limit.

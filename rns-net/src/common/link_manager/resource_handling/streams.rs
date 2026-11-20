@@ -30,7 +30,10 @@ impl LinkManager {
         Ok(data)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is an independent input of the segment; the link and stream are disjoint borrows of link manager state"
+    )]
     pub(super) fn build_stream_segment(
         link: &ManagedLink,
         stream: &mut OutgoingStreamTransfer,
@@ -158,7 +161,10 @@ impl LinkManager {
     /// The declared-length reader is consumed directly. Unlike the upstream
     /// zero-stat compatibility path, no temporary buffered proxy must be
     /// flushed and rewound before its size or first segment can be observed.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "public link manager entry point; each argument is an independent property of the transfer"
+    )]
     pub fn send_resource_stream(
         &mut self,
         link_id: &LinkId,
@@ -185,7 +191,10 @@ impl LinkManager {
 
     /// Start a bounded-memory Resource transfer from a sequential reader with
     /// explicit send options.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "public link manager entry point; each argument is an independent property of the transfer"
+    )]
     pub fn send_resource_stream_with_options(
         &mut self,
         link_id: &LinkId,

@@ -116,7 +116,7 @@ fn wait_for_flush(dir: &Path, dest_hash: [u8; 16]) {
     let db = dir.join("storage").join("known_destinations.db");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let flushed = rns_net::storage_sqlite::KnownDestinationsStore::open_read_only(&db, 16)
+        let flushed = rns_net::storage_sqlite::KnownDestinationsStore::open_read_only(&db)
             .and_then(|store| store.load_all())
             .is_ok_and(|entries| entries.iter().any(|(hash, _)| *hash == dest_hash));
         if flushed {

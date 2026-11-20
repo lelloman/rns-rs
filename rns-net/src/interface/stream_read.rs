@@ -76,7 +76,10 @@ pub(crate) fn read_device_frames(
 }
 
 #[cfg(stream_read_ifaces)]
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the read loop's state is borrowed from the interface loop piecewise; runs for every read"
+)]
 fn read_frames(
     fd: std::os::fd::RawFd,
     device: bool,

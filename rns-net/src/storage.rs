@@ -64,7 +64,10 @@ pub struct KnownDestination {
 
 /// A 64-bit fingerprint of everything persisted about a known destination,
 /// so the flush can tell a changed entry without keeping a copy of it.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "takes each persisted field by reference so KnownDestination and the driver's KnownDestinationState hash identically without building a copy of either"
+)]
 pub(crate) fn known_destination_fingerprint(
     identity_hash: &[u8; 16],
     public_key: &[u8; 64],
@@ -367,7 +370,7 @@ impl SharedClientRatchetStore {
         let storage = self.instance_storage.as_ref()?;
         let db = crate::storage_sqlite::default_path(storage);
         if db.is_file() {
-            match crate::storage_sqlite::KnownDestinationsStore::open_read_only(&db, 16)
+            match crate::storage_sqlite::KnownDestinationsStore::open_read_only(&db)
                 .and_then(|store| store.current(dest_hash, now, expiry_secs))
             {
                 Ok(Some(entry)) => return Some(entry),
@@ -1566,7 +1569,6 @@ mod tests {
         {
             let db = crate::storage_sqlite::KnownDestinationsStore::open(
                 &crate::storage_sqlite::default_path(&storage),
-                16,
             )
             .unwrap();
             db.remember(in_db, db_entry).unwrap();
@@ -1601,7 +1603,6 @@ mod tests {
         assert!(!storage.join("ratchets").join(hex(&heard)).exists());
         let db = crate::storage_sqlite::KnownDestinationsStore::open_read_only(
             &crate::storage_sqlite::default_path(&storage),
-            16,
         )
         .unwrap();
         assert_eq!(db.current(&heard, now, 60.0).unwrap(), None);

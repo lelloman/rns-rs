@@ -176,7 +176,7 @@ struct ClientSleepHold {
 }
 
 impl ClientSleepHold {
-    #[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+    #[cfg(any(target_os = "android", test))]
     fn new(timeout: Duration) -> Self {
         Self {
             timeout,
@@ -204,7 +204,7 @@ fn android_client_sleep_hold() -> Option<ClientSleepHold> {
     }
 }
 
-#[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+#[cfg(any(target_os = "android", test))]
 fn spawn_physical_keepalive_loop(
     mut writer: Box<dyn Writer>,
     interface_id: InterfaceId,

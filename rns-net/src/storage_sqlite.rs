@@ -28,8 +28,6 @@ pub fn default_path(storage_dir: &Path) -> PathBuf {
 /// store is only used to load and persist them.
 pub struct KnownDestinationsStore {
     conn: Mutex<Connection>,
-    #[allow(dead_code)]
-    hash_width: usize,
     read_only: bool,
     /// Destinations whose last save was rejected by a constraint or data
     /// error, so each rejection is logged once (upstream's quarantine).
@@ -38,19 +36,18 @@ pub struct KnownDestinationsStore {
 
 impl KnownDestinationsStore {
     /// Open the database at `path` read-write, creating it, its parent
-    /// directory and the schema if missing. `hash_width` is stored but not
-    /// used.
-    pub fn open(path: &Path, hash_width: usize) -> io::Result<Self> {
-        Self::open_inner(path, hash_width, false)
+    /// directory and the schema if missing.
+    pub fn open(path: &Path) -> io::Result<Self> {
+        Self::open_inner(path, false)
     }
 
     /// Open an existing database at `path` read-only, without touching its
     /// schema; every write through it does nothing.
-    pub fn open_read_only(path: &Path, hash_width: usize) -> io::Result<Self> {
-        Self::open_inner(path, hash_width, true)
+    pub fn open_read_only(path: &Path) -> io::Result<Self> {
+        Self::open_inner(path, true)
     }
 
-    fn open_inner(path: &Path, hash_width: usize, read_only: bool) -> io::Result<Self> {
+    fn open_inner(path: &Path, read_only: bool) -> io::Result<Self> {
         if !read_only {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
@@ -75,7 +72,6 @@ impl KnownDestinationsStore {
         }
         Ok(Self {
             conn: Mutex::new(conn),
-            hash_width,
             read_only,
             rejected: Mutex::new(HashSet::new()),
         })
@@ -765,7 +761,7 @@ mod tests {
     #[test]
     fn sqlite_known_destinations_roundtrip() {
         let dir = temp_dir();
-        let store = KnownDestinationsStore::open(&default_path(&dir), 16).unwrap();
+        let store = KnownDestinationsStore::open(&default_path(&dir)).unwrap();
         let destinations = HashMap::from([
             ([0x11; 16], destination(0x11, Some(2_000.0), true)),
             ([0x22; 16], destination(0x22, None, false)),
@@ -800,7 +796,7 @@ mod tests {
     #[test]
     fn sqlite_save_skips_a_rejected_destination_and_saves_the_rest() {
         let dir = temp_dir();
-        let store = KnownDestinationsStore::open(&default_path(&dir), 16).unwrap();
+        let store = KnownDestinationsStore::open(&default_path(&dir)).unwrap();
         // SQLite binds NaN as NULL, which `last_heard NOT NULL` rejects.
         let mut invalid = destination(0x22, None, false);
         invalid.received_at = f64::NAN;
@@ -844,7 +840,7 @@ mod tests {
         // (for example from legacy imports) as NULL.
         let dir = temp_dir();
         let path = default_path(&dir);
-        let store = KnownDestinationsStore::open(&path, 16).unwrap();
+        let store = KnownDestinationsStore::open(&path).unwrap();
         assert!(!packet_hash_not_null(&path));
         // The release format is version 0 (upstream c4ed59be).
         assert_eq!(user_version(&path), 0);
@@ -932,7 +928,7 @@ mod tests {
         }
         assert!(packet_hash_not_null(&path));
 
-        let store = KnownDestinationsStore::open(&path, 16).unwrap();
+        let store = KnownDestinationsStore::open(&path).unwrap();
         assert_eq!(user_version(&path), 0);
         assert!(!packet_hash_not_null(&path));
         assert_eq!(
@@ -971,10 +967,10 @@ mod tests {
 
         // Reopening a release database changes nothing.
         drop(store);
-        KnownDestinationsStore::open(&path, 16).unwrap();
+        KnownDestinationsStore::open(&path).unwrap();
         assert_eq!(user_version(&path), 0);
         assert_eq!(
-            KnownDestinationsStore::open(&path, 16)
+            KnownDestinationsStore::open(&path)
                 .unwrap()
                 .load_all()
                 .unwrap()
@@ -1012,7 +1008,7 @@ mod tests {
             .unwrap();
         }
 
-        let store = KnownDestinationsStore::open(&path, 16).unwrap();
+        let store = KnownDestinationsStore::open(&path).unwrap();
         assert_eq!(user_version(&path), 0);
         let loaded = store.load_all().unwrap();
         assert_eq!(loaded.len(), 1);
@@ -1024,13 +1020,13 @@ mod tests {
     fn sqlite_keeps_a_version_above_the_pre_release_range() {
         let dir = temp_dir();
         let path = default_path(&dir);
-        KnownDestinationsStore::open(&path, 16).unwrap();
+        KnownDestinationsStore::open(&path).unwrap();
         assert_eq!(user_version(&path), 0);
         Connection::open(&path)
             .unwrap()
             .execute_batch("PRAGMA user_version = 4;")
             .unwrap();
-        KnownDestinationsStore::open(&path, 16).unwrap();
+        KnownDestinationsStore::open(&path).unwrap();
         assert_eq!(user_version(&path), 4);
     }
 
@@ -1071,7 +1067,7 @@ mod tests {
             .unwrap();
         }
 
-        let store = KnownDestinationsStore::open(&path, 16).unwrap();
+        let store = KnownDestinationsStore::open(&path).unwrap();
         let loaded = store.load_all().unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].0, [0x77; 16]);
@@ -1110,7 +1106,7 @@ mod tests {
         let legacy = HashMap::from([([0x33; 16], destination(0x33, Some(3_000.0), true))]);
         crate::storage::save_known_destinations(&legacy, &legacy_path).unwrap();
 
-        let store = KnownDestinationsStore::open(&default_path(&dir), 16).unwrap();
+        let store = KnownDestinationsStore::open(&default_path(&dir)).unwrap();
         assert_eq!(store.import_legacy(&legacy_path).unwrap(), 1);
         let loaded = store.load_all().unwrap();
         assert_eq!(loaded.len(), 1);
@@ -1122,7 +1118,7 @@ mod tests {
     #[test]
     fn sqlite_ratchet_store_roundtrip_and_cleanup() {
         let dir = temp_dir();
-        let store = KnownDestinationsStore::open(&default_path(&dir), 16).unwrap();
+        let store = KnownDestinationsStore::open(&default_path(&dir)).unwrap();
         store
             .remember(
                 [0x44; 16],
@@ -1198,7 +1194,7 @@ mod tests {
             )
             .unwrap();
 
-        let store = KnownDestinationsStore::open(&default_path(&dir), 16).unwrap();
+        let store = KnownDestinationsStore::open(&default_path(&dir)).unwrap();
         let known = HashSet::from([[0x55; 16], [0x56; 16]]);
         assert_eq!(
             store
@@ -1231,7 +1227,7 @@ mod tests {
         )
         .unwrap();
         drop(conn);
-        let store = KnownDestinationsStore::open_read_only(&path, 16).unwrap();
+        let store = KnownDestinationsStore::open_read_only(&path).unwrap();
         let loaded = store.load_all().unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].0, [1u8; 16]);
@@ -1243,7 +1239,7 @@ mod tests {
     fn sqlite_read_only_does_not_write() {
         let dir = temp_dir();
         let path = default_path(&dir);
-        let store = KnownDestinationsStore::open(&path, 16).unwrap();
+        let store = KnownDestinationsStore::open(&path).unwrap();
         store
             .save_all(&HashMap::from([(
                 [0x66; 16],
@@ -1252,7 +1248,7 @@ mod tests {
             .unwrap();
         drop(store);
 
-        let read_only = KnownDestinationsStore::open_read_only(&path, 16).unwrap();
+        let read_only = KnownDestinationsStore::open_read_only(&path).unwrap();
         assert_eq!(read_only.load_all().unwrap().len(), 1);
         assert_eq!(read_only.save_all(&HashMap::new()).unwrap(), 0);
         assert!(read_only
@@ -1265,7 +1261,7 @@ mod tests {
             )
             .is_ok());
         drop(read_only);
-        let writable = KnownDestinationsStore::open(&path, 16).unwrap();
+        let writable = KnownDestinationsStore::open(&path).unwrap();
         assert_eq!(writable.load_all().unwrap().len(), 1);
         assert!(writable.current(&[0x67; 16], 2.0, 5.0).unwrap().is_none());
     }

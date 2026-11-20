@@ -205,7 +205,7 @@ pub fn set_worker_limits(max_workers: Option<usize>, niceness: i32) {
 /// How many workers a search uses out of `available` threads: like
 /// upstream's stamp jobs, every core up to 12 and half of them beyond, at
 /// most `max_workers`.
-#[cfg_attr(not(feature = "engine-parallel"), allow(dead_code))]
+#[cfg(feature = "engine-parallel")]
 fn search_workers(available: usize) -> usize {
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
     let max_workers = MAX_WORKERS.load(std::sync::atomic::Ordering::Relaxed);
@@ -214,7 +214,7 @@ fn search_workers(available: usize) -> usize {
 
 /// Upstream's stamp job size for `cores`, capped by `max_workers` and by
 /// the `available` threads of the pool.
-#[cfg_attr(not(feature = "engine-parallel"), allow(dead_code))]
+#[cfg(any(feature = "engine-parallel", test))]
 fn worker_count(cores: usize, available: usize, max_workers: Option<usize>) -> usize {
     let default = if cores <= 12 { cores } else { cores / 2 };
     let limit = max_workers.map_or(default, |max| default.min(max));
@@ -224,7 +224,7 @@ fn worker_count(cores: usize, available: usize, max_workers: Option<usize>) -> u
 /// Lower the scheduling priority of the calling search thread to the
 /// configured niceness, as upstream's stamp workers do with `os.nice`. On
 /// Linux this applies to the calling thread only.
-#[cfg_attr(not(feature = "engine-parallel"), allow(dead_code))]
+#[cfg(feature = "engine-parallel")]
 fn renice_search_thread() {
     #[cfg(target_os = "linux")]
     {
@@ -234,7 +234,6 @@ fn renice_search_thread() {
 }
 
 /// Where a multi-threaded search runs its workers.
-#[cfg_attr(not(feature = "engine-parallel"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SearchPool {
     /// rayon's global pool, one worker per thread in it.

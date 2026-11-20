@@ -27,8 +27,6 @@ const APP_NAME: &str = "example_utilities";
 // ─── Delivery from on_local_delivery ─────────────────────────────────────────
 
 struct Delivery {
-    #[allow(dead_code)]
-    dest_hash: DestHash,
     raw: Vec<u8>,
 }
 
@@ -70,7 +68,7 @@ impl Callbacks for PeerCallbacks {
             raw.len(),
             packet_hash
         );
-        let _ = self.delivery_tx.send(Delivery { dest_hash, raw });
+        let _ = self.delivery_tx.send(Delivery { raw });
     }
 
     fn on_proof(&mut self, _dest_hash: DestHash, packet_hash: PacketHash, rtt: f64) {
