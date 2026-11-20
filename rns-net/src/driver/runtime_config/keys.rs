@@ -317,7 +317,7 @@ impl Driver {
     }
 
     pub(crate) fn runtime_config_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
-        let defaults = self.runtime_config_defaults;
+        let defaults = self.runtime_config.defaults;
         let make_entry = |key: &str,
                           value: RuntimeConfigValue,
                           default: RuntimeConfigValue,

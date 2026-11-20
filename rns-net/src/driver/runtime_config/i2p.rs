@@ -6,7 +6,7 @@ impl Driver {
     #[cfg(feature = "iface-i2p")]
     pub(crate) fn list_i2p_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
-        let mut names: Vec<&String> = self.i2p_runtime.keys().collect();
+        let mut names: Vec<&String> = self.runtime_config.i2p.keys().collect();
         names.sort();
         for name in names {
             let key = format!("i2p.{}.reconnect_wait_secs", name);
@@ -21,7 +21,7 @@ impl Driver {
     pub(crate) fn i2p_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("i2p.")?;
         let (name, setting) = rest.split_once('.')?;
-        let handle = self.i2p_runtime.get(name)?;
+        let handle = self.runtime_config.i2p.get(name)?;
         let current = recover_mutex_guard(&handle.runtime, "i2p runtime").clone();
         let startup = handle.startup.clone();
         match setting {
@@ -65,10 +65,14 @@ impl Driver {
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_i2p_runtime_key(key)?;
-        let handle = self.i2p_runtime.get(name).ok_or(RuntimeConfigError {
-            code: RuntimeConfigErrorCode::NotFound,
-            message: format!("i2p interface '{}' not found", name),
-        })?;
+        let handle = self
+            .runtime_config
+            .i2p
+            .get(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("i2p interface '{}' not found", name),
+            })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "i2p runtime");
         match setting {
             "reconnect_wait_secs" => {
@@ -86,10 +90,14 @@ impl Driver {
     #[cfg(feature = "iface-i2p")]
     pub(crate) fn reset_i2p_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_i2p_runtime_key(key)?;
-        let handle = self.i2p_runtime.get(name).ok_or(RuntimeConfigError {
-            code: RuntimeConfigErrorCode::NotFound,
-            message: format!("i2p interface '{}' not found", name),
-        })?;
+        let handle = self
+            .runtime_config
+            .i2p
+            .get(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("i2p interface '{}' not found", name),
+            })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "i2p runtime");
         let startup = handle.startup.clone();
         match setting {

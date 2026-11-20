@@ -80,9 +80,9 @@ impl Driver {
         for id in managed.static_ids {
             self.remove_static_interface(id);
         }
-        self.interface_runtime_defaults.remove(name);
-        self.interface_ifac_runtime.remove(name);
-        self.interface_ifac_runtime_defaults.remove(name);
+        self.runtime_config.interface_defaults.remove(name);
+        self.runtime_config.ifac.remove(name);
+        self.runtime_config.ifac_defaults.remove(name);
         #[cfg(runtime_config_ifaces)]
         self.remove_managed_runtime(name);
         if let Some(announcer) = self.interface_announcer.as_mut() {
@@ -108,9 +108,9 @@ impl Driver {
             self.interfaces.remove(&id);
         }
         if let Some(entry_name) = entry_name {
-            self.interface_runtime_defaults.remove(&entry_name);
-            self.interface_ifac_runtime.remove(&entry_name);
-            self.interface_ifac_runtime_defaults.remove(&entry_name);
+            self.runtime_config.interface_defaults.remove(&entry_name);
+            self.runtime_config.ifac.remove(&entry_name);
+            self.runtime_config.ifac_defaults.remove(&entry_name);
         }
         self.event_tx.remove_interface(id);
         self.interface_display_names.remove(&id);
@@ -374,36 +374,36 @@ impl Driver {
     fn remove_managed_runtime(&mut self, name: &str) {
         #[cfg(feature = "iface-backbone")]
         {
-            self.backbone_runtime.remove(name);
-            self.backbone_peer_state.remove(name);
-            self.backbone_client_runtime.remove(name);
-            self.backbone_discovery_runtime.remove(name);
+            self.runtime_config.backbone.remove(name);
+            self.runtime_config.backbone_peer_state.remove(name);
+            self.runtime_config.backbone_client.remove(name);
+            self.runtime_config.backbone_discovery.remove(name);
         }
         #[cfg(feature = "iface-tcp")]
         {
-            self.tcp_client_runtime.remove(name);
-            self.tcp_server_runtime.remove(name);
-            self.tcp_server_discovery_runtime.remove(name);
+            self.runtime_config.tcp_client.remove(name);
+            self.runtime_config.tcp_server.remove(name);
+            self.runtime_config.tcp_server_discovery.remove(name);
         }
         #[cfg(feature = "iface-udp")]
         {
-            self.udp_runtime.remove(name);
+            self.runtime_config.udp.remove(name);
         }
         #[cfg(feature = "iface-auto")]
         {
-            self.auto_runtime.remove(name);
+            self.runtime_config.auto.remove(name);
         }
         #[cfg(feature = "iface-i2p")]
         {
-            self.i2p_runtime.remove(name);
+            self.runtime_config.i2p.remove(name);
         }
         #[cfg(feature = "iface-pipe")]
         {
-            self.pipe_runtime.remove(name);
+            self.runtime_config.pipe.remove(name);
         }
         #[cfg(feature = "iface-rnode")]
         {
-            self.rnode_runtime.remove(name);
+            self.runtime_config.rnode.remove(name);
         }
     }
 

@@ -7749,7 +7749,7 @@ fn runtime_config_rejects_invalid_policy() {
 #[test]
 fn runtime_config_supports_identified_only_and_configured_reset_default() {
     let mut driver = new_test_driver();
-    driver.runtime_config_defaults.direct_connect_policy = HolePunchPolicy::Reject;
+    driver.runtime_config.defaults.direct_connect_policy = HolePunchPolicy::Reject;
     let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
         key: "global.direct_connect_policy".into(),
         value: RuntimeConfigValue::String("identified_only".into()),
@@ -8106,6 +8106,7 @@ fn backbone_peer_state_query_lists_entries() {
     let mut driver = new_test_driver();
     register_test_backbone(&mut driver, "public");
     driver
+        .runtime_config
         .backbone_peer_state
         .get("public")
         .unwrap()
@@ -8143,7 +8144,12 @@ fn backbone_peer_state_query_lists_entries() {
 fn interface_stats_include_backbone_clients_and_fast_flap_blocks() {
     let mut driver = new_test_driver();
     register_test_backbone(&mut driver, "public");
-    let handle = driver.backbone_peer_state.get("public").unwrap().clone();
+    let handle = driver
+        .runtime_config
+        .backbone_peer_state
+        .get("public")
+        .unwrap()
+        .clone();
     let peer_ip = "203.0.113.20".parse().unwrap();
     handle
         .peer_state
@@ -8213,7 +8219,12 @@ fn interface_stats_include_backbone_clients_and_fast_flap_blocks() {
 fn backbone_peer_state_clear_removes_entry() {
     let mut driver = new_test_driver();
     register_test_backbone(&mut driver, "public");
-    let handle = driver.backbone_peer_state.get("public").unwrap().clone();
+    let handle = driver
+        .runtime_config
+        .backbone_peer_state
+        .get("public")
+        .unwrap()
+        .clone();
     let peer_ip = "203.0.113.11".parse().unwrap();
     handle
         .peer_state
@@ -8274,6 +8285,7 @@ fn backbone_peer_blacklist_sets_blacklist() {
     let mut driver = new_test_driver();
     register_test_backbone(&mut driver, "public");
     driver
+        .runtime_config
         .backbone_peer_state
         .get("public")
         .unwrap()
@@ -9225,8 +9237,8 @@ fn runtime_config_sets_provider_bridge_values() {
         },
     )
     .unwrap();
-    driver.runtime_config_defaults.provider_queue_max_events = 1024;
-    driver.runtime_config_defaults.provider_queue_max_bytes = 1024 * 1024;
+    driver.runtime_config.defaults.provider_queue_max_events = 1024;
+    driver.runtime_config.defaults.provider_queue_max_bytes = 1024 * 1024;
     driver.provider_bridge = Some(bridge);
 
     let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {

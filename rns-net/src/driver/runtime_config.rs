@@ -5,6 +5,7 @@ mod auto;
 mod backbone;
 mod backbone_pool;
 mod generic;
+mod handles;
 mod i2p;
 mod keys;
 mod pipe;
@@ -15,6 +16,8 @@ mod udp;
 mod values;
 
 use super::*;
+
+pub(crate) use handles::RuntimeConfigHandles;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RuntimeConfigFamily {

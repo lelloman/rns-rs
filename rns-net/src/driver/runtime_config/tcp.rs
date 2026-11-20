@@ -6,7 +6,7 @@ impl Driver {
     #[cfg(feature = "iface-tcp")]
     pub(crate) fn list_tcp_server_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
-        let mut names: Vec<&String> = self.tcp_server_runtime.keys().collect();
+        let mut names: Vec<&String> = self.runtime_config.tcp_server.keys().collect();
         names.sort();
         for name in names {
             for suffix in [
@@ -33,7 +33,7 @@ impl Driver {
     #[cfg(feature = "iface-tcp")]
     pub(crate) fn list_tcp_client_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
-        let mut names: Vec<&String> = self.tcp_client_runtime.keys().collect();
+        let mut names: Vec<&String> = self.runtime_config.tcp_client.keys().collect();
         names.sort();
         for name in names {
             for suffix in [
@@ -54,7 +54,7 @@ impl Driver {
     pub(crate) fn tcp_client_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("tcp_client.")?;
         let (name, setting) = rest.split_once('.')?;
-        let handle = self.tcp_client_runtime.get(name)?;
+        let handle = self.runtime_config.tcp_client.get(name)?;
         let current = recover_mutex_guard(&handle.runtime, "tcp client runtime").clone();
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
@@ -117,7 +117,8 @@ impl Driver {
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_tcp_client_runtime_key(key)?;
         let handle = self
-            .tcp_client_runtime
+            .runtime_config
+            .tcp_client
             .get(name)
             .ok_or(RuntimeConfigError {
                 code: RuntimeConfigErrorCode::NotFound,
@@ -154,7 +155,8 @@ impl Driver {
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_tcp_client_runtime_key(key)?;
         let handle = self
-            .tcp_client_runtime
+            .runtime_config
+            .tcp_client
             .get(name)
             .ok_or(RuntimeConfigError {
                 code: RuntimeConfigErrorCode::NotFound,
@@ -181,7 +183,7 @@ impl Driver {
         let rest = key.strip_prefix("tcp_server.")?;
         let (name, setting) = rest.split_once('.')?;
         if Self::is_discovery_runtime_setting(setting) {
-            let handle = self.tcp_server_discovery_runtime.get(name)?;
+            let handle = self.runtime_config.tcp_server_discovery.get(name)?;
             return Self::discovery_runtime_entry(
                 key,
                 setting,
@@ -193,7 +195,7 @@ impl Driver {
             );
         }
 
-        let handle = self.tcp_server_runtime.get(name)?;
+        let handle = self.runtime_config.tcp_server.get(name)?;
         let current = recover_mutex_guard(&handle.runtime, "tcp server runtime").clone();
         let startup = handle.startup.clone();
         match setting {
@@ -253,7 +255,8 @@ impl Driver {
             return self.set_tcp_server_discovery_runtime_config(key, value);
         }
         let handle = self
-            .tcp_server_runtime
+            .runtime_config
+            .tcp_server
             .get(name)
             .ok_or(RuntimeConfigError {
                 code: RuntimeConfigErrorCode::NotFound,
@@ -293,7 +296,8 @@ impl Driver {
             return self.reset_tcp_server_discovery_runtime_config(key);
         }
         let handle = self
-            .tcp_server_runtime
+            .runtime_config
+            .tcp_server
             .get(name)
             .ok_or(RuntimeConfigError {
                 code: RuntimeConfigErrorCode::NotFound,
@@ -321,7 +325,8 @@ impl Driver {
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_tcp_server_runtime_key(key)?;
         let handle = self
-            .tcp_server_discovery_runtime
+            .runtime_config
+            .tcp_server_discovery
             .get_mut(name)
             .ok_or(RuntimeConfigError {
                 code: RuntimeConfigErrorCode::NotFound,
@@ -371,7 +376,8 @@ impl Driver {
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_tcp_server_runtime_key(key)?;
         let handle = self
-            .tcp_server_discovery_runtime
+            .runtime_config
+            .tcp_server_discovery
             .get_mut(name)
             .ok_or(RuntimeConfigError {
                 code: RuntimeConfigErrorCode::NotFound,

@@ -6,7 +6,7 @@ impl Driver {
     #[cfg(feature = "iface-rnode")]
     pub(crate) fn list_rnode_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
-        let mut names: Vec<&String> = self.rnode_runtime.keys().collect();
+        let mut names: Vec<&String> = self.runtime_config.rnode.keys().collect();
         names.sort();
         for name in names {
             for suffix in [
@@ -31,7 +31,7 @@ impl Driver {
     pub(crate) fn rnode_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("rnode.")?;
         let (name, setting) = rest.split_once('.')?;
-        let handle = self.rnode_runtime.get(name)?;
+        let handle = self.runtime_config.rnode.get(name)?;
         let current = recover_mutex_guard(&handle.runtime, "rnode runtime").clone();
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
@@ -150,10 +150,14 @@ impl Driver {
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_rnode_runtime_key(key)?;
         let updated_sub = {
-            let handle = self.rnode_runtime.get(name).ok_or(RuntimeConfigError {
-                code: RuntimeConfigErrorCode::NotFound,
-                message: format!("rnode interface '{}' not found", name),
-            })?;
+            let handle = self
+                .runtime_config
+                .rnode
+                .get(name)
+                .ok_or(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::NotFound,
+                    message: format!("rnode interface '{}' not found", name),
+                })?;
             let mut runtime = recover_mutex_guard(&handle.runtime, "rnode runtime");
             let old = runtime.sub.clone();
             match setting {
@@ -200,10 +204,14 @@ impl Driver {
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_rnode_runtime_key(key)?;
         let updated_sub = {
-            let handle = self.rnode_runtime.get(name).ok_or(RuntimeConfigError {
-                code: RuntimeConfigErrorCode::NotFound,
-                message: format!("rnode interface '{}' not found", name),
-            })?;
+            let handle = self
+                .runtime_config
+                .rnode
+                .get(name)
+                .ok_or(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::NotFound,
+                    message: format!("rnode interface '{}' not found", name),
+                })?;
             let mut runtime = recover_mutex_guard(&handle.runtime, "rnode runtime");
             let old = runtime.sub.clone();
             let startup = handle.startup.clone();

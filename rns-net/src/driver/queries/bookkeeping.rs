@@ -95,7 +95,8 @@ impl Driver {
     /// Return active announce and path-request burst counts for a Backbone listener.
     #[cfg(feature = "iface-backbone")]
     pub fn backbone_burst_counts(&self, parent_id: InterfaceId) -> Option<(usize, usize)> {
-        self.backbone_peer_state
+        self.runtime_config
+            .backbone_peer_state
             .values()
             .any(|handle| handle.interface_id == parent_id)
             .then(|| self.dynamic_burst_counts(parent_id))

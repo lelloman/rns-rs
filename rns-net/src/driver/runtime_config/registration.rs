@@ -5,13 +5,15 @@ use super::*;
 impl Driver {
     #[cfg(feature = "iface-backbone")]
     pub(crate) fn register_backbone_runtime(&mut self, handle: BackboneRuntimeConfigHandle) {
-        self.backbone_runtime
+        self.runtime_config
+            .backbone
             .insert(handle.interface_name.clone(), handle);
     }
 
     #[cfg(feature = "iface-backbone")]
     pub(crate) fn register_backbone_peer_state(&mut self, handle: BackbonePeerStateHandle) {
-        self.backbone_peer_state
+        self.runtime_config
+            .backbone_peer_state
             .insert(handle.interface_name.clone(), handle);
     }
 
@@ -20,7 +22,8 @@ impl Driver {
         &mut self,
         handle: BackboneClientRuntimeConfigHandle,
     ) {
-        self.backbone_client_runtime
+        self.runtime_config
+            .backbone_client
             .insert(handle.interface_name.clone(), handle);
     }
 
@@ -29,19 +32,22 @@ impl Driver {
         &mut self,
         handle: BackboneDiscoveryRuntimeHandle,
     ) {
-        self.backbone_discovery_runtime
+        self.runtime_config
+            .backbone_discovery
             .insert(handle.interface_name.clone(), handle);
     }
 
     #[cfg(feature = "iface-tcp")]
     pub(crate) fn register_tcp_server_runtime(&mut self, handle: TcpServerRuntimeConfigHandle) {
-        self.tcp_server_runtime
+        self.runtime_config
+            .tcp_server
             .insert(handle.interface_name.clone(), handle);
     }
 
     #[cfg(feature = "iface-tcp")]
     pub(crate) fn register_tcp_client_runtime(&mut self, handle: TcpClientRuntimeConfigHandle) {
-        self.tcp_client_runtime
+        self.runtime_config
+            .tcp_client
             .insert(handle.interface_name.clone(), handle);
     }
 
@@ -50,37 +56,43 @@ impl Driver {
         &mut self,
         handle: TcpServerDiscoveryRuntimeHandle,
     ) {
-        self.tcp_server_discovery_runtime
+        self.runtime_config
+            .tcp_server_discovery
             .insert(handle.interface_name.clone(), handle);
     }
 
     #[cfg(feature = "iface-udp")]
     pub(crate) fn register_udp_runtime(&mut self, handle: UdpRuntimeConfigHandle) {
-        self.udp_runtime
+        self.runtime_config
+            .udp
             .insert(handle.interface_name.clone(), handle);
     }
 
     #[cfg(feature = "iface-auto")]
     pub(crate) fn register_auto_runtime(&mut self, handle: AutoRuntimeConfigHandle) {
-        self.auto_runtime
+        self.runtime_config
+            .auto
             .insert(handle.interface_name.clone(), handle);
     }
 
     #[cfg(feature = "iface-i2p")]
     pub(crate) fn register_i2p_runtime(&mut self, handle: I2pRuntimeConfigHandle) {
-        self.i2p_runtime
+        self.runtime_config
+            .i2p
             .insert(handle.interface_name.clone(), handle);
     }
 
     #[cfg(feature = "iface-pipe")]
     pub(crate) fn register_pipe_runtime(&mut self, handle: PipeRuntimeConfigHandle) {
-        self.pipe_runtime
+        self.runtime_config
+            .pipe
             .insert(handle.interface_name.clone(), handle);
     }
 
     #[cfg(feature = "iface-rnode")]
     pub(crate) fn register_rnode_runtime(&mut self, handle: RNodeRuntimeConfigHandle) {
-        self.rnode_runtime
+        self.runtime_config
+            .rnode
             .insert(handle.interface_name.clone(), handle);
     }
 
@@ -88,7 +100,8 @@ impl Driver {
         &mut self,
         info: &rns_core::transport::types::InterfaceInfo,
     ) {
-        self.interface_runtime_defaults
+        self.runtime_config
+            .interface_defaults
             .entry(info.name.clone())
             .or_insert_with(|| info.clone());
     }
@@ -98,10 +111,12 @@ impl Driver {
         interface_name: &str,
         startup: IfacRuntimeConfig,
     ) {
-        self.interface_ifac_runtime_defaults
+        self.runtime_config
+            .ifac_defaults
             .entry(interface_name.to_string())
             .or_insert_with(|| startup.clone());
-        self.interface_ifac_runtime
+        self.runtime_config
+            .ifac
             .entry(interface_name.to_string())
             .or_insert(startup);
     }
