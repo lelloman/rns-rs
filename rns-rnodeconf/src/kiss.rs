@@ -1,9 +1,6 @@
-#![allow(
-    dead_code,
-    reason = "the full KISS command set the firmware speaks; not every command is sent or matched yet"
-)]
 //! The KISS framing and command set RNode firmware speaks, as upstream
-//! `rnodeconf.py`'s `KISS` class defines it.
+//! `rnodeconf.py`'s `KISS` class defines it: the commands upstream sends or
+//! reads.
 
 pub(crate) const FEND: u8 = 0xC0;
 pub(crate) const FESC: u8 = 0xDB;
@@ -20,12 +17,10 @@ pub(crate) const CMD_RADIO_STATE: u8 = 0x06;
 pub(crate) const CMD_RADIO_LOCK: u8 = 0x07;
 pub(crate) const CMD_DETECT: u8 = 0x08;
 pub(crate) const CMD_LEAVE: u8 = 0x0A;
-pub(crate) const CMD_READY: u8 = 0x0F;
 pub(crate) const CMD_STAT_RX: u8 = 0x21;
 pub(crate) const CMD_STAT_TX: u8 = 0x22;
 pub(crate) const CMD_STAT_RSSI: u8 = 0x23;
 pub(crate) const CMD_STAT_SNR: u8 = 0x24;
-pub(crate) const CMD_BLINK: u8 = 0x30;
 pub(crate) const CMD_RANDOM: u8 = 0x40;
 pub(crate) const CMD_DISP_INT: u8 = 0x45;
 pub(crate) const CMD_NP_INT: u8 = 0x65;
@@ -60,13 +55,10 @@ pub(crate) const CMD_FW_HASH: u8 = 0x58;
 pub(crate) const CMD_FW_UPD: u8 = 0x61;
 pub(crate) const DETECT_REQ: u8 = 0x73;
 pub(crate) const DETECT_RESP: u8 = 0x46;
-pub(crate) const RADIO_STATE_OFF: u8 = 0x00;
 pub(crate) const RADIO_STATE_ON: u8 = 0x01;
-pub(crate) const RADIO_STATE_ASK: u8 = 0xFF;
 pub(crate) const CMD_ERROR: u8 = 0x90;
 pub(crate) const ERROR_INITRADIO: u8 = 0x01;
 pub(crate) const ERROR_TXFAILED: u8 = 0x02;
-pub(crate) const ERROR_EEPROM_LOCKED: u8 = 0x03;
 
 /// Escape `FESC` and `FEND` in a frame payload.
 pub(crate) fn escape(data: &[u8]) -> Vec<u8> {
