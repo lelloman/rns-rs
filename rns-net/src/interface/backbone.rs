@@ -29,7 +29,7 @@ use std::io;
 #[cfg(test)]
 use std::io::Write;
 use std::net::{IpAddr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
-use std::os::unix::io::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;

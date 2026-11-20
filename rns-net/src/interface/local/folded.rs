@@ -16,7 +16,7 @@
 
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -59,12 +59,12 @@ impl Listener {
     }
 }
 
-impl AsRawFd for Listener {
-    fn as_raw_fd(&self) -> RawFd {
+impl AsFd for Listener {
+    fn as_fd(&self) -> BorrowedFd<'_> {
         match self {
-            Listener::Tcp(listener) => listener.as_raw_fd(),
+            Listener::Tcp(listener) => listener.as_fd(),
             #[cfg(target_os = "linux")]
-            Listener::Unix(listener) => listener.as_raw_fd(),
+            Listener::Unix(listener) => listener.as_fd(),
         }
     }
 }
@@ -103,12 +103,12 @@ impl Stream {
     }
 }
 
-impl AsRawFd for Stream {
-    fn as_raw_fd(&self) -> RawFd {
+impl AsFd for Stream {
+    fn as_fd(&self) -> BorrowedFd<'_> {
         match self {
-            Stream::Tcp(stream) => stream.as_raw_fd(),
+            Stream::Tcp(stream) => stream.as_fd(),
             #[cfg(target_os = "linux")]
-            Stream::Unix(stream) => stream.as_raw_fd(),
+            Stream::Unix(stream) => stream.as_fd(),
         }
     }
 }
@@ -154,7 +154,7 @@ impl Writer for ClientWriter {
     }
 
     fn loop_socket(&self) -> Option<RawFd> {
-        Some(self.stream.as_raw_fd())
+        Some(self.stream.as_fd().as_raw_fd())
     }
 }
 
@@ -196,8 +196,8 @@ struct ListenerSource {
 }
 
 impl LoopSource for ListenerSource {
-    fn fd(&self) -> RawFd {
-        self.listener.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.listener.as_fd()
     }
 
     fn stopped(&self) -> bool {
@@ -312,8 +312,8 @@ struct ClientSource {
 }
 
 impl LoopSource for ClientSource {
-    fn fd(&self) -> RawFd {
-        self.stream.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.stream.as_fd()
     }
 
     fn on_abandoned(&mut self) {
@@ -324,7 +324,7 @@ impl LoopSource for ClientSource {
     fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
         let sleep_hold = &self.sleep_hold;
         match read_stream_frames(
-            self.stream.as_raw_fd(),
+            self.stream.as_fd().as_raw_fd(),
             &mut self.decoder,
             cx,
             &self.tx,
@@ -447,15 +447,15 @@ struct SharedConnection {
 }
 
 impl LoopSource for SharedConnection {
-    fn fd(&self) -> RawFd {
-        self.stream.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.stream.as_fd()
     }
 
     fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
         let link = &self.link;
         let name = &link.config.name;
         match read_stream_frames(
-            self.stream.as_raw_fd(),
+            self.stream.as_fd().as_raw_fd(),
             &mut self.decoder,
             cx,
             &link.tx,

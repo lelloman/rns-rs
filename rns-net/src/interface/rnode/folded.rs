@@ -9,7 +9,7 @@
 //! exits once the configured device is served on the driver.
 
 use std::io::{self, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use rns_core::transport::types::InterfaceId;
 
 use super::setup;
-use super::transport::Transport;
+use super::transport::{Readable, Transport};
 use super::DeviceWriter;
 use super::{bring_up, reconnect_until_configured, RNodeConfig, RNodeReceiver, SubFlowState};
 use super::{identify_station, station_id_due};
@@ -99,9 +99,10 @@ impl RNodeLink {
     }
 
     fn serve(self: &Arc<Self>, reader: Transport) -> io::Result<()> {
+        let reader = Readable::try_from(reader)?;
         // Reader and writer share one open file, so this makes both
         // non-blocking.
-        set_nonblocking(reader.as_raw_fd())?;
+        set_nonblocking(reader.as_fd().as_raw_fd())?;
         self.tx.register_source(
             crate::interface::loop_writer::read_key(self.config.base_interface_id),
             Box::new(RNodeSource {
@@ -163,7 +164,7 @@ impl RNodeLink {
 
 /// The RNode connection, read on the driver thread.
 struct RNodeSource {
-    reader: Transport,
+    reader: Readable,
     receiver: RNodeReceiver,
     keepalive_at: Instant,
     link: Arc<RNodeLink>,
@@ -186,7 +187,7 @@ impl RNodeSource {
         let mut read = 0;
         while read < STREAM_READ_BUDGET {
             // The connection is non-blocking.
-            let n = crate::sys::read(self.reader.as_raw_fd(), cx.buf);
+            let n = crate::sys::read(self.reader.as_fd().as_raw_fd(), cx.buf);
             if n < 0 {
                 let e = io::Error::last_os_error();
                 match e.kind() {
@@ -222,8 +223,8 @@ impl RNodeSource {
 }
 
 impl LoopSource for RNodeSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.reader.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.reader.as_fd()
     }
 
     fn stopped(&self) -> bool {

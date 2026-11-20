@@ -1,6 +1,6 @@
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::io::AsRawFd;
 
 use crate::serial::SerialConfig;
@@ -171,6 +171,56 @@ impl Write for Transport {
             #[cfg(feature = "iface-rnode-ble")]
             Transport::BleNotify(..) | Transport::BleWrite(_) => Ok(()),
             Transport::Offline => Ok(()),
+        }
+    }
+}
+
+/// The side of a connection that is read: a [`Transport`] that has a
+/// descriptor to watch.
+#[derive(Debug)]
+pub(super) enum Readable {
+    Serial(std::fs::File),
+    Tcp(TcpStream),
+    #[cfg(feature = "iface-rnode-ble")]
+    BleNotify(std::fs::File, std::sync::Arc<super::ble::Session>),
+}
+
+impl Readable {
+    /// Mark the connection lost, as [`Transport::lost`] does.
+    pub(super) fn lost(&self) {
+        #[cfg(feature = "iface-rnode-ble")]
+        if let Readable::BleNotify(_, session) = self {
+            session.lost();
+        }
+    }
+}
+
+impl TryFrom<Transport> for Readable {
+    type Error = io::Error;
+
+    fn try_from(transport: Transport) -> io::Result<Readable> {
+        match transport {
+            Transport::Serial(f) => Ok(Readable::Serial(f)),
+            Transport::Tcp(s) => Ok(Readable::Tcp(s)),
+            #[cfg(feature = "iface-rnode-ble")]
+            Transport::BleNotify(f, session) => Ok(Readable::BleNotify(f, session)),
+            #[cfg(feature = "iface-rnode-ble")]
+            Transport::BleWrite(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "the BLE write side is not read",
+            )),
+            Transport::Offline => Err(offline()),
+        }
+    }
+}
+
+impl AsFd for Readable {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        match self {
+            Readable::Serial(f) => f.as_fd(),
+            Readable::Tcp(s) => s.as_fd(),
+            #[cfg(feature = "iface-rnode-ble")]
+            Readable::BleNotify(f, _) => f.as_fd(),
         }
     }
 }

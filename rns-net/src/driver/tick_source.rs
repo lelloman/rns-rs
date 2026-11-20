@@ -5,7 +5,7 @@
 
 #![allow(unsafe_code, reason = "OS calls through libc")]
 
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -69,8 +69,8 @@ impl TickSource {
 }
 
 impl LoopSource for TickSource {
-    fn fd(&self) -> RawFd {
-        self.timer.as_raw_fd()
+    fn fd(&self) -> BorrowedFd<'_> {
+        self.timer.as_fd()
     }
 
     fn on_ready(&mut self, _cx: &mut LoopContext<'_>) -> SourceStatus {

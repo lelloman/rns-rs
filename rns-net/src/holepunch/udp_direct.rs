@@ -497,9 +497,8 @@ const READ_BUDGET: usize = 64;
 struct DirectSource(DirectReader);
 
 impl LoopSource for DirectSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        use std::os::fd::AsRawFd;
-        self.0.socket.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        std::os::fd::AsFd::as_fd(&self.0.socket)
     }
 
     fn stopped(&self) -> bool {

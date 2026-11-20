@@ -100,7 +100,8 @@ const INBOUND_QUEUE_COUNT: usize = 4;
 /// socket is readable. Sources enqueue what they produce with
 /// [`EventSender::push_from_loop`], which never blocks that thread.
 pub(crate) trait LoopSource: Send {
-    fn fd(&self) -> std::os::fd::RawFd;
+    /// The descriptor to watch, open for as long as the source is.
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_>;
     /// Serve a readable socket.
     fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus;
     /// Whether the source should be closed at the next sweep (e.g. its
@@ -336,7 +337,7 @@ impl QueueShared {
         // poller before it is dropped (see `remove_source`).
         if let Err(error) = unsafe {
             self.poller.add_with_mode(
-                source.fd(),
+                std::os::fd::AsRawFd::as_raw_fd(&source.fd()),
                 crate::poll::Event::readable(key),
                 self.source_mode,
             )
@@ -354,18 +355,14 @@ impl QueueShared {
     }
 
     fn remove_source(&self, mut source: Box<dyn LoopSource>) {
-        // SAFETY: the source still owns its descriptor here.
-        let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(source.fd()) };
-        if let Err(error) = self.poller.delete(fd) {
+        if let Err(error) = self.poller.delete(source.fd()) {
             log::warn!("failed to deregister a loop source: {error}");
         }
         source.on_removed();
     }
 
     fn arm_source(&self, key: usize, source: &dyn LoopSource) {
-        // SAFETY: the source owns its descriptor while registered.
-        let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(source.fd()) };
-        if let Err(error) = self.set_source_interest(fd, key, true) {
+        if let Err(error) = self.set_source_interest(source.fd(), key, true) {
             log::warn!("failed to re-arm a loop source: {error}");
         }
     }
@@ -376,9 +373,7 @@ impl QueueShared {
         if self.source_mode == crate::poll::PollMode::Oneshot {
             return;
         }
-        // SAFETY: the source owns its descriptor while registered.
-        let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(source.fd()) };
-        if let Err(error) = self.set_source_interest(fd, key, false) {
+        if let Err(error) = self.set_source_interest(source.fd(), key, false) {
             log::warn!("failed to stop watching a loop source: {error}");
         }
     }
@@ -1743,9 +1738,15 @@ mod tests {
     struct BadFdSource(Arc<Mutex<Vec<&'static str>>>);
 
     impl LoopSource for BadFdSource {
-        fn fd(&self) -> std::os::fd::RawFd {
-            // Not an open descriptor: registration fails with EBADF.
-            999_999
+        fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+            // Not an open descriptor, so registration fails with EBADF:
+            // this source exists to hit that path. No open descriptor can
+            // be made to fail registration on every backend.
+            // SAFETY: the number is far above the descriptor limit tests run
+            // under, so it names no open file; the poller only hands it to
+            // the kernel, which rejects it, and the source is dropped
+            // unregistered.
+            unsafe { std::os::fd::BorrowedFd::borrow_raw(999_999) }
         }
         fn on_ready(&mut self, _cx: &mut LoopContext<'_>) -> SourceStatus {
             unreachable!("never registered")
@@ -1756,8 +1757,8 @@ mod tests {
     }
 
     impl LoopSource for PairSource {
-        fn fd(&self) -> std::os::fd::RawFd {
-            std::os::fd::AsRawFd::as_raw_fd(&self.stream)
+        fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+            std::os::fd::AsFd::as_fd(&self.stream)
         }
         fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
             use std::io::Read;
@@ -1835,8 +1836,8 @@ mod tests {
 
     #[cfg(feature = "iface-backbone")]
     impl LoopSource for TimerSource {
-        fn fd(&self) -> std::os::fd::RawFd {
-            std::os::fd::AsRawFd::as_raw_fd(&self.stream)
+        fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+            std::os::fd::AsFd::as_fd(&self.stream)
         }
         fn on_ready(&mut self, _cx: &mut LoopContext<'_>) -> SourceStatus {
             self.reads.fetch_add(1, Ordering::SeqCst);
@@ -1918,8 +1919,8 @@ mod tests {
         feature = "iface-backbone"
     ))]
     impl LoopSource for PausingSource {
-        fn fd(&self) -> std::os::fd::RawFd {
-            std::os::fd::AsRawFd::as_raw_fd(&self.stream)
+        fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+            std::os::fd::AsFd::as_fd(&self.stream)
         }
         fn stopped(&self) -> bool {
             self.stop.load(Ordering::Relaxed)

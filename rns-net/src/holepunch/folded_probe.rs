@@ -7,7 +7,7 @@
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 use rns_core::holepunch::ProbeProtocol;
@@ -37,9 +37,9 @@ impl ProbeJob {
         for index in next..self.servers.len() {
             let server = self.servers[index];
             match ask(server, &self) {
-                Ok((socket, request)) => {
+                Ok((socket, registration, request)) => {
                     serve(Box::new(ProbeSource {
-                        fd: socket.as_raw_fd(),
+                        registration,
                         socket: Some(socket),
                         request,
                         index,
@@ -63,12 +63,15 @@ impl ProbeJob {
     }
 }
 
-fn ask(server: SocketAddr, job: &ProbeJob) -> io::Result<(UdpSocket, ProbeRequest)> {
+/// Open a socket and send `server` a request, returning the socket, a
+/// duplicate of its descriptor to watch, and the request.
+fn ask(server: SocketAddr, job: &ProbeJob) -> io::Result<(UdpSocket, OwnedFd, ProbeRequest)> {
     let socket = open_probe_socket(server, job.device.as_deref(), job.underlay_mark)?;
     socket.set_nonblocking(true)?;
     let request = ProbeRequest::new(job.protocol);
+    let registration = socket.as_fd().try_clone_to_owned()?;
     socket.send_to(request.bytes(), server)?;
-    Ok((socket, request))
+    Ok((socket, registration, request))
 }
 
 /// Start probing on the driver loop. Called on the driver thread.
@@ -83,9 +86,10 @@ pub(crate) fn start(job: ProbeJob) {
 
 /// Waiting for one probe server's reply.
 struct ProbeSource {
-    /// The socket's descriptor, kept for deregistering after the socket
-    /// was handed over with the result.
-    fd: RawFd,
+    /// A duplicate of the socket's descriptor, watched in its place: the
+    /// socket is handed over with the result before the source is
+    /// deregistered, and its new owner may close it first.
+    registration: OwnedFd,
     socket: Option<UdpSocket>,
     request: ProbeRequest,
     /// The server asked, in the job's list.
@@ -113,8 +117,8 @@ impl ProbeSource {
 }
 
 impl LoopSource for ProbeSource {
-    fn fd(&self) -> RawFd {
-        self.fd
+    fn fd(&self) -> BorrowedFd<'_> {
+        self.registration.as_fd()
     }
 
     fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {

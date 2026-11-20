@@ -686,8 +686,8 @@ pub(super) struct ListenerSource {
 }
 
 impl LoopSource for ListenerSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.listener.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.listener.as_fd()
     }
 
     fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
@@ -737,8 +737,8 @@ pub(super) struct PeerSource {
 }
 
 impl LoopSource for PeerSource {
-    fn fd(&self) -> std::os::fd::RawFd {
-        self.stream.as_raw_fd()
+    fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.stream.as_fd()
     }
 
     fn on_ready(&mut self, cx: &mut LoopContext<'_>) -> SourceStatus {
