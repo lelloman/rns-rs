@@ -17,6 +17,18 @@ impl Driver {
         !self.hook_slots[point as usize].programs.is_empty()
     }
 
+    /// Run the hook attached to a Backbone peer event (connected,
+    /// disconnected, idle timeout, write stall, penalty), in builds with
+    /// hooks.
+    pub(super) fn handle_backbone_peer_event(&mut self, event: &Event) {
+        #[cfg(feature = "hooks")]
+        if let Some((attach_point, point, hook_event)) = backbone_peer_hook(event) {
+            self.run_backbone_peer_hook(attach_point, point, &hook_event);
+        }
+        #[cfg(not(feature = "hooks"))]
+        let _ = event;
+    }
+
     #[cfg(feature = "hooks")]
     pub(super) fn run_backbone_peer_hook(
         &mut self,
@@ -170,4 +182,96 @@ impl Driver {
             }
         }
     }
+}
+
+/// The hook a Backbone peer event runs: its attach point name, hook point
+/// and payload. `None` for other events.
+#[cfg(feature = "hooks")]
+fn backbone_peer_hook(event: &Event) -> Option<(&'static str, HookPoint, BackbonePeerHookEvent)> {
+    let peer = |server_interface_id, peer_interface_id, peer_ip, peer_port| BackbonePeerHookEvent {
+        server_interface_id,
+        peer_interface_id: Some(peer_interface_id),
+        peer_ip,
+        peer_port,
+        connected_for: Duration::ZERO,
+        had_received_data: false,
+        penalty_level: 0,
+        blacklist_for: Duration::ZERO,
+    };
+    Some(match *event {
+        Event::BackbonePeerConnected {
+            server_interface_id,
+            peer_interface_id,
+            peer_ip,
+            peer_port,
+        } => (
+            "BackbonePeerConnected",
+            HookPoint::BackbonePeerConnected,
+            peer(server_interface_id, peer_interface_id, peer_ip, peer_port),
+        ),
+        Event::BackbonePeerDisconnected {
+            server_interface_id,
+            peer_interface_id,
+            peer_ip,
+            peer_port,
+            connected_for,
+            had_received_data,
+        } => (
+            "BackbonePeerDisconnected",
+            HookPoint::BackbonePeerDisconnected,
+            BackbonePeerHookEvent {
+                connected_for,
+                had_received_data,
+                ..peer(server_interface_id, peer_interface_id, peer_ip, peer_port)
+            },
+        ),
+        Event::BackbonePeerIdleTimeout {
+            server_interface_id,
+            peer_interface_id,
+            peer_ip,
+            peer_port,
+            connected_for,
+        } => (
+            "BackbonePeerIdleTimeout",
+            HookPoint::BackbonePeerIdleTimeout,
+            BackbonePeerHookEvent {
+                connected_for,
+                ..peer(server_interface_id, peer_interface_id, peer_ip, peer_port)
+            },
+        ),
+        Event::BackbonePeerWriteStall {
+            server_interface_id,
+            peer_interface_id,
+            peer_ip,
+            peer_port,
+            connected_for,
+        } => (
+            "BackbonePeerWriteStall",
+            HookPoint::BackbonePeerWriteStall,
+            BackbonePeerHookEvent {
+                connected_for,
+                ..peer(server_interface_id, peer_interface_id, peer_ip, peer_port)
+            },
+        ),
+        Event::BackbonePeerPenalty {
+            server_interface_id,
+            peer_ip,
+            penalty_level,
+            blacklist_for,
+        } => (
+            "BackbonePeerPenalty",
+            HookPoint::BackbonePeerPenalty,
+            BackbonePeerHookEvent {
+                server_interface_id,
+                peer_interface_id: None,
+                peer_ip,
+                peer_port: 0,
+                connected_for: Duration::ZERO,
+                had_received_data: false,
+                penalty_level,
+                blacklist_for,
+            },
+        ),
+        _ => return None,
+    })
 }
