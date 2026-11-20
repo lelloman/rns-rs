@@ -157,6 +157,7 @@ impl Driver {
                                     self.discovery_required_value,
                                     &mut self.discovery_stamp_cache,
                                     self.network_identity.as_ref(),
+                                    crate::time::now(),
                                 )
                             {
                                 crate::discovery::apply_transport_autoconnect_mode(

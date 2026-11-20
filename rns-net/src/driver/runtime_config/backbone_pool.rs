@@ -328,7 +328,7 @@ impl Driver {
         if !(crate::discovery::is_ip_address(remote) || crate::discovery::is_hostname(remote)) {
             return None;
         }
-        let status = iface.compute_status();
+        let status = iface.compute_status(crate::time::now());
         if status == crate::discovery::DiscoveredStatus::Stale {
             return None;
         }
@@ -391,7 +391,7 @@ impl Driver {
         [u8; 32],
     ) {
         (
-            match iface.compute_status() {
+            match iface.compute_status(crate::time::now()) {
                 crate::discovery::DiscoveredStatus::Available => 0,
                 crate::discovery::DiscoveredStatus::Unknown => 1,
                 crate::discovery::DiscoveredStatus::Stale => 2,
