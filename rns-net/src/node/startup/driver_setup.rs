@@ -125,6 +125,7 @@ pub(super) fn transport_config(
         local_hops_delta,
         prefer_shorter_path: config.prefer_shorter_path,
         max_paths_per_destination: config.max_paths_per_destination,
+        unresponsive_path_recovery: config.unresponsive_path_recovery,
         packet_hashlist_max_entries: config.packet_hashlist_max_entries,
         packet_hashlist_allocation: config.packet_hashlist_allocation,
         max_discovery_pr_tags: config.max_discovery_pr_tags,

@@ -521,6 +521,25 @@ pub enum PacketHashlistAllocation {
     Lazy,
 }
 
+/// How an announce may recover a destination's path once that path is
+/// marked unresponsive (`[reticulum] unresponsive_path_recovery`).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum UnresponsivePathRecovery {
+    /// rns-rs's own rules. An already-heard announce (same emission time)
+    /// replaces an unresponsive path only through the path's own next hop,
+    /// over more hops, or, unlike upstream, over the same or fewer hops;
+    /// through another next hop it is rejected. A replacement accepted only
+    /// because the path is unresponsive is not rebroadcast.
+    #[default]
+    Native,
+    /// Upstream Transport.py's rules for an unresponsive path: the path is
+    /// decided as upstream's single path, and an accepted announce replaces
+    /// it whatever its next hop. An already-heard announce over more hops
+    /// replaces it without being rebroadcast; one over the same or fewer
+    /// hops does not.
+    Upstream,
+}
+
 /// Configuration for [`TransportEngine`](super::TransportEngine).
 #[derive(Debug, Clone)]
 pub struct TransportConfig {
@@ -539,6 +558,9 @@ pub struct TransportConfig {
     /// when the primary becomes unresponsive.  Default 1 (single path,
     /// backward-compatible with Python Reticulum behaviour).
     pub max_paths_per_destination: usize,
+    /// How an announce may recover an unresponsive path. Default
+    /// [`UnresponsivePathRecovery::Native`].
+    pub unresponsive_path_recovery: UnresponsivePathRecovery,
     /// Maximum number of packet hashes retained for duplicate suppression.
     pub packet_hashlist_max_entries: usize,
     /// Startup allocation policy for packet-hash payload storage.
@@ -587,6 +609,7 @@ mod tests {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery: crate::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: crate::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: crate::constants::MAX_PR_TAGS,
@@ -606,6 +629,14 @@ mod tests {
         assert_eq!(cfg.local_hops_delta, 0);
         assert!(!cfg.prefer_shorter_path);
         assert_eq!(cfg.max_paths_per_destination, 1);
+        assert_eq!(
+            cfg.unresponsive_path_recovery,
+            UnresponsivePathRecovery::default()
+        );
+        assert_eq!(
+            UnresponsivePathRecovery::default(),
+            UnresponsivePathRecovery::Native
+        );
         assert_eq!(
             cfg.packet_hashlist_max_entries,
             crate::constants::HASHLIST_MAXSIZE

@@ -358,6 +358,32 @@ fn rejects_invalid_packet_hashlist_allocation() {
 }
 
 #[test]
+fn parses_unresponsive_path_recovery() {
+    use rns_core::transport::types::UnresponsivePathRecovery;
+    assert_eq!(
+        parse("[reticulum]\n")
+            .unwrap()
+            .reticulum
+            .unresponsive_path_recovery,
+        UnresponsivePathRecovery::Native
+    );
+    for (value, expected) in [
+        ("native", UnresponsivePathRecovery::Native),
+        ("upstream", UnresponsivePathRecovery::Upstream),
+    ] {
+        let input = format!("[reticulum]\nunresponsive_path_recovery = {value}\n");
+        assert_eq!(
+            parse(&input).unwrap().reticulum.unresponsive_path_recovery,
+            expected
+        );
+    }
+    for value in ["python", "yes", ""] {
+        let input = format!("[reticulum]\nunresponsive_path_recovery = {value}\n");
+        assert!(parse(&input).is_err(), "{value:?}");
+    }
+}
+
+#[test]
 fn rejects_non_integer_global_gravity_options() {
     assert!(parse("[reticulum]\ndefault_gravity = heavy\n").is_err());
     assert!(parse("[reticulum]\nautoconnect_interface_gravity = light\n").is_err());

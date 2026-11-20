@@ -209,6 +209,7 @@ pub(super) fn node_config_from(
         use_implicit_proof: reticulum.use_implicit_proof,
         prefer_shorter_path: reticulum.prefer_shorter_path,
         max_paths_per_destination: reticulum.max_paths_per_destination,
+        unresponsive_path_recovery: reticulum.unresponsive_path_recovery,
         packet_hashlist_max_entries: reticulum.packet_hashlist_max_entries,
         packet_hashlist_allocation: reticulum.packet_hashlist_allocation,
         max_discovery_pr_tags: reticulum.max_discovery_pr_tags,

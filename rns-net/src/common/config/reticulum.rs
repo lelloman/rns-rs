@@ -194,6 +194,16 @@ pub(super) fn build_reticulum_section(
             *field = n.max(1);
         }
     }
+    if let Some(v) = keys.with("unresponsive_path_recovery", |v| {
+        use rns_core::transport::types::UnresponsivePathRecovery;
+        match v {
+            "native" => Some(UnresponsivePathRecovery::Native),
+            "upstream" => Some(UnresponsivePathRecovery::Upstream),
+            _ => None,
+        }
+    })? {
+        s.unresponsive_path_recovery = v;
+    }
     if let Some(v) = keys.with("packet_hashlist_allocation", |v| {
         use rns_core::transport::types::PacketHashlistAllocation;
         match v.to_ascii_lowercase().as_str() {

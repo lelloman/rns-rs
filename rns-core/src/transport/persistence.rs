@@ -414,6 +414,7 @@ mod tests {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 4,
+            unresponsive_path_recovery: crate::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: hash_capacity,
             packet_hashlist_allocation: allocation,
             max_discovery_pr_tags: constants::MAX_PR_TAGS,

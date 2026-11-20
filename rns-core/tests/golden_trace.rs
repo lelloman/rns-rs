@@ -386,6 +386,7 @@ fn config(identity_hash: Option<[u8; 16]>) -> TransportConfig {
         local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
+        unresponsive_path_recovery: rns_core::transport::types::UnresponsivePathRecovery::Native,
         packet_hashlist_max_entries: constants::HASHLIST_MAXSIZE,
         packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
         max_discovery_pr_tags: constants::MAX_PR_TAGS,

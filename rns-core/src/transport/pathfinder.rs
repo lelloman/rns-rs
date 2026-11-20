@@ -1,4 +1,5 @@
 use super::tables::{PathEntry, PathSet};
+use super::types::UnresponsivePathRecovery;
 use crate::constants;
 
 /// Extract emission timestamp from bytes `[5:10]` of a random_blob (big-endian u64).
@@ -210,6 +211,62 @@ pub fn should_update_path(
     }
 }
 
+/// Upstream Transport.py's path decision (at cff4d03f) for an announce
+/// against a destination's single path `existing` when that path is
+/// unresponsive (`unresponsive_path_recovery = upstream`). The
+/// higher-gravity replacement is decided before this, as
+/// [`is_higher_gravity_replacement`].
+///
+/// Over the same or fewer hops, only a new announce emitted after the
+/// path's newest random blob is taken. Over more hops, an expired path
+/// takes any new announce; otherwise a new announce emitted later is taken,
+/// and one emitted at the path's emission time (upstream's scan of the
+/// path's random blobs, which stops at the first that reaches the
+/// announce's emission time) is upstream's lenient insertion,
+/// [`PathDecision::AddForUnresponsive`], whether or not it was heard
+/// before. Emission times implausibly far in the future count as unknown,
+/// as everywhere in path selection (see [`MAX_EMISSION_TIME_SKEW_SECS`]).
+pub fn upstream_unresponsive_path_decision(
+    existing: &PathEntry,
+    announce_hops: u8,
+    announce_emitted_ts: u64,
+    random_blob: &[u8; 10],
+    now: f64,
+) -> PathDecision {
+    if announce_hops > constants::PATHFINDER_M {
+        return PathDecision::Reject;
+    }
+    let announce_emitted_ts = trusted_emission_time(announce_emitted_ts, now);
+    let blob_is_new = !existing.random_blobs.contains(random_blob);
+    let new_blob = |accept: bool| {
+        if accept && blob_is_new {
+            PathDecision::Add
+        } else {
+            PathDecision::Reject
+        }
+    };
+    if announce_hops <= existing.hops {
+        let path_timebase = trusted_timebase_from_random_blobs(&existing.random_blobs, now);
+        return new_blob(announce_emitted_ts > path_timebase);
+    }
+    let mut path_announce_emitted = 0;
+    for blob in &existing.random_blobs {
+        path_announce_emitted =
+            path_announce_emitted.max(trusted_emission_time(timebase_from_random_blob(blob), now));
+        if path_announce_emitted >= announce_emitted_ts {
+            break;
+        }
+    }
+    // An expired path takes any new announce and nothing else.
+    if now >= existing.expires || announce_emitted_ts > path_announce_emitted {
+        new_blob(true)
+    } else if announce_emitted_ts == path_announce_emitted {
+        PathDecision::AddForUnresponsive
+    } else {
+        PathDecision::Reject
+    }
+}
+
 /// Decision for multi-path announce processing.
 #[derive(Debug, PartialEq, Eq)]
 pub enum MultiPathDecision {
@@ -221,6 +278,14 @@ pub enum MultiPathDecision {
     /// does, accepted only because the path is unresponsive: a table
     /// insertion that is not rebroadcast (upstream 8c73e203).
     RecoverUnresponsive,
+    /// `unresponsive_path_recovery = upstream`: replace the unresponsive
+    /// primary path whatever the announce's next hop, as upstream replaces
+    /// its single path. `rebroadcast` is false for upstream's lenient
+    /// insertion (8c73e203).
+    ReplaceUnresponsive {
+        /// Whether the announce is rebroadcast.
+        rebroadcast: bool,
+    },
     /// Reject this announce.
     Reject,
 }
@@ -260,6 +325,7 @@ pub fn decide_announce_multipath(
         prefer_shorter_path,
         None,
         None,
+        UnresponsivePathRecovery::Native,
     )
 }
 
@@ -279,6 +345,7 @@ pub fn decide_announce_multipath_with_gravity(
     prefer_shorter_path: bool,
     current_gravity: Option<i64>,
     announce_gravity: Option<i64>,
+    recovery: UnresponsivePathRecovery,
 ) -> MultiPathDecision {
     // Hop limit
     if announce_hops > constants::PATHFINDER_M {
@@ -300,6 +367,29 @@ pub fn decide_announce_multipath_with_gravity(
         announce_gravity,
     ) {
         return MultiPathDecision::ReplacePrimary;
+    }
+
+    // An unresponsive path recovered as upstream does. `prefer_shorter_path`
+    // still takes a strictly shorter announce, as it would for any path.
+    if recovery == UnresponsivePathRecovery::Upstream && path_is_unresponsive {
+        if let Some(primary) = path_set
+            .primary()
+            .filter(|primary| !(prefer_shorter_path && announce_hops < primary.hops))
+        {
+            return match upstream_unresponsive_path_decision(
+                primary,
+                announce_hops,
+                announce_emitted_ts,
+                random_blob,
+                now,
+            ) {
+                PathDecision::Add => MultiPathDecision::ReplaceUnresponsive { rebroadcast: true },
+                PathDecision::AddForUnresponsive => {
+                    MultiPathDecision::ReplaceUnresponsive { rebroadcast: false }
+                }
+                PathDecision::Reject => MultiPathDecision::Reject,
+            };
+        }
     }
 
     // Check if there's already a path with the same next_hop
@@ -597,6 +687,56 @@ mod tests {
     }
 
     #[test]
+    fn upstream_unresponsive_decision_scans_blobs_as_upstream() {
+        // Upstream's scan of the path's random blobs stops at the first
+        // that brings their running maximum to the announce's emission
+        // time or past it, so "the same emission" depends on blob order.
+        let entry = |blobs: &[[u8; 10]], expires: f64| make_path_entry(2, blobs, expires);
+        let known = make_blob(1000);
+        let decide = |path: &PathEntry, hops: u8, blob: &[u8; 10]| {
+            upstream_unresponsive_path_decision(
+                path,
+                hops,
+                timebase_from_random_blob(blob),
+                blob,
+                2000.0,
+            )
+        };
+        let older_first = entry(&[known, make_blob(1100)], 9999.0);
+        let newer_first = entry(&[make_blob(1100), known], 9999.0);
+        assert_eq!(
+            decide(&older_first, 5, &known),
+            PathDecision::AddForUnresponsive
+        );
+        assert_eq!(decide(&newer_first, 5, &known), PathDecision::Reject);
+        // A new announce emitted at the path's emission time is lenient too.
+        let mut same_time = make_blob(1000);
+        same_time[0] = 0xFF;
+        assert_eq!(
+            decide(&entry(&[known], 9999.0), 5, &same_time),
+            PathDecision::AddForUnresponsive
+        );
+        // Over the same or fewer hops only a newer new announce is taken.
+        assert_eq!(
+            decide(&entry(&[known], 9999.0), 2, &known),
+            PathDecision::Reject
+        );
+        assert_eq!(
+            decide(&entry(&[known], 9999.0), 1, &make_blob(1001)),
+            PathDecision::Add
+        );
+        // An expired path takes only a new announce.
+        assert_eq!(
+            decide(&entry(&[known], 1500.0), 5, &known),
+            PathDecision::Reject
+        );
+        assert_eq!(
+            decide(&entry(&[known], 1500.0), 5, &make_blob(900)),
+            PathDecision::Add
+        );
+    }
+
+    #[test]
     fn test_more_hops_same_emission_responsive_reject() {
         let old_blob = make_blob(100);
         let mut different_blob = [0u8; 10];
@@ -835,6 +975,7 @@ mod tests {
                 false,
                 Some(current),
                 Some(incoming),
+                UnresponsivePathRecovery::Native,
             )
         };
 
@@ -946,9 +1087,9 @@ mod tests {
             match decision {
                 MultiPathDecision::ReplacePrimary => ps.upsert_primary(entry),
                 MultiPathDecision::AddAlternative => ps.upsert(entry),
-                MultiPathDecision::RecoverUnresponsive | MultiPathDecision::Reject => {
-                    unreachable!()
-                }
+                MultiPathDecision::RecoverUnresponsive
+                | MultiPathDecision::ReplaceUnresponsive { .. }
+                | MultiPathDecision::Reject => unreachable!(),
             }
             let primary = ps.primary().unwrap();
             assert_eq!(primary.next_hop, direct);

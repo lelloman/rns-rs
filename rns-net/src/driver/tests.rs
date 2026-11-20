@@ -200,6 +200,7 @@ pub(crate) fn make_transport_config(transport_enabled: bool) -> TransportConfig 
         local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
+        unresponsive_path_recovery: rns_core::transport::types::UnresponsivePathRecovery::Native,
         packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
         packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
         max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -2508,6 +2509,8 @@ fn malformed_inbound_frame_does_not_block_later_valid_frame() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -2569,6 +2572,8 @@ fn queued_startup_events_register_dynamic_interface_before_frame() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -2628,6 +2633,8 @@ fn dispatch_send() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -2788,6 +2795,8 @@ fn dispatch_broadcast() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -2838,6 +2847,8 @@ fn dispatch_broadcast_exclude() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -2888,6 +2899,8 @@ fn tick_event() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -2931,6 +2944,8 @@ fn shutdown_event() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -2993,6 +3008,8 @@ fn begin_drain_updates_driver_status() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3046,6 +3063,8 @@ fn begin_drain_with_pending_link_reports_incomplete_status() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3097,6 +3116,8 @@ fn begin_drain_with_queued_writer_frames_reports_incomplete_status() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3187,6 +3208,8 @@ fn enforce_drain_deadline_tears_down_remaining_links() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3237,6 +3260,8 @@ fn begin_drain_with_holepunch_session_reports_incomplete_status_and_deadline_abo
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3304,6 +3329,8 @@ fn begin_drain_event_is_processed_by_run_loop() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3352,6 +3379,8 @@ fn send_channel_message_returns_error_while_draining() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3401,6 +3430,8 @@ fn send_outbound_is_ignored_while_draining() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3455,6 +3486,8 @@ fn request_path_is_ignored_while_draining() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3505,6 +3538,8 @@ fn create_link_returns_zero_link_id_while_draining() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3552,6 +3587,8 @@ fn announce_callback() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3610,6 +3647,8 @@ fn dispatch_skips_offline_interface() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3668,6 +3707,8 @@ fn interface_up_refreshes_writer() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -4123,6 +4164,8 @@ fn dynamic_interface_deregister() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -4185,6 +4228,8 @@ fn send_wouldblock_is_backed_off_between_dispatches() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -4239,6 +4284,8 @@ fn interface_callbacks_fire() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -4292,6 +4339,8 @@ fn frame_updates_rx_stats() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -5959,6 +6008,8 @@ fn send_updates_tx_stats() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6007,6 +6058,8 @@ fn broadcast_updates_tx_stats() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6059,6 +6112,8 @@ fn query_interface_stats() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6215,6 +6270,8 @@ fn query_path_table() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6306,6 +6363,8 @@ fn query_drop_path() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6371,6 +6430,8 @@ fn send_outbound_event() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6431,6 +6492,8 @@ fn register_destination_and_deliver() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6498,6 +6561,8 @@ fn query_transport_identity() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6542,6 +6607,8 @@ fn query_link_count() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6591,6 +6658,8 @@ fn query_rate_table() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6633,6 +6702,8 @@ fn query_next_hop() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6711,6 +6782,8 @@ fn query_next_hop_if_name() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6757,6 +6830,8 @@ fn query_drop_all_via() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6805,6 +6880,8 @@ fn query_drop_announce_queues() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6851,6 +6928,8 @@ fn register_link_dest_event() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6908,6 +6987,8 @@ fn create_link_event() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -6970,6 +7051,8 @@ fn create_link_uses_known_destination_interface_without_path() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -7045,6 +7128,8 @@ fn create_link_ignores_sentinel_known_destination_interface() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -7119,6 +7204,8 @@ fn deliver_local_routes_to_link_manager() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -7228,6 +7315,8 @@ fn shutdown_tears_down_pending_link() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -7283,6 +7372,8 @@ fn shutdown_tears_down_active_link() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -7333,6 +7424,8 @@ fn link_count_includes_link_manager() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -7389,6 +7482,8 @@ fn register_request_handler_event() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -7436,6 +7531,8 @@ fn management_announces_emitted_after_delay() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -7501,6 +7598,8 @@ fn first_discovery_announce(
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -9388,6 +9487,8 @@ fn disabled_interface_drops_ingress_and_egress() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -9463,6 +9564,8 @@ fn management_announces_not_emitted_when_disabled() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -9518,6 +9621,8 @@ fn management_announces_not_emitted_before_delay() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -9618,6 +9723,8 @@ fn announce_received_populates_known_destinations() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -9691,6 +9798,8 @@ fn known_destinations_cleanup_respects_ttl() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -9861,6 +9970,8 @@ fn known_destinations_cleanup_prunes_ratchets_to_surviving_destinations() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -10012,6 +10123,8 @@ fn known_destinations_cleanup_enforces_cap() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -10082,6 +10195,8 @@ fn retained_known_destination_survives_cleanup() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -10165,6 +10280,8 @@ fn used_known_destination_cleanup_uses_last_used_time() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -10219,6 +10336,8 @@ fn query_has_path() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -10298,6 +10417,8 @@ fn query_hops_to() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -10360,6 +10481,8 @@ fn query_recall_identity() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -10446,6 +10569,8 @@ fn request_path_sends_packet() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -10718,6 +10843,8 @@ fn request_path_includes_transport_id() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -10789,6 +10916,8 @@ fn path_request_dest_registered() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -10831,6 +10960,8 @@ fn register_proof_strategy_event() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -10880,6 +11011,8 @@ fn register_proof_strategy_prove_none_no_identity() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -10926,6 +11059,8 @@ fn send_outbound_tracks_sent_packets() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -10983,6 +11118,8 @@ fn prove_all_generates_proof_on_delivery() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -11071,6 +11208,8 @@ fn proofs_go_back_only_on_the_receiving_interface() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -11160,6 +11299,8 @@ fn prove_none_does_not_generate_proof() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -11238,6 +11379,8 @@ fn no_proof_strategy_does_not_generate_proof() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -11329,6 +11472,8 @@ fn prove_app_calls_callback() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -11436,6 +11581,8 @@ fn inbound_proof_fires_callback() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -11547,6 +11694,8 @@ fn inbound_proof_for_unknown_packet_is_ignored() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -11637,6 +11786,8 @@ fn inbound_implicit_proof_matches_truncated_destination() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -11878,6 +12029,8 @@ fn inbound_proof_with_valid_signature_fires_callback() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -12006,6 +12159,8 @@ fn inbound_proof_with_invalid_signature_rejected() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -12122,6 +12277,8 @@ fn proof_data_is_valid(implicit: bool) {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -12215,6 +12372,7 @@ fn query_local_destinations_empty() {
         local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
+        unresponsive_path_recovery: rns_core::transport::types::UnresponsivePathRecovery::Native,
         packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
         packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
         max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -12259,6 +12417,7 @@ fn query_local_destinations_with_registered() {
         local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
+        unresponsive_path_recovery: rns_core::transport::types::UnresponsivePathRecovery::Native,
         packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
         packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
         max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -12311,6 +12470,7 @@ fn query_local_destinations_tracks_link_dest() {
         local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
+        unresponsive_path_recovery: rns_core::transport::types::UnresponsivePathRecovery::Native,
         packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
         packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
         max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -12366,6 +12526,7 @@ fn query_links_empty() {
         local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
+        unresponsive_path_recovery: rns_core::transport::types::UnresponsivePathRecovery::Native,
         packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
         packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
         max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -12405,6 +12566,7 @@ fn query_resources_empty() {
         local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
+        unresponsive_path_recovery: rns_core::transport::types::UnresponsivePathRecovery::Native,
         packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
         packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
         max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -12477,6 +12639,8 @@ fn send_probe_unknown_dest_returns_none() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -12532,6 +12696,8 @@ fn send_probe_known_dest_returns_packet_hash() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -12677,6 +12843,8 @@ fn probe_test_driver() -> (Driver, [u8; 16]) {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -12792,6 +12960,8 @@ fn check_proof_not_found_returns_none() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -12839,6 +13009,8 @@ fn check_proof_found_returns_rtt() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -12974,6 +13146,8 @@ fn inbound_proof_populates_completed_proofs() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -13102,6 +13276,8 @@ fn inbound_proof_populates_completed_proofs() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -13170,6 +13346,8 @@ fn interface_stats_includes_probe_responder() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -13221,6 +13399,8 @@ fn interface_stats_probe_responder_none_when_disabled() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -13306,6 +13486,8 @@ fn announce_stores_receiving_interface_in_known_destinations() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -13384,6 +13566,8 @@ fn announce_on_different_interfaces_stores_correct_id() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -13443,6 +13627,8 @@ fn inject_identity_stores_sentinel_interface() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -13520,6 +13706,8 @@ fn inject_identity_overwrites_previous_entry() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -13605,6 +13793,8 @@ fn re_announce_updates_receiving_interface() {
             local_hops_delta: 0,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,

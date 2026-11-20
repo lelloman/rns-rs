@@ -54,6 +54,7 @@ fn transport_config(identity_hash: Option<[u8; 16]>, hashlist_max: usize) -> Tra
         local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
+        unresponsive_path_recovery: rns_core::transport::types::UnresponsivePathRecovery::Native,
         packet_hashlist_max_entries: hashlist_max,
         packet_hashlist_allocation: PacketHashlistAllocation::Eager,
         max_discovery_pr_tags: constants::MAX_PR_TAGS,

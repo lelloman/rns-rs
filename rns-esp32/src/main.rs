@@ -176,6 +176,7 @@ fn main() {
         local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 2,
+        unresponsive_path_recovery: rns_core::transport::types::UnresponsivePathRecovery::Native,
         packet_hashlist_max_entries: 1024,
         packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
         max_discovery_pr_tags: 256,
