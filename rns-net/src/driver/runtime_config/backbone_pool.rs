@@ -154,7 +154,8 @@ impl Driver {
         }
 
         let id = InterfaceId(
-            self.next_dynamic_interface_id
+            self.registry
+                .next_dynamic_id
                 .fetch_add(1, Ordering::Relaxed),
         );
         let mut client = BackboneClientConfig {
@@ -612,7 +613,7 @@ impl Driver {
         self.runtime_config.ifac.remove(&name);
         self.runtime_config.ifac_defaults.remove(&name);
         self.runtime_config.backbone_client.remove(&name);
-        self.interface_display_names.remove(&id);
+        self.registry.display_names.remove(&id);
         if self.engine.interface_info(&id).is_some() {
             self.engine.deregister_interface(id);
         }
@@ -745,7 +746,7 @@ impl Driver {
         self.register_interface_ifac_runtime(&name, ifac_runtime);
         self.engine.register_interface(info.clone());
         // Upstream's `str()` of the BackboneClientInterface it starts.
-        self.interface_display_names.insert(
+        self.registry.display_names.insert(
             id,
             crate::interface::display::backbone(&name, &client.target_host, client.target_port),
         );

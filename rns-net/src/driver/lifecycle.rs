@@ -266,7 +266,7 @@ impl Driver {
 
     /// Keep `control` so the driver stops the listener when it shuts down.
     pub fn register_listener_control(&mut self, control: crate::interface::ListenerControl) {
-        self.listener_controls.push(control);
+        self.registry.listener_controls.push(control);
     }
 
     /// Report the shared instance's local server, serving on `endpoint`,
@@ -277,8 +277,10 @@ impl Driver {
         id: InterfaceId,
         endpoint: crate::interface::display::LocalEndpoint,
     ) {
-        self.listener_stats.retain(|listener| listener.id != id);
-        self.listener_stats.push(super::ListenerStat {
+        self.registry
+            .listener_stats
+            .retain(|listener| listener.id != id);
+        self.registry.listener_stats.push(super::ListenerStat {
             id,
             // Upstream's `LocalServerInterface.name`.
             name: "Reticulum".into(),
@@ -295,7 +297,7 @@ impl Driver {
     }
 
     pub(crate) fn stop_listener_accepts(&mut self) {
-        for control in &self.listener_controls {
+        for control in &self.registry.listener_controls {
             control.request_stop();
         }
         #[cfg(feature = "hooks")]
@@ -397,7 +399,7 @@ impl Driver {
         self.proofs.sent_packets.clear();
         self.proofs.sent_packet_keys.clear();
         self.proofs.completed.clear();
-        for control in &self.listener_controls {
+        for control in &self.registry.listener_controls {
             control.finish();
         }
         self.proofs.pending_probes.clear();

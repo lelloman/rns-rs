@@ -190,13 +190,14 @@ impl ConfiguredDisplay {
     /// Register the display names of a listener that started.
     pub(crate) fn register_listener(&mut self, driver: &mut Driver) {
         if let Some((id, display_name)) = self.listener.take() {
-            driver.interface_display_names.insert(id, display_name);
+            driver.registry.display_names.insert(id, display_name);
         }
         if let Some(listener) = self.listener_stat.take() {
             driver
+                .registry
                 .listener_stats
                 .retain(|candidate| candidate.id != listener.id);
-            driver.listener_stats.push(listener);
+            driver.registry.listener_stats.push(listener);
         }
     }
 }
@@ -244,10 +245,10 @@ pub(crate) fn register_started_interface(params: StartedInterface<'_>) {
     } = params;
     match display_name {
         Some(display_name) => {
-            driver.interface_display_names.insert(id, display_name);
+            driver.registry.display_names.insert(id, display_name);
         }
         None => {
-            driver.interface_display_names.remove(&id);
+            driver.registry.display_names.remove(&id);
         }
     }
     info.stamp_costs = stamp_costs;

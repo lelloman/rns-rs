@@ -42,9 +42,10 @@ impl Driver {
         limits: crate::node::InterfaceAnnounceLimits,
     ) {
         if limits == crate::node::InterfaceAnnounceLimits::default() {
-            self.interface_announce_limits.remove(name);
+            self.registry.announce_limits.remove(name);
         } else {
-            self.interface_announce_limits
+            self.registry
+                .announce_limits
                 .insert(name.to_string(), limits);
         }
     }
@@ -56,7 +57,7 @@ impl Driver {
         &self,
         info: &mut rns_core::transport::types::InterfaceInfo,
     ) {
-        if let Some(limits) = self.interface_announce_limits.get(&info.name) {
+        if let Some(limits) = self.registry.announce_limits.get(&info.name) {
             limits.apply(info);
         }
     }

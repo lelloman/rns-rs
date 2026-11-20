@@ -141,6 +141,7 @@ mod hook_events;
 mod housekeeping;
 mod interface_discovery;
 mod interface_management;
+mod interface_registry;
 mod known_destinations;
 mod lifecycle;
 mod link_stamps;
@@ -284,25 +285,9 @@ pub struct Driver {
     pub(crate) pending_link_frames: std::collections::VecDeque<PendingLinkFrame>,
     pub(crate) engine: TransportEngine,
     pub(crate) interfaces: crate::interface::InterfaceMap<InterfaceEntry>,
-    /// Parent listener for dynamically spawned interfaces.
-    pub(crate) dynamic_interface_parents: HashMap<InterfaceId, InterfaceId>,
-    /// Upstream's display names (`str(interface)`) of interfaces whose
-    /// name shows more than `{type}[{name}]`: addresses, parents.
-    pub(crate) interface_display_names: HashMap<InterfaceId, String>,
-    /// Upstream's `interface.name` of spawned interfaces whose upstream
-    /// name differs from their own (`Client on {listener}`), reported as
-    /// their `short_name`.
-    pub(crate) interface_short_names: HashMap<InterfaceId, String>,
-    /// Listeners with no interface entry of their own, reported in
-    /// interface statistics as upstream lists them.
-    pub(crate) listener_stats: Vec<ListenerStat>,
-    /// Upstream's `Transport.interfaces` order: by bitrate, recomputed
-    /// every `INTERFACE_JOBS_INTERVAL`; interfaces added since are listed
-    /// after it.
-    pub(crate) interface_priority: Vec<u64>,
-    pub(crate) interface_priority_at: f64,
-    /// Previous cumulative counters used to calculate current one-second rates.
-    pub(crate) traffic_samples: HashMap<InterfaceId, TrafficSample>,
+    /// Bookkeeping about the interfaces beyond their entries: naming,
+    /// listeners, management and statistics.
+    pub(crate) registry: interface_registry::InterfaceRegistry,
     pub(crate) rng: OsRng,
     pub(crate) rx: EventReceiver,
     pub(crate) callbacks: Box<dyn Callbacks>,
@@ -313,15 +298,6 @@ pub struct Driver {
     /// requests that rediscover paths for it
     /// (`Transport.owner.is_connected_to_shared_instance`).
     pub(crate) connected_to_shared_instance: bool,
-    pub(crate) listener_controls: Vec<crate::interface::ListenerControl>,
-    pub(crate) interface_management: Option<crate::node::InterfaceManagementConfig>,
-    pub(crate) managed_interfaces: HashMap<String, ManagedInterface>,
-    /// Static interfaces started without interface management, with their
-    /// stop controls, so transport can still detach one as upstream's
-    /// `_detach_interface(.., internal_forced=True)` does.
-    pub(crate) unmanaged_static_interfaces:
-        HashMap<InterfaceId, Option<crate::interface::ListenerControl>>,
-    pub(crate) retired_interface_parents: HashSet<InterfaceId>,
     /// Writers that may hold frames queued without a wakeup.
     pub(crate) writers_to_wake: Vec<InterfaceId>,
     /// Ingress burst state last published to the event queue, per interface.
@@ -428,9 +404,6 @@ pub struct Driver {
     pub(crate) underlay_mark: Option<u32>,
     /// Default announce-rate controls for interfaces on transport nodes.
     pub(crate) announce_rate_defaults: AnnounceRateDefaults,
-    /// Announce rate and cap options from configured interface sections,
-    /// by interface name, applied when the interface registers.
-    pub(crate) interface_announce_limits: HashMap<String, crate::node::InterfaceAnnounceLimits>,
     /// Default ingress/egress controls for interfaces on transport nodes.
     pub(crate) ingress_control_defaults: rns_core::transport::types::IngressControlConfig,
     /// Shared timer interval used by the node timer thread.
@@ -440,8 +413,6 @@ pub struct Driver {
     /// Ordered outbound Backbone peer pool, if enabled.
     #[cfg(feature = "iface-backbone")]
     backbone_peer_pool: Option<BackbonePeerPool>,
-    /// Shared allocator for listener-created and discovery-created dynamic interfaces.
-    pub(crate) next_dynamic_interface_id: Arc<AtomicU64>,
     /// Destination hash for the probe responder (if respond_to_probes is enabled).
     pub(crate) probe_responder_hash: Option<[u8; 16]>,
     /// Shared async announce verification queue.

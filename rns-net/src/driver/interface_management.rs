@@ -17,14 +17,14 @@ impl Driver {
         operation: InterfaceManagementOperation,
         name: &str,
     ) -> Option<bool> {
-        if self.interface_management.is_none() || self.is_draining() {
+        if self.registry.management.is_none() || self.is_draining() {
             return Some(false);
         }
         match operation {
             InterfaceManagementOperation::Attach => self.attach_interface(name),
             InterfaceManagementOperation::Detach => self.detach_interface(name),
             InterfaceManagementOperation::Reload => {
-                if !self.managed_interfaces.contains_key(name) {
+                if !self.registry.managed.contains_key(name) {
                     return None;
                 }
                 if self.detach_interface(name) == Some(true) {
@@ -37,7 +37,7 @@ impl Driver {
     }
 
     fn detach_interface(&mut self, name: &str) -> Option<bool> {
-        if !self.managed_interfaces.contains_key(name) {
+        if !self.registry.managed.contains_key(name) {
             // Upstream 3281e283: a name that is no interface may be a tunnel
             // id, naming the interface a remote tunnel is attached to or the
             // one this node synthesized its tunnel on.
@@ -45,16 +45,16 @@ impl Driver {
             let id = self.engine.interface_for_tunnel_id(&tunnel_id)?;
             return self.teardown_interface(id);
         }
-        let managed = self.managed_interfaces.get(name)?;
+        let managed = self.registry.managed.get(name)?;
         if matches!(
             managed.type_name.as_str(),
             "I2PInterface" | "LocalClientInterface" | "LocalServerInterface"
         ) {
             return Some(false);
         }
-        let managed = self.managed_interfaces.remove(name).expect("checked above");
-        self.retired_interface_parents.insert(managed.parent_id);
-        self.listener_stats.retain(|listener| {
+        let managed = self.registry.managed.remove(name).expect("checked above");
+        self.registry.retired_parents.insert(managed.parent_id);
+        self.registry.listener_stats.retain(|listener| {
             listener.id != managed.parent_id
                 && !matches!(
                     &listener.clients,
@@ -65,17 +65,19 @@ impl Driver {
         if let Some(control) = &managed.control {
             control.request_stop();
             control.finish();
-            self.listener_controls
+            self.registry
+                .listener_controls
                 .retain(|candidate| !candidate.same_instance(control));
         }
         let child_ids: Vec<_> = self
-            .dynamic_interface_parents
+            .registry
+            .dynamic_parents
             .iter()
             .filter_map(|(id, parent)| (*parent == managed.parent_id).then_some(*id))
             .collect();
         for id in child_ids {
             self.handle_interface_down_event(id);
-            self.traffic_samples.remove(&id);
+            self.registry.traffic_samples.remove(&id);
         }
         for id in managed.static_ids {
             self.remove_static_interface(id);
@@ -113,12 +115,12 @@ impl Driver {
             self.runtime_config.ifac_defaults.remove(&entry_name);
         }
         self.event_tx.remove_interface(id);
-        self.interface_display_names.remove(&id);
-        self.interface_short_names.remove(&id);
+        self.registry.display_names.remove(&id);
+        self.registry.short_names.remove(&id);
         if self.engine.interface_info(&id).is_some() {
             self.engine.deregister_interface(id);
         }
-        self.traffic_samples.remove(&id);
+        self.registry.traffic_samples.remove(&id);
     }
 
     pub(crate) fn teardown_interface(&mut self, id: InterfaceId) -> Option<bool> {
@@ -131,7 +133,8 @@ impl Driver {
             return Some(false);
         }
         if let Some(name) = self
-            .managed_interfaces
+            .registry
+            .managed
             .iter()
             .find(|(_, managed)| managed.static_ids.contains(&id))
             .map(|(name, _)| name.clone())
@@ -146,14 +149,15 @@ impl Driver {
         if !entry.dynamic {
             // A static interface of a node without interface management
             // (no config file): upstream detaches it all the same, forced.
-            let Some(control) = self.unmanaged_static_interfaces.remove(&id) else {
+            let Some(control) = self.registry.unmanaged_static.remove(&id) else {
                 return Some(false);
             };
             let name = entry.info.name.clone();
             if let Some(control) = control {
                 control.request_stop();
                 control.finish();
-                self.listener_controls
+                self.registry
+                    .listener_controls
                     .retain(|candidate| !candidate.same_instance(&control));
             }
             if let Some(entry) = self.interfaces.get_mut(&id) {
@@ -168,13 +172,13 @@ impl Driver {
             entry.writer.shutdown();
         }
         self.handle_interface_down_event(id);
-        self.traffic_samples.remove(&id);
+        self.registry.traffic_samples.remove(&id);
         log::info!("Interface {name} was detached");
         Some(true)
     }
 
     fn attach_interface(&mut self, name: &str) -> Option<bool> {
-        if self.managed_interfaces.contains_key(name)
+        if self.registry.managed.contains_key(name)
             || self
                 .interfaces
                 .values()
@@ -182,7 +186,7 @@ impl Driver {
         {
             return Some(false);
         }
-        let management = self.interface_management.as_ref()?;
+        let management = self.registry.management.as_ref()?;
         let content = match std::fs::read_to_string(&management.config_file) {
             Ok(content) => content,
             Err(error) => {
@@ -203,7 +207,8 @@ impl Driver {
         // after it (at most one per configured subinterface section).
         let reserved_ids = 1 + iface.subinterfaces.len() as u64;
         let id = InterfaceId(
-            self.next_dynamic_interface_id
+            self.registry
+                .next_dynamic_id
                 .fetch_add(reserved_ids, Ordering::Relaxed),
         );
         let config =
@@ -233,7 +238,8 @@ impl Driver {
         registry: &InterfaceRegistry,
     ) -> io::Result<()> {
         let management = self
-            .interface_management
+            .registry
+            .management
             .as_ref()
             .expect("checked by manage_interface");
         let queue_capacity = management.queue_capacity;
@@ -257,7 +263,7 @@ impl Driver {
         self.set_interface_announce_limits(&config.name, config.announce_limits);
         let ctx = StartContext {
             tx: self.event_tx.clone(),
-            next_dynamic_id: self.next_dynamic_interface_id.clone(),
+            next_dynamic_id: self.registry.next_dynamic_id.clone(),
             mode: config.mode,
             gravity: config.gravity,
             hop_limiter: config.hop_limiter,
@@ -358,7 +364,7 @@ impl Driver {
                     Some(self.new_interface_announcer(*identity.hash(), vec![discoverable]));
             }
         }
-        self.managed_interfaces.insert(
+        self.registry.managed.insert(
             config.name,
             ManagedInterface {
                 parent_id,

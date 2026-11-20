@@ -818,7 +818,7 @@ fn backbone_peer_pool_discovered_fill_target_after_configured() {
     let discovered = InterfaceId(status.members[1].interface_id.unwrap());
     let name = &driver.interfaces[&discovered].info.name;
     assert_eq!(
-        driver.interface_display_names[&discovered],
+        driver.registry.display_names[&discovered],
         format!("BackboneInterface[{name}/127.0.0.1:{port_b}]")
     );
 }
@@ -3873,7 +3873,7 @@ fn dynamic_burst_counts_are_scoped_to_parent_and_cleaned_on_disconnect() {
             assert!(driver.engine.pr_burst_active(&InterfaceId(child_id)));
         }
         assert_eq!(
-            driver.dynamic_interface_parents[&InterfaceId(child_id)],
+            driver.registry.dynamic_parents[&InterfaceId(child_id)],
             InterfaceId(parent_id)
         );
     }
@@ -3884,7 +3884,8 @@ fn dynamic_burst_counts_are_scoped_to_parent_and_cleaned_on_disconnect() {
     driver.handle_interface_down_event(InterfaceId(12));
     assert_eq!(driver.dynamic_burst_counts(InterfaceId(10)), (1, 0));
     assert!(!driver
-        .dynamic_interface_parents
+        .registry
+        .dynamic_parents
         .contains_key(&InterfaceId(12)));
 }
 
@@ -5172,7 +5173,7 @@ impl Writer for ShutdownRecorder {
 }
 
 fn enable_interface_management(driver: &mut Driver) {
-    driver.interface_management = Some(crate::node::InterfaceManagementConfig {
+    driver.registry.management = Some(crate::node::InterfaceManagementConfig {
         config_file: std::path::PathBuf::from("/nonexistent/config"),
         storage_dir: std::path::PathBuf::from("/nonexistent/storage"),
         initial_ids: HashMap::new(),
@@ -5214,13 +5215,14 @@ fn a_bad_synthesis_detaches_a_static_interface_without_interface_management() {
     synthesis[last] ^= 0x01;
 
     let mut node = new_test_driver();
-    assert!(node.interface_management.is_none());
+    assert!(node.registry.management.is_none());
     register_typed_interface(&mut node, 5, "static-client", "TCPClientInterface");
     let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     node.interfaces.get_mut(&InterfaceId(5)).unwrap().writer =
         Box::new(ShutdownRecorder(Arc::clone(&closed)));
     let control = crate::interface::ListenerControl::new();
-    node.unmanaged_static_interfaces
+    node.registry
+        .unmanaged_static
         .insert(InterfaceId(5), Some(control.clone()));
     node.handle_frame_event(InterfaceId(5), synthesis, None, None);
 
@@ -8195,7 +8197,8 @@ fn interface_stats_include_backbone_clients_and_fast_flap_blocks() {
     child.stats.hop_limiter_hits = 8;
     driver.interfaces.insert(child_id, child);
     driver
-        .dynamic_interface_parents
+        .registry
+        .dynamic_parents
         .insert(child_id, handle.interface_id);
 
     let QueryResponse::InterfaceStats(stats) = driver.handle_query(QueryRequest::InterfaceStats)
@@ -16845,7 +16848,8 @@ fn interface_stats_report_upstream_display_names_and_listeners() {
     udp.interface_type = "UDPInterface".into();
     driver.interfaces.insert(InterfaceId(1), udp);
     driver
-        .interface_display_names
+        .registry
+        .display_names
         .insert(InterfaceId(1), "UDPInterface[UDP/0.0.0.0:4242]".into());
     let (writer, _) = MockWriter::new();
     let mut kiss = make_entry(2, Box::new(writer), true);
@@ -16854,7 +16858,7 @@ fn interface_stats_report_upstream_display_names_and_listeners() {
     driver.interfaces.insert(InterfaceId(2), kiss);
 
     // A TCP server and the client it spawned.
-    driver.listener_stats.push(ListenerStat {
+    driver.registry.listener_stats.push(ListenerStat {
         id: InterfaceId(10),
         name: "Server".into(),
         display_name: "TCPServerInterface[Server/0.0.0.0:4242]".into(),
@@ -16976,10 +16980,8 @@ fn interface_stats_report_upstream_display_names_and_listeners() {
 
     // A spawned interface's display name goes with it.
     driver.handle_interface_down_event(InterfaceId(11));
-    assert!(!driver
-        .interface_display_names
-        .contains_key(&InterfaceId(11)));
-    assert!(!driver.interface_short_names.contains_key(&InterfaceId(11)));
+    assert!(!driver.registry.display_names.contains_key(&InterfaceId(11)));
+    assert!(!driver.registry.short_names.contains_key(&InterfaceId(11)));
     assert_eq!(driver.interface_stats().interfaces.len(), 6);
     let stats = driver.interface_stats();
     let server = stats.interfaces.iter().find(|stat| stat.id == 10).unwrap();
@@ -17029,7 +17031,7 @@ fn interface_stats_report_peer_spawning_parents() {
     };
 
     // An AutoInterface with two peers.
-    driver.listener_stats.push(listener(
+    driver.registry.listener_stats.push(listener(
         10,
         "Auto",
         "AutoInterface",
@@ -17041,7 +17043,7 @@ fn interface_stats_report_peer_spawning_parents() {
     // A connectable I2PInterface with one peer it connected to and one
     // that connected to it.
     let endpoint = Arc::new(Mutex::new(crate::interface::i2p::I2pEndpoint::default()));
-    driver.listener_stats.push(listener(
+    driver.registry.listener_stats.push(listener(
         20,
         "I2P",
         "I2PInterface",
@@ -17065,7 +17067,7 @@ fn interface_stats_report_peer_spawning_parents() {
             .interfaces
             .insert(InterfaceId(id), make_entry(id, Box::new(writer), online));
     }
-    driver.listener_stats.push(listener(
+    driver.registry.listener_stats.push(listener(
         40,
         "Multi",
         "RNodeMultiInterface",
@@ -17161,7 +17163,7 @@ fn driver_watches_i2p_peer_tunnels() {
     let (tx, rx) = event::channel();
     let mut driver = Driver::new(make_transport_config(true), rx, tx, Box::new(callbacks));
     let endpoint = Arc::new(Mutex::new(crate::interface::i2p::I2pEndpoint::default()));
-    driver.listener_stats.push(ListenerStat {
+    driver.registry.listener_stats.push(ListenerStat {
         id: InterfaceId(20),
         name: "I2P".into(),
         display_name: "I2PInterface[I2P]".into(),
@@ -17260,7 +17262,7 @@ fn outbound_i2p_peer_is_listed_before_connecting_and_kept_across_reconnects() {
     let (tx, rx) = event::channel();
     let mut driver = Driver::new(make_transport_config(true), rx, tx, Box::new(callbacks));
     let endpoint = Arc::new(Mutex::new(crate::interface::i2p::I2pEndpoint::default()));
-    driver.listener_stats.push(ListenerStat {
+    driver.registry.listener_stats.push(ListenerStat {
         id: InterfaceId(20),
         name: "I2P".into(),
         display_name: "I2PInterface[I2P]".into(),

@@ -5,7 +5,8 @@ use super::*;
 impl Driver {
     #[cfg(feature = "iface-local")]
     pub(super) fn shared_instance_listener(&self) -> Option<&ListenerStat> {
-        self.listener_stats
+        self.registry
+            .listener_stats
             .iter()
             .find(|listener| matches!(listener.clients, ListenerClients::Local(_)))
     }
@@ -23,14 +24,15 @@ impl Driver {
             ListenerClients::Subinterfaces(ids) => ids.contains(&entry.info.id),
             // The others are registered as their interfaces' parent.
             #[cfg(any(feature = "iface-tcp", feature = "iface-auto", feature = "iface-i2p"))]
-            _ => self.dynamic_interface_parents.get(&entry.info.id) == Some(&listener.id),
+            _ => self.registry.dynamic_parents.get(&entry.info.id) == Some(&listener.id),
         }
     }
 
     /// Whether an I2P peer connected to this node (upstream's `Connected
     /// peer on {interface}`), rather than this node to it.
     pub(super) fn i2p_peer_accepted(&self, id: &InterfaceId) -> bool {
-        self.interface_short_names
+        self.registry
+            .short_names
             .get(id)
             .is_some_and(|name| name.starts_with("Connected peer on "))
     }
@@ -39,8 +41,9 @@ impl Driver {
     /// `None` for any other interface.
     #[cfg(feature = "iface-i2p")]
     pub(super) fn i2p_tunnel_state(&self, entry: &InterfaceEntry) -> Option<Option<String>> {
-        let parent = self.dynamic_interface_parents.get(&entry.info.id)?;
-        self.listener_stats
+        let parent = self.registry.dynamic_parents.get(&entry.info.id)?;
+        self.registry
+            .listener_stats
             .iter()
             .find_map(|listener| match &listener.clients {
                 ListenerClients::I2pPeers(i2p) if listener.id == *parent => Some(

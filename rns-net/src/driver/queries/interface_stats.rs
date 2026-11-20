@@ -67,10 +67,10 @@ impl Driver {
     pub(crate) fn prioritize_interfaces(&mut self) {
         const INTERFACE_JOBS_INTERVAL: f64 = 5.0;
         let now = crate::time::now();
-        if now < self.interface_priority_at + INTERFACE_JOBS_INTERVAL {
+        if now < self.registry.priority_at + INTERFACE_JOBS_INTERVAL {
             return;
         }
-        self.interface_priority_at = now;
+        self.registry.priority_at = now;
         let mut order: Vec<(u64, u64)> = self
             .interface_stats()
             .interfaces
@@ -78,7 +78,7 @@ impl Driver {
             .map(|i| (i.id, i.bitrate.unwrap_or(0)))
             .collect();
         order.sort_by_key(|(_, bitrate)| std::cmp::Reverse(*bitrate));
-        self.interface_priority = order.into_iter().map(|(id, _)| id).collect();
+        self.registry.priority = order.into_iter().map(|(id, _)| id).collect();
     }
 
     /// Every interface's statistics and the node's totals, as upstream's
@@ -121,7 +121,7 @@ impl Driver {
         for handle in self.runtime_config.backbone_peer_state.values() {
             interfaces.push(self.backbone_listener_stat(handle, now));
         }
-        for listener in &self.listener_stats {
+        for listener in &self.registry.listener_stats {
             interfaces.push(self.listener_interface_stat(listener));
         }
         // In upstream's Transport.interfaces order: as last prioritized,
@@ -129,7 +129,8 @@ impl Driver {
         // (ids are handed out in that order).
         interfaces.sort_by_key(|i| {
             (
-                self.interface_priority
+                self.registry
+                    .priority
                     .iter()
                     .position(|id| *id == i.id)
                     .unwrap_or(usize::MAX),
@@ -184,7 +185,8 @@ impl Driver {
         SingleInterfaceStat {
             id: interface_id.0,
             name: self
-                .interface_short_names
+                .registry
+                .short_names
                 .get(&interface_id)
                 .cloned()
                 .unwrap_or_else(|| entry.info.name.clone()),
@@ -318,7 +320,8 @@ impl Driver {
             id: handle.interface_id.0,
             name: handle.interface_name.clone(),
             display_name: self
-                .interface_display_names
+                .registry
+                .display_names
                 .get(&handle.interface_id)
                 .cloned()
                 .unwrap_or_else(|| {
@@ -399,7 +402,7 @@ impl Driver {
     #[cfg(feature = "iface-backbone")]
     fn backbone_child_totals(&self, parent: InterfaceId, now: f64) -> BackboneChildTotals {
         let mut totals = BackboneChildTotals::default();
-        for (child_id, parent_id) in &self.dynamic_interface_parents {
+        for (child_id, parent_id) in &self.registry.dynamic_parents {
             if *parent_id == parent {
                 if let Some(child) = self.interfaces.get(child_id) {
                     add_traffic(&mut totals.traffic, traffic_detail(&child.stats, now));

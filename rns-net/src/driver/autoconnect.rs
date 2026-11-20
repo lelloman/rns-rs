@@ -280,7 +280,8 @@ impl Driver {
             );
         }
         let id = InterfaceId(
-            self.next_dynamic_interface_id
+            self.registry
+                .next_dynamic_id
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         );
         let mut client = BackboneClientConfig {
@@ -416,7 +417,7 @@ impl Driver {
                     .interfaces
                     .values()
                     .any(|entry| &entry.info.name == name)
-                    || self.managed_interfaces.contains_key(name)
+                    || self.registry.managed.contains_key(name)
                 {
                     log::info!(
                         "Tearing down bootstrap-only interface {name} since target connected auto-discovered interface count has been reached"
@@ -430,7 +431,7 @@ impl Driver {
                 self.interfaces
                     .values()
                     .any(|entry| &entry.info.name == name)
-                    || self.managed_interfaces.contains_key(name)
+                    || self.registry.managed.contains_key(name)
             });
             if !bootstrap.is_empty() && !bootstrap_up {
                 log::info!(
@@ -518,7 +519,7 @@ impl Driver {
         } else {
             crate::event::InterfaceManagementOperation::Detach
         };
-        if self.interface_management.is_none() {
+        if self.registry.management.is_none() {
             log::warn!(
                 "Cannot {} bootstrap interface {name}: interface management needs a config file",
                 if attach { "attach" } else { "detach" }

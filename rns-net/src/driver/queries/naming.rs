@@ -5,7 +5,7 @@ use super::*;
 impl Driver {
     /// Upstream's `str(interface)` for an interface entry.
     pub(crate) fn interface_display_name(&self, entry: &InterfaceEntry) -> String {
-        if let Some(display_name) = self.interface_display_names.get(&entry.info.id) {
+        if let Some(display_name) = self.registry.display_names.get(&entry.info.id) {
             return display_name.clone();
         }
         // The shared instance's clients on its Unix socket, which its
@@ -33,7 +33,7 @@ impl Driver {
     /// listener names its clients after their port).
     #[cfg(feature = "iface-local")]
     pub(crate) fn name_local_client(&mut self, id: InterfaceId) {
-        if self.interface_short_names.contains_key(&id) {
+        if self.registry.short_names.contains_key(&id) {
             return;
         }
         let Some(ListenerStat {
@@ -50,12 +50,12 @@ impl Driver {
             .filter(|entry| entry.info.is_local_client && entry.dynamic && entry.info.id != id)
             .count();
         let short_name = format!("{clients}@\0rns/{instance}");
-        self.interface_short_names.insert(id, short_name);
+        self.registry.short_names.insert(id, short_name);
     }
 
     /// The display name of the listener that spawned an interface.
     pub(super) fn parent_display_name(&self, entry: &InterfaceEntry) -> Option<String> {
-        let parent_id = match self.dynamic_interface_parents.get(&entry.info.id) {
+        let parent_id = match self.registry.dynamic_parents.get(&entry.info.id) {
             Some(parent_id) => *parent_id,
             // The shared instance's clients have no registered parent.
             None if entry.info.is_local_client && entry.dynamic => {
@@ -66,7 +66,7 @@ impl Driver {
             // Subinterfaces are configured, not spawned.
             None => {
                 return self
-                    .listener_stats
+                    .registry.listener_stats
                     .iter()
                     .find(|listener| {
                         matches!(&listener.clients, ListenerClients::Subinterfaces(ids) if ids.contains(&entry.info.id))
@@ -75,13 +75,14 @@ impl Driver {
             }
         };
         if let Some(listener) = self
+            .registry
             .listener_stats
             .iter()
             .find(|listener| listener.id == parent_id)
         {
             return Some(listener.display_name.clone());
         }
-        if let Some(display_name) = self.interface_display_names.get(&parent_id) {
+        if let Some(display_name) = self.registry.display_names.get(&parent_id) {
             return Some(display_name.clone());
         }
         self.interfaces
@@ -95,7 +96,7 @@ impl Driver {
     /// the connection fails, so it does not list them meanwhile.
     pub(super) fn subinterface_without_device(&self, entry: &InterfaceEntry) -> bool {
         !entry.online
-            && self.listener_stats.iter().any(|listener| {
+            && self.registry.listener_stats.iter().any(|listener| {
                 matches!(&listener.clients, ListenerClients::Subinterfaces(ids) if ids.contains(&entry.info.id))
             })
     }
