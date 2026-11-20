@@ -5,16 +5,18 @@ use crate::result::{HookResult, Verdict};
 #[cfg(feature = "wasm")]
 use crate::runtime::StoreData;
 
-pub use rns_hooks_abi::context::{
+#[cfg(feature = "wasm")]
+pub(crate) use rns_hooks_abi::context::ARENA_BASE;
+use rns_hooks_abi::context::{
     AnnounceContext, BackbonePeerContext, InterfaceContext, LinkContext, PacketContext,
-    TickContext, ARENA_BASE, CTX_TYPE_ANNOUNCE, CTX_TYPE_BACKBONE_PEER, CTX_TYPE_INTERFACE,
-    CTX_TYPE_LINK, CTX_TYPE_PACKET, CTX_TYPE_TICK,
+    TickContext, CTX_TYPE_ANNOUNCE, CTX_TYPE_BACKBONE_PEER, CTX_TYPE_INTERFACE, CTX_TYPE_LINK,
+    CTX_TYPE_PACKET, CTX_TYPE_TICK,
 };
 
 /// Write a HookContext into WASM linear memory at ARENA_BASE.
 /// Returns the number of bytes written.
 #[cfg(feature = "wasm")]
-pub fn write_context(
+pub(crate) fn write_context(
     memory: &wasmtime::Memory,
     mut store: impl wasmtime::AsContextMut<Data = StoreData>,
     ctx: &HookContext,
@@ -160,7 +162,8 @@ pub fn write_context(
 /// Variable packet data starts at the same offset recorded in
 /// `PacketContext::data_offset`, but offsets are relative to the beginning of
 /// the returned buffer instead of WASM linear memory.
-pub fn context_to_bytes(
+#[cfg(feature = "native")]
+pub(crate) fn context_to_bytes(
     ctx: &HookContext,
     data_override: Option<&[u8]>,
 ) -> Result<Vec<u8>, HookError> {
@@ -244,7 +247,7 @@ pub fn context_to_bytes(
 
 /// Read a HookResult from WASM linear memory at the given offset.
 #[cfg(feature = "wasm")]
-pub fn read_result(
+pub(crate) fn read_result(
     memory: &wasmtime::Memory,
     store: impl wasmtime::AsContext<Data = StoreData>,
     offset: usize,
@@ -332,7 +335,7 @@ fn read_slice(data: &[u8], offset: usize, len: usize) -> Option<Vec<u8>> {
 ///
 /// All data referenced by offset/len pairs within the action is copied
 /// from `wasm_data` (full linear memory) into owned `Vec<u8>`.
-pub fn read_action_wire(
+pub(crate) fn read_action_wire(
     wasm_data: &[u8],
     action_ptr: usize,
     action_len: usize,
@@ -526,7 +529,7 @@ pub fn read_action_wire(
 /// Read modified data bytes from WASM memory using offsets from a HookResult.
 /// The offsets are relative to WASM linear memory (not arena base).
 #[cfg(feature = "wasm")]
-pub fn read_modified_data(
+pub(crate) fn read_modified_data(
     memory: &wasmtime::Memory,
     store: impl wasmtime::AsContext<Data = StoreData>,
     result: &crate::result::HookResult,
@@ -548,7 +551,7 @@ pub fn read_modified_data(
 /// This writes `new_data` at the data offset within the Packet arena layout,
 /// and updates the `data_len` field.
 #[cfg(feature = "wasm")]
-pub fn write_data_override(
+pub(crate) fn write_data_override(
     memory: &wasmtime::Memory,
     mut store: impl wasmtime::AsContextMut<Data = StoreData>,
     new_data: &[u8],

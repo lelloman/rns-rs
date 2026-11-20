@@ -14,10 +14,17 @@ use crate::wire::ActionWire;
 /// intended for first-party hooks and appliance builds where the hook code is
 /// trusted and should not require a WASM runtime or a dynamic library file.
 pub struct BuiltinHookCall<'a> {
+    /// What the hook point is about.
     pub ctx: &'a HookContext<'a>,
+    /// For a packet context, the packet bytes as replaced by an earlier
+    /// program in the chain with a `Modify` verdict; use them instead of the
+    /// context's raw bytes when present.
     pub data_override: Option<&'a [u8]>,
+    /// Read access to the node's state.
     pub engine_access: &'a dyn EngineAccess,
+    /// Current time, in seconds since the Unix epoch.
     pub now: f64,
+    /// Whether [`BuiltinHookHost::emit_event`] is allowed in this call.
     pub provider_events_enabled: bool,
 }
 
@@ -30,10 +37,17 @@ pub struct BuiltinHookHost {
 }
 
 impl BuiltinHookHost {
+    /// Queues an action for the host to carry out after the call. Actions
+    /// are kept even when the hook then returns an error.
     pub fn inject_action(&mut self, action: ActionWire) {
         self.injected_actions.push(action);
     }
 
+    /// Emits a provider event tagged with the hook's name.
+    ///
+    /// Fails with [`HookError::Trap`] when the host has provider events
+    /// disabled for this call; returning that error from the hook counts as
+    /// a failed run.
     pub fn emit_event(
         &mut self,
         call: &BuiltinHookCall<'_>,
@@ -52,6 +66,9 @@ impl BuiltinHookHost {
         Ok(())
     }
 
+    /// Sets the replacement packet bytes a `Modify` verdict uses; the last
+    /// call wins. The host checks them before using them, and drops the
+    /// packet if they are not a valid packet within the interface's MTU.
     pub fn set_modified_data(&mut self, data: impl Into<Vec<u8>>) {
         self.modified_data = Some(data.into());
     }
@@ -74,7 +91,17 @@ impl BuiltinHookHost {
     }
 }
 
+/// A hook implemented in Rust and linked into the host.
+///
+/// Implemented for every `Fn(BuiltinHookCall, &mut BuiltinHookHost) ->
+/// Result<HookResult, HookError>` closure or function, so a plain function
+/// can be passed to [`register_builtin_hook`].
 pub trait BuiltinHook: Send + Sync + 'static {
+    /// Runs the hook once, synchronously on the node's event loop thread, so
+    /// it must not block. An `Err` counts as a failed run (enough
+    /// consecutive failures disable the program), and a result whose
+    /// verdict is not a valid [`Verdict`] is rejected as
+    /// [`HookError::InvalidResult`].
     fn call(
         &self,
         call: BuiltinHookCall<'_>,
@@ -102,25 +129,20 @@ where
 }
 
 #[derive(Clone)]
-pub struct BuiltinProgram {
-    id: String,
+pub(crate) struct BuiltinProgram {
     hook: Arc<dyn BuiltinHook>,
 }
 
 impl BuiltinProgram {
-    pub fn load(id: impl Into<String>) -> Result<Self, HookError> {
+    pub(crate) fn load(id: impl Into<String>) -> Result<Self, HookError> {
         let id = id.into();
         let hook = resolve_builtin_hook(&id).ok_or_else(|| {
             HookError::CompileError(format!("built-in hook '{}' is not registered", id))
         })?;
-        Ok(Self { id, hook })
+        Ok(Self { hook })
     }
 
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    pub fn execute(
+    pub(crate) fn execute(
         &self,
         ctx: &HookContext<'_>,
         data_override: Option<&[u8]>,
@@ -155,6 +177,9 @@ fn registry() -> &'static RwLock<HashMap<String, Arc<dyn BuiltinHook>>> {
 
 /// Register a built-in hook implementation under a stable ID.
 ///
+/// Fails with [`HookError::CompileError`] if the id is already registered.
+/// Registrations are process-wide and last for the life of the process.
+///
 /// Third-party binaries can call this at startup after linking a plugin crate:
 ///
 /// ```ignore
@@ -178,13 +203,6 @@ pub fn register_builtin_hook(
     Ok(())
 }
 
-pub fn resolve_builtin_hook(id: &str) -> Option<Arc<dyn BuiltinHook>> {
+pub(crate) fn resolve_builtin_hook(id: &str) -> Option<Arc<dyn BuiltinHook>> {
     registry().read().ok()?.get(id).cloned()
-}
-
-#[cfg(test)]
-pub fn clear_builtin_hooks_for_tests() {
-    if let Ok(mut hooks) = registry().write() {
-        hooks.clear();
-    }
 }

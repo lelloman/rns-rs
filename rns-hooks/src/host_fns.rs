@@ -12,7 +12,9 @@ use crate::wire::ActionWire;
 use wasmtime::{Caller, Linker};
 
 /// Register all host functions into the linker under the "env" module.
-pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<(), wasmtime::Error> {
+pub(crate) fn register_host_functions(
+    linker: &mut Linker<StoreData>,
+) -> Result<(), wasmtime::Error> {
     linker.func_wrap("env", "host_log", host_log)?;
     linker.func_wrap("env", "host_has_path", host_has_path)?;
     linker.func_wrap("env", "host_get_hops", host_get_hops)?;
@@ -33,7 +35,7 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<(), was
 }
 
 /// Return code for a call refused because a per-call limit was reached.
-pub const LIMIT_REACHED: i32 = -3;
+pub(crate) const LIMIT_REACHED: i32 = -3;
 
 fn get_memory(caller: &mut Caller<'_, StoreData>) -> Option<wasmtime::Memory> {
     caller.get_export("memory").and_then(|e| e.into_memory())
