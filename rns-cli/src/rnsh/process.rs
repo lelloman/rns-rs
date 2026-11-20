@@ -173,8 +173,10 @@ impl ChildProcess {
                     } else {
                         2
                     };
-                    // The ioctl request type differs between Linux and macOS.
-                    #[allow(clippy::useless_conversion)]
+                    #[allow(
+                        clippy::useless_conversion,
+                        reason = "the ioctl request type differs between Linux and macOS"
+                    )]
                     libc::ioctl(tty_fd, libc::TIOCSCTTY.into(), 0);
                 }
                 for fd in 3..1024 {

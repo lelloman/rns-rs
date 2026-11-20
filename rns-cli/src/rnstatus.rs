@@ -446,7 +446,10 @@ impl ProgressOut {
 
 /// `-R`: upstream's `get_remote_status` and the remote branch of
 /// `program_setup`, with its progress lines, messages and exit codes.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate command-line option of the -R mode"
+)]
 fn remote_status(
     hash_str: &str,
     management_identity: Option<&str>,

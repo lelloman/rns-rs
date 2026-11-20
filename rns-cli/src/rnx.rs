@@ -1298,7 +1298,10 @@ fn decode_command_request(data: &[u8]) -> Result<CommandRequest, ()> {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one argument per element of the msgpack result array the remote side unpacks"
+)]
 fn encode_result(
     executed: bool,
     status: Option<i64>,
