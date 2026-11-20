@@ -1515,6 +1515,65 @@ against its source commit above, not taken as evidence.
 
 **Local handling:** Analysis only.
 
+**Tag target.** The commit adds the `### RNS 1.6.1` section and moves the
+unchanged "Verified Retrieval" and "Release Signatures" text from 1.6.0 to
+it; nothing else changes and `RNS/_version.py` stays `1.6.1`. The signed
+`1.6.1` tag object `bde4cd79` points at this commit (`cff4d03f`) and its
+message is the section's text, so the changelog identifies the tag
+target as the tip of this range.
+
+**Changelog cross-check.** The section covers `1.6.0` (tag at `cb126089`)
+to `cff4d03f`, which rns-rs audited in six records: `1.6.0-rgit-2`
+(`5d38ce30..c5d205ff`, from `cb126089` on), `1.6.0-rgit-3`
+(`..16621a78`), `1.6.0-rgit-4` (`..134dc677`), `1.6.0-rgit-5`
+(`..c850cdac`), `1.6.1` (`..884f109b`) and this one. Each bullet, with
+the commits it describes:
+
+| Bullet | Source | Range |
+|---|---|---|
+| Enabled network stamp generation by default | `51fa8413` | 1.6.1 |
+| Filter destination types by hash | `e96c81c3` (filtering by name, `825c2e19`, is in 1.6.0) | 1.6.1 |
+| Hop limiter options globally and per-interface | `bb63dd44` (per interface; the `[filter]` option, `01aef5bc`, is in 1.6.0) | 1.6.1 |
+| Super fast announce ingress pre-filtering | `096e6726` | 1.6.1 |
+| Filtered traffic stats in `rnstatus` | `134dc677` | rgit-4 |
+| Link traffic stats in `rnstatus` | 29 `ef3e8086`, 30 `e8b3b14b`; 32 `01ffb98e` counts local links | this range |
+| Remote transport IDs per client interface in `rnstatus` | `464e7598`; 10 `f876ed8d` | rgit-5; this range |
+| Inspect filtered traffic, announces per interface | `134dc677`, `819076c3` | rgit-4, rgit-5 |
+| Inspect tunnel properties, stamp costs, remote implementation info | `3281e283`, `464e7598`, `b7a93b9b`; 10 `f876ed8d` | rgit-5, 1.6.1; this range |
+| `client_limit` on `BackboneInterface`, default 500 | `3c4b271f` | rgit-4 |
+| Max stamp workers and worker niceness | `16621a78` | rgit-3 |
+| `blocked_ips` file | `5f2dbc16` | rgit-4 |
+| Directly blackhole remote transport nodes | `350b7e26` | rgit-5 |
+| Stamp values and costs for `rngit` | 12 `05ac4bba` | this range |
+| Held announce queue cleaning | `85d36979` | 1.6.1 |
+| Bidirectional tunnel synthesis with stamp cost and version signalling | `b7a93b9b`, `f361a354`, `ad6c709e`; 4 `2b1a984c`, 5 `25cce0a8` | 1.6.1; this range |
+| Announce rate table persistence | `d5f1e014` | rgit-5 |
+| Default caps for auto-connect interface counts | 2 `aecc1547` | this range |
+| Path state info in path table getters | 27 `41260ea1` | this range |
+| Inbound announce filtering and deduplication | `096e6726`, `85d36979`, `a450be5d`; 1 `da368e05` | 1.6.1; this range |
+| Filtering subsystem reworked for many interfaces | no single commit: `20e25a9f`, `134dc677`, `819076c3`, `e96c81c3` and this range's 21, 22 | rgit-4 to this range |
+| Improved `rnpath` display and filtering | 20 `9568b704` (and 21, 24-28, 31 around it) | this range |
+| Improved traffic counting | `01e7ed84`, `d1837919`, `c850cdac`, `29dc449a`; 29, 32 | rgit-5, 1.6.1; this range |
+| Improved path responsiveness tracking | 13-17 | this range |
+| Improved protocol violation tracking and logging | `715707b1` | 1.6.1 |
+| Improved path pool and tunnel table culling | `023849ed` | rgit-4 |
+| Tuned announce validation caches | `a450be5d` | 1.6.1 |
+| Fixed 1.6.0 regression: culling removing own local destination paths | 13 `833f6cf2` | this range |
+| Fixed DPEC state not resetting on Backbone client reconnect | `0bc5c37c` | rgit-4 |
+| Fixed potential logging deadlock | `9ef6c90e` | rgit-4 |
+| Fixed exit handler deadlock on a signal mid RPC call | `29ce7ca5` | 1.6.1 |
+| Fixed missing wanted destination type for interface discovery | `884f109b` | 1.6.1 |
+| Fixed split-instance known-destinations load on Android | 9 `48c77061` | this range |
+| CPython process fork stdin deadlock mitigation | 11 `0123133e` | this range |
+
+Nothing in the section describes commits 3, 6, 7, 8, 18, 19, 23 or 33,
+and only the counting side of 32 ("Improved traffic counting"). Every
+bullet that comes from this range matches the commit it names. One names
+only the case its commit was made for: commit 9's RPC load is not
+Android-specific, it runs for any split-mode client that finds no known
+destinations file. The section is release communication,
+not evidence: the evidence for each commit is its own row.
+
 **Proposed disposition:** Non-runtime.
 
 ## Decisions (2026-11-20)

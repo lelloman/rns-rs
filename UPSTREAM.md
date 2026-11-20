@@ -10,7 +10,10 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.6.1`
 - Version metadata commit: `fd36a97220a40383ce7f0a1d0f40bc7043f4494f`
-- Release tag: none yet; no `1.6.1` tag on either remote
+- Release tag: none at this commit; upstream signed `1.6.1` on 2026-11-18 at
+  `cff4d03f` (its `Updated changelog` commit), 34 commits later, which
+  [`reticulum-1.6.1-rgit-audit.md`](docs/upstream-parity/reticulum-1.6.1-rgit-audit.md)
+  audits
 - Normative commit: `884f109b2b821638c7addd456a52a2cd5bb8c5b1`
 - Commit date: `2026-11-15 16:53:08 +0100`
 - Subject: `Fixed missing wanted destination type for interface discovery`
