@@ -91,7 +91,8 @@ impl PacketHashlist {
             return;
         }
         if self.queue.len() == self.max_size {
-            let oldest = *self.queue.entries.get(self.queue.head);
+            // SAFETY: the queue is full, so `head` is in its live range.
+            let oldest = unsafe { *self.queue.entries.get(self.queue.head) };
             let removed = self.set.remove(&oldest, &self.queue);
             debug_assert!(removed, "oldest hash must exist in index");
             self.queue.pop_front();
@@ -99,11 +100,14 @@ impl PacketHashlist {
         self.set.make_room(&self.queue);
         let slot = (self.queue.head + self.queue.len) % self.queue.capacity();
         self.queue.push_back(hash);
-        self.set.insert(slot, &self.queue);
+        // SAFETY: `slot` is the tail just written by `push_back`; it was
+        // free before, so it is not indexed.
+        unsafe { self.set.insert(slot, &self.queue) };
         if self.queue.len() == self.max_size {
             // The next new hash evicts the current oldest; start loading its
             // bucket now instead of stalling on it then.
-            let oldest = self.queue.entries.get(self.queue.head);
+            // SAFETY: the queue is full, so `head` is in its live range.
+            let oldest = unsafe { self.queue.entries.get(self.queue.head) };
             self.set.prefetch(self.set.key(oldest));
         }
     }
@@ -139,7 +143,8 @@ impl PacketHashlist {
         (0..self.queue.len).map(|offset| {
             let index = (self.queue.head + offset) % self.queue.capacity();
             let mut hash = [0u8; 32];
-            hash[..16].copy_from_slice(self.queue.entries.get(index));
+            // SAFETY: `offset < len`, so `index` is in the live range.
+            hash[..16].copy_from_slice(unsafe { self.queue.entries.get(index) });
             hash
         })
     }
@@ -174,15 +179,25 @@ impl RawHashSlots {
         self.slots[index].write(hash);
     }
 
-    fn read(&self, index: usize) -> Key {
-        // SAFETY: callers establish initialization through the queue's logical
-        // range before calling this method.
+    /// Copy of the hash in slot `index`.
+    ///
+    /// # Safety
+    ///
+    /// Slot `index` must have been written: it must lie in the owning
+    /// queue's live range `head..head + len` (cyclically). Out-of-bounds
+    /// indices panic.
+    unsafe fn read(&self, index: usize) -> Key {
+        // SAFETY: the caller guarantees slot `index` was written.
         unsafe { self.slots[index].assume_init_read() }
     }
 
-    fn get(&self, index: usize) -> &Key {
-        // SAFETY: callers establish initialization through the queue's logical
-        // range before calling this method.
+    /// The hash in slot `index`.
+    ///
+    /// # Safety
+    ///
+    /// As for [`read`](Self::read): slot `index` must have been written.
+    unsafe fn get(&self, index: usize) -> &Key {
+        // SAFETY: the caller guarantees slot `index` was written.
         unsafe { self.slots[index].assume_init_ref() }
     }
 }
@@ -301,7 +316,8 @@ impl PacketHashQueue {
         if self.len == 0 || self.capacity() == 0 {
             return None;
         }
-        let hash = self.entries.read(self.head);
+        // SAFETY: `len > 0`, so `head` is in the live range.
+        let hash = unsafe { self.entries.read(self.head) };
         self.head = (self.head + 1) % self.capacity();
         self.len -= 1;
         if self.len == 0 {
@@ -313,7 +329,8 @@ impl PacketHashQueue {
     fn remove(&mut self, hash: &Key) -> bool {
         let Some(offset) = (0..self.len).find(|offset| {
             let index = (self.head + offset) % self.capacity();
-            self.entries.get(index) == hash
+            // SAFETY: `offset < len`, so `index` is in the live range.
+            unsafe { self.entries.get(index) == hash }
         }) else {
             return false;
         };
@@ -321,7 +338,8 @@ impl PacketHashQueue {
         for current in offset..self.len - 1 {
             let next_index = (self.head + current + 1) % self.capacity();
             let current_index = (self.head + current) % self.capacity();
-            let next = self.entries.read(next_index);
+            // SAFETY: `current + 1 < len`, so `next_index` is in the live range.
+            let next = unsafe { self.entries.read(next_index) };
             self.entries.write(current_index, next);
         }
         self.len -= 1;
@@ -450,7 +468,11 @@ impl PacketHashSet {
             if entry == 0 {
                 return None;
             }
-            if entry & self.tag_mask == tag && queue.entries.get(self.entry_slot(entry)) == hash {
+            if entry & self.tag_mask == tag
+                // SAFETY: every nonzero bucket names a slot in the queue's
+                // live range; the index is kept in step with the queue.
+                && unsafe { queue.entries.get(self.entry_slot(entry)) } == hash
+            {
                 return Some(idx);
             }
             idx = (idx + 1) & self.mask();
@@ -461,8 +483,16 @@ impl PacketHashSet {
         self.position(hash, queue).is_some()
     }
 
-    fn insert(&mut self, slot: usize, queue: &PacketHashQueue) {
-        let key = self.key(queue.entries.get(slot));
+    /// Index queue slot `slot`.
+    ///
+    /// # Safety
+    ///
+    /// `slot` must be in the queue's live range, and must not already be
+    /// indexed.
+    unsafe fn insert(&mut self, slot: usize, queue: &PacketHashQueue) {
+        debug_assert!((slot + queue.capacity() - queue.head) % queue.capacity() < queue.len);
+        // SAFETY: the caller guarantees `slot` is in the live range.
+        let key = self.key(unsafe { queue.entries.get(slot) });
         let home = self.bucket_index(key);
         let mut idx = home;
         while self.buckets[idx] != 0 {
@@ -511,7 +541,9 @@ impl PacketHashSet {
         self.buckets[..self.active].fill(0);
         self.len = 0;
         for offset in 0..queue.len {
-            self.insert((queue.head + offset) % queue.capacity(), queue);
+            // SAFETY: `offset < len`, so the slot is live; the buckets were
+            // cleared, and each live slot is inserted once.
+            unsafe { self.insert((queue.head + offset) % queue.capacity(), queue) };
         }
     }
 
@@ -534,7 +566,10 @@ impl PacketHashSet {
         if displacement < self.max_displacement {
             index.wrapping_sub(displacement as usize) & self.mask()
         } else {
-            self.bucket_index(self.key(queue.entries.get(self.entry_slot(entry))))
+            // SAFETY: every nonzero bucket names a slot in the queue's live
+            // range; the index is kept in step with the queue.
+            let hash = unsafe { queue.entries.get(self.entry_slot(entry)) };
+            self.bucket_index(self.key(hash))
         }
     }
 }
@@ -840,7 +875,9 @@ mod tests {
             assert_eq!(colliding.len(), 3);
             for hash in &colliding {
                 queue.push_back(*hash);
-                set.insert(queue.len - 1, &queue);
+                // SAFETY: the queue never wraps here, so `len - 1` is the
+                // slot just pushed, and it is not yet indexed.
+                unsafe { set.insert(queue.len - 1, &queue) };
             }
             assert!(set.remove(&colliding[0], &queue));
             assert!(set.contains(&colliding[1], &queue));
@@ -853,7 +890,8 @@ mod tests {
         for policy in policies() {
             let mut slots = RawHashSlots::new(2, policy);
             slots.write(1, key_of(&make_hash(42)));
-            assert_eq!(slots.read(1), key_of(&make_hash(42)));
+            // SAFETY: slot 1 was just written.
+            assert_eq!(unsafe { slots.read(1) }, key_of(&make_hash(42)));
         }
     }
 
@@ -893,7 +931,8 @@ mod tests {
                 assert_eq!(queue.pop_front(), None);
                 // An emptied queue restarts at slot 0 and reuses old slots.
                 queue.push_back(key(99));
-                assert_eq!(*queue.entries.get(0), key(99));
+                // SAFETY: the queue holds one entry, at slot 0.
+                assert_eq!(unsafe { *queue.entries.get(0) }, key(99));
             }
         }
     }
