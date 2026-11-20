@@ -1300,6 +1300,35 @@ fn reupgrade_stops_on_refusal_success_or_link_close() {
 }
 
 #[test]
+fn reupgrade_postponed_by_a_stale_link_keeps_its_attempt() {
+    let link_id = [0x75; 16];
+    let mut mgr = accepting_manager();
+    upgraded(&mut mgr, link_id, 50_109);
+    mgr.take_direct(&link_id, DirectLossCause::LinkFailed);
+    assert!(run_due_reupgrade(&mut mgr, link_id));
+    // The link was stale for the moment: it is looked at again shortly,
+    // and that does not count as an attempt.
+    let before = time::now();
+    mgr.postpone_reupgrade(link_id);
+    assert_eq!(mgr.reupgrades[&link_id].attempts, 1);
+    let due = reupgrade_due(&mgr, &link_id).expect("re-upgrade still scheduled");
+    assert!(
+        due >= before + REUPGRADE_STALE_RETRY && due <= time::now() + REUPGRADE_STALE_RETRY,
+        "{}",
+        due - before
+    );
+    assert!(run_due_reupgrade(&mut mgr, link_id));
+    assert_eq!(mgr.reupgrades[&link_id].attempts, 1);
+
+    // Nothing in flight: the schedule stays.
+    mgr.reupgrade_failed(link_id, rns_core::holepunch::types::FAIL_TIMEOUT);
+    let due = reupgrade_due(&mgr, &link_id);
+    mgr.postpone_reupgrade(link_id);
+    assert_eq!(reupgrade_due(&mgr, &link_id), due);
+    assert_eq!(mgr.reupgrades[&link_id].attempts, 2);
+}
+
+#[test]
 fn only_the_proposing_side_reupgrades_and_only_when_enabled() {
     let link_id = [0x73; 16];
     // The responder side of the lost upgrade.

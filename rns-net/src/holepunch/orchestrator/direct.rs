@@ -94,6 +94,25 @@ impl HolePunchManager {
         self.schedule_reupgrade(link_id, time::now());
     }
 
+    /// The link's due re-upgrade could not start because the link is
+    /// stale for the moment: try again shortly, without counting an
+    /// attempt. A link's watchdog marks it stale in the same run that
+    /// sends the keepalive whose answer reactivates it, so a link that is
+    /// fine is stale for a moment every so often; one that is not closes
+    /// soon after, which cancels the re-upgrade.
+    pub fn postpone_reupgrade(&mut self, link_id: [u8; 16]) {
+        if let Some(entry) = self.reupgrades.get_mut(&link_id) {
+            if entry.in_flight {
+                log::debug!(
+                    "Link {:02x?} is stale for now: re-upgrading it shortly",
+                    &link_id[..4]
+                );
+                entry.in_flight = false;
+                entry.due = Some(time::now() + REUPGRADE_STALE_RETRY);
+            }
+        }
+    }
+
     /// Stop re-upgrading the link (it is no longer active).
     pub fn cancel_reupgrade(&mut self, link_id: &[u8; 16]) {
         self.reupgrades.remove(link_id);

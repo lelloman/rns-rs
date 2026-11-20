@@ -319,7 +319,7 @@ impl Driver {
     }
 
     /// Propose again on a link that lost its direct path, if it is still
-    /// active: a stale link waits for the next attempt, a closed one stops.
+    /// active: a stale link is looked at again shortly, a closed one stops.
     pub(super) fn reupgrade_direct_link(&mut self, link_id: [u8; 16]) {
         use rns_core::link::LinkState;
         let state = self.link_manager.link_state(&link_id);
@@ -327,8 +327,7 @@ impl Driver {
         let derived_key = match (state, derived_key) {
             (Some(LinkState::Active), Some(key)) if !self.is_draining() => key,
             (Some(LinkState::Stale), _) => {
-                self.holepunch_manager
-                    .reupgrade_failed(link_id, rns_core::holepunch::types::FAIL_NOT_STARTED);
+                self.holepunch_manager.postpone_reupgrade(link_id);
                 return;
             }
             _ => {
