@@ -33,12 +33,6 @@ pub struct Counters {
     pub unauthorized: u64,
     /// Packets dropped because the node did not take them in time.
     pub queue_drops: u64,
-    /// Incomplete packets dropped at reassembly expiry. Not counted yet;
-    /// always 0.
-    pub reassembly_expired: u64,
-    /// Packets dropped before a session was active. Not counted yet; always
-    /// 0.
-    pub early_drops: u64,
 }
 /// One tunnel session.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -272,8 +272,8 @@ Use bounded queues between:
 - decoded packets and packet-device writes.
 
 Queue saturation drops complete IP packets, not arbitrary fragments. Expose
-counters for malformed packets, unauthorized packets, queue drops, incomplete
-reassemblies, and bytes/packets in each direction. Session teardown cancels all
+counters for malformed packets, unauthorized packets, queue drops, and
+bytes/packets in each direction. Session teardown cancels all
 workers and releases queued buffers.
 
 ## Linux integration
