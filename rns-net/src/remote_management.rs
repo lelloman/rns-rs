@@ -60,8 +60,6 @@ pub enum RemoteManagementError {
     SendFailed,
     /// The response could not be decoded as expected.
     MalformedResponse(String),
-    /// A failure described only by its message, displayed as is.
-    Unsupported(String),
 }
 
 impl fmt::Display for RemoteManagementError {
@@ -93,7 +91,6 @@ impl fmt::Display for RemoteManagementError {
             Self::LinkClosed(_) => write!(f, "remote link closed before request completed"),
             Self::SendFailed => write!(f, "could not send remote management request"),
             Self::MalformedResponse(e) => write!(f, "malformed remote response: {e}"),
-            Self::Unsupported(e) => write!(f, "{e}"),
         }
     }
 }
