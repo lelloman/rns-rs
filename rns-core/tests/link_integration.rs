@@ -305,7 +305,8 @@ fn test_full_handshake_two_engines() {
         Some(500),
         100.0,
         &mut rng_init,
-    );
+    )
+    .unwrap();
     assert_eq!(initiator.state(), LinkState::Pending);
 
     // Build fake hashable part
@@ -378,7 +379,8 @@ fn test_channel_messaging_over_link() {
         Some(500),
         100.0,
         &mut rng_init,
-    );
+    )
+    .unwrap();
     let mut hashable = Vec::new();
     hashable.push(0x02);
     hashable.push(0x00);
@@ -478,7 +480,7 @@ fn test_establishment_timeout_integration() {
     let mut rng = FixedRng::new(&[0x42; 128]);
     let dest_hash = [0xDD; 16];
     let (mut engine, _) =
-        LinkEngine::new_initiator(&dest_hash, 1, LinkMode::Aes256Cbc, None, 0.0, &mut rng);
+        LinkEngine::new_initiator(&dest_hash, 1, LinkMode::Aes256Cbc, None, 0.0, &mut rng).unwrap();
 
     // Timeout = 6.0 + 6.0 * 1 = 12.0s → expires at 12.0
     // Should not timeout before 12.0s

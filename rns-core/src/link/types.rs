@@ -31,6 +31,9 @@ pub enum TeardownReason {
 }
 
 /// Link encryption mode.
+///
+/// Both CBC modes are wire values, but as upstream's `Link.ENABLED_MODES`
+/// only AES-256-CBC is enabled: see [`LinkMode::is_enabled`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkMode {
     /// AES-128 in CBC mode (mode byte `0x00`), as upstream's `Link.MODE_AES128_CBC`.
@@ -40,6 +43,24 @@ pub enum LinkMode {
 }
 
 impl LinkMode {
+    /// The modes links may use, upstream's `Link.ENABLED_MODES`.
+    pub const ENABLED: [LinkMode; 1] = [LinkMode::Aes256Cbc];
+
+    /// Whether links may use this mode. Upstream refuses any other mode
+    /// when an initiator creates a link, and drops a link request that
+    /// signals one without sending a proof.
+    pub fn is_enabled(self) -> bool {
+        Self::ENABLED.contains(&self)
+    }
+
+    /// The mode's name in upstream's `Link.MODE_DESCRIPTIONS`.
+    pub fn description(self) -> &'static str {
+        match self {
+            LinkMode::Aes128Cbc => "AES_128_CBC",
+            LinkMode::Aes256Cbc => "AES_256_CBC",
+        }
+    }
+
     /// Mode value as carried in link request and proof signalling.
     pub fn mode_byte(self) -> u8 {
         match self {
@@ -125,6 +146,9 @@ pub enum LinkError {
     InvalidSignature,
     /// Link mode is unknown or differs from the requested one.
     UnsupportedMode,
+    /// The link mode is defined but not enabled; only
+    /// [`LinkMode::ENABLED`] modes may be used.
+    ModeNotEnabled(LinkMode),
     /// Key derivation, signing, encryption or decryption failed.
     CryptoError,
     /// No session key has been derived yet.
@@ -138,6 +162,10 @@ impl fmt::Display for LinkError {
             LinkError::InvalidData => write!(f, "Invalid data"),
             LinkError::InvalidSignature => write!(f, "Invalid signature"),
             LinkError::UnsupportedMode => write!(f, "Unsupported link mode"),
+            // Upstream's text, which it logs when it drops such a request.
+            LinkError::ModeNotEnabled(mode) => {
+                write!(f, "Requested link mode {} not enabled", mode.description())
+            }
             LinkError::CryptoError => write!(f, "Cryptographic error"),
             LinkError::NoSessionKey => write!(f, "No session key established"),
         }
@@ -157,6 +185,16 @@ mod tests {
         assert_eq!(
             LinkMode::from_byte(LinkMode::Aes256Cbc.mode_byte()).unwrap(),
             LinkMode::Aes256Cbc
+        );
+    }
+
+    #[test]
+    fn only_aes_256_cbc_is_enabled() {
+        assert!(LinkMode::Aes256Cbc.is_enabled());
+        assert!(!LinkMode::Aes128Cbc.is_enabled());
+        assert_eq!(
+            LinkError::ModeNotEnabled(LinkMode::Aes128Cbc).to_string(),
+            "Requested link mode AES_128_CBC not enabled"
         );
     }
 

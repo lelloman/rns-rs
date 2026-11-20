@@ -38,7 +38,7 @@ impl LinkManager {
         // rns-net API takes a mode: every outbound link is AES-256-CBC.
         let mode = LinkMode::Aes256Cbc;
         let signalled_mtu = self.link_mtu_discovery.then_some(mtu);
-        let (mut engine, request_data) = match keys {
+        let created = match keys {
             Some((prv, sig_prv)) => LinkEngine::new_initiator_with_keys(
                 dest_hash,
                 hops,
@@ -52,6 +52,7 @@ impl LinkManager {
                 LinkEngine::new_initiator(dest_hash, hops, mode, signalled_mtu, time::now(), rng)
             }
         };
+        let (mut engine, request_data) = created.expect("AES-256-CBC is an enabled link mode");
 
         // Build the LINKREQUEST packet to compute link_id
         let flags = PacketFlags {
@@ -190,6 +191,12 @@ impl LinkManager {
             rng,
         ) {
             Ok(r) => r,
+            // A well-formed request for a mode that is not enabled: upstream's
+            // `validate_request` drops it without a proof and logs this.
+            Err(e @ rns_core::link::LinkError::ModeNotEnabled(_)) => {
+                log::debug!("Validating incoming link request failed: {}", e);
+                return Vec::new();
+            }
             Err(e) => {
                 log::debug!("LINKREQUEST rejected: {}", e);
                 return vec![LinkManagerAction::ProtocolViolation {

@@ -996,7 +996,8 @@ fn run_trace() -> String {
         Some(constants::MTU as u32),
         sim.now,
         &mut a_app_rng,
-    );
+    )
+    .unwrap();
     let flags = PacketFlags {
         header_type: constants::HEADER_1,
         context_flag: constants::FLAG_UNSET,
