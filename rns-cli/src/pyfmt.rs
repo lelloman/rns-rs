@@ -325,7 +325,7 @@ pub fn prettyhexrep(data: &[u8]) -> String {
 
 /// `RNS.hexrep(data, delimit=False)`.
 pub fn hexrep(data: &[u8]) -> String {
-    data.iter().map(|b| format!("{b:02x}")).collect()
+    rns_core::encoding::hex(data)
 }
 
 #[cfg(test)]

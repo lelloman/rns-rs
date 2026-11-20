@@ -18,6 +18,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use rns_core::encoding::{hex, hex_decode};
 use rns_core::msgpack::{self, Value};
 use rns_core::stamp::{stamp_valid, stamp_workblock, StampCost, StampValue};
 use rns_crypto::sha256::sha256;
@@ -48,7 +49,7 @@ impl DiscoveredInterfaceStorage {
     }
 
     fn store_unlocked(&self, iface: &DiscoveredInterface) -> io::Result<()> {
-        let filename = hex_encode(&iface.discovery_hash);
+        let filename = hex(&iface.discovery_hash);
         let filepath = self.base_path.join(filename);
 
         let data = self.serialize_interface(iface)?;
@@ -90,7 +91,7 @@ impl DiscoveredInterfaceStorage {
     }
 
     fn load_unlocked(&self, discovery_hash: &[u8; 32]) -> io::Result<Option<DiscoveredInterface>> {
-        let filename = hex_encode(discovery_hash);
+        let filename = hex(discovery_hash);
         let filepath = self.base_path.join(filename);
 
         if !filepath.exists() {
@@ -153,7 +154,7 @@ impl DiscoveredInterfaceStorage {
             return Some(iface);
         }
         let _ = fs::remove_file(path);
-        if self.base_path.join(hex_encode(&expected)).exists() {
+        if self.base_path.join(hex(&expected)).exists() {
             return None;
         }
         iface.discovery_hash = expected;
@@ -170,7 +171,7 @@ impl DiscoveredInterfaceStorage {
     }
 
     fn remove_unlocked(&self, discovery_hash: &[u8; 32]) -> io::Result<()> {
-        let filename = hex_encode(discovery_hash);
+        let filename = hex(discovery_hash);
         let filepath = self.base_path.join(filename);
 
         if filepath.exists() {
@@ -271,11 +272,8 @@ impl DiscoveredInterfaceStorage {
             (key("received"), Value::Float(iface.last_heard)),
             (key("stamp"), Value::Bin(iface.stamp.clone())),
             (key("value"), Value::Float(iface.stamp_value.as_f64())),
-            (
-                key("transport_id"),
-                Value::Str(hex_encode(&iface.transport_id)),
-            ),
-            (key("network_id"), Value::Str(hex_encode(&iface.network_id))),
+            (key("transport_id"), Value::Str(hex(&iface.transport_id))),
+            (key("network_id"), Value::Str(hex(&iface.network_id))),
             (
                 key("dst_cost"),
                 opt(iface.dst_cost, |c| Value::Float(c.as_f64())),
@@ -335,10 +333,7 @@ impl DiscoveredInterfaceStorage {
             Value::Bin(iface.discovery_hash.to_vec()),
         ));
         if let Some(address) = iface.operator_lxmf_address {
-            entries.push((
-                key("operator_lxmf_address"),
-                Value::Str(hex_encode(&address)),
-            ));
+            entries.push((key("operator_lxmf_address"), Value::Str(hex(&address))));
         }
         entries.push((key("discovered"), Value::Float(iface.discovered)));
         entries.push((key("last_heard"), Value::Float(iface.last_heard)));
@@ -1579,9 +1574,9 @@ mod tests {
     }
 
     #[test]
-    fn test_hex_encode() {
-        assert_eq!(hex_encode(&[0x00, 0xff, 0x12]), "00ff12");
-        assert_eq!(hex_encode(&[]), "");
+    fn test_hex() {
+        assert_eq!(hex(&[0x00, 0xff, 0x12]), "00ff12");
+        assert_eq!(hex(&[]), "");
     }
 
     #[test]
@@ -1795,8 +1790,8 @@ mod tests {
             .collect();
         files.sort();
         let mut expected = vec![
-            hex_encode(&compute_discovery_hash(&moved.transport_id, "Moved")),
-            hex_encode(&compute_discovery_hash(&stale_copy.transport_id, "Twice")),
+            hex(&compute_discovery_hash(&moved.transport_id, "Moved")),
+            hex(&compute_discovery_hash(&stale_copy.transport_id, "Twice")),
         ];
         expected.sort();
         assert_eq!(files, expected);
@@ -2026,7 +2021,7 @@ mod tests {
         received.discovered = 1234.0;
         received.last_heard = 5678.0;
         received.heard_count = 0;
-        let filepath = dir.join(hex_encode(&received.discovery_hash));
+        let filepath = dir.join(hex(&received.discovery_hash));
         fs::write(&filepath, b"not msgpack").unwrap();
 
         storage.store_received(&mut received).unwrap();

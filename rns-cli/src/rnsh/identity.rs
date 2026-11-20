@@ -146,15 +146,7 @@ pub(super) fn sanitize_service_name(value: &str) -> String {
 }
 
 pub(super) fn parse_hash_16(value: &str) -> Option<[u8; 16]> {
-    let s = value.trim();
-    if s.len() != 32 {
-        return None;
-    }
-    let mut out = [0u8; 16];
-    for i in 0..16 {
-        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
-    }
-    Some(out)
+    rns_core::encoding::hex_decode_array(value.trim())
 }
 
 pub(super) fn extract_sig_keys(identity: &Identity) -> Result<([u8; 32], [u8; 32]), RnshError> {

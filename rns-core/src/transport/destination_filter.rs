@@ -49,21 +49,10 @@ pub fn configured_destination_type(full_name: &str) -> Option<DestinationType> {
         return Some(destination_type(full_name));
     };
     let kept: String = inner.chars().take(hex_len).collect();
-    match decode_hex(&kept) {
+    match crate::encoding::hex_decode(&kept) {
         Some(bytes) => DestinationType::try_from(bytes.as_slice()).ok(),
         None => Some(destination_type(&kept)),
     }
-}
-
-/// `bytes.fromhex` for ASCII hex without separators.
-fn decode_hex(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
-        .collect()
 }
 
 /// The `Transport` destination type tables: `blocked_destination_types`,
@@ -185,7 +174,7 @@ mod tests {
     fn configured_destination_types_take_names_or_bracketed_hashes() {
         // Upstream e96c81c3.
         let lxmf = destination_type("lxmf.delivery");
-        let hex: String = lxmf.iter().map(|b| alloc::format!("{b:02x}")).collect();
+        let hex = crate::encoding::hex(&lxmf);
         assert_eq!(configured_destination_type("lxmf.delivery"), Some(lxmf));
         assert_eq!(
             configured_destination_type(&alloc::format!("<{hex}>")),

@@ -65,10 +65,7 @@ impl Driver {
                 if self.engine.is_blackholed(&remote, now) {
                     log::debug!(
                         "Tunnel synthesis from blackholed transport node {}, tearing down {:?}",
-                        remote
-                            .iter()
-                            .map(|b| format!("{b:02x}"))
-                            .collect::<String>(),
+                        rns_core::encoding::hex(&remote),
                         receiving_interface
                     );
                     self.teardown_interface(receiving_interface);

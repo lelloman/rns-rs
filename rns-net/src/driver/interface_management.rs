@@ -523,12 +523,5 @@ impl Driver {
 
 /// A 32-byte tunnel id written as 64 hexadecimal digits.
 fn parse_tunnel_id(name: &str) -> Option<[u8; 32]> {
-    if name.len() != 64 || !name.is_ascii() {
-        return None;
-    }
-    let mut tunnel_id = [0u8; 32];
-    for (byte, pair) in tunnel_id.iter_mut().zip(name.as_bytes().chunks(2)) {
-        *byte = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
-    }
-    Some(tunnel_id)
+    rns_core::encoding::hex_decode_array(name)
 }

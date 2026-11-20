@@ -546,15 +546,7 @@ pub(super) fn weave_stats_to_pickle(
     s: &SingleInterfaceStat,
     dict: &mut Vec<(PickleValue, PickleValue)>,
 ) {
-    let hexrep = |bytes: &[u8]| {
-        PickleValue::String(
-            bytes
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<Vec<_>>()
-                .join(":"),
-        )
-    };
+    let hexrep = |bytes: &[u8]| PickleValue::String(rns_core::encoding::hex_delimited(bytes, ':'));
     let key = |name: &str| PickleValue::String(name.into());
     match s.interface_type.as_str() {
         "WeaveInterface" => {

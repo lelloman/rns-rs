@@ -17,6 +17,7 @@ mod bundle;
 mod jni_api;
 mod session;
 
+use rns_core::encoding::hex;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{c_char, c_void, CStr};
 use std::fs;
@@ -164,10 +165,6 @@ pub(crate) fn import_identity(path: &std::path::Path, bytes: &[u8]) -> io::Resul
         let _ = fs::remove_file(&temporary);
     })?;
     Ok(hex(identity.hash()))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 pub(crate) fn validate_node_config_text(text: &str, full_tunnel: bool) -> io::Result<()> {

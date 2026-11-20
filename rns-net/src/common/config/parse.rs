@@ -290,17 +290,7 @@ pub(super) fn parse_hop_limiter(kvs: &HashMap<String, String>) -> Result<Option<
 /// not support.
 pub(super) fn parse_rpc_key(value: &str) -> Option<[u8; 32]> {
     let value = value.trim();
-    let bytes: Option<Vec<u8>> = value
-        .len()
-        .is_multiple_of(2)
-        .then(|| {
-            (0..value.len())
-                .step_by(2)
-                .map(|i| u8::from_str_radix(value.get(i..i + 2)?, 16).ok())
-                .collect()
-        })
-        .flatten();
-    match bytes {
+    match rns_core::encoding::hex_decode(value) {
         Some(bytes) if !bytes.is_empty() && bytes.len() <= 32 => {
             let mut key = [0u8; 32];
             key[..bytes.len()].copy_from_slice(&bytes);
@@ -321,12 +311,5 @@ pub(super) fn parse_rpc_key(value: &str) -> Option<[u8; 32]> {
 
 /// A 16-byte identity hash written as 32 hexadecimal characters.
 pub(super) fn parse_identity_hash_hex(hexhash: &str) -> Option<[u8; 16]> {
-    if hexhash.len() != 32 {
-        return None;
-    }
-    let mut hash = [0u8; 16];
-    for (i, byte) in hash.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(hexhash.get(i * 2..i * 2 + 2)?, 16).ok()?;
-    }
-    Some(hash)
+    rns_core::encoding::hex_decode_array(hexhash)
 }

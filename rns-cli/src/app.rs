@@ -47,14 +47,7 @@ pub use rns_net::storage::load_or_create_identity_file as load_or_create_identit
 /// Parses a 32-character hex string into a 16-byte destination or identity
 /// hash. `None` for any other length or a non-hex digit.
 pub fn parse_hash_16(value: &str) -> Option<[u8; 16]> {
-    if value.len() != 32 {
-        return None;
-    }
-    let mut result = [0u8; 16];
-    for (index, byte) in result.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
-    }
-    Some(result)
+    rns_core::encoding::hex_decode_array(value)
 }
 
 /// The Ed25519 signing halves of `identity`'s keys, as (private, public).

@@ -143,7 +143,7 @@ impl BuiltinDestination {
         };
         let mut aspects: Vec<String> = fixed.iter().map(|a| a.to_string()).collect();
         if self == BuiltinDestination::NetworkInstance {
-            aspects.push(identity_hash.iter().map(|b| format!("{b:02x}")).collect());
+            aspects.push(rns_core::encoding::hex(identity_hash));
         }
         aspects
     }

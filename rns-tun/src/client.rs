@@ -1,6 +1,6 @@
 //! The Linux client: connects to a gateway and runs the tunnel.
 
-use rns_core::display::hex;
+use rns_core::encoding::hex;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;

@@ -6,7 +6,7 @@
 //!
 //! Python reference: Transport.py:3087-3099 and Storage.py AnnounceCache.
 
-use rns_core::display::hex;
+use rns_core::encoding::{hex, hex_decode_array};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -218,7 +218,7 @@ impl SqliteAnnounceCache {
             let Some(packet_hash) = path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .and_then(hex_decode)
+                .and_then(hex_decode_array::<32>)
             else {
                 let _ = fs::remove_file(&path);
                 continue;
@@ -342,7 +342,7 @@ impl FileAnnounceCache {
                 Some(n) => n,
                 None => continue,
             };
-            match hex_decode(filename) {
+            match hex_decode_array::<32>(filename) {
                 Some(hash) if active_set.contains(&hash) => {}
                 _ => {
                     let _ = fs::remove_file(&path);
@@ -398,29 +398,6 @@ fn sql_error(error: rusqlite::Error) -> io::Error {
     io::Error::other(error.to_string())
 }
 
-/// Decode a 64-char hex string back to 32 bytes.
-fn hex_decode(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 {
-        return None;
-    }
-    let mut result = [0u8; 32];
-    for (i, chunk) in s.as_bytes().chunks(2).enumerate() {
-        let high = hex_nibble(chunk[0])?;
-        let low = hex_nibble(chunk[1])?;
-        result[i] = (high << 4) | low;
-    }
-    Some(result)
-}
-
-fn hex_nibble(c: u8) -> Option<u8> {
-    match c {
-        b'0'..=b'9' => Some(c - b'0'),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        b'A'..=b'F' => Some(c - b'A' + 10),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,13 +420,13 @@ mod tests {
         let encoded = hex(&hash);
         assert_eq!(encoded.len(), 64);
         assert!(encoded.chars().all(|c| c == 'a' || c == 'b'));
-        assert_eq!(hex_decode(&encoded), Some(hash));
+        assert_eq!(hex_decode_array(&encoded), Some(hash));
     }
 
     #[test]
     fn test_hex_decode_invalid() {
-        assert!(hex_decode("too_short").is_none());
-        assert!(hex_decode(&"zz".repeat(32)).is_none());
+        assert!(hex_decode_array::<32>("too_short").is_none());
+        assert!(hex_decode_array::<32>(&"zz".repeat(32)).is_none());
     }
 
     fn sqlite_cache_dir() -> (PathBuf, PathBuf) {

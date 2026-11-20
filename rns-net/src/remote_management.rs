@@ -4,7 +4,7 @@
 //! remote management destinations from a remote transport identity hash, and
 //! query the remote node over a Reticulum link.
 
-use rns_core::display::hex;
+use rns_core::encoding::hex;
 use std::fmt;
 use std::path::Path;
 use std::sync::mpsc;
@@ -588,16 +588,8 @@ impl RemoteManagementClient {
 /// Parse a 32-character hex transport identity hash, ignoring surrounding
 /// whitespace.
 pub fn parse_transport_identity_hash(s: &str) -> Result<[u8; 16], RemoteManagementError> {
-    let trimmed = s.trim();
-    if trimmed.len() != 32 {
-        return Err(RemoteManagementError::InvalidHash(s.into()));
-    }
-    let mut out = [0u8; 16];
-    for i in 0..16 {
-        out[i] = u8::from_str_radix(&trimmed[i * 2..i * 2 + 2], 16)
-            .map_err(|_| RemoteManagementError::InvalidHash(s.into()))?;
-    }
-    Ok(out)
+    rns_core::encoding::hex_decode_array(s.trim())
+        .ok_or_else(|| RemoteManagementError::InvalidHash(s.into()))
 }
 
 /// Convert a msgpack value to the equivalent pickle value; unsigned

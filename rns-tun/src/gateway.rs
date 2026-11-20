@@ -1,7 +1,7 @@
 //! The Linux gateway: serves authorized clients and forwards their packets
 //! through a TUN interface.
 
-use rns_core::display::hex;
+use rns_core::encoding::hex;
 use std::collections::HashMap;
 use std::fs;
 use std::io;

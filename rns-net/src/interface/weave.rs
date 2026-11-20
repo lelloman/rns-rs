@@ -1,6 +1,6 @@
 //! Weave Device Control Link (WDCL) framing and interface state.
 
-use rns_core::display::hex;
+use rns_core::encoding::hex;
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;

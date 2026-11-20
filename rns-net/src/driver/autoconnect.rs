@@ -284,7 +284,7 @@ impl Driver {
             target_host: reachable_on.clone(),
             target_port: port,
             interface_id: id,
-            transport_identity: Some(crate::discovery::hex_encode(&iface.transport_id)),
+            transport_identity: Some(rns_core::encoding::hex(&iface.transport_id)),
             // Upstream adds it with `configured_bitrate=5E6`, which also
             // sets its hardware MTU (8192).
             bitrate: AUTOCONNECT_BITRATE,
@@ -336,7 +336,7 @@ impl Driver {
                         id,
                         name,
                         endpoint_hash: endpoint_hash(&reachable_on, iface.port),
-                        source: crate::discovery::hex_encode(&iface.network_id),
+                        source: rns_core::encoding::hex(&iface.network_id),
                         target: (reachable_on, port),
                         control: Some(control),
                         down_since: None,
@@ -469,7 +469,7 @@ impl Driver {
         }
         #[cfg(feature = "iface-backbone")]
         if let Some(network_id) = self.backbone_peer_pool_discovery_network(id) {
-            return Some(crate::discovery::hex_encode(&network_id));
+            return Some(rns_core::encoding::hex(&network_id));
         }
         None
     }

@@ -162,11 +162,7 @@ pub(crate) fn i2p_peer_name(interface_name: &str, peer: &str, outbound: bool) ->
 /// colon-delimited.
 #[cfg(all(feature = "iface-weave", target_os = "linux"))]
 pub(crate) fn weave_peer(endpoint: &[u8]) -> String {
-    let hexrep = endpoint
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<Vec<_>>()
-        .join(":");
+    let hexrep = rns_core::encoding::hex_delimited(endpoint, ':');
     format!("WeaveInterfacePeer[{hexrep}]")
 }
 

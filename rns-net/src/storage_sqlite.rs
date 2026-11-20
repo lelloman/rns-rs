@@ -9,6 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
+use rns_core::encoding::{hex, hex_decode_array};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 
 use crate::storage::{KnownDestination, RatchetCleanupStats, RatchetEntry, RatchetStore};
@@ -231,7 +232,7 @@ impl KnownDestinationsStore {
             if !previous.contains(destination_hash) {
                 log::error!(
                     "invalid known destination data for {} at persist: {}",
-                    hex_16(destination_hash),
+                    hex(destination_hash),
                     error
                 );
             }
@@ -272,7 +273,7 @@ impl KnownDestinationsStore {
                     drop(row);
                     log::debug!(
                         "invalid known destination data for {} at flush: {}",
-                        hex_16(hash),
+                        hex(hash),
                         error
                     );
                 }
@@ -327,7 +328,7 @@ impl KnownDestinationsStore {
                 let _ = fs::remove_file(&path);
                 continue;
             };
-            let Some(destination_hash) = parse_hex_16(filename) else {
+            let Some(destination_hash) = hex_decode_array::<16>(filename) else {
                 let _ = fs::remove_file(&path);
                 continue;
             };
@@ -681,10 +682,6 @@ fn is_rejected_row(error: &rusqlite::Error) -> bool {
     )
 }
 
-fn hex_16(bytes: &[u8; 16]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 fn parse_legacy_ratchet(data: &[u8]) -> Option<RatchetEntry> {
     use rns_core::msgpack;
 
@@ -723,28 +720,6 @@ fn fixed_64(bytes: &[u8]) -> io::Result<[u8; 64]> {
             format!("expected 64 bytes, got {}", bytes.len()),
         )
     })
-}
-
-fn parse_hex_16(text: &str) -> Option<[u8; 16]> {
-    if text.len() != 32 {
-        return None;
-    }
-    let mut bytes = [0u8; 16];
-    for (index, chunk) in text.as_bytes().chunks(2).enumerate() {
-        let high = hex_nibble(chunk[0])?;
-        let low = hex_nibble(chunk[1])?;
-        bytes[index] = (high << 4) | low;
-    }
-    Some(bytes)
-}
-
-fn hex_nibble(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
 }
 
 fn sql_error(error: rusqlite::Error) -> io::Error {

@@ -2,6 +2,7 @@
 //! messages upstream's utilities print to stdout through them.
 
 use crate::sys::home_of;
+use rns_core::encoding::{BASE64_EITHER, BASE64_URL_SAFE};
 use std::sync::atomic::{AtomicI32, Ordering};
 
 /// Level that silences all logging.
@@ -546,13 +547,8 @@ pub fn urlsafe_b64decode(s: &str) -> Option<Vec<u8>> {
             }
             continue;
         }
-        let v = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'-' | b'+' => 62,
-            b'_' | b'/' => 63,
-            _ => continue,
+        let Some(v) = BASE64_EITHER.sextet(c) else {
+            continue;
         };
         pads = 0;
         acc = (acc << 6) | u32::from(v);
@@ -569,21 +565,7 @@ pub fn urlsafe_b64decode(s: &str) -> Option<Vec<u8>> {
 
 /// `base64.urlsafe_b64encode(data)`.
 pub fn urlsafe_b64encode(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::new();
-    for chunk in data.chunks(3) {
-        let mut buf = [0u8; 3];
-        buf[..chunk.len()].copy_from_slice(chunk);
-        let n = (u32::from(buf[0]) << 16) | (u32::from(buf[1]) << 8) | u32::from(buf[2]);
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
+    BASE64_URL_SAFE.encode(data)
 }
 
 /// `base64.b32encode(data)`.

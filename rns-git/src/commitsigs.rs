@@ -2,6 +2,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::PathBuf;
 
+use rns_core::encoding::{BASE64_EITHER, BASE64_STANDARD};
 use rns_core::msgpack::{self, Value};
 use rns_crypto::identity::Identity;
 use rns_crypto::sha256::sha256;
@@ -499,7 +500,7 @@ fn read_ssh_string(data: &[u8], offset: &mut usize) -> Result<Vec<u8>> {
 }
 
 fn armor_ssh_signature(blob: &[u8]) -> String {
-    let encoded = base64_encode(blob);
+    let encoded = BASE64_STANDARD.encode(blob);
     let mut out = String::from("-----BEGIN SSH SIGNATURE-----\n");
     for chunk in encoded.as_bytes().chunks(70) {
         out.push_str(&String::from_utf8_lossy(chunk));
@@ -530,86 +531,11 @@ fn unarmor_ssh_signature(armored: &str) -> Result<Vec<u8>> {
     base64_decode(&encoded).ok_or_else(|| Error::msg("invalid base64 SSH signature"))
 }
 
-fn base64_encode(data: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::new();
-    let mut i = 0;
-    while i < data.len() {
-        let b0 = data[i] as u32;
-        let b1 = if i + 1 < data.len() {
-            data[i + 1] as u32
-        } else {
-            0
-        };
-        let b2 = if i + 2 < data.len() {
-            data[i + 2] as u32
-        } else {
-            0
-        };
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-        result.push(CHARS[((triple >> 18) & 0x3f) as usize] as char);
-        result.push(CHARS[((triple >> 12) & 0x3f) as usize] as char);
-        result.push(if i + 1 < data.len() {
-            CHARS[((triple >> 6) & 0x3f) as usize] as char
-        } else {
-            '='
-        });
-        result.push(if i + 2 < data.len() {
-            CHARS[(triple & 0x3f) as usize] as char
-        } else {
-            '='
-        });
-        i += 3;
-    }
-    result
-}
-
+/// Base64 as an armored SSH signature carries it, line breaks and other
+/// whitespace removed; padding may be left out.
 fn base64_decode(s: &str) -> Option<Vec<u8>> {
-    let mut chars: Vec<char> = s.trim().chars().filter(|c| !c.is_whitespace()).collect();
-    if chars.len() % 4 == 1 {
-        return None;
-    }
-    while !chars.len().is_multiple_of(4) {
-        chars.push('=');
-    }
-    let mut out = Vec::with_capacity(chars.len() / 4 * 3);
-    for chunk in chars.chunks(4) {
-        let mut pad = 0usize;
-        let mut sextets = [0u8; 4];
-        for (i, c) in chunk.iter().copied().enumerate() {
-            if c == '=' {
-                pad += 1;
-                sextets[i] = 0;
-                continue;
-            }
-            if pad > 0 {
-                return None;
-            }
-            sextets[i] = match c {
-                'A'..='Z' => c as u8 - b'A',
-                'a'..='z' => c as u8 - b'a' + 26,
-                '0'..='9' => c as u8 - b'0' + 52,
-                '+' | '-' => 62,
-                '/' | '_' => 63,
-                _ => return None,
-            };
-        }
-        if pad > 2 {
-            return None;
-        }
-        let triple = ((sextets[0] as u32) << 18)
-            | ((sextets[1] as u32) << 12)
-            | ((sextets[2] as u32) << 6)
-            | (sextets[3] as u32);
-        out.push(((triple >> 16) & 0xff) as u8);
-        if pad < 2 {
-            out.push(((triple >> 8) & 0xff) as u8);
-        }
-        if pad < 1 {
-            out.push((triple & 0xff) as u8);
-        }
-    }
-    Some(out)
+    let compact: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    BASE64_EITHER.decode(compact.as_bytes()).ok()
 }
 
 pub(crate) fn split_commit_signature(commit: &[u8]) -> (Option<String>, Vec<u8>) {

@@ -52,11 +52,7 @@ pub(super) fn py_round(value: f64, digits: usize) -> f64 {
 
 /// `RNS.hexrep`: lowercase hex bytes, colon-delimited.
 pub(super) fn hexrep(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join(":")
+    rns_core::encoding::hex_delimited(bytes, ':')
 }
 
 /// upstream `graceful_exit`.
@@ -118,7 +114,7 @@ pub(super) fn py_int(text: &str) -> Option<i64> {
 
 /// Lowercase hex without delimiters.
 pub(super) fn hexstr(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    rns_core::encoding::hex(bytes)
 }
 
 /// A two-digit hex code from `--product` or `--model`.

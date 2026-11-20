@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use rns_core::encoding::{hex, hex_decode_array};
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 
@@ -175,7 +176,7 @@ impl FsRatchetStore {
     }
 
     fn path_for(&self, dest_hash: &[u8; 16]) -> PathBuf {
-        self.dir.join(hex_lower(dest_hash))
+        self.dir.join(hex(dest_hash))
     }
 
     fn read_entry(path: &Path) -> io::Result<RatchetEntry> {
@@ -306,7 +307,7 @@ impl RatchetStore for FsRatchetStore {
                 continue;
             };
 
-            let Some(dest_hash) = parse_dest_hash_hex(filename) else {
+            let Some(dest_hash) = hex_decode_array::<16>(filename) else {
                 let _ = fs::remove_file(&path);
                 stats.removed += 1;
                 continue;
@@ -378,7 +379,7 @@ impl SharedClientRatchetStore {
                 ),
             }
         }
-        let file = storage.join("ratchets").join(hex_lower(dest_hash));
+        let file = storage.join("ratchets").join(hex(dest_hash));
         if !file.is_file() {
             return None;
         }
@@ -481,26 +482,6 @@ pub fn ensure_storage_dirs(config_dir: &Path) -> io::Result<StoragePaths> {
         ratchets,
         discovered_interfaces,
     })
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        use std::fmt::Write;
-        let _ = write!(&mut out, "{:02x}", byte);
-    }
-    out
-}
-
-fn parse_dest_hash_hex(s: &str) -> Option<[u8; 16]> {
-    if s.len() != 32 {
-        return None;
-    }
-    let mut out = [0u8; 16];
-    for i in 0..16 {
-        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
-    }
-    Some(out)
 }
 
 /// A persisted link request cost: fractional since upstream 796ef2d4, with
@@ -1613,7 +1594,7 @@ mod tests {
             client.current(&heard, now, 60.0).unwrap(),
             Some(heard_entry)
         );
-        assert!(!storage.join("ratchets").join(hex_lower(&heard)).exists());
+        assert!(!storage.join("ratchets").join(hex(&heard)).exists());
         let db = crate::storage_sqlite::KnownDestinationsStore::open_read_only(
             &crate::storage_sqlite::default_path(&storage),
             16,
@@ -1641,7 +1622,7 @@ mod tests {
         let loaded = store.current(&dest, 1700000001.0, 60.0).unwrap();
 
         assert_eq!(loaded, Some(entry));
-        assert!(dir.join("ratchets").join(hex_lower(&dest)).exists());
+        assert!(dir.join("ratchets").join(hex(&dest)).exists());
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1683,7 +1664,7 @@ mod tests {
                 },
             )
             .unwrap();
-        fs::write(ratchets.join(hex_lower(&[0x04; 16])), b"not msgpack").unwrap();
+        fs::write(ratchets.join(hex(&[0x04; 16])), b"not msgpack").unwrap();
         fs::write(ratchets.join("0102.out"), b"temp").unwrap();
 
         let known = HashSet::from([known_live, known_expired, [0x04; 16]]);
@@ -1692,10 +1673,10 @@ mod tests {
         assert_eq!(stats.processed, 5);
         assert_eq!(stats.not_known, 1);
         assert_eq!(stats.removed, 4);
-        assert!(ratchets.join(hex_lower(&known_live)).exists());
-        assert!(!ratchets.join(hex_lower(&known_expired)).exists());
-        assert!(!ratchets.join(hex_lower(&unknown)).exists());
-        assert!(!ratchets.join(hex_lower(&[0x04; 16])).exists());
+        assert!(ratchets.join(hex(&known_live)).exists());
+        assert!(!ratchets.join(hex(&known_expired)).exists());
+        assert!(!ratchets.join(hex(&unknown)).exists());
+        assert!(!ratchets.join(hex(&[0x04; 16])).exists());
         assert!(!ratchets.join("0102.out").exists());
 
         let _ = fs::remove_dir_all(&dir);

@@ -1,4 +1,4 @@
-use rns_core::display::hex;
+use rns_core::encoding::hex;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -185,11 +185,8 @@ fn parse_hash(value: &str) -> Result<[u8; 16], Box<dyn std::error::Error>> {
     if value.len() != 32 {
         return Err("destination hash must contain 32 hexadecimal characters".into());
     }
-    let mut result = [0; 16];
-    for (index, byte) in result.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)?;
-    }
-    Ok(result)
+    rns_core::encoding::hex_decode_array(value)
+        .ok_or_else(|| "invalid digit found in string".into())
 }
 
 fn print_help() {

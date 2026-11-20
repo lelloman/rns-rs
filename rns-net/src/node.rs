@@ -313,4 +313,4 @@ impl Drop for RnsNode {
     }
 }
 
-pub(crate) use rns_core::display::hex;
+pub(crate) use rns_core::encoding::hex;

@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use rns_core::constants;
+use rns_core::encoding::hex;
 use rns_core::msgpack::{self, Value};
 use rns_core::stamp::{stamp_valid, stamp_value, stamp_workblock, StampCost, StampValue};
 use rns_crypto::sha256::sha256;
@@ -730,7 +731,7 @@ pub fn parse_interface_announce_with_identity(
 /// Compute the discovery hash for storage
 pub fn compute_discovery_hash(transport_id: &[u8; 16], name: &str) -> [u8; 32] {
     // Upstream: full_hash((hexrep(transport_id) + name).encode("utf-8")).
-    sha256(format!("{}{name}", hex_encode(transport_id)).as_bytes())
+    sha256(format!("{}{name}", hex(transport_id)).as_bytes())
 }
 
 /// Mark a discovered transport interface config entry for gateway mode.
@@ -817,7 +818,7 @@ fn generate_config_entry(params: ConfigEntryParams<'_>) -> Option<String> {
         return None;
     }
 
-    let transport_id_hex = hex_encode(transport_id);
+    let transport_id_hex = hex(transport_id);
     let netname_str = ifac_netname
         .map(|n| format!("\n  network_name = {}", n))
         .unwrap_or_default();
@@ -961,24 +962,6 @@ pub fn sanitize_discovered_name(name: &str) -> Option<String> {
 
     let sanitized = sanitized[start..end].to_string();
     (!sanitized.is_empty()).then_some(sanitized)
-}
-
-/// Encode bytes as hex string (no delimiters)
-/// Plain lower- or upper-case hex, as `bytes.fromhex` reads it without
-/// whitespace.
-pub fn hex_decode(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
-        .collect()
-}
-
-/// `bytes` as lowercase hex.
-pub fn hex_encode(bytes: &[u8]) -> String {
-    rns_core::display::hex(bytes)
 }
 
 /// Check if a string is a valid IP address

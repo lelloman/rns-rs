@@ -338,16 +338,8 @@ pub(super) fn parse_management_allowed(entries: &[String]) -> Vec<[u8; 16]> {
     let mut mgmt_allowed = Vec::new();
     for hex_hash in entries {
         if hex_hash.len() == 32 {
-            if let Ok(bytes) = (0..hex_hash.len())
-                .step_by(2)
-                .map(|i| u8::from_str_radix(&hex_hash[i..i + 2], 16))
-                .collect::<Result<Vec<u8>, _>>()
-            {
-                if bytes.len() == 16 {
-                    let mut h = [0u8; 16];
-                    h.copy_from_slice(&bytes);
-                    mgmt_allowed.push(h);
-                }
+            if let Some(hash) = rns_core::encoding::hex_decode_array(hex_hash) {
+                mgmt_allowed.push(hash);
             } else {
                 log::warn!("Invalid hex in remote_management_allowed: {}", hex_hash);
             }

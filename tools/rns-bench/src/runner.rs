@@ -20,10 +20,7 @@ fn cancelled() -> bool {
 }
 
 fn digest(bytes: &[u8]) -> String {
-    rns_crypto::sha256::sha256(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    rns_core::encoding::hex(&rns_crypto::sha256::sha256(bytes))
 }
 fn output(root: &Path, cmd: &str, args: &[&str]) -> Result<Vec<u8>> {
     let result = std::process::Command::new(cmd)

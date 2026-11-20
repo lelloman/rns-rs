@@ -28,10 +28,7 @@ impl DestinationStampStore {
 
     fn path_for(&self, destination_hash: &[u8; 16]) -> PathBuf {
         let mut name = String::with_capacity(32 + 6);
-        for byte in destination_hash {
-            use std::fmt::Write;
-            let _ = write!(name, "{:02x}", byte);
-        }
+        rns_core::encoding::push_hex(&mut name, destination_hash);
         name.push_str(".dstamp");
         self.dir.join(name)
     }
