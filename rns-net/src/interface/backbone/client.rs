@@ -21,7 +21,10 @@ pub struct BackboneClientConfig {
     pub max_reconnect_tries: Option<u32>,
     /// Startup TCP connect timeout; default 5 seconds.
     pub connect_timeout: Duration,
-    /// The `transport_identity` config value, kept as given; nothing reads it.
+    /// The `transport_identity` config value (hex), as upstream writes it in
+    /// the config entries of discovered interfaces; upstream's interfaces
+    /// ignore it. The Backbone peer pool matches a discovered peer to this
+    /// candidate by it, so a peer is not connected twice.
     pub transport_identity: Option<String>,
     /// The client's bitrate, which sets its hardware MTU as upstream's
     /// `optimise_mtu` does: [`CLIENT_BITRATE_GUESS`] unless it was
