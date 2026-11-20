@@ -33,7 +33,7 @@ pub(super) fn start_interfaces(
         .as_ref()
         .map(|management| management.initial_ids.clone())
         .unwrap_or_default();
-    driver.interface_management = interface_management;
+    driver.registry.management = interface_management;
 
     let mut starter = InterfaceStarter {
         driver,
@@ -254,7 +254,7 @@ impl InterfaceStarter<'_> {
         control: Option<crate::interface::ListenerControl>,
         static_ids: Vec<rns_core::transport::types::InterfaceId>,
     ) {
-        self.driver.managed_interfaces.insert(
+        self.driver.registry.managed.insert(
             name.to_string(),
             crate::driver::ManagedInterface {
                 parent_id,
@@ -300,7 +300,8 @@ impl InterfaceStarter<'_> {
                     self.insert_managed(name, type_name, parent_id, managed_control, vec![id]);
                 } else {
                     self.driver
-                        .unmanaged_static_interfaces
+                        .registry
+                        .unmanaged_static
                         .insert(id, managed_control);
                 }
                 register_started_interface(StartedInterface {

@@ -417,7 +417,8 @@ impl RnsNode {
             local_config.port,
         );
         driver
-            .interface_display_names
+            .registry
+            .display_names
             .insert(id, crate::interface::display::local_client(&endpoint));
         let info = rns_core::transport::types::InterfaceInfo {
             stamp_costs: Default::default(),

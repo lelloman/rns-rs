@@ -39,7 +39,7 @@ impl Driver {
                 new_writer.map(|writer| self.wrap_interface_writer(id, &interface_name, writer));
             // A dynamic interface kept while it reconnected counts with
             // its parent again.
-            if let Some(parent_id) = self.dynamic_interface_parents.get(&id) {
+            if let Some(parent_id) = self.registry.dynamic_parents.get(&id) {
                 self.event_tx.register_dynamic_parent(id, *parent_id);
             }
             if let Some(entry) = self.interfaces.get_mut(&id) {
@@ -166,7 +166,7 @@ impl Driver {
     ) {
         self.housekeeping.state_snapshot_schedule.mark_dirty();
         let parent_id = registration.parent_id;
-        if self.retired_interface_parents.contains(&parent_id) {
+        if self.registry.retired_parents.contains(&parent_id) {
             return;
         }
         let parent_ifac = self.interfaces.get(&parent_id).and_then(|parent| {
@@ -200,12 +200,12 @@ impl Driver {
             // Kept, offline, when it goes down.
             entry.dynamic = !reconnecting;
             if let Some(display_name) = display_name {
-                self.interface_display_names.insert(id, display_name);
+                self.registry.display_names.insert(id, display_name);
             }
             if let Some(short_name) = short_name {
-                self.interface_short_names.insert(id, short_name);
+                self.registry.short_names.insert(id, short_name);
             }
-            self.dynamic_interface_parents.insert(id, parent_id);
+            self.registry.dynamic_parents.insert(id, parent_id);
             self.event_tx.register_dynamic_parent(id, parent_id);
             entry.interface_type = interface_type;
             entry.ifac = inherited_ifac;
@@ -297,9 +297,9 @@ impl Driver {
                     .remove(&interface_name);
                 self.engine.deregister_interface(id);
                 self.interfaces.remove(&id);
-                self.dynamic_interface_parents.remove(&id);
-                self.interface_display_names.remove(&id);
-                self.interface_short_names.remove(&id);
+                self.registry.dynamic_parents.remove(&id);
+                self.registry.display_names.remove(&id);
+                self.registry.short_names.remove(&id);
             } else {
                 log::info!("[{}] interface offline", id.0);
                 if let Some(entry) = self.interfaces.get_mut(&id) {

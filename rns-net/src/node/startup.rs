@@ -241,7 +241,7 @@ impl RnsNode {
 
         // Shared counter for dynamic interface IDs
         let next_dynamic_id = Arc::new(AtomicU64::new(10000));
-        driver.next_dynamic_interface_id = Arc::clone(&next_dynamic_id);
+        driver.registry.next_dynamic_id = Arc::clone(&next_dynamic_id);
         let interfaces = std::mem::take(&mut config.interfaces);
         let registry = config.registry.take();
         let mut started = start_interfaces(

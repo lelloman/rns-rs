@@ -8,7 +8,7 @@ impl Driver {
     /// answering (see [`crate::interface::i2p::tunnel`]).
     #[cfg(feature = "iface-i2p")]
     pub(crate) fn watch_i2p_tunnels(&mut self) {
-        for listener in &self.listener_stats {
+        for listener in &self.registry.listener_stats {
             let ListenerClients::I2pPeers(i2p) = &listener.clients else {
                 continue;
             };
@@ -193,11 +193,13 @@ impl Driver {
     }
 
     pub(in crate::driver) fn sample_interface_traffic(&mut self, now: f64) {
-        self.traffic_samples
+        self.registry
+            .traffic_samples
             .retain(|id, _| self.interfaces.contains_key(id));
         for (id, entry) in &mut self.interfaces {
-            let Some(previous) = self.traffic_samples.get(id).copied() else {
-                self.traffic_samples
+            let Some(previous) = self.registry.traffic_samples.get(id).copied() else {
+                self.registry
+                    .traffic_samples
                     .insert(*id, TrafficSample::from_stats(now, &entry.stats));
                 entry.stats.traffic_rates = Default::default();
                 continue;
@@ -221,7 +223,8 @@ impl Driver {
                 frxs: bps(entry.stats.frxb, previous.frxb),
                 ftxs: bps(entry.stats.ftxb, previous.ftxb),
             };
-            self.traffic_samples
+            self.registry
+                .traffic_samples
                 .insert(*id, TrafficSample::from_stats(now, &entry.stats));
         }
     }

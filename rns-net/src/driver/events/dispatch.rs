@@ -47,10 +47,10 @@ impl Driver {
                 short_name,
             } => {
                 if let Some(display_name) = display_name {
-                    self.interface_display_names.insert(id, display_name);
+                    self.registry.display_names.insert(id, display_name);
                 }
                 if let Some(short_name) = short_name {
-                    self.interface_short_names.insert(id, short_name);
+                    self.registry.short_names.insert(id, short_name);
                 }
             }
             Event::InterfaceTelemetry {
