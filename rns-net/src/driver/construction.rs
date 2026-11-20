@@ -121,8 +121,7 @@ impl Driver {
             rpc_service: None,
             probe_server: None,
             resource_preparation: None,
-            #[cfg(feature = "hooks")]
-            hooks: Hooks::new(),
+            hooks: HookHost::new(),
         }
     }
 }

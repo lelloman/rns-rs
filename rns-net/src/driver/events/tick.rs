@@ -68,29 +68,8 @@ impl Driver {
         #[cfg(feature = "iface-i2p")]
         self.watch_i2p_tunnels();
         self.prioritize_interfaces();
-        #[cfg(feature = "hooks")]
-        {
-            let ctx = HookContext::Tick;
-            let now = time::now();
-            let engine_ref = EngineRef {
-                engine: &self.engine,
-                interfaces: &self.interfaces,
-                link_manager: &self.link_manager,
-                now,
-            };
-            let provider_events_enabled = self.provider_events_enabled();
-            // Tick carries no packet: `Modify` acts as `Continue`.
-            if let Some(ref e) = run_hook_inner(
-                &mut self.hooks.slots[HookPoint::Tick as usize].programs,
-                &self.hooks.manager,
-                &engine_ref,
-                &ctx,
-                now,
-                provider_events_enabled,
-            ) {
-                self.forward_hook_side_effects("Tick", e);
-            }
-        }
+        // Tick carries no packet: `Modify` acts as `Continue`.
+        self.run_hooks_with_effects(HookPoint::Tick, &HookEvent::Tick, InjectedActions::Dispatch);
 
         let now = time::now();
         self.sample_interface_traffic(now);

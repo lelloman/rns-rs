@@ -17,7 +17,6 @@ impl Driver {
     /// ratchet lease that covers them, or `None` when the packet must not be
     /// sent. A replacement takes its own ratchet lease and becomes the packet
     /// a pending confirmed link send waits for.
-    #[cfg(feature = "hooks")]
     pub(super) fn apply_outbound_hook_outcome(
         &mut self,
         outcome: PacketHookOutcome,
@@ -55,11 +54,9 @@ impl Driver {
         &mut self,
         interface: InterfaceId,
         raw: rns_core::transport::types::PacketBytes,
-        _hook_injected: &mut Vec<TransportAction>,
+        hook_injected: &mut Vec<TransportAction>,
         run_hooks: bool,
     ) {
-        #[cfg(not(feature = "hooks"))]
-        let _ = run_hooks;
         let ratchet_lease = match crate::local_ratchet::AnnouncementLease::acquire(
             self.event_tx.local_ratchets(),
             &raw,
@@ -71,43 +68,13 @@ impl Driver {
             }
         };
 
-        #[cfg(feature = "hooks")]
-        let (raw, ratchet_lease) = if run_hooks && self.hooks_attached(HookPoint::SendOnInterface) {
-            let pkt_ctx = rns_hooks::PacketContext {
-                flags: if raw.is_empty() { 0 } else { raw[0] },
-                hops: if raw.len() > 1 { raw[1] } else { 0 },
-                destination_hash: extract_dest_hash(&raw),
-                context: 0,
-                packet_hash: [0; 32],
-                interface_id: interface.0,
-                data_offset: 0,
-                data_len: raw.len() as u32,
-            };
-            let ctx = HookContext::Packet {
-                ctx: &pkt_ctx,
-                raw: &raw,
-            };
-            let now = time::now();
-            let engine_ref = EngineRef {
-                engine: &self.engine,
-                interfaces: &self.interfaces,
-                link_manager: &self.link_manager,
-                now,
-            };
-            let provider_events_enabled = self.provider_events_enabled();
-            let mut outcome = PacketHookOutcome::Keep;
-            if let Some(ref e) = run_hook_inner(
-                &mut self.hooks.slots[HookPoint::SendOnInterface as usize].programs,
-                &self.hooks.manager,
-                &engine_ref,
-                &ctx,
-                now,
-                provider_events_enabled,
-            ) {
-                self.collect_hook_side_effects("SendOnInterface", e, _hook_injected);
-                let max_len = self.hook_packet_limit(interface);
-                outcome = self.packet_hook_outcome(HookPoint::SendOnInterface, e, max_len);
-            }
+        let (raw, ratchet_lease) = if run_hooks && self.hooks.attached(HookPoint::SendOnInterface) {
+            let outcome = self.run_packet_hooks(
+                HookPoint::SendOnInterface,
+                &HookEvent::wire_packet(&raw, interface.0),
+                InjectedActions::Collect(hook_injected),
+                |driver| driver.hook_packet_limit(interface),
+            );
             let Some(applied) = self.apply_outbound_hook_outcome(outcome, raw, ratchet_lease)
             else {
                 return;
@@ -264,11 +231,9 @@ impl Driver {
         &mut self,
         raw: rns_core::transport::types::PacketBytes,
         exclude: Option<InterfaceId>,
-        _hook_injected: &mut Vec<TransportAction>,
+        hook_injected: &mut Vec<TransportAction>,
         run_hooks: bool,
     ) {
-        #[cfg(not(feature = "hooks"))]
-        let _ = run_hooks;
         let ratchet_lease = match crate::local_ratchet::AnnouncementLease::acquire(
             self.event_tx.local_ratchets(),
             &raw,
@@ -280,53 +245,25 @@ impl Driver {
             }
         };
 
-        #[cfg(feature = "hooks")]
         let (raw, ratchet_lease) = if run_hooks
-            && self.hooks_attached(HookPoint::BroadcastOnAllInterfaces)
+            && self.hooks.attached(HookPoint::BroadcastOnAllInterfaces)
         {
-            let pkt_ctx = rns_hooks::PacketContext {
-                flags: if raw.is_empty() { 0 } else { raw[0] },
-                hops: if raw.len() > 1 { raw[1] } else { 0 },
-                destination_hash: extract_dest_hash(&raw),
-                context: 0,
-                packet_hash: [0; 32],
-                interface_id: 0,
-                data_offset: 0,
-                data_len: raw.len() as u32,
-            };
-            let ctx = HookContext::Packet {
-                ctx: &pkt_ctx,
-                raw: &raw,
-            };
-            let now = time::now();
-            let engine_ref = EngineRef {
-                engine: &self.engine,
-                interfaces: &self.interfaces,
-                link_manager: &self.link_manager,
-                now,
-            };
-            let provider_events_enabled = self.provider_events_enabled();
-            let mut outcome = PacketHookOutcome::Keep;
-            if let Some(ref e) = run_hook_inner(
-                &mut self.hooks.slots[HookPoint::BroadcastOnAllInterfaces as usize].programs,
-                &self.hooks.manager,
-                &engine_ref,
-                &ctx,
-                now,
-                provider_events_enabled,
-            ) {
-                self.collect_hook_side_effects("BroadcastOnAllInterfaces", e, _hook_injected);
+            let outcome = self.run_packet_hooks(
+                HookPoint::BroadcastOnAllInterfaces,
+                &HookEvent::wire_packet(&raw, 0),
+                InjectedActions::Collect(hook_injected),
                 // The replacement goes out on every selected interface, so it
                 // must fit the smallest of them.
-                let max_len = self
-                    .interfaces
-                    .values()
-                    .filter(|entry| entry.online && entry.enabled && Some(entry.id) != exclude)
-                    .map(|entry| self.hook_packet_limit(entry.id))
-                    .min()
-                    .unwrap_or(rns_core::constants::MTU);
-                outcome = self.packet_hook_outcome(HookPoint::BroadcastOnAllInterfaces, e, max_len);
-            }
+                |driver| {
+                    driver
+                        .interfaces
+                        .values()
+                        .filter(|entry| entry.online && entry.enabled && Some(entry.id) != exclude)
+                        .map(|entry| driver.hook_packet_limit(entry.id))
+                        .min()
+                        .unwrap_or(rns_core::constants::MTU)
+                },
+            );
             let Some(applied) = self.apply_outbound_hook_outcome(outcome, raw, ratchet_lease)
             else {
                 return;

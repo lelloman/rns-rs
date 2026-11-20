@@ -316,10 +316,7 @@ impl Driver {
         for control in &self.registry.listener_controls {
             control.request_stop();
         }
-        #[cfg(feature = "hooks")]
-        if let Some(bridge) = self.hooks.provider_bridge.as_ref() {
-            bridge.stop_accepting();
-        }
+        self.hooks.stop_provider_bridge();
     }
 
     pub(crate) fn reject_new_work(&self, op: &str) {
@@ -446,25 +443,8 @@ impl Driver {
         let active_holepunch_sessions = self.holepunch_manager.session_count();
         let interface_writer_queued_frames = self.interface_writer_queued_frames();
         let link_transmissions = self.event_tx.link_send_pool().in_flight();
-        #[cfg(feature = "hooks")]
-        let (provider_backlog_events, provider_consumer_queued_events) = self
-            .hooks
-            .provider_bridge
-            .as_ref()
-            .map(|bridge| {
-                let stats = bridge.stats();
-                (
-                    stats.backlog_len,
-                    stats
-                        .consumers
-                        .iter()
-                        .map(|consumer| consumer.queue_len)
-                        .sum(),
-                )
-            })
-            .unwrap_or((0, 0));
-        #[cfg(not(feature = "hooks"))]
-        let (provider_backlog_events, provider_consumer_queued_events) = (0, 0);
+        let (provider_backlog_events, provider_consumer_queued_events) =
+            self.hooks.provider_queued_events();
         let drain_age_seconds = self
             .lifecycle
             .drain_started_at

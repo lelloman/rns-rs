@@ -11,10 +11,7 @@ impl Driver {
         if self.rpc_service.is_some() {
             self.serve_rpc(ready);
         }
-        #[cfg(feature = "hooks")]
-        if let Some(bridge) = &self.hooks.provider_bridge {
-            bridge.serve(ready);
-        }
+        self.hooks.serve_provider_bridge(ready);
         if let Some(probe_server) = &mut self.probe_server {
             probe_server.serve(ready);
         }

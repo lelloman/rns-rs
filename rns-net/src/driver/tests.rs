@@ -14107,6 +14107,7 @@ fn local_ratchets_reconnect_replay_and_writer_queue_retention() {
 #[cfg(feature = "hooks")]
 mod hook_modify {
     use super::*;
+    use rns_hooks::HookContext;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static HOOK_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);

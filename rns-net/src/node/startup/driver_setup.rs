@@ -256,8 +256,7 @@ pub(super) fn configure_driver_services(
     driver.management.config = config.management.clone();
     // Store transport identity for tunnel synthesis and management announces.
     driver.transport_identity = Some(transport_identity);
-    #[cfg(feature = "hooks")]
-    load_configured_hooks(driver, &config.hooks);
+    driver.hooks.load_configured(&config.hooks);
     configure_discovery(driver, config, network_identity);
     probe_server
 }

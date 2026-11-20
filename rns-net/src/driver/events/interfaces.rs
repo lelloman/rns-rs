@@ -93,28 +93,11 @@ impl Driver {
     /// interface came up.
     pub(super) fn notify_interface_up(&mut self, id: InterfaceId) {
         self.callbacks.on_interface_up(id);
-        #[cfg(feature = "hooks")]
-        {
-            let ctx = HookContext::Interface { interface_id: id.0 };
-            let now = time::now();
-            let engine_ref = EngineRef {
-                engine: &self.engine,
-                interfaces: &self.interfaces,
-                link_manager: &self.link_manager,
-                now,
-            };
-            let provider_events_enabled = self.provider_events_enabled();
-            if let Some(ref e) = run_hook_inner(
-                &mut self.hooks.slots[HookPoint::InterfaceUp as usize].programs,
-                &self.hooks.manager,
-                &engine_ref,
-                &ctx,
-                now,
-                provider_events_enabled,
-            ) {
-                self.forward_hook_side_effects("InterfaceUp", e);
-            }
-        }
+        self.run_hooks_with_effects(
+            HookPoint::InterfaceUp,
+            &HookEvent::Interface { interface_id: id.0 },
+            InjectedActions::Dispatch,
+        );
     }
 
     /// Register a new dynamic interface, with its entry when it has a
@@ -331,28 +314,11 @@ impl Driver {
                 }
             }
             self.callbacks.on_interface_down(id);
-            #[cfg(feature = "hooks")]
-            {
-                let ctx = HookContext::Interface { interface_id: id.0 };
-                let now = time::now();
-                let engine_ref = EngineRef {
-                    engine: &self.engine,
-                    interfaces: &self.interfaces,
-                    link_manager: &self.link_manager,
-                    now,
-                };
-                let provider_events_enabled = self.provider_events_enabled();
-                if let Some(ref e) = run_hook_inner(
-                    &mut self.hooks.slots[HookPoint::InterfaceDown as usize].programs,
-                    &self.hooks.manager,
-                    &engine_ref,
-                    &ctx,
-                    now,
-                    provider_events_enabled,
-                ) {
-                    self.forward_hook_side_effects("InterfaceDown", e);
-                }
-            }
+            self.run_hooks_with_effects(
+                HookPoint::InterfaceDown,
+                &HookEvent::Interface { interface_id: id.0 },
+                InjectedActions::Dispatch,
+            );
         }
         #[cfg(feature = "iface-backbone")]
         self.handle_backbone_peer_pool_down(id);

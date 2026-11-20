@@ -1014,29 +1014,27 @@ impl Driver {
             capped_duration,
             reason,
         );
-        if ok {
-            #[cfg(feature = "hooks")]
-            self.run_backbone_peer_hook(
-                "BackbonePeerPenalty",
+        if ok && self.hooks.attached(HookPoint::BackbonePeerPenalty) {
+            let peer = BackbonePeerHookEvent {
+                server_interface_id: self
+                    .interfaces
+                    .iter()
+                    .find(|(_, entry)| entry.info.name == interface_name)
+                    .map(|(id, _)| *id)
+                    .unwrap_or(InterfaceId(0)),
+                peer_interface_id: None,
+                peer_ip,
+                peer_port: 0,
+                connected_for: Duration::ZERO,
+                had_received_data: false,
+                penalty_level,
+                blacklist_for: capped_duration,
+            };
+            self.run_hooks_with_effects(
                 HookPoint::BackbonePeerPenalty,
-                &BackbonePeerHookEvent {
-                    server_interface_id: self
-                        .interfaces
-                        .iter()
-                        .find(|(_, entry)| entry.info.name == interface_name)
-                        .map(|(id, _)| *id)
-                        .unwrap_or(InterfaceId(0)),
-                    peer_interface_id: None,
-                    peer_ip,
-                    peer_port: 0,
-                    connected_for: Duration::ZERO,
-                    had_received_data: false,
-                    penalty_level,
-                    blacklist_for: capped_duration,
-                },
+                &HookEvent::BackbonePeer(&peer),
+                InjectedActions::Dispatch,
             );
-            #[cfg(not(feature = "hooks"))]
-            let _ = (peer_ip, capped_duration, penalty_level);
         }
         ok
     }

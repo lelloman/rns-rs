@@ -21,7 +21,7 @@ impl Driver {
     /// (`SendOnInterface`, `BroadcastOnAllInterfaces`, `DeliverLocal`), and
     /// nesting through other hook points is capped at
     /// `MAX_HOOK_INJECTION_DEPTH`; anything beyond that is logged and dropped.
-    #[cfg(feature = "hooks")]
+    #[inline]
     pub(super) fn dispatch_hook_injected(&mut self, injected: Vec<TransportAction>, depth: usize) {
         if injected.is_empty() {
             return;
@@ -47,9 +47,6 @@ impl Driver {
         depth: usize,
     ) {
         let run_packet_hooks = depth == 0;
-        #[cfg(feature = "hooks")]
-        let mut hook_injected: Vec<TransportAction> = Vec::new();
-        #[cfg(not(feature = "hooks"))]
         let mut hook_injected: Vec<TransportAction> = Vec::new();
 
         for action in actions.drain(..) {
@@ -103,42 +100,16 @@ impl Driver {
                         rx,
                         ..
                     } = *announce;
-                    #[cfg(feature = "hooks")]
-                    {
-                        let ctx = HookContext::Announce {
+                    if self.run_hooks_with_effects(
+                        HookPoint::AnnounceReceived,
+                        &HookEvent::Announce {
                             destination_hash,
                             hops,
                             interface_id: receiving_interface.0,
-                        };
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        {
-                            let exec = run_hook_inner(
-                                &mut self.hooks.slots[HookPoint::AnnounceReceived as usize]
-                                    .programs,
-                                &self.hooks.manager,
-                                &engine_ref,
-                                &ctx,
-                                now,
-                                provider_events_enabled,
-                            );
-                            if let Some(ref e) = exec {
-                                self.collect_hook_side_effects(
-                                    "AnnounceReceived",
-                                    e,
-                                    &mut hook_injected,
-                                );
-                                if e.hook_result.as_ref().is_some_and(|r| r.is_drop()) {
-                                    continue;
-                                }
-                            }
-                        }
+                        },
+                        InjectedActions::Collect(&mut hook_injected),
+                    ) {
+                        continue;
                     }
 
                     // Check if this is a discovery announce (matched by name_hash
@@ -283,34 +254,15 @@ impl Driver {
                         &next_hop[..4],
                         interface.0,
                     );
-                    #[cfg(feature = "hooks")]
-                    {
-                        let ctx = HookContext::Announce {
+                    self.run_hooks_with_effects(
+                        HookPoint::PathUpdated,
+                        &HookEvent::Announce {
                             destination_hash,
                             hops,
                             interface_id: interface.0,
-                        };
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        if let Some(ref e) = run_hook_inner(
-                            &mut self.hooks.slots[HookPoint::PathUpdated as usize].programs,
-                            &self.hooks.manager,
-                            &engine_ref,
-                            &ctx,
-                            now,
-                            provider_events_enabled,
-                        ) {
-                            self.collect_hook_side_effects("PathUpdated", e, &mut hook_injected);
-                        }
-                    }
-                    #[cfg(not(feature = "hooks"))]
-                    let _ = interface;
+                        },
+                        InjectedActions::Collect(&mut hook_injected),
+                    );
 
                     let _ = self.mark_known_destination_used(&destination_hash);
                     self.callbacks
@@ -387,53 +339,21 @@ impl Driver {
                     data,
                     dest_hash,
                 } => {
-                    #[cfg(feature = "hooks")]
-                    {
-                        let pkt_ctx = rns_hooks::PacketContext {
+                    // The hook sees the synthesis payload, not a packet, so `Modify`
+                    // acts as `Continue` and its bytes are ignored.
+                    if self.run_hooks_with_effects(
+                        HookPoint::TunnelSynthesize,
+                        &HookEvent::Packet {
                             flags: 0,
                             hops: 0,
                             destination_hash: dest_hash,
-                            context: 0,
                             packet_hash: [0; 32],
                             interface_id: interface.0,
-                            data_offset: 0,
-                            data_len: data.len() as u32,
-                        };
-                        let ctx = HookContext::Packet {
-                            ctx: &pkt_ctx,
                             raw: &data,
-                        };
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        // The hook sees the synthesis payload, not a packet, so
-                        // `Modify` acts as `Continue` and its bytes are ignored.
-                        {
-                            let exec = run_hook_inner(
-                                &mut self.hooks.slots[HookPoint::TunnelSynthesize as usize]
-                                    .programs,
-                                &self.hooks.manager,
-                                &engine_ref,
-                                &ctx,
-                                now,
-                                provider_events_enabled,
-                            );
-                            if let Some(ref e) = exec {
-                                self.collect_hook_side_effects(
-                                    "TunnelSynthesize",
-                                    e,
-                                    &mut hook_injected,
-                                );
-                                if e.hook_result.as_ref().is_some_and(|r| r.is_drop()) {
-                                    continue;
-                                }
-                            }
-                        }
+                        },
+                        InjectedActions::Collect(&mut hook_injected),
+                    ) {
+                        continue;
                     }
                     // Pack as BROADCAST DATA PLAIN packet and send on interface
                     let flags = rns_core::packet::PacketFlags {
@@ -486,145 +406,49 @@ impl Driver {
                     hops,
                     interface,
                 } => {
-                    #[cfg(feature = "hooks")]
-                    {
-                        let ctx = HookContext::Announce {
+                    self.run_hooks_with_effects(
+                        HookPoint::AnnounceRetransmit,
+                        &HookEvent::Announce {
                             destination_hash,
                             hops,
                             interface_id: interface.map(|i| i.0).unwrap_or(0),
-                        };
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        if let Some(ref e) = run_hook_inner(
-                            &mut self.hooks.slots[HookPoint::AnnounceRetransmit as usize].programs,
-                            &self.hooks.manager,
-                            &engine_ref,
-                            &ctx,
-                            now,
-                            provider_events_enabled,
-                        ) {
-                            self.collect_hook_side_effects(
-                                "AnnounceRetransmit",
-                                e,
-                                &mut hook_injected,
-                            );
-                        }
-                    }
-                    #[cfg(not(feature = "hooks"))]
-                    {
-                        let _ = (destination_hash, hops, interface);
-                    }
+                        },
+                        InjectedActions::Collect(&mut hook_injected),
+                    );
                 }
                 TransportAction::LinkRequestReceived {
                     link_id,
                     destination_hash: _,
                     receiving_interface,
                 } => {
-                    #[cfg(feature = "hooks")]
-                    {
-                        let ctx = HookContext::Link {
+                    self.run_hooks_with_effects(
+                        HookPoint::LinkRequestReceived,
+                        &HookEvent::Link {
                             link_id,
                             interface_id: receiving_interface.0,
-                        };
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        if let Some(ref e) = run_hook_inner(
-                            &mut self.hooks.slots[HookPoint::LinkRequestReceived as usize].programs,
-                            &self.hooks.manager,
-                            &engine_ref,
-                            &ctx,
-                            now,
-                            provider_events_enabled,
-                        ) {
-                            self.collect_hook_side_effects(
-                                "LinkRequestReceived",
-                                e,
-                                &mut hook_injected,
-                            );
-                        }
-                    }
-                    #[cfg(not(feature = "hooks"))]
-                    {
-                        let _ = (link_id, receiving_interface);
-                    }
+                        },
+                        InjectedActions::Collect(&mut hook_injected),
+                    );
                 }
                 TransportAction::LinkEstablished { link_id, interface } => {
-                    #[cfg(feature = "hooks")]
-                    {
-                        let ctx = HookContext::Link {
+                    self.run_hooks_with_effects(
+                        HookPoint::LinkEstablished,
+                        &HookEvent::Link {
                             link_id,
                             interface_id: interface.0,
-                        };
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        if let Some(ref e) = run_hook_inner(
-                            &mut self.hooks.slots[HookPoint::LinkEstablished as usize].programs,
-                            &self.hooks.manager,
-                            &engine_ref,
-                            &ctx,
-                            now,
-                            provider_events_enabled,
-                        ) {
-                            self.collect_hook_side_effects(
-                                "LinkEstablished",
-                                e,
-                                &mut hook_injected,
-                            );
-                        }
-                    }
-                    #[cfg(not(feature = "hooks"))]
-                    {
-                        let _ = (link_id, interface);
-                    }
+                        },
+                        InjectedActions::Collect(&mut hook_injected),
+                    );
                 }
                 TransportAction::LinkClosed { link_id } => {
-                    #[cfg(feature = "hooks")]
-                    {
-                        let ctx = HookContext::Link {
+                    self.run_hooks_with_effects(
+                        HookPoint::LinkClosed,
+                        &HookEvent::Link {
                             link_id,
                             interface_id: 0,
-                        };
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        if let Some(ref e) = run_hook_inner(
-                            &mut self.hooks.slots[HookPoint::LinkClosed as usize].programs,
-                            &self.hooks.manager,
-                            &engine_ref,
-                            &ctx,
-                            now,
-                            provider_events_enabled,
-                        ) {
-                            self.collect_hook_side_effects("LinkClosed", e, &mut hook_injected);
-                        }
-                    }
-                    #[cfg(not(feature = "hooks"))]
-                    {
-                        let _ = link_id;
-                    }
+                        },
+                        InjectedActions::Collect(&mut hook_injected),
+                    );
                 }
                 TransportAction::ProtocolViolation { interface } => {
                     if let Some(entry) = self.interfaces.get_mut(&interface) {
@@ -660,9 +484,6 @@ impl Driver {
         self.transport_actions.give(actions);
 
         // Dispatch any actions injected by hooks during action processing
-        #[cfg(feature = "hooks")]
         self.dispatch_hook_injected(hook_injected, depth);
-        #[cfg(not(feature = "hooks"))]
-        let _ = depth;
     }
 }

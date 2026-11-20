@@ -1,125 +1,89 @@
-//! Calling hooks from the driver and forwarding their side effects.
+//! Calling hooks from the driver and carrying out what they inject.
 
 use super::*;
-#[cfg(feature = "hooks")]
-use crate::event::HookOpError;
 
 impl Driver {
-    #[cfg(feature = "hooks")]
-    pub(super) fn provider_events_enabled(&self) -> bool {
-        self.hooks.provider_bridge.is_some()
-    }
-
-    /// Whether any program is attached at `point`. Per-packet hook points
-    /// check this before building a hook context, which reads the clock.
-    #[cfg(feature = "hooks")]
-    pub(crate) fn hooks_attached(&self, point: HookPoint) -> bool {
-        !self.hooks.slots[point as usize].programs.is_empty()
-    }
-
-    /// Run the hook attached to a Backbone peer event (connected,
-    /// disconnected, idle timeout, write stall, penalty), in builds with
-    /// hooks.
-    pub(super) fn handle_backbone_peer_event(&mut self, event: &Event) {
-        #[cfg(feature = "hooks")]
-        if let Some((attach_point, point, hook_event)) = backbone_peer_hook(event) {
-            self.run_backbone_peer_hook(attach_point, point, &hook_event);
-        }
-        #[cfg(not(feature = "hooks"))]
-        let _ = event;
-    }
-
-    #[cfg(feature = "hooks")]
-    pub(super) fn run_backbone_peer_hook(
-        &mut self,
-        attach_point: &str,
-        point: HookPoint,
-        event: &BackbonePeerHookEvent,
-    ) {
-        let ctx = backbone_peer_hook_context(event);
-        let now = time::now();
-        let engine_ref = EngineRef {
+    /// Run the hooks attached at `point` on `event`.
+    #[inline]
+    pub(super) fn run_hooks(&mut self, point: HookPoint, event: &HookEvent<'_>) -> Option<HookRun> {
+        let env = HookEnv {
             engine: &self.engine,
             interfaces: &self.interfaces,
             link_manager: &self.link_manager,
-            now,
         };
-        let provider_events_enabled = self.provider_events_enabled();
-        if let Some(ref e) = run_hook_inner(
-            &mut self.hooks.slots[point as usize].programs,
-            &self.hooks.manager,
-            &engine_ref,
-            &ctx,
-            now,
-            provider_events_enabled,
-        ) {
-            self.forward_hook_side_effects(attach_point, e);
-        }
+        self.hooks.run(point, event, &env)
     }
 
-    #[cfg(feature = "hooks")]
-    pub(super) fn update_hook_program<F>(
-        &mut self,
-        name: &str,
-        attach_point: &str,
-        mut update: F,
-    ) -> Result<(), HookOpError>
-    where
-        F: FnMut(&mut rns_hooks::LoadedProgram),
-    {
-        let point_idx = crate::config::parse_hook_point(attach_point)
-            .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
-        let program = self.hooks.slots[point_idx]
-            .programs
-            .iter_mut()
-            .find(|program| program.name == name)
-            .ok_or_else(|| HookOpError::NotFound {
-                name: name.to_string(),
-                point: attach_point.to_string(),
-            })?;
-        update(program);
-        Ok(())
-    }
-
-    /// Turn a packet hook chain result into the action the hook point takes.
-    ///
-    /// `Drop` stops the packet. `Modify` with replacement bytes is validated
-    /// against `max_len` and the packet decoder; a replacement that fails
-    /// validation is treated as `Drop` and counted in
-    /// `hook_rejected_modifications`. `Modify` without bytes, `Continue` and
-    /// `Halt` keep the current bytes.
-    #[cfg(feature = "hooks")]
-    pub(crate) fn packet_hook_outcome(
+    /// Run the hooks attached at `point` on `event` and carry out their side
+    /// effects. Returns whether a hook dropped what the hook point handles.
+    #[inline]
+    pub(super) fn run_hooks_with_effects(
         &mut self,
         point: HookPoint,
-        exec: &rns_hooks::ExecuteResult,
-        max_len: usize,
-    ) -> PacketHookOutcome {
-        let Some(result) = exec.hook_result.as_ref() else {
-            return PacketHookOutcome::Keep;
-        };
-        if result.is_drop() {
-            return PacketHookOutcome::Drop;
-        }
-        if rns_hooks::Verdict::from_u32(result.verdict) != Some(rns_hooks::Verdict::Modify) {
-            return PacketHookOutcome::Keep;
-        }
-        let Some(data) = exec.modified_data.as_deref() else {
-            return PacketHookOutcome::Keep;
-        };
-        match validate_hook_replacement(data, max_len) {
-            Ok(packet) => PacketHookOutcome::Replace(packet),
-            Err(reason) => {
-                let rejected = &mut self.hooks.rejected_modifications[point as usize];
-                *rejected = rejected.saturating_add(1);
-                log::debug!("{:?} hook: {}; dropping packet", point, reason);
-                PacketHookOutcome::Drop
+        event: &HookEvent<'_>,
+        injected: InjectedActions<'_>,
+    ) -> bool {
+        match self.run_hooks(point, event) {
+            Some(mut run) => {
+                self.apply_hook_effects(point, &mut run, injected);
+                run.dropped()
             }
+            None => false,
+        }
+    }
+
+    /// Run the packet hooks attached at `point` on `event`, carry out their
+    /// side effects, and decide what happens to the packet. A replacement
+    /// may be at most `max_len` bytes long.
+    #[inline]
+    pub(super) fn run_packet_hooks(
+        &mut self,
+        point: HookPoint,
+        event: &HookEvent<'_>,
+        injected: InjectedActions<'_>,
+        max_len: impl FnOnce(&Self) -> usize,
+    ) -> PacketHookOutcome {
+        let Some(mut run) = self.run_hooks(point, event) else {
+            return PacketHookOutcome::Keep;
+        };
+        self.apply_hook_effects(point, &mut run, injected);
+        let max_len = max_len(self);
+        self.hooks.packet_outcome(point, &run, max_len)
+    }
+
+    /// Carry out what the hooks of `run` asked for: the actions they
+    /// injected, then the events they emitted for the provider bridge.
+    fn apply_hook_effects(
+        &mut self,
+        point: HookPoint,
+        run: &mut HookRun,
+        injected: InjectedActions<'_>,
+    ) {
+        let actions = run.take_injected();
+        match injected {
+            InjectedActions::Dispatch => {
+                if !actions.is_empty() {
+                    self.dispatch_all(actions);
+                }
+            }
+            InjectedActions::Collect(out) => out.extend(actions),
+        }
+        self.hooks.emit_provider_events(point, run);
+    }
+
+    /// Run the hook attached to a Backbone peer event (connected,
+    /// disconnected, idle timeout, write stall, penalty).
+    pub(super) fn handle_backbone_peer_event(&mut self, event: &Event) {
+        if let Some((point, peer)) = backbone_peer_hook(event) {
+            self.run_hooks_with_effects(
+                point,
+                &HookEvent::BackbonePeer(&peer),
+                InjectedActions::Dispatch,
+            );
         }
     }
 
     /// Largest packet a hook may substitute for one handled on `interface`.
-    #[cfg(feature = "hooks")]
     pub(crate) fn hook_packet_limit(&self, interface: InterfaceId) -> usize {
         self.interfaces
             .get(&interface)
@@ -130,7 +94,6 @@ impl Driver {
 
     /// Point a pending confirmed link send at the replacement bytes a hook
     /// produced for the packet it was tracking.
-    #[cfg(feature = "hooks")]
     pub(crate) fn retarget_tracked_link_send(&mut self, original: &[u8], replacement: &RawPacket) {
         let Some((hash, _)) = self.tracked_link_send.as_mut() else {
             return;
@@ -139,55 +102,11 @@ impl Driver {
             *hash = replacement.packet_hash;
         }
     }
-
-    #[cfg(feature = "hooks")]
-    pub(super) fn forward_hook_side_effects(
-        &mut self,
-        attach_point: &str,
-        exec: &rns_hooks::ExecuteResult,
-    ) {
-        if !exec.injected_actions.is_empty() {
-            self.dispatch_all(convert_injected_actions(exec.injected_actions.clone()));
-        }
-        if let Some(ref bridge) = self.hooks.provider_bridge {
-            for event in &exec.provider_events {
-                bridge.emit_event(
-                    attach_point,
-                    event.hook_name.clone(),
-                    event.payload_type.clone(),
-                    event.payload.clone(),
-                );
-            }
-        }
-    }
-
-    #[cfg(feature = "hooks")]
-    pub(super) fn collect_hook_side_effects(
-        &mut self,
-        attach_point: &str,
-        exec: &rns_hooks::ExecuteResult,
-        out: &mut Vec<TransportAction>,
-    ) {
-        if !exec.injected_actions.is_empty() {
-            out.extend(convert_injected_actions(exec.injected_actions.clone()));
-        }
-        if let Some(ref bridge) = self.hooks.provider_bridge {
-            for event in &exec.provider_events {
-                bridge.emit_event(
-                    attach_point,
-                    event.hook_name.clone(),
-                    event.payload_type.clone(),
-                    event.payload.clone(),
-                );
-            }
-        }
-    }
 }
 
-/// The hook a Backbone peer event runs: its attach point name, hook point
-/// and payload. `None` for other events.
-#[cfg(feature = "hooks")]
-fn backbone_peer_hook(event: &Event) -> Option<(&'static str, HookPoint, BackbonePeerHookEvent)> {
+/// The hook point a Backbone peer event runs and the peer it hands the
+/// hook. `None` for other events.
+fn backbone_peer_hook(event: &Event) -> Option<(HookPoint, BackbonePeerHookEvent)> {
     let peer = |server_interface_id, peer_interface_id, peer_ip, peer_port| BackbonePeerHookEvent {
         server_interface_id,
         peer_interface_id: Some(peer_interface_id),
@@ -205,7 +124,6 @@ fn backbone_peer_hook(event: &Event) -> Option<(&'static str, HookPoint, Backbon
             peer_ip,
             peer_port,
         } => (
-            "BackbonePeerConnected",
             HookPoint::BackbonePeerConnected,
             peer(server_interface_id, peer_interface_id, peer_ip, peer_port),
         ),
@@ -217,7 +135,6 @@ fn backbone_peer_hook(event: &Event) -> Option<(&'static str, HookPoint, Backbon
             connected_for,
             had_received_data,
         } => (
-            "BackbonePeerDisconnected",
             HookPoint::BackbonePeerDisconnected,
             BackbonePeerHookEvent {
                 connected_for,
@@ -232,7 +149,6 @@ fn backbone_peer_hook(event: &Event) -> Option<(&'static str, HookPoint, Backbon
             peer_port,
             connected_for,
         } => (
-            "BackbonePeerIdleTimeout",
             HookPoint::BackbonePeerIdleTimeout,
             BackbonePeerHookEvent {
                 connected_for,
@@ -246,7 +162,6 @@ fn backbone_peer_hook(event: &Event) -> Option<(&'static str, HookPoint, Backbon
             peer_port,
             connected_for,
         } => (
-            "BackbonePeerWriteStall",
             HookPoint::BackbonePeerWriteStall,
             BackbonePeerHookEvent {
                 connected_for,
@@ -259,7 +174,6 @@ fn backbone_peer_hook(event: &Event) -> Option<(&'static str, HookPoint, Backbon
             penalty_level,
             blacklist_for,
         } => (
-            "BackbonePeerPenalty",
             HookPoint::BackbonePeerPenalty,
             BackbonePeerHookEvent {
                 server_interface_id,

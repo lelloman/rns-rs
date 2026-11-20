@@ -151,53 +151,28 @@ impl Driver {
         packet_hash: [u8; 32],
         receiving_interface: InterfaceId,
         ingress_limited: bool,
-        _hook_injected: &mut Vec<TransportAction>,
+        hook_injected: &mut Vec<TransportAction>,
         run_hooks: bool,
     ) {
-        #[cfg(not(feature = "hooks"))]
-        let _ = run_hooks;
         // The engine recorded the received packet's hash; a stale-link arrival
         // must forget that entry even if a hook replaced the bytes.
         let hashlist_hash = packet_hash;
-        #[cfg(feature = "hooks")]
         let (destination_hash, raw, packet_hash) =
-            if run_hooks && self.hooks_attached(HookPoint::DeliverLocal) {
+            if run_hooks && self.hooks.attached(HookPoint::DeliverLocal) {
                 let packet_hash = delivered_packet_hash(&raw, packet_hash);
-                let pkt_ctx = rns_hooks::PacketContext {
-                    flags: 0,
-                    hops: 0,
-                    destination_hash,
-                    context: 0,
-                    packet_hash,
-                    interface_id: receiving_interface.0,
-                    data_offset: 0,
-                    data_len: raw.len() as u32,
-                };
-                let ctx = HookContext::Packet {
-                    ctx: &pkt_ctx,
-                    raw: &raw,
-                };
-                let now = time::now();
-                let engine_ref = EngineRef {
-                    engine: &self.engine,
-                    interfaces: &self.interfaces,
-                    link_manager: &self.link_manager,
-                    now,
-                };
-                let provider_events_enabled = self.provider_events_enabled();
-                let mut outcome = PacketHookOutcome::Keep;
-                if let Some(ref e) = run_hook_inner(
-                    &mut self.hooks.slots[HookPoint::DeliverLocal as usize].programs,
-                    &self.hooks.manager,
-                    &engine_ref,
-                    &ctx,
-                    now,
-                    provider_events_enabled,
-                ) {
-                    self.collect_hook_side_effects("DeliverLocal", e, _hook_injected);
-                    let max_len = self.hook_packet_limit(receiving_interface);
-                    outcome = self.packet_hook_outcome(HookPoint::DeliverLocal, e, max_len);
-                }
+                let outcome = self.run_packet_hooks(
+                    HookPoint::DeliverLocal,
+                    &HookEvent::Packet {
+                        flags: 0,
+                        hops: 0,
+                        destination_hash,
+                        packet_hash,
+                        interface_id: receiving_interface.0,
+                        raw: &raw,
+                    },
+                    InjectedActions::Collect(hook_injected),
+                    |driver| driver.hook_packet_limit(receiving_interface),
+                );
                 match outcome {
                     PacketHookOutcome::Keep => (destination_hash, raw, packet_hash),
                     PacketHookOutcome::Drop => return,

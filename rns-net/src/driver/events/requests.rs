@@ -362,29 +362,10 @@ impl Driver {
 
     /// An interface's runtime configuration changed: apply it.
     pub(super) fn handle_interface_config_changed(&mut self, id: InterfaceId) {
-        #[cfg(feature = "hooks")]
-        {
-            let ctx = HookContext::Interface { interface_id: id.0 };
-            let now = time::now();
-            let engine_ref = EngineRef {
-                engine: &self.engine,
-                interfaces: &self.interfaces,
-                link_manager: &self.link_manager,
-                now,
-            };
-            let provider_events_enabled = self.provider_events_enabled();
-            if let Some(ref e) = run_hook_inner(
-                &mut self.hooks.slots[HookPoint::InterfaceConfigChanged as usize].programs,
-                &self.hooks.manager,
-                &engine_ref,
-                &ctx,
-                now,
-                provider_events_enabled,
-            ) {
-                self.forward_hook_side_effects("InterfaceConfigChanged", e);
-            }
-        }
-        #[cfg(not(feature = "hooks"))]
-        let _ = id;
+        self.run_hooks_with_effects(
+            HookPoint::InterfaceConfigChanged,
+            &HookEvent::Interface { interface_id: id.0 },
+            InjectedActions::Dispatch,
+        );
     }
 }

@@ -5,7 +5,6 @@ use super::*;
 impl Driver {
     /// Dispatch link manager actions.
     pub(crate) fn dispatch_link_actions(&mut self, mut actions: Vec<LinkManagerAction>) {
-        #[cfg(feature = "hooks")]
         let mut hook_injected: Vec<TransportAction> = Vec::new();
 
         for action in actions.drain(..) {
@@ -143,35 +142,14 @@ impl Driver {
                     if is_initiator {
                         self.engine.mark_path_responsive(&dest_hash, time::now());
                     }
-                    #[cfg(feature = "hooks")]
-                    {
-                        let ctx = HookContext::Link {
+                    self.run_hooks_with_effects(
+                        HookPoint::LinkEstablished,
+                        &HookEvent::Link {
                             link_id,
                             interface_id: 0,
-                        };
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        if let Some(ref e) = run_hook_inner(
-                            &mut self.hooks.slots[HookPoint::LinkEstablished as usize].programs,
-                            &self.hooks.manager,
-                            &engine_ref,
-                            &ctx,
-                            now,
-                            provider_events_enabled,
-                        ) {
-                            self.collect_hook_side_effects(
-                                "LinkEstablished",
-                                e,
-                                &mut hook_injected,
-                            );
-                        }
-                    }
+                        },
+                        InjectedActions::Collect(&mut hook_injected),
+                    );
                     // Upstream logs this at LOG_DEBUG.
                     log::debug!(
                         "Link established: {:02x?} rtt={:.3}s initiator={}",
@@ -197,31 +175,14 @@ impl Driver {
                     );
                 }
                 LinkManagerAction::LinkClosed { link_id, reason } => {
-                    #[cfg(feature = "hooks")]
-                    {
-                        let ctx = HookContext::Link {
+                    self.run_hooks_with_effects(
+                        HookPoint::LinkClosed,
+                        &HookEvent::Link {
                             link_id,
                             interface_id: 0,
-                        };
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        if let Some(ref e) = run_hook_inner(
-                            &mut self.hooks.slots[HookPoint::LinkClosed as usize].programs,
-                            &self.hooks.manager,
-                            &engine_ref,
-                            &ctx,
-                            now,
-                            provider_events_enabled,
-                        ) {
-                            self.collect_hook_side_effects("LinkClosed", e, &mut hook_injected);
-                        }
-                    }
+                        },
+                        InjectedActions::Collect(&mut hook_injected),
+                    );
                     log::debug!("Link closed: {:02x?} reason={:?}", &link_id[..4], reason);
                     // The link's direct interface, if any, goes with it.
                     self.holepunch_manager.link_closed(&link_id);
@@ -544,39 +505,14 @@ impl Driver {
                     link_id,
                     receiving_interface,
                 } => {
-                    #[cfg(feature = "hooks")]
-                    {
-                        let ctx = HookContext::Link {
+                    self.run_hooks_with_effects(
+                        HookPoint::LinkRequestReceived,
+                        &HookEvent::Link {
                             link_id,
                             interface_id: receiving_interface.0,
-                        };
-                        let now = time::now();
-                        let engine_ref = EngineRef {
-                            engine: &self.engine,
-                            interfaces: &self.interfaces,
-                            link_manager: &self.link_manager,
-                            now,
-                        };
-                        let provider_events_enabled = self.provider_events_enabled();
-                        if let Some(ref e) = run_hook_inner(
-                            &mut self.hooks.slots[HookPoint::LinkRequestReceived as usize].programs,
-                            &self.hooks.manager,
-                            &engine_ref,
-                            &ctx,
-                            now,
-                            provider_events_enabled,
-                        ) {
-                            self.collect_hook_side_effects(
-                                "LinkRequestReceived",
-                                e,
-                                &mut hook_injected,
-                            );
-                        }
-                    }
-                    #[cfg(not(feature = "hooks"))]
-                    {
-                        let _ = (link_id, receiving_interface);
-                    }
+                        },
+                        InjectedActions::Collect(&mut hook_injected),
+                    );
                 }
                 LinkManagerAction::ProtocolViolation {
                     receiving_interface,
@@ -590,7 +526,6 @@ impl Driver {
         self.link_actions.give(actions);
 
         // Dispatch any actions injected by hooks during action processing
-        #[cfg(feature = "hooks")]
         self.dispatch_hook_injected(hook_injected, 0);
     }
 }
