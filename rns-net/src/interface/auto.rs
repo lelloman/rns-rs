@@ -169,7 +169,7 @@ pub struct AutoConfig {
 
 impl Default for AutoConfig {
     fn default() -> Self {
-        let mut config = AutoConfig {
+        AutoConfig {
             name: String::new(),
             group_id: DEFAULT_GROUP_ID.to_vec(),
             discovery_scope: SCOPE_LINK.to_string(),
@@ -182,15 +182,8 @@ impl Default for AutoConfig {
             max_peers: DEFAULT_MAX_PEERS,
             interface_id: InterfaceId(0),
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
-            runtime: Arc::new(Mutex::new(AutoRuntime {
-                announce_interval_secs: ANNOUNCE_INTERVAL,
-                peer_timeout_secs: PEERING_TIMEOUT,
-                peer_job_interval_secs: PEER_JOB_INTERVAL,
-            })),
-        };
-        let startup = AutoRuntime::from_config(&config);
-        config.runtime = Arc::new(Mutex::new(startup));
-        config
+            runtime: Arc::new(Mutex::new(AutoRuntime::default())),
+        }
     }
 }
 

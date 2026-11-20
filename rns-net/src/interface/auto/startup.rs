@@ -40,8 +40,7 @@ pub(super) fn start_with_template(
     };
 
     {
-        let startup = AutoRuntime::from_config(&config);
-        *lock_or_recover(&config.runtime, "auto runtime") = startup;
+        *lock_or_recover(&config.runtime, "auto runtime") = AutoRuntime::default();
     }
     let runtime = Arc::clone(&config.runtime);
     let mut shared_state = SharedState::new(next_dynamic_id);
