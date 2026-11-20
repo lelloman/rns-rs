@@ -467,6 +467,12 @@ pub struct FilterSection {
     /// Types allowed with `Transport.allow_destination_type`
     /// (`allowed_types`).
     pub allowed_types: Vec<String>,
+    /// The section's keys in file order. Upstream applies the options in
+    /// that order, so it decides the order of the `Blocked …` and
+    /// `Allowing …` lines, which name a type listed in both keeps, and
+    /// whether `Allowing …` is logged at all: only once `required_only`
+    /// has been read as true.
+    pub key_order: Vec<String>,
 }
 
 impl FilterSection {

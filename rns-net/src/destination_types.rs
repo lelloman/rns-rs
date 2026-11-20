@@ -34,14 +34,65 @@ impl DestinationTypeNames {
     /// `known_destination_types` file of `config_dir`, read as
     /// [`DestinationTypeNames::load_files`] reads it.
     pub fn from_config(config_dir: &Path, filter: &FilterSection) -> Self {
-        let mut names = Self::default();
-        for full_name in filter.ignored_types.iter().chain(&filter.allowed_types) {
-            if let Some((destination_type, name)) = configured_destination_type_name(full_name) {
-                names.insert(destination_type, name);
-            }
+        let (mut names, lines) = Self::from_filter(filter);
+        for line in lines {
+            log::debug!("{line}");
         }
         names.load_files(config_dir);
         names
+    }
+
+    /// The names the `[filter]` section records, with the debug lines
+    /// upstream logs while it applies the section.
+    ///
+    /// Upstream reads the options in file order. `block_destination_type`
+    /// logs `Blocked <name> <hash> destinations` for each ignored type, and
+    /// `allow_destination_type` logs `Allowing <<name>> <hash> destinations`
+    /// for each allowed type, but only when `required_destinations_only` is
+    /// already set, so only when `required_only = yes` comes before
+    /// `allowed_types`. Each records its name, so of a type listed under
+    /// both keys the later key's name stays. An empty name is ignored
+    /// without a line.
+    ///
+    /// Upstream also has `Could not add … destination type to blocked
+    /// list` and `… to allowed list` errors. Their `try` blocks cannot fail
+    /// for a config value, which ConfigObj always decodes to a `str`, so
+    /// there is nothing here to log them for.
+    pub fn from_filter(filter: &FilterSection) -> (Self, Vec<String>) {
+        let mut names = Self::default();
+        let mut lines = Vec::new();
+        let mut required_only = false;
+        for key in &filter.key_order {
+            let (allowing, full_names) = match key.as_str() {
+                "required_only" => {
+                    required_only = filter.required_only;
+                    continue;
+                }
+                "ignored_types" => (false, &filter.ignored_types),
+                "allowed_types" => (true, &filter.allowed_types),
+                _ => continue,
+            };
+            for full_name in full_names {
+                let Some((destination_type, name)) = configured_destination_type_name(full_name)
+                else {
+                    continue;
+                };
+                if !allowing {
+                    lines.push(format!(
+                        "Blocked {name} <{}> destinations",
+                        hex(&destination_type)
+                    ));
+                }
+                names.insert(destination_type, name);
+                if allowing && required_only {
+                    lines.push(format!(
+                        "Allowing {} destinations",
+                        names.describe(&destination_type)
+                    ));
+                }
+            }
+        }
+        (names, lines)
     }
 
     /// Record `name` for `destination_type`, replacing any earlier name.
@@ -258,6 +309,7 @@ mod tests {
             required_only: false,
             ignored_types: vec!["nomadnetwork.node".into(), String::new()],
             allowed_types: vec![format!("<{}>", hex(&lxmf))],
+            key_order: vec!["ignored_types".into(), "allowed_types".into()],
         };
         let names = DestinationTypeNames::from_config(dir.path(), &filter);
         assert_eq!(names.get(&lxmf), Some(hex(&lxmf).as_str()));
@@ -274,5 +326,79 @@ mod tests {
         .unwrap();
         let names = DestinationTypeNames::from_config(dir.path(), &filter);
         assert_eq!(names.get(&lxmf), Some("lxmf.delivery"));
+    }
+
+    /// The `[filter]` section of `config`, as the parser reads it.
+    fn filter_of(config: &str) -> FilterSection {
+        crate::config::parse(config).unwrap().filter
+    }
+
+    // Upstream's block_destination_type and allow_destination_type, applied
+    // in file order as Reticulum.__apply_config applies them.
+    #[test]
+    fn filter_types_are_logged_as_upstream_applies_them() {
+        let lxmf = destination_type("lxmf.delivery");
+        let node = destination_type("nomadnetwork.node");
+        let rncp = destination_type("rncp.receive");
+        let blocked =
+            |name: &str, t: &DestinationType| format!("Blocked {name} <{}> destinations", hex(t));
+        let allowing = |name: &str, t: &DestinationType| {
+            format!("Allowing <{name}> <{}> destinations", hex(t))
+        };
+
+        // required_only before allowed_types: every type is logged.
+        let (names, lines) = DestinationTypeNames::from_filter(&filter_of(
+            "[filter]\nrequired_only = yes\nignored_types = nomadnetwork.node\n\
+             allowed_types = lxmf.delivery, rncp.receive\n",
+        ));
+        assert_eq!(
+            lines,
+            [
+                blocked("nomadnetwork.node", &node),
+                allowing("lxmf.delivery", &lxmf),
+                allowing("rncp.receive", &rncp),
+            ]
+        );
+        assert_eq!(names.get(&lxmf), Some("lxmf.delivery"));
+
+        // After allowed_types, required_only is not yet set when the types
+        // are allowed: they are not logged.
+        let (_, lines) = DestinationTypeNames::from_filter(&filter_of(
+            "[filter]\nallowed_types = lxmf.delivery\nignored_types = nomadnetwork.node\n\
+             required_only = yes\n",
+        ));
+        assert_eq!(lines, [blocked("nomadnetwork.node", &node)]);
+
+        // Not required: allowed types are never logged.
+        let (_, lines) = DestinationTypeNames::from_filter(&filter_of(
+            "[filter]\nrequired_only = no\nallowed_types = lxmf.delivery\n",
+        ));
+        assert!(lines.is_empty());
+
+        // File order decides the order of the lines and which name a type
+        // listed under both keys keeps. The bracketed form logs the kept
+        // characters, in both lines.
+        let hash = hex(&lxmf);
+        let (names, lines) = DestinationTypeNames::from_filter(&filter_of(&format!(
+            "[filter]\nrequired_only = yes\nallowed_types = <{hash}>\nignored_types = lxmf.delivery\n"
+        )));
+        assert_eq!(
+            lines,
+            [allowing(&hash, &lxmf), blocked("lxmf.delivery", &lxmf)]
+        );
+        assert_eq!(names.get(&lxmf), Some("lxmf.delivery"));
+        let (names, lines) = DestinationTypeNames::from_filter(&filter_of(&format!(
+            "[filter]\nignored_types = lxmf.delivery\nrequired_only = yes\nallowed_types = <{hash}>\n"
+        )));
+        assert_eq!(
+            lines,
+            [blocked("lxmf.delivery", &lxmf), allowing(&hash, &lxmf)]
+        );
+        assert_eq!(names.get(&lxmf), Some(hash.as_str()));
+
+        // No section, no lines.
+        let (names, lines) = DestinationTypeNames::from_filter(&filter_of(""));
+        assert!(lines.is_empty());
+        assert_eq!(names, DestinationTypeNames::default());
     }
 }

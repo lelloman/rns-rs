@@ -14,6 +14,9 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
     let mut logging_kvs: HashMap<String, String> = HashMap::new();
     let mut stamps_kvs: HashMap<String, String> = HashMap::new();
     let mut filter_kvs: HashMap<String, String> = HashMap::new();
+    // The [filter] keys in file order: upstream applies them in that order,
+    // so whether an allowed type is logged depends on it.
+    let mut filter_key_order: Vec<String> = Vec::new();
     let mut interfaces: Vec<ParsedInterface> = Vec::new();
     let mut current_iface_kvs: Option<HashMap<String, String>> = None;
     let mut current_iface_name: Option<String> = None;
@@ -151,6 +154,8 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
                         stamps_kvs.insert(key, value);
                     }
                     "filter" => {
+                        filter_key_order.retain(|k| *k != key);
+                        filter_key_order.push(key.clone());
                         filter_kvs.insert(key, value);
                     }
                     _ => {} // ignore unknown sections
@@ -182,7 +187,7 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
     }
     let logging = build_logging_section(&logging_kvs)?;
     let stamps = build_stamps_section(&stamps_kvs)?;
-    let filter = build_filter_section(&filter_kvs)?;
+    let filter = build_filter_section(&filter_kvs, filter_key_order)?;
 
     Ok(RnsConfig {
         reticulum,
