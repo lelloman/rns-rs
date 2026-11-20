@@ -22,6 +22,7 @@ pub(crate) use interface_state::*;
 pub(crate) use path_responses::*;
 #[cfg(feature = "iface-backbone")]
 pub use peer_pool::*;
+pub(crate) use settings::InterfaceSettings;
 
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "iface-backbone")]
@@ -332,9 +333,8 @@ pub struct Driver {
     /// to it. Unless this node is a shared instance client, it also owns
     /// the `rnstransport.network` management destinations.
     pub(crate) network_identity: Option<rns_crypto::identity::Identity>,
-    /// The bitrate the shared instance's client interfaces report
-    /// (`force_shared_instance_bitrate`).
-    pub(crate) forced_local_bitrate: Option<u64>,
+    /// Settings applied to interfaces as they register.
+    pub(crate) interface_settings: InterfaceSettings,
     /// Store for received remote ratchets, if persistence/use is enabled.
     pub(crate) ratchet_store: Option<Arc<dyn crate::storage::RatchetStore>>,
     /// TTL for received ratchets, in seconds.
@@ -366,14 +366,6 @@ pub struct Driver {
     /// counted as `hop_limiter_hits` (`Transport.HOP_LIMITER`, set from
     /// `[filter] hop_limiter`).
     pub(crate) hop_limiter: u8,
-    /// Maximum queued outbound frames per interface writer worker.
-    pub(crate) interface_writer_queue_capacity: usize,
-    /// Linux mark inherited by dynamically created IP underlay sockets.
-    pub(crate) underlay_mark: Option<u32>,
-    /// Default announce-rate controls for interfaces on transport nodes.
-    pub(crate) announce_rate_defaults: AnnounceRateDefaults,
-    /// Default ingress/egress controls for interfaces on transport nodes.
-    pub(crate) ingress_control_defaults: rns_core::transport::types::IngressControlConfig,
     /// Shared timer interval used by the node timer thread.
     pub(crate) tick_interval_ms: Arc<AtomicU64>,
     /// Runtime-config handles of the interfaces and the defaults they reset to.

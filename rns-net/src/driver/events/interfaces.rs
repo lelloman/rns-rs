@@ -121,7 +121,7 @@ impl Driver {
     ) -> bool {
         log::debug!("[{}] dynamic interface registered", id.0);
         if info.is_local_client {
-            if let Some(bitrate) = self.forced_local_bitrate {
+            if let Some(bitrate) = self.interface_settings.forced_local_bitrate {
                 info.bitrate = Some(bitrate);
             }
         }

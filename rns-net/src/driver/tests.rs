@@ -16394,7 +16394,7 @@ fn packet_signal_readings_are_cached_per_packet_hash() {
 #[test]
 fn forced_shared_instance_bitrate_applies_to_local_clients() {
     let mut driver = new_test_driver();
-    driver.forced_local_bitrate = Some(9600);
+    driver.interface_settings.forced_local_bitrate = Some(9600);
     let mut local = make_interface_info(5);
     local.is_local_client = true;
     let (writer, _sent) = MockWriter::new();

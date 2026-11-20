@@ -2,6 +2,33 @@
 
 use super::*;
 
+/// Settings applied to interfaces as they register.
+pub(crate) struct InterfaceSettings {
+    /// Default announce-rate controls for interfaces on transport nodes.
+    pub(crate) announce_rate: AnnounceRateDefaults,
+    /// Default ingress/egress controls for interfaces on transport nodes.
+    pub(crate) ingress_control: rns_core::transport::types::IngressControlConfig,
+    /// Maximum queued outbound frames per interface writer worker.
+    pub(crate) writer_queue_capacity: usize,
+    /// Linux mark inherited by dynamically created IP underlay sockets.
+    pub(crate) underlay_mark: Option<u32>,
+    /// The bitrate the shared instance's client interfaces report
+    /// (`force_shared_instance_bitrate`).
+    pub(crate) forced_local_bitrate: Option<u64>,
+}
+
+impl InterfaceSettings {
+    pub(crate) fn new() -> Self {
+        Self {
+            announce_rate: AnnounceRateDefaults::default(),
+            ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
+            writer_queue_capacity: crate::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
+            underlay_mark: None,
+            forced_local_bitrate: None,
+        }
+    }
+}
+
 impl Driver {
     /// Replace the announce verification queue with an empty one using these
     /// limits: entry count, bytes, staleness in seconds and overflow policy.
@@ -23,7 +50,7 @@ impl Driver {
     /// Set the announce rate options given to interfaces that configure no
     /// announce rate target of their own, when transport is enabled.
     pub fn set_announce_rate_defaults(&mut self, defaults: AnnounceRateDefaults) {
-        self.announce_rate_defaults = defaults;
+        self.interface_settings.announce_rate = defaults;
     }
 
     /// Set the ingress control values used in place of the built-in defaults
@@ -32,7 +59,7 @@ impl Driver {
         &mut self,
         defaults: rns_core::transport::types::IngressControlConfig,
     ) {
-        self.ingress_control_defaults = defaults;
+        self.interface_settings.ingress_control = defaults;
     }
 
     /// Remember a configured interface's announce rate and cap options.
@@ -70,16 +97,16 @@ impl Driver {
             return;
         }
 
-        let Some(target) = self.announce_rate_defaults.target else {
+        let Some(target) = self.interface_settings.announce_rate.target else {
             return;
         };
 
         info.announce_rate_target = Some(target);
         if info.announce_rate_grace == 0 {
-            info.announce_rate_grace = self.announce_rate_defaults.grace;
+            info.announce_rate_grace = self.interface_settings.announce_rate.grace;
         }
         if info.announce_rate_penalty == 0.0 {
-            info.announce_rate_penalty = self.announce_rate_defaults.penalty;
+            info.announce_rate_penalty = self.interface_settings.announce_rate.penalty;
         }
     }
 
@@ -96,7 +123,7 @@ impl Driver {
         } else {
             rns_core::transport::types::IngressControlConfig::disabled()
         };
-        let defaults = self.ingress_control_defaults;
+        let defaults = self.interface_settings.ingress_control;
         let ic = &mut info.ingress_control;
 
         if ic.max_held_announces == baseline.max_held_announces {
@@ -148,7 +175,7 @@ impl Driver {
             interface_id,
             interface_name,
             self.event_tx.clone(),
-            self.interface_writer_queue_capacity,
+            self.interface_settings.writer_queue_capacity,
         )
     }
 
@@ -241,6 +268,7 @@ impl Driver {
             .set_probe_config(addrs, protocol, device);
         self.holepunch_manager
             .set_event_sender(self.event_tx.clone());
-        self.holepunch_manager.set_underlay_mark(self.underlay_mark);
+        self.holepunch_manager
+            .set_underlay_mark(self.interface_settings.underlay_mark);
     }
 }
