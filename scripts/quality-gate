@@ -30,7 +30,7 @@ base_rev=$(cat "$baseline/rev")
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-compact=compact-threads-timers,compact-threads-work,compact-threads-services,compact-threads-io
+compact=compact-threads
 
 step() { printf '\n=== %s\n' "$*"; }
 

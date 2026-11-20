@@ -24,8 +24,9 @@ const MAX_QUEUED: usize = 4096;
 /// the others.
 const MAX_BATCH: usize = 8;
 
-/// How many threads verify and sign link proofs. Threads start only in builds with the
-/// `proof-pool` feature; other builds verify every proof inline.
+/// How many threads verify and sign link proofs. Threads start only in the
+/// parallel engine (`engine-parallel`); the compact engine verifies every
+/// proof inline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProofVerifyThreads {
     /// Half the CPUs this process may run on, at least one and at most four.
@@ -41,11 +42,13 @@ pub enum ProofVerifyThreads {
 }
 
 impl ProofVerifyThreads {
-    /// Threads to start: none without the `proof-pool` feature.
+    /// Threads to start: none in the compact engine.
     pub(super) fn count(self) -> usize {
-        if !cfg!(feature = "proof-pool") {
+        if !cfg!(feature = "engine-parallel") {
             if matches!(self, ProofVerifyThreads::Fixed(n) if n > 0) {
-                log::warn!("link proofs verified inline: built without the proof-pool feature");
+                log::warn!(
+                    "link proofs verified inline: built without the engine-parallel feature"
+                );
             }
             return 0;
         }
@@ -371,9 +374,9 @@ fn run_jobs(jobs: Vec<Job>) -> Vec<Outcome> {
         .iter()
         .filter(|job| matches!(job, Job::Verify { .. }))
         .count();
-    // Batches need rns-crypto's `ed25519-batch`, which `proof-pool` (the
-    // only build that starts workers) turns on.
-    #[cfg(feature = "proof-pool")]
+    // Batches need rns-crypto's `ed25519-batch`, which `engine-parallel`
+    // (the only build that starts workers) turns on.
+    #[cfg(feature = "engine-parallel")]
     let batch_valid = checks > 1 && {
         let items: Vec<(&Ed25519PublicKey, &[u8; 64], &[u8])> = jobs
             .iter()
@@ -389,7 +392,7 @@ fn run_jobs(jobs: Vec<Job>) -> Vec<Outcome> {
             .collect();
         rns_crypto::ed25519::verify_batch(&items)
     };
-    #[cfg(not(feature = "proof-pool"))]
+    #[cfg(not(feature = "engine-parallel"))]
     let batch_valid = {
         let _ = checks;
         false

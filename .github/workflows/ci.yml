@@ -229,7 +229,7 @@ jobs:
         # compact folded and compact with its helper threads kept.
         run: |
           cargo test -p rns-net
-          cargo test -p rns-net --features compact-threads-timers,compact-threads-work,compact-threads-services,compact-threads-io
+          cargo test -p rns-net --features compact-threads
           # The BLE RNode transport is not a default feature (it links libdbus).
           cargo test -p rns-net --lib --features iface-rnode-ble rnode
 
@@ -333,7 +333,7 @@ jobs:
           # the compact engine with its helper threads kept, and the
           # parallel engine.
           cargo test -p rns-net --test python_interop -- --nocapture
-          cargo test -p rns-net --features compact-threads-timers,compact-threads-work,compact-threads-services,compact-threads-io --test python_interop -- --nocapture
+          cargo test -p rns-net --features compact-threads --test python_interop -- --nocapture
           cargo test -p rns-net --features engine-parallel --test python_interop -- --nocapture
           cargo test -p rns-cli --test utility_interop -- --ignored --nocapture
           cargo test -p rns-cli --test placeholders -- --ignored --nocapture
@@ -378,7 +378,7 @@ jobs:
       - name: Run hook integration tests under each engine
         run: |
           cargo test -p rns-net --features rns-hooks-wasm,rns-hooks-builtin --test e2e_hooks
-          cargo test -p rns-net --features rns-hooks-wasm,rns-hooks-builtin,compact-threads-timers,compact-threads-work,compact-threads-services,compact-threads-io --test e2e_hooks
+          cargo test -p rns-net --features rns-hooks-wasm,rns-hooks-builtin,compact-threads --test e2e_hooks
           cargo test -p rns-net --features rns-hooks-wasm,rns-hooks-builtin,engine-parallel --test e2e_hooks
 
       - name: Run built-in hook rns-ctl test

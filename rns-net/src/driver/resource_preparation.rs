@@ -211,7 +211,7 @@ impl Drop for Worker {
 }
 
 /// bzip2 level of the compact engine's folded compression, which runs on the
-/// driver loop one bzip2 block at a time (`compact-threads-work` keeps the
+/// driver loop one bzip2 block at a time (`compact-threads` keeps the
 /// worker thread instead, at the codec's default level 6).
 ///
 /// bzip2 sorts each block in a single call, so one block is the smallest
@@ -756,7 +756,7 @@ mod tests {
         (driver, id, errors)
     }
 
-    #[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-work")))]
+    #[cfg(not(any(feature = "engine-parallel", feature = "compact-threads")))]
     #[test]
     fn folded_preparation_keeps_resource_order_on_the_link() {
         let (mut driver, id, errors) = driver();
@@ -773,7 +773,7 @@ mod tests {
         assert!(errors.lock().unwrap().is_empty());
     }
 
-    #[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-work")))]
+    #[cfg(not(any(feature = "engine-parallel", feature = "compact-threads")))]
     #[test]
     fn folded_preparation_keeps_the_worker_budget() {
         let (mut driver, id, errors) = driver();
@@ -790,7 +790,7 @@ mod tests {
         assert!(errors.lock().unwrap().is_empty());
     }
 
-    #[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-work")))]
+    #[cfg(not(any(feature = "engine-parallel", feature = "compact-threads")))]
     #[test]
     fn folded_preparation_fails_when_the_link_is_torn_down() {
         let (mut driver, id, errors) = driver();
@@ -801,7 +801,7 @@ mod tests {
         assert_eq!(errors.lock().unwrap().len(), 1);
     }
 
-    #[cfg(not(any(feature = "engine-parallel", feature = "compact-threads-work")))]
+    #[cfg(not(any(feature = "engine-parallel", feature = "compact-threads")))]
     #[test]
     fn folded_preparation_fails_pending_work_at_shutdown() {
         let (mut driver, id, errors) = driver();
@@ -814,7 +814,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads"))]
     #[test]
     fn preparation_fallback_preserves_resource_order_and_drain_tracks_pending() {
         let (mut driver, id, errors) = driver();
@@ -829,7 +829,7 @@ mod tests {
         assert!(errors.lock().unwrap().is_empty());
     }
 
-    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads"))]
     #[test]
     fn preparation_saturated_driver_falls_back_after_earlier_sends() {
         let (mut driver, id, errors) = driver();
@@ -855,7 +855,7 @@ mod tests {
         assert!(errors.lock().unwrap().is_empty());
     }
 
-    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads"))]
     #[test]
     fn preparation_teardown_discards_ready_result_and_releases_budget() {
         let (mut driver, id, errors) = driver();
@@ -867,7 +867,7 @@ mod tests {
         assert_eq!(driver.resource_preparation.as_ref().unwrap().bytes, 0);
     }
 
-    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads"))]
     #[test]
     fn preparation_cancellation_during_codec_skips_queued_job() {
         let (mut driver, id, errors) = driver();
@@ -899,7 +899,7 @@ mod tests {
         assert_eq!(driver.resource_preparation.as_ref().unwrap().bytes, 0);
     }
 
-    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads"))]
     #[test]
     fn preparation_rejects_result_with_wrong_link_generation() {
         let (mut driver, id, errors) = driver();
@@ -916,7 +916,7 @@ mod tests {
         assert_eq!(errors.lock().unwrap().len(), 1);
     }
 
-    #[cfg(any(feature = "engine-parallel", feature = "compact-threads-work"))]
+    #[cfg(any(feature = "engine-parallel", feature = "compact-threads"))]
     #[test]
     fn preparation_drain_finishes_accepted_work_and_shutdown_cancels_pending() {
         let (mut driver, id, errors) = driver();

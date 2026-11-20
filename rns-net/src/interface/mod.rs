@@ -533,9 +533,9 @@ pub(crate) fn parse_tcp_rate_params(
 }
 
 /// How long a TCP interface lets a frame wait in the driver's write buffer
-/// when `flush_after_us` is not set: 25 µs with the `low-latency-flush`
-/// feature, otherwise until the end of the driver's pass.
-pub(crate) const DEFAULT_FLUSH_AFTER: Option<Duration> = if cfg!(feature = "low-latency-flush") {
+/// when `flush_after_us` is not set: 25 µs in the parallel
+/// engine, otherwise until the end of the driver's pass.
+pub(crate) const DEFAULT_FLUSH_AFTER: Option<Duration> = if cfg!(feature = "engine-parallel") {
     Some(Duration::from_micros(25))
 } else {
     None

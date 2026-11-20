@@ -31,26 +31,14 @@ iface-backbone = []
 iface-i2p = []
 iface-weave = []
 # The parallel engine (docs/engines.md): without it, the compact engine.
-engine-parallel = ["low-latency-flush", "proof-pool", "dep:rayon"]
-# Compact engine: keep the timer and housekeeping threads instead of running
-# that work on the driver loop.
-compact-threads-timers = []
-# Compact engine: keep the CPU-work threads (announce verification) instead
-# of running that work on the driver loop.
-compact-threads-work = []
-# Compact engine: keep the service threads (RPC servers, provider bridge,
-# probe server) instead of serving them on the driver loop.
-compact-threads-services = []
-# Compact engine: keep the interface reader and writer threads of the
-# interface types that have a driver-loop form (UDP, so far).
-compact-threads-io = []
-# TCP interfaces write a buffered frame once it has waited 25 µs, instead of
-# at the end of the driver's pass, unless `flush_after_us` says otherwise:
-# more writes, less latency.
-low-latency-flush = []
-# `NodeConfig::link_proof_verify_threads` may start threads that verify link
-# proofs off the driver thread; without it every proof is verified inline.
-proof-pool = ["rns-crypto/ed25519-batch"]
+# It also writes TCP frames after 25 µs instead of at the end of the
+# driver's pass, and may verify link proofs on worker threads
+# (`NodeConfig::link_proof_verify_threads`) in batches.
+engine-parallel = ["rns-crypto/ed25519-batch", "dep:rayon"]
+# Compact engine: keep the helper threads (timers and housekeeping, CPU
+# work, services, interface I/O) instead of running that work on the
+# driver loop.
+compact-threads = []
 # X25519 on aws-lc (rns-crypto's `x25519-aws-lc`): about twice as fast.
 x25519-aws-lc = ["rns-crypto/x25519-aws-lc"]
 # Ed25519 signing on aws-lc (rns-crypto's `ed25519-aws-lc`): about twice as
