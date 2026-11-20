@@ -1,4 +1,7 @@
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "shared with the library; the firmware binary includes this module privately and uses only part of it"
+)]
 
 //! IFAC (Interface Access Codes) — per-interface cryptographic authentication.
 //!
