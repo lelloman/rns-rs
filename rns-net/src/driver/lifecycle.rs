@@ -299,7 +299,7 @@ impl Driver {
             control.request_stop();
         }
         #[cfg(feature = "hooks")]
-        if let Some(bridge) = self.provider_bridge.as_ref() {
+        if let Some(bridge) = self.hooks.provider_bridge.as_ref() {
             bridge.stop_accepting();
         }
     }
@@ -394,13 +394,13 @@ impl Driver {
             "lifecycle announce verify queue",
         )
         .clear();
-        self.sent_packets.clear();
-        self.sent_packet_keys.clear();
-        self.completed_proofs.clear();
+        self.proofs.sent_packets.clear();
+        self.proofs.sent_packet_keys.clear();
+        self.proofs.completed.clear();
         for control in &self.listener_controls {
             control.finish();
         }
-        self.pending_probes.clear();
+        self.proofs.pending_probes.clear();
         if let Some(handle) = self.housekeeping.ratchet_cleanup_handle.take() {
             let _ = handle.join();
         }
@@ -430,6 +430,7 @@ impl Driver {
         let link_transmissions = self.event_tx.link_send_pool().in_flight();
         #[cfg(feature = "hooks")]
         let (provider_backlog_events, provider_consumer_queued_events) = self
+            .hooks
             .provider_bridge
             .as_ref()
             .map(|bridge| {

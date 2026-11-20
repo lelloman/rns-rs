@@ -184,8 +184,8 @@ impl Driver {
                 let provider_events_enabled = self.provider_events_enabled();
                 let mut outcome = PacketHookOutcome::Keep;
                 if let Some(ref e) = run_hook_inner(
-                    &mut self.hook_slots[HookPoint::DeliverLocal as usize].programs,
-                    &self.hook_manager,
+                    &mut self.hooks.slots[HookPoint::DeliverLocal as usize].programs,
+                    &self.hooks.manager,
                     &engine_ref,
                     &ctx,
                     now,

@@ -97,7 +97,7 @@ impl Driver {
                             if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA
                                 && !packet.is_unproven_link_data()
                             {
-                                self.sent_packets.insert(
+                                self.proofs.sent_packets.insert(
                                     packet.packet_hash,
                                     (packet.destination_hash, time::now()),
                                 );
@@ -153,8 +153,8 @@ impl Driver {
                         };
                         let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
-                            &mut self.hook_slots[HookPoint::LinkEstablished as usize].programs,
-                            &self.hook_manager,
+                            &mut self.hooks.slots[HookPoint::LinkEstablished as usize].programs,
+                            &self.hooks.manager,
                             &engine_ref,
                             &ctx,
                             now,
@@ -207,8 +207,8 @@ impl Driver {
                         };
                         let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
-                            &mut self.hook_slots[HookPoint::LinkClosed as usize].programs,
-                            &self.hook_manager,
+                            &mut self.hooks.slots[HookPoint::LinkClosed as usize].programs,
+                            &self.hooks.manager,
                             &engine_ref,
                             &ctx,
                             now,
@@ -554,8 +554,8 @@ impl Driver {
                         };
                         let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
-                            &mut self.hook_slots[HookPoint::LinkRequestReceived as usize].programs,
-                            &self.hook_manager,
+                            &mut self.hooks.slots[HookPoint::LinkRequestReceived as usize].programs,
+                            &self.hooks.manager,
                             &engine_ref,
                             &ctx,
                             now,

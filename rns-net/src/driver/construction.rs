@@ -104,16 +104,10 @@ impl Driver {
             ratchet_expiry_secs: rns_core::constants::RATCHET_EXPIRY as f64,
             rate_limiter_ttl_secs: DEFAULT_RATE_LIMITER_TTL_SECS,
             path_request_dest,
-            proof_strategies: HashMap::new(),
-            sent_packets: HashMap::new(),
-            sent_packet_keys: HashMap::new(),
-            packet_proofs: Vec::new(),
+            proofs: packet_proofs::PacketProofs::new(),
             decrypted_destinations: HashMap::new(),
             transport_actions: crate::action_pool::ActionPool::new(),
             link_actions: crate::action_pool::ActionPool::new(),
-            completed_proofs: HashMap::new(),
-            pending_probes: std::collections::HashSet::new(),
-            proof_keys: HashMap::new(),
             local_destinations,
             builtin_link_destinations: HashSet::new(),
             builtin_links: HashSet::new(),
@@ -157,13 +151,7 @@ impl Driver {
             management_announce_interval_secs: runtime_config_defaults
                 .management_announce_interval_secs,
             #[cfg(feature = "hooks")]
-            hook_slots: create_hook_slots(),
-            #[cfg(feature = "hooks")]
-            hook_manager: HookManager::new().ok(),
-            #[cfg(feature = "hooks")]
-            provider_bridge: None,
-            #[cfg(feature = "hooks")]
-            hook_rejected_modifications: [0; HookPoint::COUNT],
+            hooks: Hooks::new(),
         }
     }
 }

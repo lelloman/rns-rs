@@ -324,7 +324,8 @@ impl Driver {
             } => {
                 let identity =
                     signing_key.map(|key| rns_crypto::identity::Identity::from_private_key(&key));
-                self.proof_strategies
+                self.proofs
+                    .strategies
                     .insert(dest_hash, (strategy, identity));
             }
             Event::ProposeDirectConnect { link_id } => self.handle_propose_direct_connect(link_id),

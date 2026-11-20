@@ -448,7 +448,7 @@ impl Driver {
             #[cfg(feature = "hooks")]
             "provider.queue_max_events" => {
                 let value = self
-                    .provider_bridge
+                    .hooks.provider_bridge
                     .as_ref()
                     .map(|b| b.queue_max_events())
                     .unwrap_or(defaults.provider_queue_max_events);
@@ -463,7 +463,7 @@ impl Driver {
             #[cfg(feature = "hooks")]
             "provider.queue_max_bytes" => {
                 let value = self
-                    .provider_bridge
+                    .hooks.provider_bridge
                     .as_ref()
                     .map(|b| b.queue_max_bytes())
                     .unwrap_or(defaults.provider_queue_max_bytes);

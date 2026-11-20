@@ -68,7 +68,10 @@ impl Driver {
                 #[cfg(feature = "hooks")]
                 {
                     QueryResponse::ProviderBridgeStats(
-                        self.provider_bridge.as_ref().map(|bridge| bridge.stats()),
+                        self.hooks
+                            .provider_bridge
+                            .as_ref()
+                            .map(|bridge| bridge.stats()),
                     )
                 }
                 #[cfg(not(feature = "hooks"))]

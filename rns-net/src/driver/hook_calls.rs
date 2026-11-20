@@ -7,14 +7,14 @@ use crate::event::HookOpError;
 impl Driver {
     #[cfg(feature = "hooks")]
     pub(super) fn provider_events_enabled(&self) -> bool {
-        self.provider_bridge.is_some()
+        self.hooks.provider_bridge.is_some()
     }
 
     /// Whether any program is attached at `point`. Per-packet hook points
     /// check this before building a hook context, which reads the clock.
     #[cfg(feature = "hooks")]
     pub(crate) fn hooks_attached(&self, point: HookPoint) -> bool {
-        !self.hook_slots[point as usize].programs.is_empty()
+        !self.hooks.slots[point as usize].programs.is_empty()
     }
 
     /// Run the hook attached to a Backbone peer event (connected,
@@ -46,8 +46,8 @@ impl Driver {
         };
         let provider_events_enabled = self.provider_events_enabled();
         if let Some(ref e) = run_hook_inner(
-            &mut self.hook_slots[point as usize].programs,
-            &self.hook_manager,
+            &mut self.hooks.slots[point as usize].programs,
+            &self.hooks.manager,
             &engine_ref,
             &ctx,
             now,
@@ -69,7 +69,7 @@ impl Driver {
     {
         let point_idx = crate::config::parse_hook_point(attach_point)
             .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
-        let program = self.hook_slots[point_idx]
+        let program = self.hooks.slots[point_idx]
             .programs
             .iter_mut()
             .find(|program| program.name == name)
@@ -110,7 +110,7 @@ impl Driver {
         match validate_hook_replacement(data, max_len) {
             Ok(packet) => PacketHookOutcome::Replace(packet),
             Err(reason) => {
-                let rejected = &mut self.hook_rejected_modifications[point as usize];
+                let rejected = &mut self.hooks.rejected_modifications[point as usize];
                 *rejected = rejected.saturating_add(1);
                 log::debug!("{:?} hook: {}; dropping packet", point, reason);
                 PacketHookOutcome::Drop
@@ -149,7 +149,7 @@ impl Driver {
         if !exec.injected_actions.is_empty() {
             self.dispatch_all(convert_injected_actions(exec.injected_actions.clone()));
         }
-        if let Some(ref bridge) = self.provider_bridge {
+        if let Some(ref bridge) = self.hooks.provider_bridge {
             for event in &exec.provider_events {
                 bridge.emit_event(
                     attach_point,
@@ -171,7 +171,7 @@ impl Driver {
         if !exec.injected_actions.is_empty() {
             out.extend(convert_injected_actions(exec.injected_actions.clone()));
         }
-        if let Some(ref bridge) = self.provider_bridge {
+        if let Some(ref bridge) = self.hooks.provider_bridge {
             for event in &exec.provider_events {
                 bridge.emit_event(
                     attach_point,

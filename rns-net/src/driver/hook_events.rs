@@ -21,11 +21,11 @@ impl Driver {
                     let result = (|| -> Result<(), HookOpError> {
                         let point_idx = crate::config::parse_hook_point(&attach_point)
                             .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
-                        let mgr = self.hook_manager.as_ref().ok_or(HookOpError::NoManager)?;
+                        let mgr = self.hooks.manager.as_ref().ok_or(HookOpError::NoManager)?;
                         let program = mgr
                             .compile(name.clone(), &wasm_bytes, priority)
                             .map_err(|e| HookOpError::Compile(e.to_string()))?;
-                        self.hook_slots[point_idx].attach(program);
+                        self.hooks.slots[point_idx].attach(program);
                         log::info!(
                             "Loaded hook '{}' at point {} (priority {})",
                             name,
@@ -57,7 +57,7 @@ impl Driver {
                             .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
                         let backend = crate::config::parse_hook_backend(&hook_type)
                             .map_err(HookOpError::Backend)?;
-                        let mgr = self.hook_manager.as_ref().ok_or(HookOpError::NoManager)?;
+                        let mgr = self.hooks.manager.as_ref().ok_or(HookOpError::NoManager)?;
                         let program = mgr
                             .load_file_backend(
                                 name.clone(),
@@ -66,7 +66,7 @@ impl Driver {
                                 backend,
                             )
                             .map_err(|e| HookOpError::Load(e.to_string()))?;
-                        self.hook_slots[point_idx].attach(program);
+                        self.hooks.slots[point_idx].attach(program);
                         log::info!(
                             "Loaded {} hook '{}' at point {} (priority {})",
                             backend.as_str(),
@@ -96,11 +96,11 @@ impl Driver {
                     let result = (|| -> Result<(), HookOpError> {
                         let point_idx = crate::config::parse_hook_point(&attach_point)
                             .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
-                        let mgr = self.hook_manager.as_ref().ok_or(HookOpError::NoManager)?;
+                        let mgr = self.hooks.manager.as_ref().ok_or(HookOpError::NoManager)?;
                         let program = mgr
                             .load_builtin(name.clone(), builtin_id.as_str(), priority)
                             .map_err(|e| HookOpError::Load(e.to_string()))?;
-                        self.hook_slots[point_idx].attach(program);
+                        self.hooks.slots[point_idx].attach(program);
                         log::info!(
                             "Loaded built-in hook '{}' ({}) at point {} (priority {})",
                             name,
@@ -128,7 +128,7 @@ impl Driver {
                     let result = (|| -> Result<(), HookOpError> {
                         let point_idx = crate::config::parse_hook_point(&attach_point)
                             .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
-                        match self.hook_slots[point_idx].detach(&name) {
+                        match self.hooks.slots[point_idx].detach(&name) {
                             Some(_) => {
                                 log::info!("Unloaded hook '{}' from point {}", name, attach_point);
                                 Ok(())
@@ -158,23 +158,23 @@ impl Driver {
                     let result = (|| -> Result<(), HookOpError> {
                         let point_idx = crate::config::parse_hook_point(&attach_point)
                             .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
-                        let old = self.hook_slots[point_idx].detach(&name).ok_or_else(|| {
+                        let old = self.hooks.slots[point_idx].detach(&name).ok_or_else(|| {
                             HookOpError::NotFound {
                                 name: name.to_string(),
                                 point: attach_point.to_string(),
                             }
                         })?;
                         let priority = old.priority;
-                        let mgr = match self.hook_manager.as_ref() {
+                        let mgr = match self.hooks.manager.as_ref() {
                             Some(m) => m,
                             None => {
-                                self.hook_slots[point_idx].attach(old);
+                                self.hooks.slots[point_idx].attach(old);
                                 return Err(HookOpError::NoManager);
                             }
                         };
                         match mgr.compile(name.clone(), &wasm_bytes, priority) {
                             Ok(program) => {
-                                self.hook_slots[point_idx].attach(program);
+                                self.hooks.slots[point_idx].attach(program);
                                 log::info!(
                                     "Reloaded hook '{}' at point {} (priority {})",
                                     name,
@@ -184,7 +184,7 @@ impl Driver {
                                 Ok(())
                             }
                             Err(e) => {
-                                self.hook_slots[point_idx].attach(old);
+                                self.hooks.slots[point_idx].attach(old);
                                 Err(HookOpError::Compile(e.to_string()))
                             }
                         }
@@ -209,7 +209,7 @@ impl Driver {
                     let result = (|| -> Result<(), HookOpError> {
                         let point_idx = crate::config::parse_hook_point(&attach_point)
                             .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
-                        let old = self.hook_slots[point_idx].detach(&name).ok_or_else(|| {
+                        let old = self.hooks.slots[point_idx].detach(&name).ok_or_else(|| {
                             HookOpError::NotFound {
                                 name: name.to_string(),
                                 point: attach_point.to_string(),
@@ -219,14 +219,14 @@ impl Driver {
                         let backend = match crate::config::parse_hook_backend(&hook_type) {
                             Ok(backend) => backend,
                             Err(e) => {
-                                self.hook_slots[point_idx].attach(old);
+                                self.hooks.slots[point_idx].attach(old);
                                 return Err(HookOpError::Backend(e));
                             }
                         };
-                        let mgr = match self.hook_manager.as_ref() {
+                        let mgr = match self.hooks.manager.as_ref() {
                             Some(m) => m,
                             None => {
-                                self.hook_slots[point_idx].attach(old);
+                                self.hooks.slots[point_idx].attach(old);
                                 return Err(HookOpError::NoManager);
                             }
                         };
@@ -237,7 +237,7 @@ impl Driver {
                             backend,
                         ) {
                             Ok(program) => {
-                                self.hook_slots[point_idx].attach(program);
+                                self.hooks.slots[point_idx].attach(program);
                                 log::info!(
                                     "Reloaded {} hook '{}' at point {} (priority {})",
                                     backend.as_str(),
@@ -248,7 +248,7 @@ impl Driver {
                                 Ok(())
                             }
                             Err(e) => {
-                                self.hook_slots[point_idx].attach(old);
+                                self.hooks.slots[point_idx].attach(old);
                                 Err(HookOpError::Load(e.to_string()))
                             }
                         }
@@ -272,23 +272,23 @@ impl Driver {
                     let result = (|| -> Result<(), HookOpError> {
                         let point_idx = crate::config::parse_hook_point(&attach_point)
                             .ok_or_else(|| HookOpError::UnknownPoint(attach_point.to_string()))?;
-                        let old = self.hook_slots[point_idx].detach(&name).ok_or_else(|| {
+                        let old = self.hooks.slots[point_idx].detach(&name).ok_or_else(|| {
                             HookOpError::NotFound {
                                 name: name.to_string(),
                                 point: attach_point.to_string(),
                             }
                         })?;
                         let priority = old.priority;
-                        let mgr = match self.hook_manager.as_ref() {
+                        let mgr = match self.hooks.manager.as_ref() {
                             Some(m) => m,
                             None => {
-                                self.hook_slots[point_idx].attach(old);
+                                self.hooks.slots[point_idx].attach(old);
                                 return Err(HookOpError::NoManager);
                             }
                         };
                         match mgr.load_builtin(name.clone(), builtin_id.as_str(), priority) {
                             Ok(program) => {
-                                self.hook_slots[point_idx].attach(program);
+                                self.hooks.slots[point_idx].attach(program);
                                 log::info!(
                                     "Reloaded built-in hook '{}' ({}) at point {} (priority {})",
                                     name,
@@ -299,7 +299,7 @@ impl Driver {
                                 Ok(())
                             }
                             Err(e) => {
-                                self.hook_slots[point_idx].attach(old);
+                                self.hooks.slots[point_idx].attach(old);
                                 Err(HookOpError::Load(e.to_string()))
                             }
                         }
@@ -352,7 +352,7 @@ impl Driver {
                     });
                     if result.is_ok() {
                         if let Some(point_idx) = crate::config::parse_hook_point(&attach_point) {
-                            self.hook_slots[point_idx]
+                            self.hooks.slots[point_idx]
                                 .programs
                                 .sort_by_key(|program| std::cmp::Reverse(program.priority));
                             log::info!(
@@ -403,7 +403,7 @@ impl Driver {
                         "Tick",
                     ];
                     let mut infos = Vec::new();
-                    for (idx, slot) in self.hook_slots.iter().enumerate() {
+                    for (idx, slot) in self.hooks.slots.iter().enumerate() {
                         let point_name = hook_point_names.get(idx).unwrap_or(&"Unknown");
                         for prog in &slot.programs {
                             infos.push(crate::event::HookInfo {

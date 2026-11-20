@@ -3,6 +3,30 @@
 
 use super::*;
 
+/// The programmable hook system's driver-side state.
+pub(crate) struct Hooks {
+    /// Hook slots, one per [`HookPoint`].
+    pub(crate) slots: [HookSlot; HookPoint::COUNT],
+    /// Hook manager. None if initialization failed.
+    pub(crate) manager: Option<HookManager>,
+    /// Hands the events hooks emit to connected consumers, when enabled.
+    pub(crate) provider_bridge: Option<ProviderBridge>,
+    /// Per hook point count of `Modify` replacements that failed validation
+    /// and were therefore treated as `Drop`.
+    pub(crate) rejected_modifications: [u64; HookPoint::COUNT],
+}
+
+impl Hooks {
+    pub(crate) fn new() -> Self {
+        Self {
+            slots: create_hook_slots(),
+            manager: HookManager::new().ok(),
+            provider_bridge: None,
+            rejected_modifications: [0; HookPoint::COUNT],
+        }
+    }
+}
+
 /// Thin wrapper providing `EngineAccess` for a `TransportEngine` + Driver interfaces.
 #[cfg(feature = "hooks")]
 pub(super) struct EngineRef<'a> {

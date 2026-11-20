@@ -81,8 +81,8 @@ impl Driver {
             let provider_events_enabled = self.provider_events_enabled();
             // Tick carries no packet: `Modify` acts as `Continue`.
             if let Some(ref e) = run_hook_inner(
-                &mut self.hook_slots[HookPoint::Tick as usize].programs,
-                &self.hook_manager,
+                &mut self.hooks.slots[HookPoint::Tick as usize].programs,
+                &self.hooks.manager,
                 &engine_ref,
                 &ctx,
                 now,
@@ -111,14 +111,18 @@ impl Driver {
         self.tick_management_announces(now);
         self.tick_blackhole_updater(now);
         self.tick_upstream_autoconnect(now);
-        self.sent_packets
+        self.proofs
+            .sent_packets
             .retain(|_, (_, sent_time)| now - *sent_time < 60.0);
-        let sent_packets = &self.sent_packets;
-        self.sent_packet_keys
+        let sent_packets = &self.proofs.sent_packets;
+        self.proofs
+            .sent_packet_keys
             .retain(|hash, _| sent_packets.contains_key(hash));
-        self.pending_probes
+        self.proofs
+            .pending_probes
             .retain(|hash| sent_packets.contains_key(hash));
-        self.completed_proofs
+        self.proofs
+            .completed
             .retain(|_, (_, received)| now - *received < 120.0);
         self.expire_local_path_responses(now);
 

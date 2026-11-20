@@ -150,13 +150,13 @@ impl Driver {
             self.engine.announce_queue_interface_cap_drop_count(),
             self.engine.discovery_pr_tags_count(),
             self.engine.discovery_path_requests_count(),
-            self.sent_packets.len(),
-            self.completed_proofs.len(),
+            self.proofs.sent_packets.len(),
+            self.proofs.completed.len(),
             self.local_destinations.len(),
             self.shared_announces.len(),
             self.link_manager.link_count(),
             self.holepunch_manager.session_count(),
-            self.proof_strategies.len(),
+            self.proofs.strategies.len(),
         );
     }
 }
