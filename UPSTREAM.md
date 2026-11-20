@@ -10,15 +10,47 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.6.1`
 - Version metadata commit: `fd36a97220a40383ce7f0a1d0f40bc7043f4494f`
-- Release tag: none at this commit; upstream signed `1.6.1` on 2026-11-18 at
-  `cff4d03f` (its `Updated changelog` commit), 34 commits later, which
-  [`reticulum-1.6.1-rgit-audit.md`](docs/upstream-parity/reticulum-1.6.1-rgit-audit.md)
-  audits
-- Normative commit: `884f109b2b821638c7addd456a52a2cd5bb8c5b1`
-- Commit date: `2026-11-15 16:53:08 +0100`
-- Subject: `Fixed missing wanted destination type for interface discovery`
+- Release tag: `1.6.1` on `cff4d03fdbd6bfb63b765280cd944756ac5cce8d`
+  (signed; tag object `bde4cd790a78b5ed285243fcc17f6439bb582288`)
+- Normative commit: `cff4d03fdbd6bfb63b765280cd944756ac5cce8d`
+- Commit date: `2026-11-18 18:41:56 +0100`
+- Subject: `Updated changelog`
 
-The normative baseline is the canonical `rgit/master` tip `884f109b`, accepted
+The normative baseline is the signed `1.6.1` release, the canonical
+`rgit/master` tip `cff4d03f`, accepted on 2026-11-20 as a same-version
+Reticulum 1.6.1 advancement from `884f109b`. The GitHub mirror agrees with
+rgit. The range has 34 commits:
+
+- An announce waiting for rebroadcast is not sent back on the interfaces a
+  copy of it arrived on, unless they are shared media.
+- Auto-connected discovered interfaces are capped at 12, with warnings
+  above 6, unless `autoconnect_discovered_interfaces_disable_caps` comes
+  first.
+- Only AES-256-CBC links can be created or accepted.
+- A split-mode client loads the instance's known destinations over RPC.
+- `rnstatus -T` shows the remote transport status of tunnels, and
+  `rnstatus -l -t` the traffic of relayed and own links.
+- rngit takes `link_cost` and `stamp_value`.
+- Instance-local paths survive culling and are not rediscovered through
+  links; a local client's path response marks its path responsive and
+  answers only the requester; a path replaced only because it was
+  unresponsive is not rebroadcast.
+- Interfaces carry a `lossless_medium` flag, unread.
+- `rnpath` gains display and filter options, the path state marker and an
+  analysis stub, now `Not yet implemented`; path tables carry `state`, and
+  `link_distribution` is reported.
+- Destination types can be named from `known_destination_types` and
+  `flagged_destination_types` files.
+- Listener backlogs are raised.
+
+`unresponsive_path_recovery` (default `native`) keeps rns-rs's own
+recovery of unresponsive paths, or decides as upstream with `upstream`.
+Acceptance evidence is in
+[`docs/upstream-parity/reticulum-1.6.1-rgit-parity.md`](docs/upstream-parity/reticulum-1.6.1-rgit-parity.md)
+and the detailed audit is
+[`docs/upstream-parity/reticulum-1.6.1-rgit-audit.md`](docs/upstream-parity/reticulum-1.6.1-rgit-audit.md).
+
+The previous baseline was the canonical `rgit/master` tip `884f109b`, accepted
 on 2026-11-16 as Reticulum 1.6.1 from `c850cdac`. Upstream bumped the version
 without tagging it; the GitHub mirror agrees with rgit. The range has
 seventeen commits:

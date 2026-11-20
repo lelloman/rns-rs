@@ -1781,7 +1781,7 @@ promotion gates were run on it; see the acceptance record.
 - [x] Workspace tests, feature suites, formatting, and lint pass.
 - [x] Required build, Docker, hardware, and manual gates are recorded honestly.
 - [x] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
@@ -1908,3 +1908,5 @@ not verified (no allowed signers file is configured).
 build and physical hardware validation. Docker E2E and the CI interop
 matrix, which this promotion moves to `cff4d03f`, are left to the
 promotion pull request's CI; hardware validation is not claimed.
+
+The final record is [reticulum-1.6.1-rgit-parity.md](reticulum-1.6.1-rgit-parity.md).
