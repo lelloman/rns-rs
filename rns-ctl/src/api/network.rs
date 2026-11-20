@@ -255,7 +255,7 @@ pub(super) fn handle_links(node: &NodeHandle) -> HttpResponse {
                         "channel_send_too_big": l.channel_send_too_big,
                         "channel_send_other_error": l.channel_send_other_error,
                         "channel_messages_received": l.channel_messages_received,
-                        "channel_proofs_sent": l.channel_proofs_sent,
+                        "channel_proofs_sent": l.packet_proofs_sent,
                         "channel_proofs_received": l.channel_proofs_received,
                     })
                 })

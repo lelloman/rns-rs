@@ -18,7 +18,8 @@ pub(super) struct ManagedLink {
     pub(super) channel_send_too_big: u64,
     pub(super) channel_send_other_error: u64,
     pub(super) channel_messages_received: u64,
-    pub(super) channel_proofs_sent: u64,
+    /// Proofs built for packets received on the link, channel or not.
+    pub(super) packet_proofs_sent: u64,
     pub(super) channel_proofs_received: u64,
     /// Destination hash this link belongs to.
     pub(super) dest_hash: [u8; 16],
