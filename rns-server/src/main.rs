@@ -42,9 +42,9 @@ fn main() -> ExitCode {
 fn run_internal_role(role: &str) -> ExitCode {
     let argv = sanitized_internal_argv();
     match role {
-        "rnsd" => {
-            rns_cli::exit::exit_code(rns_cli::rnsd::main_entry_from(CliArgs::parse_from(argv)))
-        }
+        "rnsd" => rns_cli::exit::exit_code(rns_cli::rnsd::main_entry_from(
+            CliArgs::parse_spec_from(argv, &rns_cli::rnsd::OPTIONS),
+        )),
         #[cfg(any(
             feature = "rns-hooks-native",
             feature = "rns-hooks-wasm",
