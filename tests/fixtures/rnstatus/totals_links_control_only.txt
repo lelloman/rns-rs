@@ -134,3 +134,12 @@
 
  Totals       : ↑98.77 KB   0 bps
                 ↓123.46 MB  3.80 Kbps
+
+ Links        : ↑5.12 KB  128 bps, 0% of data flow
+                ↓4.32 MB  2.50 Kbps, 0% of data flow
+
+ Transport Instance <000102030405060708090a0b0c0d0e0f> running
+ Network Identity   <101112131415161718191a1b1c1d1e1f>
+ Probe responder at <202122232425262728292a2b2c2d2e2f> active
+ Uptime is 1d, 2h, 3m and 4.5s, 1 entry in link table
+

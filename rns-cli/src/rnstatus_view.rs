@@ -186,25 +186,9 @@ macro_rules! outln {
     ($out:expr, $($arg:tt)*) => {{ $out.push_str(&format!($($arg)*)); $out.push('\n'); }};
 }
 
-/// Where upstream's status display raises: what it had printed, and the
-/// exception, as Python's traceback ends with it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Crash {
-    /// The output printed before the exception.
-    pub printed: String,
-    /// The exception's last traceback line.
-    pub error: &'static str,
-}
-
 /// The status display for `stats` (upstream's `get_interface_stats()`
 /// result), as upstream prints it; `now` stands in for `time.time()`.
-/// `Err` where upstream's display raises.
-pub fn render(
-    stats: &PickleValue,
-    opts: &ViewOptions,
-    extras: &Extras<'_>,
-    now: f64,
-) -> Result<String, Crash> {
+pub fn render(stats: &PickleValue, opts: &ViewOptions, extras: &Extras<'_>, now: f64) -> String {
     let mut out = String::new();
 
     for ifstat in sorted_interfaces(stats, opts) {
@@ -215,12 +199,7 @@ pub fn render(
 
     let lstr = link_table_str(stats, opts, extras);
     if opts.traffic_totals {
-        if let Err(error) = render_totals(&mut out, stats, opts) {
-            return Err(Crash {
-                printed: out,
-                error,
-            });
-        }
+        render_totals(&mut out, stats, opts);
     }
     if opts.queue_stats {
         render_queue_pressure(&mut out, stats);
@@ -235,7 +214,7 @@ pub fn render(
     render_instance_footer(&mut out, stats, &lstr);
 
     outln!(out, "");
-    Ok(out)
+    out
 }
 
 /// The interfaces in display order: as listed, or sorted by `-s`.
@@ -990,13 +969,8 @@ fn link_table_str(stats: &PickleValue, opts: &ViewOptions, extras: &Extras<'_>) 
 }
 
 /// `-t`: the instance's traffic totals, with `-F`'s filtered totals, `-l`'s
-/// link totals and `-P`/`-A`'s path request and announce totals. `Err` is
-/// the exception upstream raises.
-fn render_totals(
-    out: &mut String,
-    stats: &PickleValue,
-    opts: &ViewOptions,
-) -> Result<(), &'static str> {
+/// link totals and `-P`/`-A`'s path request and announce totals.
+fn render_totals(out: &mut String, stats: &PickleValue, opts: &ViewOptions) {
     let mut rxb_str = format!("↓{}", prettysize(num(stats, "rxb").f(), "B"));
     let mut txb_str = format!("↑{}", prettysize(num(stats, "txb").f(), "B"));
     equalize(&mut rxb_str, &mut txb_str);
@@ -1041,7 +1015,7 @@ fn render_totals(
         && has(stats, "lrxs")
         && has(stats, "ltxs")
     {
-        render_link_totals(out, stats)?;
+        render_link_totals(out, stats);
     }
 
     for (enabled, prefix, label) in [
@@ -1052,34 +1026,30 @@ fn render_totals(
             render_control_totals(out, stats, prefix, label);
         }
     }
-    Ok(())
 }
 
 /// `-l` with `-t` (upstream ef3e8086): the link table's traffic and its
 /// share of the data flow, the totals less announces and path requests.
-/// As at ef3e8086, a share is only computed when the total speed is not 0,
-/// so where announces and path requests make up all of it, upstream
-/// divides by zero.
-fn render_link_totals(out: &mut String, stats: &PickleValue) -> Result<(), &'static str> {
+/// A share is only computed when the data flow and the link speed are not
+/// 0, and is 0 otherwise (upstream e8b3b14b; at ef3e8086 the guard was the
+/// total speed, which divided by zero where announces and path requests
+/// made up all of it).
+fn render_link_totals(out: &mut String, stats: &PickleValue) {
     let mut lrxb_str = format!("↓{}", prettysize(num(stats, "lrxb").f(), "B"));
     let mut ltxb_str = format!("↑{}", prettysize(num(stats, "ltxb").f(), "B"));
     equalize(&mut lrxb_str, &mut ltxb_str);
 
-    let (rxs, txs) = (num(stats, "rxs").f(), num(stats, "txs").f());
     let ((_, drxs), (_, dtxs)) = data_shares(stats);
     let (lrxs, ltxs) = (num(stats, "lrxs").f(), num(stats, "ltxs").f());
-    let share = |total: f64, link: f64, data: f64| {
-        if total != 0.0 && link != 0.0 {
-            if data == 0.0 {
-                return Err("ZeroDivisionError: float division by zero");
-            }
-            Ok(f64::min(100.0, (link / data) * 100.0))
+    let share = |data: f64, link: f64| {
+        if data != 0.0 && link != 0.0 {
+            f64::min(100.0, (link / data) * 100.0)
         } else {
-            Ok(0.0)
+            0.0
         }
     };
-    let lrxspct = share(rxs, lrxs, drxs)?;
-    let ltxspct = share(txs, ltxs, dtxs)?;
+    let lrxspct = share(drxs, lrxs);
+    let ltxspct = share(dtxs, ltxs);
 
     let lrxstat = format!(
         "{lrxb_str}  {}, {}% of data flow",
@@ -1095,7 +1065,6 @@ fn render_link_totals(out: &mut String, stats: &PickleValue) -> Result<(), &'sta
         out,
         "\n Links        : {ltxstat}\n                {lrxstat}"
     );
-    Ok(())
 }
 
 /// The percentage and speed of the received and of the transmitted totals
@@ -1706,48 +1675,43 @@ mod tests {
             let inputs = rns_net::pickle::decode(&std::fs::read(&path).unwrap()).unwrap();
             let expected = std::fs::read_to_string(path.with_extension("txt")).unwrap();
             // Where upstream's display raised, `.txt` holds what it printed
-            // first and `.err` the exception.
+            // first and `.err` the exception; rns-rs's display never raises.
             let expected_error = std::fs::read_to_string(path.with_extension("err")).ok();
             let now = inputs.get("now").and_then(Num::of).unwrap().f();
             let options = inputs.get("options").unwrap();
-            let (rendered, error) =
-                if let Some(PickleValue::List(records)) = inputs.get("discovered") {
-                    let flag = |key: &str| truthy(options.get(key));
-                    let rendered = if flag("json") {
-                        render_discovered_json(records)
-                    } else {
-                        render_discovered(
-                            records,
-                            flag("config_entries"),
-                            options.get("name_filter").and_then(|v| v.as_str()),
-                            flag("show_stale"),
-                            flag("show_unknown"),
-                            now,
-                        )
-                    };
-                    (rendered, None)
+            let rendered = if let Some(PickleValue::List(records)) = inputs.get("discovered") {
+                let flag = |key: &str| truthy(options.get(key));
+                if flag("json") {
+                    render_discovered_json(records)
                 } else {
-                    let profiling = inputs
-                        .get("profiling")
-                        .filter(|v| !matches!(v, PickleValue::None));
-                    let extras = Extras {
-                        link_count: inputs.get("link_count").and_then(Num::of),
-                        active_link_count: inputs.get("active_link_count").and_then(Num::of),
-                        profiling_results: profiling,
-                    };
-                    match render(
-                        inputs.get("stats").unwrap(),
-                        &options_from(options),
-                        &extras,
+                    render_discovered(
+                        records,
+                        flag("config_entries"),
+                        options.get("name_filter").and_then(|v| v.as_str()),
+                        flag("show_stale"),
+                        flag("show_unknown"),
                         now,
-                    ) {
-                        Ok(rendered) => (rendered, None),
-                        Err(crash) => (crash.printed, Some(crash.error)),
-                    }
+                    )
+                }
+            } else {
+                let profiling = inputs
+                    .get("profiling")
+                    .filter(|v| !matches!(v, PickleValue::None));
+                let extras = Extras {
+                    link_count: inputs.get("link_count").and_then(Num::of),
+                    active_link_count: inputs.get("active_link_count").and_then(Num::of),
+                    profiling_results: profiling,
                 };
-            if error != expected_error.as_deref().map(str::trim_end) {
+                render(
+                    inputs.get("stats").unwrap(),
+                    &options_from(options),
+                    &extras,
+                    now,
+                )
+            };
+            if let Some(error) = expected_error {
                 failures.push(format!(
-                    "{}: rust raised {error:?}, upstream {expected_error:?}",
+                    "{}: upstream raised {error:?}",
                     path.file_stem().unwrap().to_string_lossy(),
                 ));
             }
