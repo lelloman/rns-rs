@@ -1670,25 +1670,52 @@ fn backbone_six_fast_flaps_reject_before_allocating_seventh_interface() {
     start(config, tx, Arc::clone(&next_id)).unwrap();
     thread::sleep(Duration::from_millis(50));
 
+    // Skips peer lifecycle events, keeping the penalties.
+    let mut penalties = Vec::new();
+    let next_event = |penalties: &mut Vec<Event>| loop {
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        match event {
+            Event::BackbonePeerPenalty { .. } => penalties.push(event),
+            Event::BackbonePeerConnected { .. }
+            | Event::BackbonePeerDisconnected { .. }
+            | Event::BackbonePeerIdleTimeout { .. }
+            | Event::BackbonePeerWriteStall { .. } => {}
+            other => return other,
+        }
+    };
+
     for flap in 0..6 {
         let mut client = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
-        let up = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
+        let up = next_event(&mut penalties);
         assert!(matches!(up, Event::InterfaceUp(_, _, _)));
 
         // Receiving traffic must not exempt a short-lived connection.
         if flap == 0 {
             let payload = vec![0x41; 32];
             client.write_all(&hdlc::frame(&payload)).unwrap();
-            let frame = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
+            let frame = next_event(&mut penalties);
             assert!(matches!(frame, Event::Frame { data, .. } if data == payload.into()));
         }
 
         drop(client);
-        let down = recv_non_peer_event(&rx, Duration::from_secs(2)).unwrap();
+        let down = next_event(&mut penalties);
         assert!(matches!(down, Event::InterfaceDown(_)));
     }
 
     let peer_ip: IpAddr = "127.0.0.1".parse().unwrap();
+    // The block is reported once, as a penalty for the block's duration.
+    assert!(
+        matches!(
+            penalties.as_slice(),
+            [Event::BackbonePeerPenalty {
+                server_interface_id: InterfaceId(99),
+                peer_ip: ip,
+                penalty_level: 0,
+                blacklist_for,
+            }] if *ip == peer_ip && *blacklist_for == test_fast_flap_config().block_duration
+        ),
+        "{penalties:?}"
+    );
     assert!(
         lock_or_recover(&fast_flap_state, "test fast-flap state").is_blocked(
             peer_ip,
