@@ -93,6 +93,7 @@ fn inbound_packet_hashes_are_remembered_as_upstream() {
             destination_hash: [0xD0; 16],
             validated: true,
             proof_timeout: 2000.0,
+            traffic: 0,
         },
     );
     let link_flags = |packet_type| {
@@ -284,6 +285,7 @@ fn relayed_link(next_hop_interface: u64, received_interface: u64) -> LinkEntry {
         destination_hash: [0xD0; 16],
         validated: true,
         proof_timeout: 2000.0,
+        traffic: 0,
     }
 }
 
@@ -317,6 +319,67 @@ fn link_traffic_is_relayed_only_by_nodes_with_a_transport_identity() {
         let actions = receive(&mut engine, &link_data, 1);
         assert_eq!(sent_on(&actions, 2).is_some(), relays);
     }
+}
+
+/// Upstream 3f55e9eb: each link packet forwarded along a link adds its raw
+/// length to the link's traffic counter, in either direction; one not
+/// forwarded adds nothing.
+#[test]
+fn forwarded_link_traffic_counts_raw_bytes() {
+    let link_id = [0x4C; 16];
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+    engine.register_interface(make_interface(3, constants::MODE_FULL));
+    // Each hop counts on arrival: the request came in after one, the
+    // destination is two away.
+    engine.register_link(
+        link_id,
+        LinkEntry {
+            taken_hops: 1,
+            remaining_hops: 2,
+            ..relayed_link(2, 1)
+        },
+    );
+    let link_data = |hops: u8, context: u8| {
+        packet(
+            flags(
+                constants::HEADER_1,
+                constants::DESTINATION_LINK,
+                constants::PACKET_TYPE_DATA,
+            ),
+            hops,
+            &link_id,
+            None,
+            context,
+        )
+    };
+    let traffic = |engine: &TransportEngine| engine.link_table[&link_id].traffic;
+    assert_eq!(traffic(&engine), 0);
+
+    // Toward the destination, then back.
+    let outbound = link_data(0, constants::CONTEXT_NONE);
+    let actions = receive(&mut engine, &outbound, 1);
+    let sent = sent_on(&actions, 2).expect("forwarded toward the destination");
+    assert_eq!(sent.len(), outbound.raw.len());
+    assert_eq!(traffic(&engine), outbound.raw.len() as u64);
+    let inbound = link_data(1, constants::CONTEXT_KEEPALIVE);
+    let actions = receive(&mut engine, &inbound, 2);
+    assert!(sent_on(&actions, 1).is_some());
+    assert_eq!(
+        traffic(&engine),
+        (outbound.raw.len() + inbound.raw.len()) as u64
+    );
+
+    // From an interface the link does not use: not forwarded, not counted.
+    let before = traffic(&engine);
+    let stray = link_data(0, constants::CONTEXT_CHANNEL);
+    let actions = receive(&mut engine, &stray, 3);
+    assert!(actions
+        .iter()
+        .all(|action| !matches!(action, TransportAction::SendOnInterface { .. })));
+    assert_eq!(traffic(&engine), before);
+    assert_eq!(engine.link_distribution()[0].traffic, before);
 }
 
 /// As upstream, announces, link requests and link request proofs are

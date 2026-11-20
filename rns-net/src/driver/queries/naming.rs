@@ -27,6 +27,20 @@ impl Driver {
         )
     }
 
+    /// Upstream's `interface.get_hash()`: the full hash of the interface's
+    /// `str()`, named as the path table names it.
+    pub(crate) fn interface_hash(&self, id: &InterfaceId) -> [u8; 32] {
+        let name = match self.interfaces.get(id) {
+            Some(entry) => self.interface_display_name(entry),
+            None => self
+                .engine
+                .interface_info(id)
+                .map(|info| info.name.clone())
+                .unwrap_or_default(),
+        };
+        rns_core::hash::full_hash(name.as_bytes())
+    }
+
     /// Name a client the shared instance accepted on its abstract Unix
     /// socket, before it is added, as upstream does: `{clients}@\0rns/{instance}`,
     /// after the number of clients the instance serves (on TCP the

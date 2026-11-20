@@ -13,6 +13,7 @@ fn entry(next_hop_interface: u64, received_interface: u64) -> LinkEntry {
         destination_hash: [0x99; 16],
         validated: false,
         proof_timeout: 1010.0,
+        traffic: 0,
     }
 }
 

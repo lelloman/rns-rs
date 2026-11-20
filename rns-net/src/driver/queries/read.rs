@@ -174,13 +174,24 @@ impl Driver {
                 self.engine
                     .link_distribution()
                     .into_iter()
-                    .map(
-                        |(destination_hash, total, active)| crate::event::LinkDistributionEntry {
-                            destination_hash,
-                            total,
-                            active,
-                        },
-                    )
+                    .map(|destination| {
+                        let mut from_interface_hashes: Vec<[u8; 32]> = Vec::new();
+                        for id in &destination.from_interfaces {
+                            // Upstream's set holds `get_hash()`s, so two
+                            // interfaces of the same name are one.
+                            let hash = self.interface_hash(id);
+                            if !from_interface_hashes.contains(&hash) {
+                                from_interface_hashes.push(hash);
+                            }
+                        }
+                        crate::event::LinkDistributionEntry {
+                            destination_hash: destination.destination_hash,
+                            active: destination.active,
+                            pending: destination.pending,
+                            traffic: destination.traffic,
+                            from_interface_hashes,
+                        }
+                    })
                     .collect(),
             ),
             QueryRequest::DropPath { .. } => {

@@ -2324,6 +2324,7 @@ fn driver_validates_and_routes_mismatched_lrproof_using_known_identity() {
             destination_hash,
             validated: false,
             proof_timeout: 200.0,
+            traffic: 0,
         },
     );
     driver.engine.inject_path(
@@ -15484,7 +15485,11 @@ fn wanted_destination_types_are_named_in_the_type_map() {
     assert_eq!(driver.destination_type_names.get(&blocked), None);
     assert_eq!(
         driver.destination_type_names.describe(&blocked),
-        format!("<unknown> <{}>", rns_core::encoding::hex(&blocked))
+        format!(
+            "{} <{}>",
+            rns_core::encoding::hex(&blocked),
+            rns_core::encoding::hex(&blocked)
+        )
     );
 }
 
@@ -18127,4 +18132,67 @@ fn links_to_built_in_destinations_are_not_reported_to_the_application() {
         vec![[2; 16], [3; 16]]
     );
     assert!(driver.builtin.links.is_empty());
+}
+
+// Upstream 3f55e9eb `link_distribution()`: `from_ifs` holds the
+// receiving interfaces' `get_hash()`, so two interfaces of the same name
+// count once.
+#[test]
+fn link_distribution_names_receiving_interfaces_by_hash() {
+    use rns_core::transport::tables::LinkEntry;
+    let mut driver = new_test_driver();
+    for id in 1..=3 {
+        let mut entry = make_entry(id, Box::new(MockWriter::new().0), true);
+        if id == 3 {
+            entry.info.name = make_interface_info(1).name;
+        }
+        driver.engine.register_interface(entry.info.clone());
+        driver.interfaces.insert(InterfaceId(id), entry);
+    }
+    let dest = [0xD5; 16];
+    for (link_id, received, validated, traffic) in [
+        (0x01, 1, true, 300),
+        (0x02, 2, false, 0),
+        (0x03, 3, true, 12),
+    ] {
+        driver.engine.register_link(
+            [link_id; 16],
+            LinkEntry {
+                timestamp: 1000.0,
+                next_hop_transport_id: [0x33; 16],
+                next_hop_interface: InterfaceId(2),
+                remaining_hops: 1,
+                received_interface: InterfaceId(received),
+                taken_hops: 1,
+                destination_hash: dest,
+                validated,
+                proof_timeout: 2000.0,
+                traffic,
+            },
+        );
+    }
+    let hash_of = |id: u64| {
+        rns_core::hash::full_hash(
+            driver
+                .interface_display_name(&driver.interfaces[&InterfaceId(id)])
+                .as_bytes(),
+        )
+    };
+    assert_eq!(hash_of(1), hash_of(3));
+    assert_ne!(hash_of(1), hash_of(2));
+    let QueryResponse::LinkDistribution(entries) =
+        driver.handle_query(QueryRequest::LinkDistribution)
+    else {
+        panic!("unexpected response");
+    };
+    assert_eq!(
+        entries,
+        vec![crate::event::LinkDistributionEntry {
+            destination_hash: dest,
+            active: 2,
+            pending: 1,
+            traffic: 312,
+            from_interface_hashes: vec![hash_of(1), hash_of(2)],
+        }]
+    );
 }

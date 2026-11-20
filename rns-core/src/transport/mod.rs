@@ -59,7 +59,9 @@ use self::pathfinder::{
     MultiPathDecision,
 };
 use self::rate_limit::AnnounceRateLimiter;
-use self::tables::{AnnounceEntry, DiscoveryPathRequest, LinkEntry, PathEntry, PathSet};
+use self::tables::{
+    AnnounceEntry, DiscoveryPathRequest, LinkDistribution, LinkEntry, PathEntry, PathSet,
+};
 use self::tunnel::TunnelTable;
 use self::types::{
     BlackholeEntry, InterfaceId, InterfaceInfo, PacketBytes, StampRequirements, TransportAction,

@@ -215,6 +215,7 @@ pub fn create_link_entry<B: AsRef<[u8]>>(
         destination_hash: packet.destination_hash,
         validated: false,
         proof_timeout,
+        traffic: 0,
     };
 
     (link_id, entry)
@@ -363,6 +364,7 @@ mod tests {
                     destination_hash: [0xAA; 16],
                     validated: true,
                     proof_timeout: 200.0,
+                    traffic: 0,
                 };
                 let payload = alloc::vec![0x7e; payload_len];
                 for hops in [0, 3, 5, 255] {
@@ -628,6 +630,7 @@ mod tests {
             destination_hash: [0xAA; 16],
             validated: true,
             proof_timeout: 200.0,
+            traffic: 0,
         };
 
         // Received on next_hop_interface (1), should forward to received_interface (2)
@@ -684,6 +687,7 @@ mod tests {
             destination_hash: [0xAA; 16],
             validated: true,
             proof_timeout: 200.0,
+            traffic: 0,
         };
 
         let result =
@@ -771,6 +775,7 @@ mod tests {
             destination_hash: [0xAA; 16],
             validated: true,
             proof_timeout: 200.0,
+            traffic: 0,
         };
         for (hops, routed) in [(3, true), (5, true), (4, false)] {
             let packet = RawPacket::pack(flags, hops, &[0xAA; 16], None, 0, b"data").unwrap();

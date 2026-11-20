@@ -272,6 +272,7 @@ impl TransportEngine {
         if !ctx.hash_deferred {
             self.packet_hashlist.add(ctx.packet.packet_hash);
         }
+        let forwarded_bytes = new_raw.len() as u64;
         actions.push(TransportAction::SendOnInterface {
             interface: outbound_iface,
             raw: new_raw,
@@ -279,6 +280,8 @@ impl TransportEngine {
 
         if let Some(entry) = self.link_table.get_mut(&ctx.packet.destination_hash) {
             entry.timestamp = ctx.now;
+            // Upstream 3f55e9eb: `link_entry[IDX_LT_TRXB] += len(new_raw)`.
+            entry.traffic += forwarded_bytes;
         }
         // As in Transport.py, traffic on a relayed link uses the path to the
         // link's destination.

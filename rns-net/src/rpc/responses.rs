@@ -3,24 +3,20 @@
 
 use super::*;
 
-pub(super) fn link_distribution_to_pickle(entries: &[LinkDistributionEntry]) -> PickleValue {
-    let mut dict = Vec::with_capacity(entries.len());
-    for entry in entries {
-        dict.push((
-            PickleValue::Bytes(entry.destination_hash.to_vec()),
-            PickleValue::Dict(vec![
-                (
-                    PickleValue::String("total".into()),
-                    PickleValue::Int(entry.total as i64),
-                ),
-                (
-                    PickleValue::String("active".into()),
-                    PickleValue::Int(entry.active as i64),
-                ),
-            ]),
-        ));
+/// Upstream's `link_distribution` answer at 3f55e9eb: a dict from
+/// destination hash to `{"active", "pending", "traffic", "from_ifs"}`.
+/// `from_ifs` is a Python set there, which umsgpack cannot pack, so
+/// `rpc_return` raises `unsupported type: <class 'set'>` for any
+/// destination with links, and the client gets no answer. Only the empty
+/// dict of an empty link table goes out. The pickle codec, which upstream's
+/// RPC no longer speaks, fails the same way.
+pub(super) fn link_distribution_to_pickle(
+    entries: &[LinkDistributionEntry],
+) -> io::Result<PickleValue> {
+    if !entries.is_empty() {
+        return Err(upstream_rpc_exception("unsupported type: <class 'set'>"));
     }
-    PickleValue::Dict(dict)
+    Ok(PickleValue::Dict(Vec::new()))
 }
 
 /// Upstream's `get_path_table()` entries, keys in its order.

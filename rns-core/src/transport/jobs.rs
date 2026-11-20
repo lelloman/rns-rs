@@ -650,6 +650,7 @@ mod tests {
                 destination_hash: [0xAA; 16],
                 validated: true,
                 proof_timeout: 200.0,
+                traffic: 0,
             },
         );
 
@@ -681,6 +682,7 @@ mod tests {
                 destination_hash: [0xAA; 16],
                 validated: false,
                 proof_timeout: 200.0,
+                traffic: 0,
             },
         );
 
@@ -1238,6 +1240,7 @@ mod tests {
             destination_hash: [0x99; 16],
             validated,
             proof_timeout,
+            traffic: 0,
         }
     }
 

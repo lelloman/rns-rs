@@ -413,10 +413,12 @@ seen one for its hash: in `ignored_types` or `allowed_types`, from an
 application asking for it, or in a `known_destination_types` file in the
 configuration directory (next to `config`; upstream `c90a5d58`), read once at
 startup with one full name per line and lines starting with `#` skipped.
-Otherwise they show `<unknown>`. Upstream also reads a
-`flagged_destination_types` file in the same format; at `c90a5d58` it has
-nowhere to keep those names, so a file with any name in it logs an error, as
-there.
+Failing that, they use a flagged name (upstream `3f55e9eb`): one from a
+`flagged_destination_types` file in the same format, or an `ignored_types`
+entry. Otherwise they show the type's hash. At debug level the node logs each
+`ignored_types` entry as blocked and, when `required_only = yes` comes before
+`allowed_types` in the file, each `allowed_types` entry as allowed, as
+upstream applies the options in file order.
 
 The upstream manual describes these modes in the "Filtering & QoS" section of
 its "Protecting Open Networks" page (since `29e5a997`). It states that some

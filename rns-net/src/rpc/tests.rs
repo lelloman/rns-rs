@@ -2441,3 +2441,61 @@ fn known_destination_entries_rpc_keeps_the_native_list() {
             .collect::<Vec<_>>()
     );
 }
+
+// Upstream 3f55e9eb: `link_distribution`'s `from_ifs` are a Python set,
+// which umsgpack cannot pack. With links in the table, upstream's
+// `rpc_loop` logs the exception and closes the connection unanswered; an
+// empty table answers an empty dict.
+#[test]
+fn link_distribution_rpc_fails_as_upstreams_set_does() {
+    let key = derive_auth_key(b"link-distribution");
+    let request = rns_core::msgpack::pack(&MsgpackValue::Map(vec![(
+        MsgpackValue::Str("get".into()),
+        MsgpackValue::Str("link_distribution".into()),
+    )]));
+    for links in [0usize, 1] {
+        let (server, mut client) = tcp_pair();
+        let (event_tx, event_rx) = crate::event::channel();
+        let driver = thread::spawn(move || {
+            let Ok(Event::Query(query, resp_tx)) =
+                event_rx.recv_timeout(std::time::Duration::from_secs(5))
+            else {
+                panic!("expected a query");
+            };
+            assert!(matches!(*query, QueryRequest::LinkDistribution));
+            let entries = (0..links)
+                .map(|_| LinkDistributionEntry {
+                    destination_hash: [0xD5; 16],
+                    active: 1,
+                    pending: 0,
+                    traffic: 42,
+                    from_interface_hashes: vec![[0x11; 32]],
+                })
+                .collect();
+            let _ = resp_tx.send(QueryResponse::LinkDistribution(entries));
+        });
+        let handler = thread::spawn(move || handle_connection(server, &key, &event_tx));
+        client_auth(&mut client, &key).unwrap();
+        send_bytes(&mut client, &request).unwrap();
+        let result = handler.join().unwrap();
+        driver.join().unwrap();
+        if links == 0 {
+            result.unwrap();
+            let answer = recv_bytes(&mut client).unwrap();
+            assert_eq!(
+                rns_core::msgpack::unpack_exact(&answer).unwrap(),
+                MsgpackValue::Map(Vec::new())
+            );
+        } else {
+            let error = result.unwrap_err();
+            assert_eq!(
+                upstream_rpc_exception_line(&error).as_deref(),
+                Some(
+                    "An error ocurred while handling RPC call from local client: unsupported type: <class 'set'>"
+                )
+            );
+            let mut buf = [0u8; 1];
+            assert_eq!(client.read(&mut buf).unwrap(), 0);
+        }
+    }
+}
