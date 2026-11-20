@@ -8,6 +8,11 @@ use crate::protocol;
 use crate::util::{default_reticulum_dir, default_rngit_dir, parse_rns_url_with_aliases};
 use crate::{Error, Result};
 
+/// Runs `rngit create` with `args`: asks the server to create an empty repository.
+///
+/// # Errors
+/// Bad arguments (`--help` returns the usage text as the error), a connection
+/// failure, or a refusal from the server.
 pub fn main<I>(args: I) -> Result<()>
 where
     I: IntoIterator<Item = String>,

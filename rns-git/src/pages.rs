@@ -22,7 +22,7 @@ use repo_info::*;
 use repo_pages::*;
 use stats_page::*;
 use templates::*;
-pub use work_pages::*;
+use work_pages::*;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -44,24 +44,40 @@ use crate::protocol;
 use crate::util::validate_repo_name;
 use crate::{Error, Result};
 
-pub const APP_NAME: &str = "nomadnetwork";
-pub const ASPECT_NODE: &str = "node";
+pub(crate) const APP_NAME: &str = "nomadnetwork";
+pub(crate) const ASPECT_NODE: &str = "node";
 
+/// Front page: the node's groups and repositories.
 pub const PATH_INDEX: &str = "/page/index.mu";
+/// One group and its repositories.
 pub const PATH_GROUP: &str = "/page/group.mu";
+/// A repository's overview.
 pub const PATH_REPO: &str = "/page/repo.mu";
+/// A directory listing at a ref.
 pub const PATH_TREE: &str = "/page/tree.mu";
+/// One file at a ref.
 pub const PATH_BLOB: &str = "/page/blob.mu";
+/// Commit history.
 pub const PATH_COMMITS: &str = "/page/commits.mu";
+/// One commit.
 pub const PATH_COMMIT: &str = "/page/commit.mu";
+/// Branches and tags.
 pub const PATH_REFS: &str = "/page/refs.mu";
+/// Statistics of a repository; needs stats access.
 pub const PATH_STATS: &str = "/page/stats.mu";
+/// A repository's releases.
 pub const PATH_RELEASES: &str = "/page/releases.mu";
+/// One release.
 pub const PATH_RELEASE: &str = "/page/release.mu";
+/// A repository's work documents.
 pub const PATH_WORK: &str = "/page/work.mu";
+/// One work document.
 pub const PATH_WORK_DOC: &str = "/page/work_doc.mu";
+/// Media requests for images shown on pages (see [`serve_media`]).
 pub const PATH_MEDIA: &str = "/media";
+/// File and release artifact downloads (see [`download_file`]).
 pub const PATH_DOWNLOAD: &str = "/file/download";
+/// Downloads of a work document's body.
 pub const PATH_WORK_DOC_DOWNLOAD: &str = "/file/workdoc";
 
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
@@ -93,11 +109,11 @@ const PAGE_PATHS: &[&str] = &[
     PATH_WORK_DOC,
 ];
 
-pub fn destination_for_identity(identity: &Identity) -> Destination {
+pub(crate) fn destination_for_identity(identity: &Identity) -> Destination {
     Destination::single_in(APP_NAME, &[ASPECT_NODE], IdentityHash(*identity.hash()))
 }
 
-pub fn register_nomadnet_destination(
+pub(crate) fn register_nomadnet_destination(
     node: &RnsNode,
     config: &ServerConfig,
     identity: &Identity,
@@ -204,6 +220,14 @@ fn register_page_handlers(node: &RnsNode, config: ServerConfig, access: Access) 
     Ok(())
 }
 
+/// Renders the page at `path` (one of the `PATH_*` page constants) for
+/// `remote`, with `data` holding the request's page variables. Returns micron
+/// markup.
+///
+/// # Errors
+/// An unknown page path, malformed page variables, a repository that does not
+/// exist or that the requester may not read (both fail with "repository not
+/// found"), or a failure reading the repository.
 pub fn render_page(
     path: &str,
     config: &ServerConfig,

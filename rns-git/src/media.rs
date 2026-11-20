@@ -93,6 +93,8 @@ pub struct ConversionOptions {
     pub quality: Option<i32>,
     /// Preserve aspect ratio and shrink to fit; zero/None disables resizing.
     pub max_dimension: Option<u32>,
+    /// How long the conversion process may run before it is killed and the
+    /// conversion fails. Defaults to 8 seconds.
     pub timeout: Duration,
 }
 

@@ -6,37 +6,70 @@ use crate::logging::DEFAULT_LOG_LEVEL;
 use crate::util::parse_hex_16;
 use crate::Result;
 
+/// Server settings. Each field is filled from the `server_config` file in
+/// [`dir`](Self::dir); settings the file leaves out keep their defaults.
+/// Relative paths in the file are resolved against `dir`.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
+    /// The rngit directory holding `server_config`, identities and logs.
     pub dir: PathBuf,
+    /// Reticulum configuration directory for the node; `None` uses the node's default.
     pub reticulum_dir: Option<PathBuf>,
+    /// Where the bare repositories live, as `<group>/<repo>` (default `repositories`).
     pub repositories_dir: PathBuf,
+    /// Identity file of the repository and page destinations (default `repositories_identity`).
     pub identity_path: PathBuf,
+    /// The operator's client identity file, whose hash `rngit --print-identity`
+    /// shows beside the server's (default `client_identity`).
     pub client_identity_path: PathBuf,
+    /// Name announced with the Nomad Network page destination.
     pub node_name: String,
+    /// Seconds between announces (default 300).
     pub announce_interval_secs: u64,
+    /// Whether to serve Nomad Network pages for browsing the repositories (default off).
     pub serve_nomadnet: bool,
+    /// Directory of `<name>.mu` page templates that override the built-in ones
+    /// (default `templates`).
     pub templates_dir: PathBuf,
+    /// Whether pages decorate links with Unicode icons (default off).
     pub unicode_icons: bool,
+    /// Whether images served on pages are converted to WebP when a converter is
+    /// installed (default on).
     pub media_conversion: bool,
+    /// Whether to count views, fetches, pushes and downloads (default off).
     pub record_stats: bool,
+    /// Identity hashes whose activity is never counted.
     pub stats_ignore_identities: Vec<[u8; 16]>,
+    /// Identity hashes whose pushes are not counted; their other activity is.
     pub stats_push_ignore_identities: Vec<[u8; 16]>,
+    /// Identity hashes denied every operation. The null identity hash here also
+    /// blocks unidentified page requests.
     pub blocked_identities: Vec<[u8; 16]>,
+    /// Names from the `[aliases]` section that the identity lists and access rules may use
+    /// in place of hex identity hashes.
     pub identity_aliases: BTreeMap<String, [u8; 16]>,
+    /// Server-wide read access: `all`, `none`, or identity hashes and aliases (default `all`).
     pub allow_read: Vec<String>,
+    /// Server-wide push access to existing repositories (default `none`).
     pub allow_write: Vec<String>,
+    /// Server-wide access to create repositories (default `none`).
     pub allow_create: Vec<String>,
+    /// Server-wide access to the statistics pages (default `none`).
     pub allow_stats: Vec<String>,
+    /// Server-wide access to create, delete and promote releases (default `none`).
     pub allow_release: Vec<String>,
+    /// Server-wide access to comment on work documents (default `none`).
     pub allow_interact: Vec<String>,
+    /// Server-wide access to propose work documents (default `none`).
     pub allow_propose: Vec<String>,
+    /// Server-wide admin access, which implies every other permission (default `none`).
     pub allow_admin: Vec<String>,
+    /// Numeric log level, 0-8 (default 4).
     pub log_level: u8,
 }
 
 #[derive(Debug, Clone)]
-pub struct ClientConfig {
+pub(crate) struct ClientConfig {
     pub dir: PathBuf,
     pub reticulum_dir: Option<PathBuf>,
     pub identity_path: PathBuf,
@@ -47,12 +80,18 @@ pub struct ClientConfig {
 }
 
 impl ServerConfig {
-    pub fn load_or_create_for_run(dir: PathBuf, reticulum_dir: Option<PathBuf>) -> Result<Self> {
+    pub(crate) fn load_or_create_for_run(
+        dir: PathBuf,
+        reticulum_dir: Option<PathBuf>,
+    ) -> Result<Self> {
         let (config, _created) = Self::load_or_create(dir, reticulum_dir)?;
         Ok(config)
     }
 
-    pub fn load_or_create(dir: PathBuf, reticulum_dir: Option<PathBuf>) -> Result<(Self, bool)> {
+    pub(crate) fn load_or_create(
+        dir: PathBuf,
+        reticulum_dir: Option<PathBuf>,
+    ) -> Result<(Self, bool)> {
         fs::create_dir_all(&dir)?;
         let path = dir.join("server_config");
         if !path.exists() {
@@ -147,12 +186,18 @@ impl ServerConfig {
 }
 
 impl ClientConfig {
-    pub fn load_or_create_for_run(dir: PathBuf, reticulum_dir: Option<PathBuf>) -> Result<Self> {
+    pub(crate) fn load_or_create_for_run(
+        dir: PathBuf,
+        reticulum_dir: Option<PathBuf>,
+    ) -> Result<Self> {
         let (config, _created) = Self::load_or_create(dir, reticulum_dir)?;
         Ok(config)
     }
 
-    pub fn load_or_create(dir: PathBuf, reticulum_dir: Option<PathBuf>) -> Result<(Self, bool)> {
+    pub(crate) fn load_or_create(
+        dir: PathBuf,
+        reticulum_dir: Option<PathBuf>,
+    ) -> Result<(Self, bool)> {
         fs::create_dir_all(&dir)?;
         let path = dir.join("client_config");
         if !path.exists() {

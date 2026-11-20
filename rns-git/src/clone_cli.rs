@@ -10,9 +10,13 @@ use crate::util::{
 };
 use crate::{Error, Result};
 
+/// Which way [`main`] copies the source repository.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloneCommand {
+    /// Copy the source and record the copy as a fork of it.
     Fork,
+    /// Copy the source and record the copy as a mirror of it; syncing a mirror
+    /// also follows the source's default branch.
     Mirror,
 }
 
@@ -32,6 +36,13 @@ impl CloneCommand {
     }
 }
 
+/// Runs `rngit fork` or `rngit mirror` with `args`: asks the server at the
+/// target URL to create a repository from the source URL. Blocks until the
+/// server answers, for up to two hours.
+///
+/// # Errors
+/// Bad arguments (`--help` returns the usage text as the error), a connection
+/// failure, or a refusal from the server.
 pub fn main<I>(command: CloneCommand, args: I) -> Result<()>
 where
     I: IntoIterator<Item = String>,

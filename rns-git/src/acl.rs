@@ -6,18 +6,29 @@ use std::process::Command;
 use crate::util::{parse_hex_16, validate_repo_name};
 use crate::{Error, Result};
 
+/// An action that access rules grant or deny.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operation {
+    /// Fetch from a repository and see it on pages.
     Read,
+    /// Push to an existing repository, sync it or delete it.
     Write,
+    /// Create a repository, by push, fork or mirror.
     Create,
+    /// View a repository's statistics.
     Stats,
+    /// Create, delete and promote releases.
     Release,
+    /// Comment on work documents.
     Interact,
+    /// Propose new work documents.
     Propose,
+    /// Manage permissions. Admin access also grants every other operation.
     Admin,
 }
 
+/// The access rules of a server: server-wide rules plus the `.allowed` files
+/// beside repositories and groups.
 #[derive(Debug, Clone)]
 pub struct Access {
     read: Rule,
@@ -41,6 +52,13 @@ enum Rule {
 }
 
 impl Access {
+    /// Builds the rules from server-wide lists, one per operation. Each list holds
+    /// `all`, `none`, or hex identity hashes. Nobody may propose until
+    /// [`with_propose`](Self::with_propose) sets a rule. `repositories_dir` is where
+    /// per-repository and per-group `.allowed` files are looked up.
+    ///
+    /// # Errors
+    /// An entry that is neither `all`, `none` nor a 32-character hex hash.
     // Kept as a source-compatible public constructor; internal call sites use named config types.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -66,9 +84,8 @@ impl Access {
         )
     }
 
-    // Kept as a source-compatible public constructor; changing its shape would be breaking.
     #[allow(clippy::too_many_arguments)]
-    pub fn new_with_aliases(
+    pub(crate) fn new_with_aliases(
         read: &[String],
         write: &[String],
         create: &[String],
@@ -94,16 +111,30 @@ impl Access {
         })
     }
 
+    /// Sets the server-wide propose rule, in the same format as the lists given to
+    /// [`new`](Self::new).
     pub fn with_propose(mut self, propose: &[String]) -> Result<Self> {
         self.propose = Rule::parse(propose, &self.aliases)?;
         Ok(self)
     }
 
+    /// Denies every operation to these identity hashes, overriding all other rules.
     pub fn with_blocked_identities(mut self, blocked: Vec<[u8; 16]>) -> Self {
         self.blocked = blocked;
         self
     }
 
+    /// Whether `identity` (`None` for an unidentified peer) may perform `op` on
+    /// `repository` (`group/repo`).
+    ///
+    /// A blocked identity is always refused. Otherwise, admin access to the
+    /// repository grants everything; then the operation's rule in the repository and
+    /// group `.allowed` files, and finally the server-wide rule, are checked. An
+    /// `.allowed` file with the executable bit set is run and its output used.
+    ///
+    /// # Errors
+    /// An invalid repository name, an unreadable or malformed `.allowed` file, or an
+    /// executable `.allowed` file that fails.
     pub fn allows(
         &self,
         op: Operation,

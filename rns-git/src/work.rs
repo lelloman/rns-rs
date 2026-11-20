@@ -10,35 +10,52 @@ use crate::util::validate_repo_name;
 use crate::util::{hex, parse_hex_16};
 use crate::{Error, Result};
 
-pub const WORK_DOC_LIMIT: usize = 256 * 1024;
+pub(crate) const WORK_DOC_LIMIT: usize = 256 * 1024;
 
+/// The state a work document is filed under. Each state is a directory in the
+/// repository's work sidecar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkScope {
+    /// Open work.
     Active,
+    /// Finished work.
     Completed,
+    /// Submitted through the propose operation, waiting to be accepted.
     Proposed,
 }
 
+/// Which states a document listing covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkListScope {
+    /// Active documents only.
     Active,
+    /// Completed documents only.
     Completed,
+    /// Proposed documents only.
     Proposed,
+    /// Every state.
     All,
 }
 
+/// A new work document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkInput {
+    /// Title; must not be blank.
     pub title: String,
+    /// Body; must not be blank. Title, body and format together are limited to 256 KiB.
     pub content: String,
+    /// Markup of the body: `micron`, or anything else for Markdown.
     pub format: String,
+    /// The author's 64-byte signature over the trimmed body, if signed.
     pub signature: Option<Vec<u8>>,
+    /// The author's 64-byte public key, stored so readers can check the signature.
     pub identity: Option<Vec<u8>>,
+    /// Identity hash of the author.
     pub author: [u8; 16],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkEdit {
+pub(crate) struct WorkEdit {
     pub title: Option<String>,
     pub content: Option<String>,
     pub signature: Option<Vec<u8>>,
@@ -46,21 +63,24 @@ pub struct WorkEdit {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkCommentInput {
+pub(crate) struct WorkCommentInput {
     pub content: String,
     pub format: String,
     pub signature: Option<Vec<u8>>,
     pub author: [u8; 16],
 }
 
+/// Where a newly created document was filed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkCreated {
+    /// Document number, unique within the repository across all states.
     pub id: u64,
+    /// The state the document starts in.
     pub scope: WorkScope,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkSummary {
+pub(crate) struct WorkSummary {
     pub id: u64,
     pub title: String,
     pub created: u64,
@@ -71,14 +91,14 @@ pub struct WorkSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct WorkLists {
+pub(crate) struct WorkLists {
     pub active: Vec<WorkSummary>,
     pub completed: Vec<WorkSummary>,
     pub proposed: Vec<WorkSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkDocument {
+pub(crate) struct WorkDocument {
     pub id: u64,
     pub scope: WorkScope,
     pub title: String,
@@ -94,7 +114,7 @@ pub struct WorkDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkComment {
+pub(crate) struct WorkComment {
     pub id: u64,
     pub content: String,
     pub created: u64,
@@ -106,7 +126,7 @@ pub struct WorkComment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkRequest {
+pub(crate) struct WorkRequest {
     pub repository: String,
     pub operation: String,
     pub step: Option<String>,
@@ -130,13 +150,14 @@ struct StoredDocument {
     identity: Option<Vec<u8>>,
 }
 
+/// The work directory of the repository at `repo`: the same path with `.work` appended.
 pub fn work_sidecar_path(repo: &Path) -> PathBuf {
     let mut name = repo.as_os_str().to_os_string();
     name.push(".work");
     PathBuf::from(name)
 }
 
-pub fn parse_request(data: &[u8]) -> Result<WorkRequest> {
+pub(crate) fn parse_request(data: &[u8]) -> Result<WorkRequest> {
     let value =
         msgpack::unpack_exact(data).map_err(|e| Error::msg(format!("invalid msgpack: {e}")))?;
     let map = value
@@ -176,6 +197,9 @@ pub fn parse_request(data: &[u8]) -> Result<WorkRequest> {
     })
 }
 
+/// A [`protocol::RES_OK`] status response carrying a msgpack map of document
+/// summaries under `active`, `completed` and `proposed`; states outside `scope`
+/// are empty.
 pub fn list_response(work_path: &Path, scope: WorkListScope) -> Result<Vec<u8>> {
     Ok(protocol::status_bytes(
         protocol::RES_OK,
@@ -183,7 +207,7 @@ pub fn list_response(work_path: &Path, scope: WorkListScope) -> Result<Vec<u8>> 
     ))
 }
 
-pub fn view_response(work_path: &Path, scope: WorkScope, doc_id: u64) -> Result<Vec<u8>> {
+pub(crate) fn view_response(work_path: &Path, scope: WorkScope, doc_id: u64) -> Result<Vec<u8>> {
     match view_document(work_path, scope, doc_id)? {
         Some(document) => Ok(protocol::status_bytes(
             protocol::RES_OK,
@@ -196,7 +220,7 @@ pub fn view_response(work_path: &Path, scope: WorkScope, doc_id: u64) -> Result<
     }
 }
 
-pub fn created_response(created: WorkCreated) -> Vec<u8> {
+pub(crate) fn created_response(created: WorkCreated) -> Vec<u8> {
     protocol::status_bytes(
         protocol::RES_OK,
         msgpack::pack(&Value::Map(vec![
@@ -209,7 +233,7 @@ pub fn created_response(created: WorkCreated) -> Vec<u8> {
     )
 }
 
-pub fn comment_response(comment_id: u64) -> Vec<u8> {
+pub(crate) fn comment_response(comment_id: u64) -> Vec<u8> {
     protocol::status_bytes(
         protocol::RES_OK,
         msgpack::pack(&Value::Map(vec![(
@@ -219,7 +243,7 @@ pub fn comment_response(comment_id: u64) -> Vec<u8> {
     )
 }
 
-pub fn transition_response(doc_id: u64, scope: WorkScope) -> Vec<u8> {
+pub(crate) fn transition_response(doc_id: u64, scope: WorkScope) -> Vec<u8> {
     protocol::status_bytes(
         protocol::RES_OK,
         msgpack::pack(&Value::Map(vec![
@@ -232,7 +256,7 @@ pub fn transition_response(doc_id: u64, scope: WorkScope) -> Vec<u8> {
     )
 }
 
-pub fn permissions_response(content: String) -> Vec<u8> {
+pub(crate) fn permissions_response(content: String) -> Vec<u8> {
     protocol::status_bytes(
         protocol::RES_OK,
         msgpack::pack(&Value::Map(vec![(
@@ -242,11 +266,16 @@ pub fn permissions_response(content: String) -> Vec<u8> {
     )
 }
 
+/// Files a new active document under `work_path`.
+///
+/// # Errors
+/// A blank title or body, content over the size limit, a signature that is not
+/// 64 bytes, or a filesystem failure.
 pub fn create_document(work_path: &Path, input: WorkInput) -> Result<WorkCreated> {
     create_document_in_scope(work_path, WorkScope::Active, input)
 }
 
-pub fn propose_document(work_path: &Path, input: WorkInput) -> Result<WorkCreated> {
+pub(crate) fn propose_document(work_path: &Path, input: WorkInput) -> Result<WorkCreated> {
     let author = input.author;
     let created = create_document_in_scope(work_path, WorkScope::Proposed, input)?;
     let permissions = format!("interact = {}\nwrite = {}\n", hex(&author), hex(&author));
@@ -282,7 +311,7 @@ fn create_document_in_scope(
     Ok(WorkCreated { id, scope })
 }
 
-pub fn list_documents(work_path: &Path, scope: WorkListScope) -> Result<WorkLists> {
+pub(crate) fn list_documents(work_path: &Path, scope: WorkListScope) -> Result<WorkLists> {
     let mut lists = WorkLists::default();
     if matches!(scope, WorkListScope::Active | WorkListScope::All) {
         lists.active = list_scope(work_path, WorkScope::Active)?;
@@ -296,7 +325,7 @@ pub fn list_documents(work_path: &Path, scope: WorkListScope) -> Result<WorkList
     Ok(lists)
 }
 
-pub fn view_document(
+pub(crate) fn view_document(
     work_path: &Path,
     scope: WorkScope,
     doc_id: u64,
@@ -323,7 +352,7 @@ pub fn view_document(
     }))
 }
 
-pub fn edit_document(
+pub(crate) fn edit_document(
     work_path: &Path,
     scope: WorkScope,
     doc_id: u64,
@@ -356,7 +385,7 @@ pub fn edit_document(
     write_document(&root_path, &doc)
 }
 
-pub fn delete_document(
+pub(crate) fn delete_document(
     work_path: &Path,
     scope: WorkScope,
     doc_id: u64,
@@ -369,7 +398,7 @@ pub fn delete_document(
     Ok(())
 }
 
-pub fn add_comment(
+pub(crate) fn add_comment(
     work_path: &Path,
     scope: WorkScope,
     doc_id: u64,
@@ -400,6 +429,10 @@ pub fn add_comment(
     Ok(comment_id)
 }
 
+/// Moves an active document to completed.
+///
+/// # Errors
+/// The document is not active, `author` is not its author, or the move fails.
 pub fn complete_document(work_path: &Path, doc_id: u64, author: &[u8; 16]) -> Result<()> {
     complete_document_authorized(work_path, doc_id, author, false)
 }
@@ -420,6 +453,11 @@ pub(crate) fn complete_document_authorized(
     )
 }
 
+/// Moves a completed or proposed document back to active.
+///
+/// # Errors
+/// No completed or proposed document has this number, `author` is not its
+/// author, or the move fails.
 pub fn activate_document(work_path: &Path, doc_id: u64, author: &[u8; 16]) -> Result<()> {
     activate_document_authorized(work_path, doc_id, author, false)
 }
@@ -441,6 +479,10 @@ pub(crate) fn activate_document_authorized(
     move_document(work_path, source, WorkScope::Active, doc_id, author, admin)
 }
 
+/// Moves a proposed document to active.
+///
+/// # Errors
+/// The document is not proposed, `author` is not its author, or the move fails.
 pub fn accept_proposal(work_path: &Path, doc_id: u64, author: &[u8; 16]) -> Result<()> {
     move_document(
         work_path,
@@ -452,13 +494,13 @@ pub fn accept_proposal(work_path: &Path, doc_id: u64, author: &[u8; 16]) -> Resu
     )
 }
 
-pub fn document_author(work_path: &Path, doc_id: u64) -> Result<[u8; 16]> {
+pub(crate) fn document_author(work_path: &Path, doc_id: u64) -> Result<[u8; 16]> {
     let doc_dir =
         find_document_dir(work_path, doc_id)?.ok_or_else(|| Error::msg("document not found"))?;
     Ok(read_existing_document(&doc_dir.join("root"))?.author)
 }
 
-pub fn document_permission_allows(
+pub(crate) fn document_permission_allows(
     work_path: &Path,
     doc_id: u64,
     op: Operation,
@@ -477,7 +519,7 @@ pub fn document_permission_allows(
     crate::acl::allowed_input_allows(&content, op, identity)
 }
 
-pub fn get_document_permissions(work_path: &Path, doc_id: u64) -> Result<String> {
+pub(crate) fn get_document_permissions(work_path: &Path, doc_id: u64) -> Result<String> {
     find_document_dir(work_path, doc_id)?.ok_or_else(|| Error::msg("document not found"))?;
     let path = permissions_path(work_path, doc_id);
     if path.is_file() {
@@ -499,6 +541,12 @@ pub(crate) fn document_permission_denies(
     crate::acl::allowed_input_denies(&fs::read_to_string(path)?, op)
 }
 
+/// Replaces a document's own access rules. `content` uses the format of an
+/// `.allowed` file; it can grant `interact`, `write` and `admin` on that document
+/// to identities beyond the repository-wide rules, or deny `read`.
+///
+/// # Errors
+/// The document does not exist, `content` does not parse, or the write fails.
 pub fn set_document_permissions(work_path: &Path, doc_id: u64, content: &str) -> Result<()> {
     find_document_dir(work_path, doc_id)?.ok_or_else(|| Error::msg("document not found"))?;
     crate::acl::validate_allowed_input(content)?;
@@ -642,7 +690,7 @@ fn permissions_path(work_path: &Path, doc_id: u64) -> PathBuf {
     work_path.join(format!("{doc_id}.allowed"))
 }
 
-pub fn find_document_scope(work_path: &Path, doc_id: u64) -> Result<Option<WorkScope>> {
+pub(crate) fn find_document_scope(work_path: &Path, doc_id: u64) -> Result<Option<WorkScope>> {
     for scope in [WorkScope::Active, WorkScope::Completed, WorkScope::Proposed] {
         let doc_dir = scope_dir(work_path, scope).join(doc_id.to_string());
         if doc_dir.join("root").is_file() {
@@ -658,6 +706,7 @@ fn find_document_dir(work_path: &Path, doc_id: u64) -> Result<Option<PathBuf>> {
 }
 
 impl WorkScope {
+    /// Parses `active`, `completed` or `proposed`; anything else is `None`.
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "active" => Some(WorkScope::Active),
@@ -667,6 +716,7 @@ impl WorkScope {
         }
     }
 
+    /// The lowercase name, which is also the state's directory name.
     pub fn as_str(self) -> &'static str {
         match self {
             WorkScope::Active => "active",
@@ -677,6 +727,7 @@ impl WorkScope {
 }
 
 impl WorkListScope {
+    /// Parses `active`, `completed`, `proposed` or `all`; anything else is `None`.
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "active" => Some(WorkListScope::Active),

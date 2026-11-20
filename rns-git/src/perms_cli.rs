@@ -14,6 +14,12 @@ use crate::{Error, Result};
 
 const PERMS_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Runs `rngit perms` with `args`: prints the permission file of a group or
+/// repository, or replaces it with the file given by `--content`.
+///
+/// # Errors
+/// Bad arguments (`--help` returns the usage text as the error), a connection
+/// failure, or a refusal from the server.
 pub fn main<I>(args: I) -> Result<()>
 where
     I: IntoIterator<Item = String>,

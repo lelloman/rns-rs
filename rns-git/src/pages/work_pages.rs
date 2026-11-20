@@ -285,7 +285,7 @@ pub(super) fn append_formatted_content(out: &mut String, format: &str, content: 
     }
 }
 
-pub fn download_work_document(
+pub(crate) fn download_work_document(
     config: &ServerConfig,
     access: &Access,
     data: &[u8],

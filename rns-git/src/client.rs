@@ -20,6 +20,12 @@ const LINK_IDENTIFY_SETTLE_DELAY: Duration = Duration::from_millis(750);
 const NOT_IDENTIFIED_RETRY_DELAY: Duration = Duration::from_millis(750);
 const NOT_IDENTIFIED_RETRIES: usize = 5;
 
+/// Runs the `git-remote-rns` remote helper with the arguments git passes it
+/// (remote name and URL; the last one is the URL). Speaks the remote-helper
+/// protocol on stdin and stdout until git closes the session.
+///
+/// # Errors
+/// Bad arguments, a configuration or connection failure, or a failed fetch or push.
 pub fn main<I>(args: I) -> Result<()>
 where
     I: IntoIterator<Item = String>,
