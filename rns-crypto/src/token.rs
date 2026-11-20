@@ -122,6 +122,13 @@ impl Token {
             "token buffer length"
         );
         let (body, tag) = out.split_at_mut(out.len() - 32);
+        self.seal_body(plaintext, iv, body);
+        tag.copy_from_slice(&self.tag(body));
+    }
+
+    /// Write the IV and the padded, encrypted `plaintext` into `body`: a
+    /// token without its tag.
+    fn seal_body(&self, plaintext: &[u8], iv: &[u8; 16], body: &mut [u8]) {
         let padding = body.len() - 16 - plaintext.len();
         body[..16].copy_from_slice(iv);
         body[16..16 + plaintext.len()].copy_from_slice(plaintext);
@@ -131,13 +138,14 @@ impl Token {
             AesMode::Aes256(aes) => aes.encrypt_cbc_in_place(&mut body[16..], iv),
         }
         .expect("PKCS7 padding always produces block-aligned plaintext");
-        tag.copy_from_slice(&self.tag(body));
     }
 
     /// `plaintext` as a token, under `iv`.
     pub fn encrypt_with_iv(&self, plaintext: &[u8], iv: &[u8; 16]) -> Vec<u8> {
         // Build the whole token in one buffer: the plaintext is copied once,
         // padded and encrypted in place, then signed and the tag appended.
+        // Not [`Token::encrypt_with_iv_into`] on a zeroed buffer: this is the
+        // link encryption path, and zeroing first costs a full extra pass.
         let padding = pkcs7::BLOCK_SIZE - plaintext.len() % pkcs7::BLOCK_SIZE;
         let mut token = Vec::with_capacity(16 + plaintext.len() + padding + 32);
         token.extend_from_slice(iv);
@@ -163,16 +171,7 @@ impl Token {
         rng.fill_bytes(&mut iv);
         let mut token = alloc::vec![0u8; Self::token_len(plaintext.len())];
         let signed = token.len() - 32;
-        let body = &mut token[..signed];
-        let padding = body.len() - 16 - plaintext.len();
-        body[..16].copy_from_slice(&iv);
-        body[16..16 + plaintext.len()].copy_from_slice(plaintext);
-        body[16 + plaintext.len()..].fill(padding as u8);
-        match &self.mode {
-            AesMode::Aes128(aes) => aes.encrypt_cbc_in_place(&mut body[16..], &iv),
-            AesMode::Aes256(aes) => aes.encrypt_cbc_in_place(&mut body[16..], &iv),
-        }
-        .expect("PKCS7 padding always produces block-aligned plaintext");
+        self.seal_body(plaintext, &iv, &mut token[..signed]);
         (token, self.mac.clone())
     }
 
@@ -183,15 +182,20 @@ impl Token {
         mac.finalize()
     }
 
-    /// Whether the token's HMAC matches; an error when it is too short to hold one.
-    pub fn verify_hmac(&self, token: &[u8]) -> Result<bool, TokenError> {
+    /// Check the token's HMAC: [`TokenError::InvalidToken`] when it is too
+    /// short to hold one, [`TokenError::HmacMismatch`] when it does not match.
+    pub fn verify_hmac(&self, token: &[u8]) -> Result<(), TokenError> {
         if token.len() <= 32 {
             return Err(TokenError::InvalidToken);
         }
         let received_hmac = &token[token.len() - 32..];
         let mut mac = self.mac.clone();
         mac.update(&token[..token.len() - 32]);
-        Ok(mac.verify(received_hmac))
+        if mac.verify(received_hmac) {
+            Ok(())
+        } else {
+            Err(TokenError::HmacMismatch)
+        }
     }
 
     /// [`Token::decrypt`] into `out`, replacing its contents and reusing
@@ -201,12 +205,7 @@ impl Token {
         if token.len() <= TOKEN_OVERHEAD {
             return Err(TokenError::InvalidToken);
         }
-        if !self
-            .verify_hmac(token)
-            .map_err(|_| TokenError::InvalidToken)?
-        {
-            return Err(TokenError::HmacMismatch);
-        }
+        self.verify_hmac(token)?;
         let Some(iv) = token.first_chunk::<16>() else {
             return Err(TokenError::InvalidToken);
         };
@@ -236,38 +235,11 @@ impl Token {
 
     /// The token's plaintext, once its HMAC checks.
     pub fn decrypt(&self, token: &[u8]) -> Result<Vec<u8>, TokenError> {
-        if token.len() <= TOKEN_OVERHEAD {
-            return Err(TokenError::InvalidToken);
-        }
-
-        if !self
-            .verify_hmac(token)
-            .map_err(|_| TokenError::InvalidToken)?
-        {
-            return Err(TokenError::HmacMismatch);
-        }
-
-        let Some(iv) = token.first_chunk::<16>() else {
-            return Err(TokenError::InvalidToken);
-        };
-        let ciphertext = &token[16..token.len() - 32];
-
-        // CBC ciphertext must be a non-empty whole number of 16-byte blocks.
-        if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) {
-            return Err(TokenError::DecryptionFailed);
-        }
-
-        let mut decrypted = match &self.mode {
-            AesMode::Aes128(aes) => aes.decrypt_cbc(ciphertext, iv),
-            AesMode::Aes256(aes) => aes.decrypt_cbc(ciphertext, iv),
-        }
-        .map_err(|_| TokenError::DecryptionFailed)?;
-
-        let unpadded_len = pkcs7::unpad(&decrypted, 16)
-            .map_err(|_| TokenError::DecryptionFailed)?
-            .len();
-        decrypted.truncate(unpadded_len);
-        Ok(decrypted)
+        // Allocated only once the HMAC checks: the first extend in
+        // `decrypt_into` reserves exactly the ciphertext's length.
+        let mut plaintext = Vec::new();
+        self.decrypt_into(token, &mut plaintext)?;
+        Ok(plaintext)
     }
 
     /// Decrypt a token that arrives as consecutive chunks, such as the parts
@@ -590,14 +562,14 @@ mod tests {
         let mut rng = FixedRng::new(&[0xCC; 16]);
         let encrypted = token.encrypt(b"timing regression", &mut rng);
 
-        assert_eq!(token.verify_hmac(&encrypted), Ok(true));
+        assert_eq!(token.verify_hmac(&encrypted), Ok(()));
         for tag_index in 0..32 {
             let mut corrupted = encrypted.clone();
             let index = corrupted.len() - 32 + tag_index;
             corrupted[index] ^= 0x01;
             assert_eq!(
                 token.verify_hmac(&corrupted),
-                Ok(false),
+                Err(TokenError::HmacMismatch),
                 "tag mismatch at byte {tag_index} must fail"
             );
         }
@@ -628,7 +600,7 @@ mod tests {
                 let mut parts = alloc::vec![0xAAu8; 16];
                 parts.extend(core::iter::repeat_n(0x55u8, ciphertext_len));
                 let signed = sign_token_parts(key, &parts);
-                assert_eq!(token.verify_hmac(&signed), Ok(true));
+                assert_eq!(token.verify_hmac(&signed), Ok(()));
                 assert_eq!(
                     token.decrypt(&signed),
                     Err(TokenError::DecryptionFailed),
