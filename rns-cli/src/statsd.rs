@@ -335,22 +335,16 @@ impl RpcControl {
     fn load_hook(&self, name: &str, attach_point: &str, priority: i32) -> Result<(), String> {
         #[cfg(feature = "rns-hooks-wasm")]
         {
-            return self.with_client(|client| {
+            self.with_client(|client| {
                 client.load_hook(name, attach_point, priority, EMBEDDED_HOOK_WASM)
-            })?;
+            })?
         }
 
         #[cfg(not(feature = "rns-hooks-wasm"))]
         {
-            return self.with_client(|client| {
+            self.with_client(|client| {
                 client.load_builtin_hook(name, attach_point, priority, rns_stats_hook::BUILTIN_ID)
-            })?;
-        }
-
-        #[allow(unreachable_code)]
-        {
-            let _ = (name, attach_point, priority);
-            Err("no stats hook backend enabled".into())
+            })?
         }
     }
 

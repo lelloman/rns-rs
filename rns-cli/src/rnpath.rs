@@ -1285,7 +1285,10 @@ fn show_published_list(response: &[u8], config_path: Option<&str>, filter: Optio
 
 /// `rnpath -R <hash>`: upstream's remote management, its progress lines,
 /// messages and exit codes.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate command-line option of the -R mode"
+)]
 fn remote_path(
     hash_str: &str,
     management_identity: Option<&str>,
@@ -1538,7 +1541,10 @@ mod tests {
     }
 
     /// A path table entry as upstream's get_path_table builds it.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per varying field of the path table entry the test builds"
+    )]
     fn path(
         byte: u8,
         via: u8,
