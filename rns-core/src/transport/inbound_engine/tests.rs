@@ -496,6 +496,35 @@ fn only_a_local_clients_path_response_answers_a_pending_request() {
     }
 }
 
+/// Upstream 833f6cf2: an announce from a local client this instance
+/// serves marks its path responsive, refreshing its timestamp, expiry and
+/// use. One from the network, or heard by a shared instance client on its
+/// connection to the instance, leaves the path state unknown and the path
+/// unused.
+#[test]
+fn a_local_clients_announce_marks_its_path_responsive() {
+    use super::local_client_announce_tests::announce_in_context;
+    for (serves, from, responsive) in [(true, 2, true), (true, 1, false), (false, 2, false)] {
+        let mut engine = TransportEngine::new(make_config(serves));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_local_client_interface(2));
+        let announce =
+            announce_in_context(10, false, constants::HEADER_1, 0, constants::CONTEXT_NONE);
+        let dest = announce.destination_hash;
+        receive(&mut engine, &announce, from);
+        let path = engine.path_table.get(&dest).unwrap().primary().unwrap();
+        let case = format!("serves {serves} from {from}");
+        assert_eq!(
+            engine.path_states.get(&dest).copied(),
+            responsive.then_some(constants::STATE_RESPONSIVE),
+            "{case}"
+        );
+        assert_eq!(path.used, if responsive { 1001.0 } else { 0.0 }, "{case}");
+        assert_eq!(path.timestamp, 1001.0, "{case}");
+        assert_eq!(path.expires, 1001.0 + constants::PATHFINDER_E, "{case}");
+    }
+}
+
 fn table_entry(hops: u8, retries: u8, retransmit_timeout: f64) -> AnnounceEntry {
     AnnounceEntry {
         timestamp: 1000.0,

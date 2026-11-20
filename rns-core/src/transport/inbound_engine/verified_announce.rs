@@ -270,6 +270,13 @@ impl TransportEngine {
         // Re-apply the path-state reset after storing the path entry so any transient
         // stale state is also cleared once the destination exists in the path table.
         self.path_states.remove(&ctx.packet.destination_hash);
+        // Upstream 833f6cf2: an announce from a local client this instance
+        // serves proves its destination alive, so its path is marked
+        // responsive (timestamp, expiry and use refreshed) instead of
+        // unknown.
+        if self.serves_local_client(ctx.iface) {
+            self.mark_path_responsive(&ctx.packet.destination_hash, ctx.now);
+        }
 
         // Store announce for retransmission
         if let Some(ann) = announce_entry {

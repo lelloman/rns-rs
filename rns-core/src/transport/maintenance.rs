@@ -290,13 +290,14 @@ impl TransportEngine {
         }
 
         let unused_path_linger = self.unused_path_linger();
-        jobs::cull_path_table(
+        jobs::cull_path_table_on_instance(
             &mut self.path_table,
             &self.interfaces,
             ctx.now,
             unused_path_linger,
             jobs::UnusedPoolLimits::UPSTREAM,
             self.hop_limiter,
+            self.config.identity_hash.is_some(),
         );
         jobs::cull_reverse_table(&mut self.reverse_table, &self.interfaces, ctx.now);
         self.rediscover_unproven_link_paths(ctx.now);
