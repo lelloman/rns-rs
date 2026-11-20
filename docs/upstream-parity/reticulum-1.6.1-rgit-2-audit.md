@@ -231,7 +231,7 @@ implementation work remains. The gates are recorded below.
 - [x] Workspace tests, feature suites, formatting, and lint pass.
 - [x] Required build, Docker, hardware, and manual gates are recorded honestly.
 - [x] Native documentation is updated for user-visible behavior.
-- [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
+- [x] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
@@ -270,3 +270,5 @@ configured checkout stayed at `cff4d03f`.
   `cff4d03f`, as it stayed at the signed release for the earlier
   same-version rgit advancements, so the promotion pull request's CI does
   not exercise `f55c0c6e`; the exact-target run above does.
+
+The final record is [reticulum-1.6.1-rgit-2-parity.md](reticulum-1.6.1-rgit-2-parity.md).

@@ -10,13 +10,32 @@ The current upstream reference baseline is:
 - Checkout selection: `.local/reticulum-upstream.path` or `RETICULUM_UPSTREAM_DIR`
 - Version: `1.6.1`
 - Version metadata commit: `fd36a97220a40383ce7f0a1d0f40bc7043f4494f`
-- Release tag: `1.6.1` on `cff4d03fdbd6bfb63b765280cd944756ac5cce8d`
-  (signed; tag object `bde4cd790a78b5ed285243fcc17f6439bb582288`)
-- Normative commit: `cff4d03fdbd6bfb63b765280cd944756ac5cce8d`
-- Commit date: `2026-11-18 18:41:56 +0100`
-- Subject: `Updated changelog`
+- Release tag: none at this commit; the signed `1.6.1` tag stays on
+  `cff4d03fdbd6bfb63b765280cd944756ac5cce8d` (tag object
+  `bde4cd790a78b5ed285243fcc17f6439bb582288`), two commits earlier
+- Normative commit: `f55c0c6ea618ebae33e7d3ab2e37b200ce0b0d81`
+- Commit date: `2026-11-20 13:50:26 +0100`
+- Subject: `Added security notice`
 
-The normative baseline is the signed `1.6.1` release, the canonical
+The normative baseline is the GitHub `master` tip `f55c0c6e`, upstream's
+security hot-patch of the 1.6.1 release, accepted on 2026-11-20 as a
+same-version Reticulum 1.6.1 advancement from `cff4d03f`. It is an ancestor
+of the canonical `rgit/master` tip, which had already moved to `606a1691`;
+that commit is left for the next audit. The range has two commits:
+
+- rngit's media conversion hands an encoder only input whose first 64 bytes
+  carry a PNG, JPEG, GIF, TIFF, WebP or BMP signature, names that format to
+  ImageMagick and GraphicsMagick (`png:-`, not `-`), and does not convert
+  input over 32 MiB, closing ImageMagick's arbitrary file read through
+  crafted media.
+- The security notice for it.
+
+Acceptance evidence is in
+[`docs/upstream-parity/reticulum-1.6.1-rgit-2-parity.md`](docs/upstream-parity/reticulum-1.6.1-rgit-2-parity.md)
+and the detailed audit is
+[`docs/upstream-parity/reticulum-1.6.1-rgit-2-audit.md`](docs/upstream-parity/reticulum-1.6.1-rgit-2-audit.md).
+
+The previous baseline was the signed `1.6.1` release, the canonical
 `rgit/master` tip `cff4d03f`, accepted on 2026-11-20 as a same-version
 Reticulum 1.6.1 advancement from `884f109b`. The GitHub mirror agrees with
 rgit. The range has 34 commits:
