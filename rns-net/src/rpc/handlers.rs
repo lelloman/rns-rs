@@ -32,34 +32,6 @@ pub(super) fn send_probe_error_pickle(err: crate::event::SendProbeError) -> Pick
     PickleValue::Dict(entries)
 }
 
-/// An exception upstream's `rpc_loop` raises while it answers a call: it
-/// logs `An error ocurred while handling RPC call from local client: <e>`
-/// at error level and closes the connection without an answer.
-#[derive(Debug)]
-pub(crate) struct UpstreamRpcException(pub(crate) String);
-
-impl std::fmt::Display for UpstreamRpcException {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for UpstreamRpcException {}
-
-/// An [`UpstreamRpcException`] with upstream's exception text `message`.
-pub(crate) fn upstream_rpc_exception(message: &str) -> io::Error {
-    io::Error::other(UpstreamRpcException(message.into()))
-}
-
-/// The line upstream's `rpc_loop` logs for `error`, if it is an
-/// [`UpstreamRpcException`].
-pub(crate) fn upstream_rpc_exception_line(error: &io::Error) -> Option<String> {
-    let exception = error.get_ref()?.downcast_ref::<UpstreamRpcException>()?;
-    Some(format!(
-        "An error ocurred while handling RPC call from local client: {exception}"
-    ))
-}
-
 /// The answer to a destination type registration: whether it was accepted.
 pub(super) fn destination_type_registration(response: QueryResponse) -> PickleValue {
     PickleValue::Bool(matches!(

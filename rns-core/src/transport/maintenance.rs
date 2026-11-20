@@ -465,7 +465,7 @@ impl TransportEngine {
     }
 
     #[cfg(test)]
-    pub(crate) fn link_table_ref(&self) -> &BTreeMap<[u8; 16], LinkEntry> {
+    pub(crate) fn link_table_ref(&self) -> &super::tables::LinkTable {
         &self.link_table
     }
 }

@@ -159,8 +159,9 @@ pub struct LinkDistributionEntry {
     /// Bytes forwarded along its links (`traffic`).
     pub traffic: u64,
     /// `from_ifs`: the `get_hash()` of each interface its link requests
-    /// came in on, each once. Upstream keeps them in a Python set at
-    /// 3f55e9eb, which its msgpack RPC cannot encode.
+    /// came in on, each once, in the order first seen (upstream's list
+    /// since 1f7cd145; a Python set at 3f55e9eb, which its msgpack RPC
+    /// could not encode).
     pub from_interface_hashes: Vec<[u8; 32]>,
 }
 

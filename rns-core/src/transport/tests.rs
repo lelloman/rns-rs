@@ -6795,6 +6795,80 @@ fn link_distribution_counts_per_destination() {
         .is_empty());
 }
 
+// Upstream iterates its `link_table` dict, so `link_distribution` (1f7cd145)
+// gives destinations, and the interfaces of each, in the order the links
+// were inserted, not by link id. A link id assigned again keeps its place,
+// as a dict key does; one removed and inserted again goes to the end.
+#[test]
+fn link_distribution_follows_link_table_insertion_order() {
+    let mut engine = TransportEngine::new(make_config(true));
+    let first = [0xAA; 16];
+    let second = [0x11; 16];
+    let link = |destination_hash, received| LinkEntry {
+        timestamp: 1000.0,
+        next_hop_transport_id: [0; 16],
+        next_hop_interface: InterfaceId(9),
+        remaining_hops: 1,
+        received_interface: InterfaceId(received),
+        taken_hops: 0,
+        destination_hash,
+        validated: false,
+        proof_timeout: 2000.0,
+        traffic: 0,
+    };
+    // Link ids in the opposite order to their insertion.
+    engine.register_link([0x09; 16], link(first, 3));
+    engine.register_link([0x07; 16], link(second, 1));
+    engine.register_link([0x05; 16], link(first, 1));
+    engine.register_link([0x03; 16], link(first, 3));
+    engine.register_link([0x01; 16], link(first, 2));
+    let order = |engine: &TransportEngine| -> Vec<([u8; 16], Vec<InterfaceId>)> {
+        engine
+            .link_distribution()
+            .into_iter()
+            .map(|d| (d.destination_hash, d.from_interfaces))
+            .collect()
+    };
+    let ids = |ids: &[u64]| ids.iter().copied().map(InterfaceId).collect::<Vec<_>>();
+    assert_eq!(
+        order(&engine),
+        vec![(first, ids(&[3, 1, 2])), (second, ids(&[1]))]
+    );
+
+    // Assigned again: the link keeps its place.
+    engine.register_link([0x09; 16], link(first, 4));
+    assert_eq!(
+        order(&engine),
+        vec![(first, ids(&[4, 1, 3, 2])), (second, ids(&[1]))]
+    );
+
+    // Removed and inserted again: it goes to the end, so the second
+    // destination's link now comes first.
+    engine.remove_link(&[0x09; 16]);
+    engine.register_link([0x09; 16], link(first, 4));
+    assert_eq!(
+        order(&engine),
+        vec![(second, ids(&[1])), (first, ids(&[1, 3, 2, 4]))]
+    );
+    engine.remove_link(&[0x05; 16]);
+    engine.remove_link(&[0x03; 16]);
+    engine.remove_link(&[0x01; 16]);
+    engine.remove_link(&[0x09; 16]);
+    engine.register_link([0x02; 16], link(first, 5));
+    assert_eq!(
+        order(&engine),
+        vec![(second, ids(&[1])), (first, ids(&[5]))]
+    );
+
+    // Entries dropped with their interface leave the order too.
+    assert_eq!(engine.drop_links_for_interface(InterfaceId(1)), 1);
+    engine.register_link([0x07; 16], link(second, 6));
+    assert_eq!(
+        order(&engine),
+        vec![(first, ids(&[5])), (second, ids(&[6]))]
+    );
+}
+
 #[test]
 fn outbound_marks_path_used_timestamp() {
     let mut engine = TransportEngine::new(make_config(false));

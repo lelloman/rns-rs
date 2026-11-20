@@ -1,4 +1,4 @@
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use super::types::InterfaceId;
@@ -106,6 +106,91 @@ pub struct LinkEntry {
     /// Bytes of link traffic this node has forwarded along the link (upstream
     /// 3f55e9eb `IDX_LT_TRXB`): each forwarded packet adds its raw length.
     pub traffic: u64,
+}
+
+/// The link table: [`LinkEntry`]s keyed by link id, which also keeps the
+/// order the link ids were inserted in, as upstream's `Transport.link_table`
+/// dict does.
+///
+/// Reads go through [`Deref`](core::ops::Deref) to the map by link id.
+/// Writes go through [`insert`](Self::insert), [`get_mut`](Self::get_mut),
+/// [`remove`](Self::remove) and [`retain`](Self::retain), which keep the
+/// order as Python's dict does: replacing the entry of a link id already
+/// in the table (`link_table[link_id] = entry`) keeps its place, an entry
+/// removed and inserted again goes to the end.
+#[derive(Debug, Clone, Default)]
+pub struct LinkTable {
+    entries: BTreeMap<[u8; 16], LinkEntry>,
+    /// The insertion sequence number of each link id in `entries`.
+    sequence_of: BTreeMap<[u8; 16], u64>,
+    /// The link ids of `entries` by insertion sequence number.
+    by_sequence: BTreeMap<u64, [u8; 16]>,
+    next_sequence: u64,
+}
+
+impl LinkTable {
+    /// An empty link table.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Insert `entry` for `link_id`, replacing (in its place) the entry it
+    /// had, which is returned.
+    pub fn insert(&mut self, link_id: [u8; 16], entry: LinkEntry) -> Option<LinkEntry> {
+        let previous = self.entries.insert(link_id, entry);
+        if previous.is_none() {
+            let sequence = self.next_sequence;
+            self.next_sequence += 1;
+            self.sequence_of.insert(link_id, sequence);
+            self.by_sequence.insert(sequence, link_id);
+        }
+        previous
+    }
+
+    /// The entry of `link_id`, to change in place.
+    pub fn get_mut(&mut self, link_id: &[u8; 16]) -> Option<&mut LinkEntry> {
+        self.entries.get_mut(link_id)
+    }
+
+    /// Remove the entry of `link_id`, returning it.
+    pub fn remove(&mut self, link_id: &[u8; 16]) -> Option<LinkEntry> {
+        let removed = self.entries.remove(link_id)?;
+        if let Some(sequence) = self.sequence_of.remove(link_id) {
+            self.by_sequence.remove(&sequence);
+        }
+        Some(removed)
+    }
+
+    /// Keep only the entries `keep` returns true for.
+    pub fn retain(&mut self, mut keep: impl FnMut(&[u8; 16], &mut LinkEntry) -> bool) {
+        let sequence_of = &mut self.sequence_of;
+        let by_sequence = &mut self.by_sequence;
+        self.entries.retain(|link_id, entry| {
+            let kept = keep(link_id, entry);
+            if !kept {
+                if let Some(sequence) = sequence_of.remove(link_id) {
+                    by_sequence.remove(&sequence);
+                }
+            }
+            kept
+        });
+    }
+
+    /// The entries in the order their link ids were inserted, as iterating
+    /// upstream's `Transport.link_table` yields them.
+    pub fn in_insertion_order(&self) -> impl Iterator<Item = (&[u8; 16], &LinkEntry)> {
+        self.by_sequence
+            .values()
+            .filter_map(|link_id| self.entries.get_key_value(link_id))
+    }
+}
+
+impl core::ops::Deref for LinkTable {
+    type Target = BTreeMap<[u8; 16], LinkEntry>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
 }
 
 /// One destination's links in the link table, as upstream's
