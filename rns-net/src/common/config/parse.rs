@@ -250,40 +250,6 @@ pub(super) fn parse_bool(value: &str) -> Option<bool> {
     }
 }
 
-pub(super) fn parse_nonnegative_f64_option(
-    kvs: &HashMap<String, String>,
-    key: &str,
-) -> Result<Option<f64>, ConfigError> {
-    let Some(v) = kvs.get(key) else {
-        return Ok(None);
-    };
-    let parsed = v.parse::<f64>().map_err(|_| ConfigError::InvalidValue {
-        key: key.into(),
-        value: v.clone(),
-    })?;
-    if !parsed.is_finite() || parsed < 0.0 {
-        return Err(ConfigError::InvalidValue {
-            key: key.into(),
-            value: v.clone(),
-        });
-    }
-    Ok(Some(parsed))
-}
-
-pub(super) fn parse_usize_option(
-    kvs: &HashMap<String, String>,
-    key: &str,
-) -> Result<Option<usize>, ConfigError> {
-    let Some(v) = kvs.get(key) else {
-        return Ok(None);
-    };
-    let parsed = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
-        key: key.into(),
-        value: v.clone(),
-    })?;
-    Ok(Some(parsed))
-}
-
 /// Parse an integer as ConfigObj's `as_int` does, saturating values beyond
 /// the `i64` range instead of rejecting them, since every caller clamps.
 pub(crate) fn parse_config_int(value: &str) -> Option<i64> {
@@ -311,16 +277,8 @@ pub(crate) fn parse_config_float(value: &str) -> Option<f64> {
 /// `[filter] hop_limiter`: `max(0, min(as_int(v), PATHFINDER_M))`
 /// (Reticulum.py since 01aef5bc). A limit of 0 drops every inbound packet.
 pub(super) fn parse_hop_limiter(kvs: &HashMap<String, String>) -> Result<Option<u8>, ConfigError> {
-    let Some(v) = kvs.get("hop_limiter") else {
-        return Ok(None);
-    };
-    let n = parse_config_int(v).ok_or_else(|| ConfigError::InvalidValue {
-        key: "hop_limiter".into(),
-        value: v.clone(),
-    })?;
-    Ok(Some(
-        n.clamp(0, i64::from(rns_core::constants::PATHFINDER_M)) as u8,
-    ))
+    let n = super::keys::Keys(kvs).with("hop_limiter", parse_config_int)?;
+    Ok(n.map(|n| n.clamp(0, i64::from(rns_core::constants::PATHFINDER_M)) as u8))
 }
 
 /// The `rpc_key` hex value as the 32-byte key rns-rs authenticates with.

@@ -1,5 +1,6 @@
 //! The `[stamps]`, filter and `[logging]` sections.
 
+use super::keys::Keys;
 use super::*;
 
 /// An infinite timeout means no deadline in practice.
@@ -11,12 +12,7 @@ pub(super) fn build_filter_section(
     kvs: &HashMap<String, String>,
 ) -> Result<FilterSection, ConfigError> {
     let mut section = FilterSection::default();
-    if let Some(v) = kvs.get("required_only") {
-        section.required_only = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
-            key: "required_only".into(),
-            value: v.clone(),
-        })?;
-    }
+    Keys(kvs).set_bool("required_only", &mut section.required_only)?;
     let list = |key: &str| -> Vec<String> {
         kvs.get(key)
             .map(|v| {
@@ -38,42 +34,23 @@ pub(super) fn build_stamps_section(
 ) -> Result<StampsSection, ConfigError> {
     use rns_core::constants::{LINK_COST_CAP, STAMP_COST_CAP, STAMP_TIMEOUT_MIN};
 
+    let keys = Keys(kvs);
     let mut section = StampsSection::default();
-    let flag = |key: &str| -> Result<bool, ConfigError> {
-        match kvs.get(key) {
-            None => Ok(false),
-            Some(v) => parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
-                key: key.into(),
-                value: v.clone(),
-            }),
-        }
+    let flag = |key: &str| Ok::<_, ConfigError>(keys.bool(key)?.unwrap_or(false));
+    let cost = |key: &str, cap: u8| {
+        Ok::<_, ConfigError>(
+            keys.with(key, parse_config_float)?
+                .map(|n| rns_core::stamp::clamp_cost(n, cap)),
+        )
     };
-    let cost = |key: &str, cap: u8| -> Result<Option<StampCost>, ConfigError> {
-        let Some(v) = kvs.get(key) else {
-            return Ok(None);
-        };
-        let n = parse_config_float(v).ok_or_else(|| ConfigError::InvalidValue {
-            key: key.into(),
-            value: v.clone(),
-        })?;
-        Ok(Some(rns_core::stamp::clamp_cost(n, cap)))
-    };
-    let timeout = |key: &str| -> Result<Option<f64>, ConfigError> {
-        let Some(v) = kvs.get(key) else {
-            return Ok(None);
-        };
-        let n = v
-            .trim()
-            .parse::<f64>()
-            .map_err(|_| ConfigError::InvalidValue {
-                key: key.into(),
-                value: v.clone(),
-            })?;
-        // `max(0.020, v)`; Python's `max` also keeps 0.020 for NaN.
-        Ok(Some(if n.is_nan() {
-            STAMP_TIMEOUT_MIN
-        } else {
-            n.max(STAMP_TIMEOUT_MIN)
+    // `max(0.020, v)`; Python's `max` also keeps 0.020 for NaN.
+    let timeout = |key: &str| {
+        Ok::<_, ConfigError>(keys.parse::<f64>(key)?.map(|n| {
+            if n.is_nan() {
+                STAMP_TIMEOUT_MIN
+            } else {
+                n.max(STAMP_TIMEOUT_MIN)
+            }
         }))
     };
 
@@ -115,18 +92,7 @@ pub(super) fn build_stamps_section(
         section.pr_stamp_timeout = v;
     }
     // Read with `as_int` (upstream 16621a78).
-    let integer = |key: &str| -> Result<Option<i64>, ConfigError> {
-        kvs.get(key)
-            .map(|v| {
-                v.trim()
-                    .parse::<i64>()
-                    .map_err(|_| ConfigError::InvalidValue {
-                        key: key.into(),
-                        value: v.clone(),
-                    })
-            })
-            .transpose()
-    };
+    let integer = |key: &str| keys.parse::<i64>(key);
     if let Some(v) = integer("max_workers")? {
         section.max_workers = Some(v.max(1) as usize);
     }
@@ -139,26 +105,16 @@ pub(super) fn build_stamps_section(
 pub(super) fn build_logging_section(
     kvs: &HashMap<String, String>,
 ) -> Result<LoggingSection, ConfigError> {
+    let keys = Keys(kvs);
     let mut section = LoggingSection::default();
-
-    if let Some(v) = kvs.get("loglevel") {
-        section.loglevel = v.parse::<u8>().map_err(|_| ConfigError::InvalidValue {
-            key: "loglevel".into(),
-            value: v.clone(),
-        })?;
-        if section.loglevel > crate::logging::LOG_EXTREME {
-            return Err(ConfigError::InvalidValue {
-                key: "loglevel".into(),
-                value: v.clone(),
-            });
-        }
+    if let Some(level) = keys.with("loglevel", |v| {
+        v.parse::<u8>()
+            .ok()
+            .filter(|level| *level <= crate::logging::LOG_EXTREME)
+    })? {
+        section.loglevel = level;
     }
-    if let Some(v) = kvs.get("logtimestamps") {
-        section.logtimestamps = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
-            key: "logtimestamps".into(),
-            value: v.clone(),
-        })?;
-    }
+    keys.set_bool("logtimestamps", &mut section.logtimestamps)?;
 
     Ok(section)
 }
