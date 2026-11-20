@@ -1,0 +1,45 @@
+
+ TCPServerInterface[Server/0.0.0.0:4242]
+    Network   : testnet
+    Status    : Up, gravity 3
+    Clients   : 1
+    Blocked   : 2 IPs
+    Mode      : Full (a>i)
+    TX Drops  : 4 (2.05 KB)
+    Rate      : 10.00 Mbps, MTU 16384
+    Rem.Tr.ID : Unknown
+    Rem.Vers. : RNS 1.6.1, transport enabled
+    Rem.Csts. : Dst 23.500, PR 15.801
+    Access    : 128-bit IFAC by <…3b3c3d3e3f>
+    Violatns. : 2 protocol
+    Flt. Hits : 17
+    Traffic   : ↑1.00 KB    81.23 Kbps (1.50 KB waiting, stalled)
+                ↓999 B      8 bps
+
+ TCPInterface[Peer/192.0.2.5:4242]
+    Status    : Up
+    Mode      : Full
+    Rate      : 10.00 Mbps, MTU 16384
+    Tunnel ID : 34343434343434343434343434343434
+    Rem.Tr.ID : <56565656565656565656565656565656>
+    Rem.Vers. : Reticulum Rust Implementation 0.10.0, no transport
+    Rem.Csts. : Dst ?, PR 7.250
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ TCPServerInterface[Quiet/0.0.0.0:4243]
+    Status    : Up
+    Clients   : 0
+    Mode      : Full
+    Tunnel ID : 78787878787878787878787878787878
+    Rem.Tr.ID : Unknown
+    Rem.Vers. : RNS 1.6.1, transport enabled
+    Rem.Csts. : Dst ?, PR ?
+    Traffic   : ↑0 B        0 bps
+                ↓0 B        0 bps
+
+ Transport Instance <000102030405060708090a0b0c0d0e0f> running
+ Network Identity   <101112131415161718191a1b1c1d1e1f>
+ Probe responder at <202122232425262728292a2b2c2d2e2f> active
+ Uptime is 1d, 2h, 3m and 4.5s
+

@@ -3,7 +3,6 @@
     Status    : Up
     Serving   : 2 programs
     Rate      : 1.00 Gbps, MTU 262144
-    Tunnel ID : None
     Traffic   : ↑8.19 KB    64 bps
                 ↓4.10 KB    1.20 Kbps
 
@@ -15,9 +14,8 @@
     Mode      : Full (a>i)
     TX Drops  : 4 (2.05 KB)
     Rate      : 10.00 Mbps, MTU 16384
-    Tunnel ID : abababababababababababababababab
     Rem.Tr.ID : Unknown
-    Rem.Vers. : RNS 1.6.1
+    Rem.Vers. : RNS 1.6.1, transport enabled
     Rem.Csts. : Dst 23.500, PR 15.801
     Access    : 128-bit IFAC by <…3b3c3d3e3f>
     Violatns. : 2 protocol
@@ -144,7 +142,6 @@
     Peers     : 1 connected I2P endpoint
     Mode      : Full
     Rate      : 256.00 kbps, MTU 1064
-    Tunnel ID : None
     I2P       : Tunnel active
     I2P B32   : abcdefghijklmnop.b32.i2p
     Traffic   : ↑0 B        0 bps
@@ -154,7 +151,6 @@
     Status    : Up
     Peers     : 3 connected I2P endpoints
     Mode      : Full
-    Tunnel ID : None
     Traffic   : ↑0 B        0 bps
                 ↓0 B        0 bps
 
@@ -184,7 +180,6 @@
  Shared Instance[rns/other]
     Status    : Up
     Serving   : 1 program
-    Tunnel ID : None
     Traffic   : ↑0 B        0 bps
                 ↓0 B        0 bps
 
