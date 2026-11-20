@@ -38,10 +38,11 @@ impl Driver {
         }
         let now = time::now();
         if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_DATA {
-            self.sent_packets
+            self.proofs
+                .sent_packets
                 .insert(packet.packet_hash, (packet.destination_hash, now));
             if let Some(key) = proof_key {
-                self.sent_packet_keys.insert(packet.packet_hash, key);
+                self.proofs.sent_packet_keys.insert(packet.packet_hash, key);
             }
         }
         // These APIs originate hops=0 packets, so announcement relay bandwidth

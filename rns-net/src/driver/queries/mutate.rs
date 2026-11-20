@@ -314,7 +314,7 @@ impl Driver {
                 payload_size,
             } => self.send_probe(dest_hash, payload_size),
             QueryRequest::CheckProof { packet_hash } => {
-                match self.completed_proofs.remove(&packet_hash) {
+                match self.proofs.completed.remove(&packet_hash) {
                     Some((rtt, _received)) => QueryResponse::CheckProof(Some(rtt)),
                     None => QueryResponse::CheckProof(None),
                 }
@@ -448,9 +448,10 @@ impl Driver {
                 let hops = self.engine.hops_to(&dest_hash).unwrap_or(0);
                 // Track for proof matching, and record
                 // its proof for CheckProof polling.
-                self.sent_packets
+                self.proofs
+                    .sent_packets
                     .insert(packet_hash, (dest_hash, time::now()));
-                self.pending_probes.insert(packet_hash);
+                self.proofs.pending_probes.insert(packet_hash);
                 // Send via engine
                 let actions = self.engine.handle_outbound(
                     &packet,
@@ -686,7 +687,7 @@ impl Driver {
         match key {
             "provider.queue_max_events" => match Self::expect_u64(value, key) {
                 Ok(v) if v > 0 => {
-                    if let Some(ref bridge) = self.provider_bridge {
+                    if let Some(ref bridge) = self.hooks.provider_bridge {
                         bridge.set_queue_max_events(v as usize);
                     }
                     Ok(())
@@ -699,7 +700,7 @@ impl Driver {
             },
             "provider.queue_max_bytes" => match Self::expect_u64(value, key) {
                 Ok(v) if v > 0 => {
-                    if let Some(ref bridge) = self.provider_bridge {
+                    if let Some(ref bridge) = self.hooks.provider_bridge {
                         bridge.set_queue_max_bytes(v as usize);
                     }
                     Ok(())
@@ -786,13 +787,13 @@ impl Driver {
             }
             #[cfg(feature = "hooks")]
             "provider.queue_max_events" => {
-                if let Some(ref bridge) = self.provider_bridge {
+                if let Some(ref bridge) = self.hooks.provider_bridge {
                     bridge.set_queue_max_events(defaults.provider_queue_max_events);
                 }
             }
             #[cfg(feature = "hooks")]
             "provider.queue_max_bytes" => {
-                if let Some(ref bridge) = self.provider_bridge {
+                if let Some(ref bridge) = self.hooks.provider_bridge {
                     bridge.set_queue_max_bytes(defaults.provider_queue_max_bytes);
                 }
             }

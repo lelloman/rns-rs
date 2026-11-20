@@ -2972,8 +2972,11 @@ fn graceful_shutdown_voids_async_announce_and_receipt_state() {
         assert!(!queue.is_empty());
         assert!(queue.queued_bytes() > 0);
     }
-    driver.sent_packets.insert([0xA1; 32], ([0xB1; 16], 100.0));
-    driver.completed_proofs.insert([0xA2; 32], (0.25, 101.0));
+    driver
+        .proofs
+        .sent_packets
+        .insert([0xA1; 32], ([0xB1; 16], 100.0));
+    driver.proofs.completed.insert([0xA2; 32], (0.25, 101.0));
 
     driver.graceful_shutdown();
 
@@ -2983,8 +2986,8 @@ fn graceful_shutdown_voids_async_announce_and_receipt_state() {
         assert!(queue.is_empty());
         assert_eq!(queue.queued_bytes(), 0);
     }
-    assert!(driver.sent_packets.is_empty());
-    assert!(driver.completed_proofs.is_empty());
+    assert!(driver.proofs.sent_packets.is_empty());
+    assert!(driver.proofs.completed.is_empty());
 }
 
 #[test]
@@ -3438,7 +3441,7 @@ fn send_outbound_is_ignored_while_draining() {
     driver.run();
 
     assert!(sent.lock().unwrap().is_empty());
-    assert!(driver.sent_packets.is_empty());
+    assert!(driver.proofs.sent_packets.is_empty());
 }
 
 #[test]
@@ -9241,7 +9244,7 @@ fn runtime_config_sets_provider_bridge_values() {
     .unwrap();
     driver.runtime_config.defaults.provider_queue_max_events = 1024;
     driver.runtime_config.defaults.provider_queue_max_bytes = 1024 * 1024;
-    driver.provider_bridge = Some(bridge);
+    driver.hooks.provider_bridge = Some(bridge);
 
     let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
         key: "provider.queue_max_events".into(),
@@ -10763,8 +10766,8 @@ fn register_proof_strategy_event() {
     tx.send(Event::Shutdown).unwrap();
     driver.run();
 
-    assert!(driver.proof_strategies.contains_key(&dest));
-    let (strategy, ref id_opt) = driver.proof_strategies[&dest];
+    assert!(driver.proofs.strategies.contains_key(&dest));
+    let (strategy, ref id_opt) = driver.proofs.strategies[&dest];
     assert_eq!(strategy, rns_core::types::ProofStrategy::ProveAll);
     assert!(id_opt.is_some());
 }
@@ -10809,8 +10812,8 @@ fn register_proof_strategy_prove_none_no_identity() {
     tx.send(Event::Shutdown).unwrap();
     driver.run();
 
-    assert!(driver.proof_strategies.contains_key(&dest));
-    let (strategy, ref id_opt) = driver.proof_strategies[&dest];
+    assert!(driver.proofs.strategies.contains_key(&dest));
+    let (strategy, ref id_opt) = driver.proofs.strategies[&dest];
     assert_eq!(strategy, rns_core::types::ProofStrategy::ProveNone);
     assert!(id_opt.is_none());
 }
@@ -10867,8 +10870,8 @@ fn send_outbound_tracks_sent_packets() {
     driver.handle_send_outbound_event(packet.raw, constants::DESTINATION_PLAIN, None);
 
     // Should be tracking the sent packet
-    assert!(driver.sent_packets.contains_key(&expected_hash));
-    let (tracked_dest, _sent_time) = &driver.sent_packets[&expected_hash];
+    assert!(driver.proofs.sent_packets.contains_key(&expected_hash));
+    let (tracked_dest, _sent_time) = &driver.proofs.sent_packets[&expected_hash];
     assert_eq!(tracked_dest, &dest);
 }
 
@@ -10915,7 +10918,7 @@ fn prove_all_generates_proof_on_delivery() {
     driver
         .engine
         .register_destination(dest, constants::DESTINATION_SINGLE);
-    driver.proof_strategies.insert(
+    driver.proofs.strategies.insert(
         dest,
         (
             rns_core::types::ProofStrategy::ProveAll,
@@ -11006,7 +11009,7 @@ fn proofs_go_back_only_on_the_receiving_interface() {
     driver
         .engine
         .register_destination(dest, constants::DESTINATION_SINGLE);
-    driver.proof_strategies.insert(
+    driver.proofs.strategies.insert(
         dest,
         (
             rns_core::types::ProofStrategy::ProveAll,
@@ -11091,7 +11094,8 @@ fn prove_none_does_not_generate_proof() {
         .engine
         .register_destination(dest, constants::DESTINATION_SINGLE);
     driver
-        .proof_strategies
+        .proofs
+        .strategies
         .insert(dest, (rns_core::types::ProofStrategy::ProveNone, None));
 
     // Send a DATA packet to that destination
@@ -11260,7 +11264,7 @@ fn prove_app_calls_callback() {
     driver
         .engine
         .register_destination(dest, constants::DESTINATION_SINGLE);
-    driver.proof_strategies.insert(
+    driver.proofs.strategies.insert(
         dest,
         (
             rns_core::types::ProofStrategy::ProveApp,
@@ -11369,7 +11373,10 @@ fn inbound_proof_fires_callback() {
     // Simulate a sent packet that we're tracking
     let tracked_hash = [0x42u8; 32];
     let sent_time = time::now() - 0.5; // 500ms ago
-    driver.sent_packets.insert(tracked_hash, (dest, sent_time));
+    driver
+        .proofs
+        .sent_packets
+        .insert(tracked_hash, (dest, sent_time));
 
     // Build a PROOF packet with the tracked hash, signed by the destination
     let identity = Identity::new(&mut OsRng);
@@ -11410,7 +11417,7 @@ fn inbound_proof_fires_callback() {
     );
 
     // Tracked packet should be removed
-    assert!(!driver.sent_packets.contains_key(&tracked_hash));
+    assert!(!driver.proofs.sent_packets.contains_key(&tracked_hash));
 }
 
 #[test]
@@ -11561,6 +11568,7 @@ fn inbound_implicit_proof_matches_truncated_destination() {
     let tracked_hash = [0x3Cu8; 32];
     let sent_time = time::now() - 0.25;
     driver
+        .proofs
         .sent_packets
         .insert(tracked_hash, ([0xEE; 16], sent_time));
 
@@ -11605,7 +11613,7 @@ fn inbound_implicit_proof_matches_truncated_destination() {
     assert_eq!(proof_list.len(), 1);
     assert_eq!(proof_list[0].0, DestHash([0xEE; 16]));
     assert_eq!(proof_list[0].1, PacketHash(tracked_hash));
-    assert!(!driver.sent_packets.contains_key(&tracked_hash));
+    assert!(!driver.proofs.sent_packets.contains_key(&tracked_hash));
 }
 
 #[test]
@@ -11685,9 +11693,9 @@ fn link_dispatch_preserves_route_headers_and_proof_tracking() {
             attached_interface: attached.then_some(InterfaceId(1)),
         }]);
         assert_eq!(sent.lock().unwrap().as_slice(), &[expected]);
-        assert_eq!(driver.sent_packets.len(), tracked);
+        assert_eq!(driver.proofs.sent_packets.len(), tracked);
         if tracked == 1 {
-            assert_eq!(driver.sent_packets[&packet.packet_hash].0, link_id);
+            assert_eq!(driver.proofs.sent_packets[&packet.packet_hash].0, link_id);
         }
         driver.dispatch_link_actions(vec![LinkManagerAction::SendPacket {
             raw: vec![0].into(),
@@ -11695,7 +11703,7 @@ fn link_dispatch_preserves_route_headers_and_proof_tracking() {
             attached_interface: None,
         }]);
         assert_eq!(sent.lock().unwrap().len(), 1);
-        assert_eq!(driver.sent_packets.len(), tracked);
+        assert_eq!(driver.proofs.sent_packets.len(), tracked);
     }
 }
 
@@ -11733,7 +11741,11 @@ fn link_manager_data_send_is_tracked_for_proofs() {
     }]);
 
     assert_eq!(
-        driver.sent_packets.get(&packet_hash).map(|(dest, _)| *dest),
+        driver
+            .proofs
+            .sent_packets
+            .get(&packet_hash)
+            .map(|(dest, _)| *dest),
         Some(destination_hash)
     );
 }
@@ -11828,7 +11840,10 @@ fn inbound_proof_with_valid_signature_fires_callback() {
     // Sign a packet hash with the identity
     let tracked_hash = [0x42u8; 32];
     let sent_time = time::now() - 0.5;
-    driver.sent_packets.insert(tracked_hash, (dest, sent_time));
+    driver
+        .proofs
+        .sent_packets
+        .insert(tracked_hash, (dest, sent_time));
 
     let signature = identity.sign(&tracked_hash).unwrap();
     let mut proof_data = Vec::new();
@@ -11952,7 +11967,10 @@ fn inbound_proof_with_invalid_signature_rejected() {
     // Track a sent packet
     let tracked_hash = [0x42u8; 32];
     let sent_time = time::now() - 0.5;
-    driver.sent_packets.insert(tracked_hash, (dest, sent_time));
+    driver
+        .proofs
+        .sent_packets
+        .insert(tracked_hash, (dest, sent_time));
 
     // Use WRONG signature (all 0xAA — invalid for this identity)
     let mut proof_data = Vec::new();
@@ -12026,7 +12044,7 @@ fn proof_data_is_valid_explicit_proof() {
     driver
         .engine
         .register_destination(dest, constants::DESTINATION_SINGLE);
-    driver.proof_strategies.insert(
+    driver.proofs.strategies.insert(
         dest,
         (
             rns_core::types::ProofStrategy::ProveAll,
@@ -12468,7 +12486,7 @@ fn send_probe_known_dest_returns_packet_hash() {
             // Packet hash should be non-zero
             assert_ne!(packet_hash, [0u8; 32]);
             // Should be tracked in sent_packets
-            assert!(driver.sent_packets.contains_key(&packet_hash));
+            assert!(driver.proofs.sent_packets.contains_key(&packet_hash));
             // Should have sent a DATA packet on the wire
             let sent_data = sent.lock().unwrap();
             assert!(!sent_data.is_empty(), "Probe packet should be sent on wire");
@@ -12736,7 +12754,8 @@ fn check_proof_found_returns_rtt() {
     // Pre-populate completed_proofs
     let packet_hash = [0xCC; 32];
     driver
-        .completed_proofs
+        .proofs
+        .completed
         .insert(packet_hash, (0.123, time::now()));
 
     let (resp_tx, resp_rx) = mpsc::channel();
@@ -12759,7 +12778,7 @@ fn check_proof_found_returns_rtt() {
         other => panic!("expected CheckProof(Some(..)), got {:?}", other),
     }
     // Should be consumed (removed) after checking
-    assert!(!driver.completed_proofs.contains_key(&packet_hash));
+    assert!(!driver.proofs.completed.contains_key(&packet_hash));
 }
 
 #[test]
@@ -12799,6 +12818,7 @@ fn proof_callback_can_enqueue_outbound_message() {
     let tracked_hash = [0xA5; 32];
     let tracked_dest = [0x5A; 16];
     driver
+        .proofs
         .sent_packets
         .insert(tracked_hash, (tracked_dest, time::now()));
     let identity = Identity::new(&mut OsRng);
@@ -12814,7 +12834,7 @@ fn proof_callback_can_enqueue_outbound_message() {
     driver.run();
 
     assert_eq!(sent.lock().unwrap().as_slice(), &[reply.raw]);
-    assert!(!driver.sent_packets.contains_key(&tracked_hash));
+    assert!(!driver.proofs.sent_packets.contains_key(&tracked_hash));
 }
 
 #[test]
@@ -12879,7 +12899,7 @@ fn inbound_proof_populates_completed_proofs() {
     driver
         .engine
         .register_destination(dest, constants::DESTINATION_SINGLE);
-    driver.proof_strategies.insert(
+    driver.proofs.strategies.insert(
         dest,
         (
             rns_core::types::ProofStrategy::ProveAll,
@@ -12908,6 +12928,7 @@ fn inbound_proof_populates_completed_proofs() {
 
     // Track it as a sent packet so the proof handler recognizes it
     driver
+        .proofs
         .sent_packets
         .insert(data_packet_hash, (dest, time::now()));
 
@@ -13002,9 +13023,10 @@ fn inbound_proof_populates_completed_proofs() {
     // Track the original sent packet in driver2 so it recognizes the proof,
     // as a probe (SendProbe), whose proof is kept for CheckProof polling.
     driver2
+        .proofs
         .sent_packets
         .insert(data_packet_hash, (dest, time::now()));
-    driver2.pending_probes.insert(data_packet_hash);
+    driver2.proofs.pending_probes.insert(data_packet_hash);
     know_identity(&mut driver2, dest, &identity);
 
     // Feed the proof frame without shutting down, since shutdown now clears
@@ -13022,12 +13044,12 @@ fn inbound_proof_populates_completed_proofs() {
 
     // completed_proofs should contain the entry
     assert!(
-        driver2.completed_proofs.contains_key(&data_packet_hash),
+        driver2.proofs.completed.contains_key(&data_packet_hash),
         "completed_proofs should contain the packet hash"
     );
-    let (rtt, _received) = driver2.completed_proofs[&data_packet_hash];
+    let (rtt, _received) = driver2.proofs.completed[&data_packet_hash];
     assert!(rtt >= 0.0, "RTT should be non-negative");
-    assert!(driver2.pending_probes.is_empty());
+    assert!(driver2.proofs.pending_probes.is_empty());
 }
 
 #[test]
@@ -13692,12 +13714,13 @@ mod hook_modify {
         );
         rns_hooks::register_builtin_hook(id.clone(), hook).unwrap();
         let program = driver
-            .hook_manager
+            .hooks
+            .manager
             .as_ref()
             .expect("hook manager")
             .load_builtin(id.clone(), id.as_str(), 0)
             .unwrap();
-        driver.hook_slots[point as usize].attach(program);
+        driver.hooks.slots[point as usize].attach(program);
     }
 
     /// A hook that answers every call with `Modify` and the given bytes.
@@ -13779,7 +13802,7 @@ mod hook_modify {
     }
 
     fn rejected(driver: &Driver, point: HookPoint) -> u64 {
-        driver.hook_rejected_modifications[point as usize]
+        driver.hooks.rejected_modifications[point as usize]
     }
 
     #[test]
@@ -15169,7 +15192,7 @@ fn plain_link_packets_are_proved_by_the_destination_strategy() {
         let (tx, rx) = event::channel();
         let mut driver = Driver::new(make_transport_config(false), rx, tx, Box::new(cbs));
         if let Some(strategy) = strategy {
-            driver.proof_strategies.insert(dest, (strategy, None));
+            driver.proofs.strategies.insert(dest, (strategy, None));
         }
         assert_eq!(
             driver.link_packet_proof_wanted(dest, &packet_hash),
@@ -15846,7 +15869,7 @@ fn single_packet_proofs_are_signed_and_checked_on_the_proof_pool() {
     // Proving a received packet: the signature comes from the pool, and the
     // proof is sent once it is applied.
     let dest = [0xDD; 16];
-    driver.proof_strategies.insert(
+    driver.proofs.strategies.insert(
         dest,
         (
             rns_core::types::ProofStrategy::ProveAll,
@@ -15875,7 +15898,7 @@ fn single_packet_proofs_are_signed_and_checked_on_the_proof_pool() {
     driver.known.entries.insert(peer, known);
     let (good, forged) = ([0x41; 32], [0x42; 32]);
     for hash in [good, forged] {
-        driver.sent_packets.insert(hash, (peer, time::now()));
+        driver.proofs.sent_packets.insert(hash, (peer, time::now()));
     }
     for (hash, signature) in [
         (good, identity.sign(&good).unwrap()),
@@ -15899,7 +15922,7 @@ fn single_packet_proofs_are_signed_and_checked_on_the_proof_pool() {
     assert_eq!(proofs[0].1, PacketHash(good));
     // The forged proof leaves its receipt for the genuine proof to complete.
     assert_eq!(
-        driver.sent_packets.keys().collect::<Vec<_>>(),
+        driver.proofs.sent_packets.keys().collect::<Vec<_>>(),
         vec![&forged]
     );
 }
@@ -15997,7 +16020,7 @@ fn a_deferred_send_reports_its_hash_before_it_is_written() {
         assert_eq!(packet.destination_hash, [0x7D; 16]);
         assert_eq!(identity.decrypt(packet.data()).unwrap(), b"hello");
         // Tracked for its proof, as any sent packet.
-        assert!(driver.sent_packets.contains_key(&hash.0));
+        assert!(driver.proofs.sent_packets.contains_key(&hash.0));
     }
 }
 
@@ -16093,7 +16116,7 @@ fn a_destination_that_delivers_decrypted_proves_only_what_decrypts() {
             .interfaces
             .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
         let dest = [0xDE; 16];
-        driver.proof_strategies.insert(
+        driver.proofs.strategies.insert(
             dest,
             (
                 rns_core::types::ProofStrategy::ProveAll,
@@ -16441,6 +16464,7 @@ fn link_receipt_driver(
     let (mut driver, proofs) = proof_receipt_driver();
     let (peer, link_id) = establish_link(&mut driver.link_manager, [0xDD; 16], InterfaceId(1));
     driver
+        .proofs
         .sent_packets
         .insert(packet_hash, (link_id, time::now() - 0.25));
     (driver, proofs, peer, link_id)
@@ -16458,7 +16482,7 @@ fn link_packet_proof_from_the_link_peer_completes_the_receipt() {
     assert_eq!(proofs.len(), 1);
     assert_eq!(proofs[0].0, DestHash(link_id));
     assert_eq!(proofs[0].1, PacketHash(hash));
-    assert!(!driver.sent_packets.contains_key(&hash));
+    assert!(!driver.proofs.sent_packets.contains_key(&hash));
 }
 
 #[test]
@@ -16474,7 +16498,10 @@ fn forged_link_packet_proof_is_rejected() {
     driver.handle_frame_event(InterfaceId(1), frame, None, None);
 
     assert!(proofs.lock().unwrap().is_empty(), "forged proof accepted");
-    assert!(driver.sent_packets.contains_key(&hash), "receipt dropped");
+    assert!(
+        driver.proofs.sent_packets.contains_key(&hash),
+        "receipt dropped"
+    );
 }
 
 #[test]
@@ -16496,7 +16523,10 @@ fn forged_link_packet_proof_addressed_elsewhere_is_rejected() {
     driver.handle_frame_event(InterfaceId(1), frame, None, None);
 
     assert!(proofs.lock().unwrap().is_empty(), "forged proof accepted");
-    assert!(driver.sent_packets.contains_key(&hash), "receipt dropped");
+    assert!(
+        driver.proofs.sent_packets.contains_key(&hash),
+        "receipt dropped"
+    );
 }
 
 #[test]
@@ -16515,7 +16545,10 @@ fn link_packet_proof_signed_on_another_link_is_rejected() {
         proofs.lock().unwrap().is_empty(),
         "cross-link proof accepted"
     );
-    assert!(driver.sent_packets.contains_key(&hash), "receipt dropped");
+    assert!(
+        driver.proofs.sent_packets.contains_key(&hash),
+        "receipt dropped"
+    );
 }
 
 #[test]
@@ -16536,7 +16569,7 @@ fn forged_link_packet_proof_does_not_suppress_the_genuine_one() {
     let proofs = proofs.lock().unwrap();
     assert_eq!(proofs.len(), 1, "genuine proof not delivered exactly once");
     assert_eq!(proofs[0].1, PacketHash(hash));
-    assert!(!driver.sent_packets.contains_key(&hash));
+    assert!(!driver.proofs.sent_packets.contains_key(&hash));
 }
 
 #[test]
@@ -16564,6 +16597,7 @@ fn single_receipt_driver(packet_hash: [u8; 32]) -> (Driver, RecordedProofs, Iden
     let destination = [0xD2; 16];
     know_identity(&mut driver, destination, &identity);
     driver
+        .proofs
         .sent_packets
         .insert(packet_hash, (destination, time::now() - 0.25));
     let proof_destination: [u8; 16] = packet_hash[..16].try_into().unwrap();
@@ -16586,7 +16620,10 @@ fn forged_single_packet_proof_does_not_suppress_the_genuine_one() {
     );
     driver.handle_frame_event(InterfaceId(1), forged, None, None);
     assert!(proofs.lock().unwrap().is_empty(), "forged proof accepted");
-    assert!(driver.sent_packets.contains_key(&hash), "receipt dropped");
+    assert!(
+        driver.proofs.sent_packets.contains_key(&hash),
+        "receipt dropped"
+    );
 
     let mut genuine = hash.to_vec();
     genuine.extend_from_slice(&identity.sign(&hash).unwrap());
@@ -16597,7 +16634,7 @@ fn forged_single_packet_proof_does_not_suppress_the_genuine_one() {
     assert_eq!(proofs.len(), 1, "genuine proof not delivered exactly once");
     assert_eq!(proofs[0].0, DestHash(destination));
     assert_eq!(proofs[0].1, PacketHash(hash));
-    assert!(!driver.sent_packets.contains_key(&hash));
+    assert!(!driver.proofs.sent_packets.contains_key(&hash));
 }
 
 #[test]
@@ -16619,7 +16656,7 @@ fn forged_implicit_proof_does_not_suppress_the_genuine_one() {
     driver.handle_frame_event(InterfaceId(1), genuine, None, None);
 
     assert_eq!(proofs.lock().unwrap().len(), 1);
-    assert!(!driver.sent_packets.contains_key(&hash));
+    assert!(!driver.proofs.sent_packets.contains_key(&hash));
 }
 
 #[test]
@@ -16664,7 +16701,7 @@ fn single_packet_proof_is_checked_with_the_identity_it_was_sent_to() {
         completion,
         Some(key),
     );
-    assert!(driver.sent_packets.contains_key(&hash));
+    assert!(driver.proofs.sent_packets.contains_key(&hash));
     let proof_destination: [u8; 16] = hash[..16].try_into().unwrap();
 
     driver.handle_inbound_proof(proof_destination, &forged_explicit_proof(&hash), &[0; 32]);
@@ -16676,8 +16713,8 @@ fn single_packet_proof_is_checked_with_the_identity_it_was_sent_to() {
     let proofs = proofs.lock().unwrap();
     assert_eq!(proofs.len(), 1);
     assert_eq!(proofs[0].1, PacketHash(hash));
-    assert!(!driver.sent_packets.contains_key(&hash));
-    assert!(!driver.sent_packet_keys.contains_key(&hash));
+    assert!(!driver.proofs.sent_packets.contains_key(&hash));
+    assert!(!driver.proofs.sent_packet_keys.contains_key(&hash));
 }
 
 #[test]
@@ -16686,7 +16723,10 @@ fn single_packet_proof_to_an_unknown_identity_is_rejected() {
     // upstream (PacketReceipt.validate_proof) does not accept it.
     let (mut driver, proofs) = proof_receipt_driver();
     let hash = [0x63; 32];
-    driver.sent_packets.insert(hash, ([0xD3; 16], time::now()));
+    driver
+        .proofs
+        .sent_packets
+        .insert(hash, ([0xD3; 16], time::now()));
 
     driver.handle_inbound_proof([0xD3; 16], &forged_explicit_proof(&hash), &[0; 32]);
 
@@ -16722,7 +16762,10 @@ fn proofs_checked_on_the_pool_keep_the_receipt_until_one_is_valid() {
     driver.handle_inbound_proof(destination, &forged_explicit_proof(&hash), &[0; 32]);
     drain(&mut driver);
     assert!(proofs.lock().unwrap().is_empty(), "forged proof accepted");
-    assert!(driver.sent_packets.contains_key(&hash), "receipt dropped");
+    assert!(
+        driver.proofs.sent_packets.contains_key(&hash),
+        "receipt dropped"
+    );
 
     // Two genuine copies in flight at once complete the receipt once.
     let mut genuine = hash.to_vec();
@@ -16731,7 +16774,7 @@ fn proofs_checked_on_the_pool_keep_the_receipt_until_one_is_valid() {
     driver.handle_inbound_proof(destination, &genuine, &[0; 32]);
     drain(&mut driver);
     assert_eq!(proofs.lock().unwrap().len(), 1);
-    assert!(!driver.sent_packets.contains_key(&hash));
+    assert!(!driver.proofs.sent_packets.contains_key(&hash));
 }
 
 #[cfg(feature = "engine-parallel")]
@@ -16770,7 +16813,10 @@ fn link_packet_proofs_checked_on_the_pool_complete_only_their_own_receipt() {
     driver.handle_frame_event(InterfaceId(1), cross_link, None, None);
     drain(&mut driver);
     assert!(proofs.lock().unwrap().is_empty(), "invalid proof accepted");
-    assert!(driver.sent_packets.contains_key(&hash), "receipt dropped");
+    assert!(
+        driver.proofs.sent_packets.contains_key(&hash),
+        "receipt dropped"
+    );
 
     let genuine = link_proof_frame(&mut peer, &link_id, &hash);
     driver.handle_frame_event(InterfaceId(1), genuine, None, None);
@@ -16782,7 +16828,7 @@ fn link_packet_proofs_checked_on_the_pool_complete_only_their_own_receipt() {
     let proofs = proofs.lock().unwrap();
     assert_eq!(proofs.len(), 1);
     assert_eq!(proofs[0].1, PacketHash(hash));
-    assert!(!driver.sent_packets.contains_key(&hash));
+    assert!(!driver.proofs.sent_packets.contains_key(&hash));
 }
 
 #[test]

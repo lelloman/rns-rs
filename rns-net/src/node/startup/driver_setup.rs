@@ -272,7 +272,7 @@ fn start_provider_bridge(
                 crate::provider_bridge::ProviderBridge::start(provider_config)
             };
             match started {
-                Ok(bridge) => driver.provider_bridge = Some(bridge),
+                Ok(bridge) => driver.hooks.provider_bridge = Some(bridge),
                 Err(err) => log::warn!("failed to start provider bridge: {}", err),
             }
         }

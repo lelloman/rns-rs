@@ -14,7 +14,8 @@ impl Driver {
     ) -> bool {
         use rns_core::types::ProofStrategy;
         match self
-            .proof_strategies
+            .proofs
+            .strategies
             .get(&dest_hash)
             .map(|(strategy, _)| *strategy)
         {
@@ -38,7 +39,7 @@ impl Driver {
     ) {
         use rns_core::types::ProofStrategy;
 
-        let (strategy, identity) = match self.proof_strategies.get(&dest_hash) {
+        let (strategy, identity) = match self.proofs.strategies.get(&dest_hash) {
             Some((s, id)) => (*s, id.as_ref()),
             None => return,
         };
@@ -145,7 +146,7 @@ impl Driver {
     /// proofs, send signed ones.
     pub(crate) fn apply_packet_proofs(&mut self) {
         use crate::common::link_manager::{ProofOutcome, ProofOwner};
-        let mut outcomes = core::mem::take(&mut self.packet_proofs);
+        let mut outcomes = core::mem::take(&mut self.proofs.pool_outcomes);
         self.link_manager.take_packet_proofs(&mut outcomes);
         for outcome in outcomes.drain(..) {
             match outcome {
@@ -191,7 +192,7 @@ impl Driver {
                 ProofOutcome::Verified { .. } | ProofOutcome::Signed { .. } => {}
             }
         }
-        self.packet_proofs = outcomes;
+        self.proofs.pool_outcomes = outcomes;
     }
 
     /// Handle an inbound proof packet: validate and fire on_proof callback.
@@ -210,6 +211,7 @@ impl Driver {
             (tracked_hash, &proof_data[32..96])
         } else if proof_data.len() == 64 {
             let mut candidates = self
+                .proofs
                 .sent_packets
                 .keys()
                 .filter_map(|packet_hash| {
@@ -235,11 +237,13 @@ impl Driver {
             if candidates.len() > 1 {
                 candidates.sort_by(|a, b| {
                     let ta = self
+                        .proofs
                         .sent_packets
                         .get(a)
                         .map(|(_, t)| *t)
                         .unwrap_or_default();
                     let tb = self
+                        .proofs
                         .sent_packets
                         .get(b)
                         .map(|(_, t)| *t)
@@ -261,7 +265,7 @@ impl Driver {
 
         // The receipt stays until a proof checks out, so that a forged proof
         // cannot keep the genuine one from completing it.
-        let Some(&(tracked_dest, sent_time)) = self.sent_packets.get(&tracked_hash) else {
+        let Some(&(tracked_dest, sent_time)) = self.proofs.sent_packets.get(&tracked_hash) else {
             log::debug!(
                 "Proof for unknown packet {:02x?} on dest {:02x?}",
                 &tracked_hash[..4],
@@ -286,7 +290,7 @@ impl Driver {
         // `PacketReceipt.validate_proof`: the identity the packet was
         // encrypted for, else the destination's known one. Without either
         // the proof cannot be checked and is not accepted.
-        let key = match self.sent_packet_keys.get(&tracked_hash) {
+        let key = match self.proofs.sent_packet_keys.get(&tracked_hash) {
             Some(bytes) => Some(rns_crypto::ed25519::Ed25519PublicKey::from_bytes(bytes).ok()),
             None => self.proof_key(&tracked_dest),
         };
@@ -334,10 +338,10 @@ impl Driver {
         rtt: f64,
         proof_packet: Option<[u8; 32]>,
     ) {
-        if self.sent_packets.remove(&packet_hash).is_none() {
+        if self.proofs.sent_packets.remove(&packet_hash).is_none() {
             return;
         }
-        self.sent_packet_keys.remove(&packet_hash);
+        self.proofs.sent_packet_keys.remove(&packet_hash);
         let _ = self.mark_known_destination_used(&destination);
         self.packet_proof_accepted(destination, packet_hash, rtt, proof_packet);
     }
@@ -346,9 +350,9 @@ impl Driver {
     /// the packet was sent on that link. A proof the peer of another link
     /// signed proves nothing about this one.
     pub(super) fn link_packet_proved(&mut self, link_id: [u8; 16], packet_hash: [u8; 32]) {
-        match self.sent_packets.get(&packet_hash) {
+        match self.proofs.sent_packets.get(&packet_hash) {
             Some(&(destination, sent_time)) if destination == link_id => {
-                self.sent_packets.remove(&packet_hash);
+                self.proofs.sent_packets.remove(&packet_hash);
                 self.packet_proof_accepted(link_id, packet_hash, time::now() - sent_time, None);
             }
             Some(_) => log::debug!(
@@ -375,8 +379,9 @@ impl Driver {
             &packet_hash[..4],
             rtt,
         );
-        if self.pending_probes.remove(&packet_hash) {
-            self.completed_proofs
+        if self.proofs.pending_probes.remove(&packet_hash) {
+            self.proofs
+                .completed
                 .insert(packet_hash, (rtt, time::now()));
         }
         self.callbacks.on_proof_packet(
@@ -395,7 +400,7 @@ impl Driver {
         destination: &[u8; 16],
     ) -> Option<Option<rns_crypto::ed25519::Ed25519PublicKey>> {
         let public_key = self.known.entries.get(destination)?.announced.public_key;
-        if let Some(key) = self.proof_keys.get(destination) {
+        if let Some(key) = self.proofs.keys.get(destination) {
             return Some(Some(key.clone()));
         }
         let (_, ed_bytes) = rns_crypto::identity::split_key(&public_key);
@@ -403,10 +408,10 @@ impl Driver {
             return Some(None);
         };
         // Bounded like a cache: refilled from the known destinations.
-        if self.proof_keys.len() >= 4096 {
-            self.proof_keys.clear();
+        if self.proofs.keys.len() >= 4096 {
+            self.proofs.keys.clear();
         }
-        self.proof_keys.insert(*destination, key.clone());
+        self.proofs.keys.insert(*destination, key.clone());
         Some(Some(key))
     }
 }

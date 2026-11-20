@@ -214,12 +214,13 @@ mod hook_injection_tests {
         );
         rns_hooks::register_builtin_hook(id.clone(), hook).unwrap();
         let program = driver
-            .hook_manager
+            .hooks
+            .manager
             .as_ref()
             .expect("hook manager")
             .load_builtin(id.clone(), id.as_str(), 0)
             .unwrap();
-        driver.hook_slots[point as usize].attach(program);
+        driver.hooks.slots[point as usize].attach(program);
         id
     }
 

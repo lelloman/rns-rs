@@ -374,8 +374,8 @@ impl Driver {
             };
             let provider_events_enabled = self.provider_events_enabled();
             if let Some(ref e) = run_hook_inner(
-                &mut self.hook_slots[HookPoint::InterfaceConfigChanged as usize].programs,
-                &self.hook_manager,
+                &mut self.hooks.slots[HookPoint::InterfaceConfigChanged as usize].programs,
+                &self.hooks.manager,
                 &engine_ref,
                 &ctx,
                 now,

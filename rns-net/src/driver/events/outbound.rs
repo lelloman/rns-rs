@@ -79,7 +79,8 @@ impl Driver {
                         packet.transport_id.as_ref().map(|id| &id[..4]),
                         attached_interface
                     );
-                    self.sent_packets
+                    self.proofs
+                        .sent_packets
                         .insert(packet.packet_hash, (packet.destination_hash, time::now()));
                 }
                 let actions = self.engine.handle_outbound(

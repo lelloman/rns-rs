@@ -119,8 +119,9 @@ impl Driver {
                         let provider_events_enabled = self.provider_events_enabled();
                         {
                             let exec = run_hook_inner(
-                                &mut self.hook_slots[HookPoint::AnnounceReceived as usize].programs,
-                                &self.hook_manager,
+                                &mut self.hooks.slots[HookPoint::AnnounceReceived as usize]
+                                    .programs,
+                                &self.hooks.manager,
                                 &engine_ref,
                                 &ctx,
                                 now,
@@ -296,8 +297,8 @@ impl Driver {
                         };
                         let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
-                            &mut self.hook_slots[HookPoint::PathUpdated as usize].programs,
-                            &self.hook_manager,
+                            &mut self.hooks.slots[HookPoint::PathUpdated as usize].programs,
+                            &self.hooks.manager,
                             &engine_ref,
                             &ctx,
                             now,
@@ -412,8 +413,9 @@ impl Driver {
                         // `Modify` acts as `Continue` and its bytes are ignored.
                         {
                             let exec = run_hook_inner(
-                                &mut self.hook_slots[HookPoint::TunnelSynthesize as usize].programs,
-                                &self.hook_manager,
+                                &mut self.hooks.slots[HookPoint::TunnelSynthesize as usize]
+                                    .programs,
+                                &self.hooks.manager,
                                 &engine_ref,
                                 &ctx,
                                 now,
@@ -498,8 +500,8 @@ impl Driver {
                         };
                         let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
-                            &mut self.hook_slots[HookPoint::AnnounceRetransmit as usize].programs,
-                            &self.hook_manager,
+                            &mut self.hooks.slots[HookPoint::AnnounceRetransmit as usize].programs,
+                            &self.hooks.manager,
                             &engine_ref,
                             &ctx,
                             now,
@@ -537,8 +539,8 @@ impl Driver {
                         };
                         let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
-                            &mut self.hook_slots[HookPoint::LinkRequestReceived as usize].programs,
-                            &self.hook_manager,
+                            &mut self.hooks.slots[HookPoint::LinkRequestReceived as usize].programs,
+                            &self.hooks.manager,
                             &engine_ref,
                             &ctx,
                             now,
@@ -572,8 +574,8 @@ impl Driver {
                         };
                         let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
-                            &mut self.hook_slots[HookPoint::LinkEstablished as usize].programs,
-                            &self.hook_manager,
+                            &mut self.hooks.slots[HookPoint::LinkEstablished as usize].programs,
+                            &self.hooks.manager,
                             &engine_ref,
                             &ctx,
                             now,
@@ -607,8 +609,8 @@ impl Driver {
                         };
                         let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
-                            &mut self.hook_slots[HookPoint::LinkClosed as usize].programs,
-                            &self.hook_manager,
+                            &mut self.hooks.slots[HookPoint::LinkClosed as usize].programs,
+                            &self.hooks.manager,
                             &engine_ref,
                             &ctx,
                             now,

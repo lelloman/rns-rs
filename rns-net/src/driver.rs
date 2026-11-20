@@ -144,6 +144,7 @@ mod interface_management;
 mod known_destinations;
 mod lifecycle;
 mod link_stamps;
+mod packet_proofs;
 mod queries;
 mod resource_preparation;
 mod rpc_service;
@@ -366,41 +367,16 @@ pub struct Driver {
     pub(crate) rate_limiter_ttl_secs: f64,
     /// Destination hash for rnstransport.path.request (PLAIN).
     pub(crate) path_request_dest: [u8; 16],
-    /// Proof strategies per destination hash.
-    /// Maps dest_hash → (strategy, optional signing identity for generating proofs).
-    pub(crate) proof_strategies: HashMap<
-        [u8; 16],
-        (
-            rns_core::types::ProofStrategy,
-            Option<rns_crypto::identity::Identity>,
-        ),
-    >,
-    /// Tracked sent packets for proof matching: packet_hash → (dest_hash, sent_time).
-    pub(crate) sent_packets: HashMap<[u8; 32], ([u8; 16], f64)>,
-    /// The signing keys proofs of tracked sent packets are checked with,
-    /// for packets sent with the identity they were encrypted for:
-    /// packet_hash → Ed25519 public key bytes.
-    pub(crate) sent_packet_keys: HashMap<[u8; 32], [u8; 32]>,
+    /// Packet proofs: tracked sent packets, the proofs they await and how
+    /// local destinations prove the packets they receive.
+    pub(crate) proofs: packet_proofs::PacketProofs,
     /// Local destinations whose single packets are delivered decrypted, with
     /// the identity they are decrypted with when they have no ratchets.
     pub(crate) decrypted_destinations: HashMap<[u8; 16], Arc<rns_crypto::identity::Identity>>,
-    /// Reused buffer for single-packet proofs the proof pool finished.
-    pub(crate) packet_proofs: Vec<crate::common::link_manager::ProofOutcome>,
     /// Reused transport action buffers (see [`crate::action_pool`]).
     pub(crate) transport_actions: crate::action_pool::ActionPool<TransportAction>,
     /// Reused link manager action buffers.
     pub(crate) link_actions: crate::action_pool::ActionPool<LinkManagerAction>,
-    /// Completed proofs for probe polling: packet_hash → (rtt_seconds, received_time).
-    /// Only probes ([`QueryRequest::SendProbe`]) are recorded: a proof for
-    /// every other packet would be kept two minutes for nobody to poll.
-    pub(crate) completed_proofs: HashMap<[u8; 32], (f64, f64)>,
-    /// Probes sent and not yet proved, whose proofs `completed_proofs`
-    /// records.
-    pub(crate) pending_probes: std::collections::HashSet<[u8; 32]>,
-    /// Parsed signing keys of destinations whose packet proofs were checked.
-    /// A destination's hash follows from its identity, so its key never
-    /// changes.
-    pub(crate) proof_keys: HashMap<[u8; 16], rns_crypto::ed25519::Ed25519PublicKey>,
     /// Locally registered destinations: hash → dest_type.
     pub(crate) local_destinations: HashMap<[u8; 16], u8>,
     /// The built-in destinations links are accepted to (remote management,
@@ -487,18 +463,10 @@ pub struct Driver {
     pub(crate) probe_server: Option<crate::holepunch::probe::FoldedProbeServer>,
     /// Runtime-configurable management announce interval.
     pub(crate) management_announce_interval_secs: f64,
-    /// Hook slots for the programmable hook system (one per HookPoint).
+    /// The programmable hook system: hook slots, their manager and the
+    /// provider bridge.
     #[cfg(feature = "hooks")]
-    pub(crate) hook_slots: [HookSlot; HookPoint::COUNT],
-    /// Hook manager. None if initialization failed.
-    #[cfg(feature = "hooks")]
-    pub(crate) hook_manager: Option<HookManager>,
-    #[cfg(feature = "hooks")]
-    pub(crate) provider_bridge: Option<ProviderBridge>,
-    /// Per hook point count of `Modify` replacements that failed validation
-    /// and were therefore treated as `Drop`.
-    #[cfg(feature = "hooks")]
-    pub(crate) hook_rejected_modifications: [u64; HookPoint::COUNT],
+    pub(crate) hooks: Hooks,
 }
 
 pub(crate) struct PendingLinkFrame {

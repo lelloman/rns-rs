@@ -143,7 +143,7 @@ pub(super) fn enable_probe_responder(driver: &mut Driver, transport_id: &Identit
             .get_private_key()
             .expect("the transport identity was built from its private key"),
     );
-    driver.proof_strategies.insert(
+    driver.proofs.strategies.insert(
         probe_dest,
         (
             rns_core::types::ProofStrategy::ProveAll,

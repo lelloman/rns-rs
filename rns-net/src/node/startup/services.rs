@@ -51,7 +51,7 @@ pub(super) fn load_configured_hooks(driver: &mut Driver, hooks: &[config::Parsed
                 continue;
             }
         };
-        let mgr = match driver.hook_manager.as_ref() {
+        let mgr = match driver.hooks.manager.as_ref() {
             Some(m) => m,
             None => {
                 log::warn!(
@@ -95,7 +95,7 @@ pub(super) fn load_configured_hooks(driver: &mut Driver, hooks: &[config::Parsed
         };
         match load_result {
             Ok(program) => {
-                driver.hook_slots[point_idx].attach(program);
+                driver.hooks.slots[point_idx].attach(program);
                 log::info!(
                     "Loaded hook '{}' at point {} (priority {})",
                     hook_cfg.name,
