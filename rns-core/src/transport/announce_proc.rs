@@ -58,7 +58,10 @@ pub fn build_retransmit_announce(
 /// `from_local_client` is true and `is_path_response` and `rate_blocked` are
 /// false (Transport.py:2351). A local client's announce is rebroadcast
 /// immediately, and only once.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct field of the validated announce, on the announce hot path"
+)]
 pub fn process_validated_announce(
     destination_hash: [u8; 16],
     hops: u8,

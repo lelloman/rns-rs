@@ -138,7 +138,10 @@ impl LinkEngine {
     ///
     /// Used when the X25519 key was stamped ahead of time, off the caller's
     /// latency-sensitive thread; see `rns-net`'s link request stamping.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is an independent part of the link request; the keys are stamped ahead of time by the caller"
+    )]
     pub fn new_initiator_with_keys(
         dest_hash: &[u8; 16],
         hops: u8,
@@ -214,7 +217,10 @@ impl LinkEngine {
     ///
     /// `owner_sig_prv` / `owner_sig_pub` are the destination's signing keys.
     /// Returns `(engine, actions)` where actions include the LRPROOF data to send.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the destination's keys and the received link request are independent inputs of the handshake"
+    )]
     pub fn new_responder(
         owner_sig_prv: &Ed25519PrivateKey,
         owner_sig_pub_bytes: &[u8; 32],

@@ -126,7 +126,10 @@ impl ResourceSender {
     /// - `original_hash`: original hash from first segment (None for first segment)
     /// - `link_rtt`: current link RTT estimate
     /// - `traffic_timeout_factor`: link traffic timeout factor
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is an independent property of the resource segment being built"
+    )]
     pub fn new(
         data: &[u8],
         metadata: Option<&[u8]>,
