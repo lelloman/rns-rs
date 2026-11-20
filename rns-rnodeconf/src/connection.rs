@@ -47,6 +47,33 @@ pub(super) fn open_serial(port: &str) -> std::io::Result<(std::fs::File, std::fs
     Ok((reader, writer))
 }
 
+/// What upstream logs when it cannot open a serial port.
+pub(super) fn log_open_failure(port: &str, e: &std::io::Error) {
+    log("Could not open the specified serial port. The contained exception was:");
+    log(&format!(
+        "[Errno {}] could not open port {port}: {e}",
+        e.raw_os_error().unwrap_or(0)
+    ));
+}
+
+/// upstream's search for an NRF52 board's port once the board has reset,
+/// which can bring it back under another name: the first listed port with
+/// the board's USB serial number. A port that is not listed, such as a
+/// pseudo-terminal, is the first candidate when it is the one in use.
+pub(super) fn find_port_after_reset(port: &str, usb_serial_id: &Option<String>) -> Option<String> {
+    let listed = ports::comports();
+    let unlisted = (!listed.iter().any(|p| p.device == port)).then(|| ports::PortInfo {
+        device: port.to_string(),
+        product: None,
+        serial_number: None,
+    });
+    unlisted
+        .into_iter()
+        .chain(listed)
+        .find(|p| &p.serial_number == usb_serial_id)
+        .map(|p| p.device)
+}
+
 /// Open `port` and probe the device, as upstream does before each use:
 /// the device, what it reported, and its platform (AVR when it does not
 /// say).
@@ -56,14 +83,14 @@ pub(super) fn connect(port: &str) -> (RNode, device::Reported, u8) {
     let mut rnode = match opened {
         Ok(rnode) => rnode,
         Err(e) => {
-            log("Could not open the specified serial port. The contained exception was:");
-            log(&format!(
-                "[Errno {}] could not open port {port}: {e}",
-                e.raw_os_error().unwrap_or(0)
-            ));
+            log_open_failure(port, &e);
             graceful_exit(0);
         }
     };
+    rnode.usb_serial_id = ports::comports()
+        .into_iter()
+        .find(|listed| listed.device == port)
+        .and_then(|listed| listed.serial_number);
     if let Err(e) = rnode.device_probe() {
         log("Serial port opened, but RNode did not respond. Is a valid firmware installed?");
         println!("{e}");

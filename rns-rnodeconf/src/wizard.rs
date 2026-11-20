@@ -930,11 +930,7 @@ pub(crate) fn run(
     let mut rnode = match opened {
         Ok(rnode) => rnode,
         Err(e) => {
-            log("Could not open the specified serial port. The contained exception was:");
-            log(&format!(
-                "[Errno {}] could not open port {port}: {e}",
-                e.raw_os_error().unwrap_or(0)
-            ));
+            crate::log_open_failure(&port, &e);
             graceful_exit(0);
         }
     };

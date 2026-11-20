@@ -51,26 +51,53 @@ impl Reported {
 }
 
 pub(crate) struct RNode {
-    writer: std::fs::File,
+    /// `None` once the port is closed.
+    writer: Option<std::fs::File>,
     pub state: Arc<Mutex<Reported>>,
     stop: Arc<AtomicBool>,
+    /// The USB serial number of the device's port, as listed when it was
+    /// opened.
+    pub usb_serial_id: Option<String>,
 }
+
+/// What writing to a closed port fails with, in upstream's words.
+const PORT_NOT_OPEN: &str = "Attempting to use a port that is not open";
 
 impl RNode {
     /// Start reading `reader` in the background.
     pub(crate) fn new(reader: std::fs::File, writer: std::fs::File) -> std::io::Result<Self> {
         let state = Arc::new(Mutex::new(Reported::default()));
-        let shared = Arc::clone(&state);
-        let stop = Arc::new(AtomicBool::new(false));
-        let stopped = Arc::clone(&stop);
-        thread::Builder::new()
-            .name("rnode-read".into())
-            .spawn(move || read_loop(reader, shared, stopped))?;
+        let stop = spawn_reader(reader, &state)?;
         Ok(Self {
-            writer,
+            writer: Some(writer),
             state,
             stop,
+            usb_serial_id: None,
         })
+    }
+
+    /// Close the port, as upstream does before a board resets and its port
+    /// goes away. Writing fails from here on, until [`RNode::reopen`].
+    pub(crate) fn close(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        self.writer = None;
+    }
+
+    pub(crate) fn is_open(&self) -> bool {
+        self.writer.is_some()
+    }
+
+    /// Talk to the device on a newly opened port, keeping what it has
+    /// reported so far.
+    pub(crate) fn reopen(
+        &mut self,
+        reader: std::fs::File,
+        writer: std::fs::File,
+    ) -> std::io::Result<()> {
+        self.close();
+        self.stop = spawn_reader(reader, &self.state)?;
+        self.writer = Some(writer);
+        Ok(())
     }
 
     pub(crate) fn reported(&self) -> Reported {
@@ -82,9 +109,12 @@ impl RNode {
     }
 
     pub(crate) fn write(&mut self, bytes: &[u8], what: &str) -> std::io::Result<()> {
-        self.writer
+        let Some(writer) = self.writer.as_mut() else {
+            return Err(std::io::Error::other(PORT_NOT_OPEN));
+        };
+        writer
             .write_all(bytes)
-            .and_then(|_| self.writer.flush())
+            .and_then(|_| writer.flush())
             .map_err(|e| {
                 std::io::Error::new(e.kind(), format!("An IO error occurred while {what}"))
             })
@@ -272,6 +302,21 @@ impl RNode {
         thread::sleep(Duration::from_secs(2));
         Ok(())
     }
+}
+
+/// Read `reader` into `state` in the background, until the returned flag
+/// is set.
+fn spawn_reader(
+    reader: std::fs::File,
+    state: &Arc<Mutex<Reported>>,
+) -> std::io::Result<Arc<AtomicBool>> {
+    let shared = Arc::clone(state);
+    let stop = Arc::new(AtomicBool::new(false));
+    let stopped = Arc::clone(&stop);
+    thread::Builder::new()
+        .name("rnode-read".into())
+        .spawn(move || read_loop(reader, shared, stopped))?;
+    Ok(stop)
 }
 
 /// The TNC radio parameters (`--freq`, `--bw`, `--txp`, `--sf`, `--cr`).

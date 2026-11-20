@@ -201,6 +201,8 @@ pub(super) fn bootstrap_eeprom(
 ) {
     use std::time::Duration;
     let pause = |ms: u64| std::thread::sleep(Duration::from_millis(ms));
+    // An NRF52 board can come back from a reset on another port.
+    let mut port = port.to_string();
 
     // The wizard reinstalls a provisioned device unless its signature
     // is valid.
@@ -219,8 +221,10 @@ pub(super) fn bootstrap_eeprom(
             pause(6000);
         }
         rom::PLATFORM_NRF52 => {
+            rnode.close();
             log("Waiting for NRF52 reset...");
             pause(18000);
+            reconnect_after_reset(rnode, &mut port);
         }
         _ => pause(3000),
     }
@@ -295,8 +299,8 @@ pub(super) fn bootstrap_eeprom(
         writes.push((rom::ADDR_SIGNATURE + i as u8, *byte));
     }
     for (addr, byte) in writes {
-        if rnode.write_eeprom(addr, byte).is_err() {
-            graceful_exit(1);
+        if let Err(e) = rnode.write_eeprom(addr, byte) {
+            write_failed(&e);
         }
         pause(6);
     }
@@ -331,19 +335,25 @@ pub(super) fn bootstrap_eeprom(
             }
         }
         rom::PLATFORM_NRF52 => {
-            // Upstream finds the board again by its USB serial number,
-            // since the port can change across this reset; this keeps
-            // the same port.
             let _ = rnode.hard_reset();
+            rnode.close();
             log("Waiting for NRF52 reset...");
+            // Long enough for an e-ink display to refresh too.
             pause(20000);
+            reconnect_after_reset(rnode, &mut port);
         }
         _ => {
             let _ = rnode.hard_reset();
         }
     }
 
-    let (image, written) = read_eeprom(rnode, port);
+    if !rnode.is_open() {
+        // Reading the EEPROM back fails on the closed port.
+        write_failed(&std::io::Error::other(
+            "Attempting to use a port that is not open",
+        ));
+    }
+    let (image, written) = read_eeprom(rnode, &port);
     if written.provisioned {
         log("EEPROM Bootstrapping successful!");
         let _ = rnode.hard_reset();
@@ -360,6 +370,30 @@ pub(super) fn bootstrap_eeprom(
         log("EEPROM was written, but validation failed. Check your settings.");
     }
     graceful_exit(0);
+}
+
+/// Find an NRF52 board again after it has reset, by its USB serial number,
+/// and talk to it on the port it is now on. When it is not found, the port
+/// stays closed and the next write fails.
+fn reconnect_after_reset(rnode: &mut RNode, port: &mut String) {
+    let Some(found) = find_port_after_reset(port, &rnode.usb_serial_id) else {
+        log("Could not detect new port for NRF52...");
+        return;
+    };
+    match open_serial(&found).and_then(|(reader, writer)| rnode.reopen(reader, writer)) {
+        Ok(()) => *port = found,
+        Err(e) => {
+            log_open_failure(&found, &e);
+            exit(0);
+        }
+    }
+}
+
+/// upstream's failure while bootstrapping: what failed, and exit status 1.
+fn write_failed(e: &std::io::Error) -> ! {
+    log("An error occurred while writing EEPROM. The contained exception was:");
+    log(&e.to_string());
+    graceful_exit(1);
 }
 
 pub(super) fn print_unverified_warning(port: &str) {
