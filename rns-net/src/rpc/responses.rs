@@ -90,6 +90,8 @@ pub(super) fn path_table_to_pickle(entries: &[PathTableEntry]) -> PickleValue {
                         rns_core::hash::full_hash(e.interface_display_name.as_bytes()).to_vec(),
                     ),
                 ),
+                // Upstream 41260ea1: `Transport.get_path_state()`, an int.
+                (key("state"), PickleValue::Int(i64::from(e.state))),
             ])
         })
         .collect();

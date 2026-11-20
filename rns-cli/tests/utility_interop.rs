@@ -1604,6 +1604,28 @@ fn python_rnpath_lists_rust_path_table() {
             "unexpected rnpath line: {line}"
         );
     }
+
+    // Upstream 41260ea1: rnpath reads every entry's `state`, without a
+    // fallback, and marks the path after its hop count; Rust's rnpath
+    // prints the same line for the same entry.
+    if python_rnpath_source_contains("state_str") {
+        assert!(
+            [" (R) on ", " (u) on ", " (?) on "]
+                .iter()
+                .any(|marker| line.contains(&format!("h{marker}"))),
+            "unexpected rnpath line: {line}"
+        );
+        let mut command = harness.rust_command("rnpath", Side::Client);
+        command.args(["--config", harness.client_config.to_str().unwrap(), "-t"]);
+        let output = run(command);
+        assert_success(&output, "Rust rnpath -t against the Rust daemon");
+        let rust = String::from_utf8_lossy(&output.stdout);
+        let rust_line = rust
+            .lines()
+            .find(|rust_line| rust_line.contains(&destination))
+            .unwrap_or_else(|| panic!("Rust rnpath did not list {destination}:\n{rust}"));
+        assert_eq!(rust_line, line);
+    }
 }
 
 #[test]
@@ -2355,6 +2377,10 @@ fn python_rnpath_reads_rust_remote_path_table() {
     // entries of an older Python Reticulum end before it.
     if !python_module_source_contains("RNS.Reticulum", "\"interface_hash\"") {
         rust_shape.retain(|(key, _)| key != "interface_hash");
+    }
+    // Upstream 41260ea1 added `state` after `interface_hash`.
+    if !python_module_source_contains("RNS.Reticulum", "\"state\"") {
+        rust_shape.retain(|(key, _)| key != "state");
     }
     assert_eq!(rust_shape, first_entry_shape(&python_table));
     assert_eq!(

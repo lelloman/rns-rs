@@ -345,12 +345,16 @@ fn test_path_state() {
     let dest = [0x22; 16];
 
     assert!(!engine.path_is_unresponsive(&dest));
+    // Upstream 41260ea1 `get_path_state`: unknown when not marked.
+    assert_eq!(engine.path_state(&dest), constants::STATE_UNKNOWN);
 
     engine.mark_path_unresponsive(&dest, None);
     assert!(engine.path_is_unresponsive(&dest));
+    assert_eq!(engine.path_state(&dest), constants::STATE_UNRESPONSIVE);
 
     engine.mark_path_responsive(&dest, 1000.0);
     assert!(!engine.path_is_unresponsive(&dest));
+    assert_eq!(engine.path_state(&dest), constants::STATE_RESPONSIVE);
 }
 
 #[test]

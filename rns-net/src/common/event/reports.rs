@@ -277,6 +277,9 @@ pub struct PathTableEntry {
     pub stamp_value: Option<rns_core::stamp::StampValue>,
     /// Link request cost the destination announced, when known (`lr_cost`).
     pub lr_cost: Option<rns_core::stamp::StampCost>,
+    /// The path's state (`constants::STATE_*`), as upstream's
+    /// `Transport.get_path_state` (41260ea1) gives it.
+    pub state: u8,
 }
 
 /// A single rate table entry for query responses.

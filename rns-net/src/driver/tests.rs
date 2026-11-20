@@ -6351,6 +6351,20 @@ fn query_path_table() {
     };
     assert_eq!(entries[0].stamp_value, None);
     assert_eq!(entries[0].lr_cost, None);
+
+    // Upstream 41260ea1: entries carry `Transport.get_path_state()`,
+    // unknown until the path is marked.
+    assert_eq!(entries[0].state, rns_core::constants::STATE_UNKNOWN);
+    driver.engine.mark_path_unresponsive(&dest_hash, None);
+    let QueryResponse::PathTable(entries) = driver.handle_path_table_query(None) else {
+        panic!("unexpected response");
+    };
+    assert_eq!(entries[0].state, rns_core::constants::STATE_UNRESPONSIVE);
+    driver.engine.mark_path_responsive(&dest_hash, 0.0);
+    let QueryResponse::PathTable(entries) = driver.handle_path_table_query(None) else {
+        panic!("unexpected response");
+    };
+    assert_eq!(entries[0].state, rns_core::constants::STATE_RESPONSIVE);
 }
 
 #[test]
