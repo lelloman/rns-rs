@@ -219,20 +219,54 @@ a port, and is not added.
 
 ## Integration Plan
 
-Every commit has a final disposition and one mapping commit. What remains is
-the promotion gates and the parity record.
+Every commit has a final disposition and one mapping commit; no
+implementation work remains. The gates are recorded below.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
+- [x] Fixture provenance and byte stability are checked where applicable.
+- [x] Exact-target live Python/Rust interop passes.
+- [x] Workspace tests, feature suites, formatting, and lint pass.
+- [x] Required build, Docker, hardware, and manual gates are recorded honestly.
+- [x] Native documentation is updated for user-visible behavior.
 - [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
-Not yet run.
+Gates were run on 2026-11-20 on `upstream/f55c0c6e` at `fe5f504e`
+(`dev@3d98c991` plus the audit opening, the two mapping commits and the
+audit update), against a disposable worktree of the Reticulum checkout at
+`f55c0c6e` (`HEAD:RNS` `3737af21`, `import RNS` reports 1.6.1). The
+configured checkout stayed at `cff4d03f`.
+
+- No conformance fixture is affected: the range changes only rngit's media
+  conversion and documentation, nothing on the wire. The signature table
+  and the per-backend argument lists were checked against upstream's
+  `detect_image_format` and `_configured_backend` at `f55c0c6e` (same
+  results for all 31 classification cases and all five backends).
+- Exact-target interop with CI's commands, `PYTHONPATH` and
+  `RETICULUM_UPSTREAM_DIR` at the `f55c0c6e` worktree: `rns-git --lib`
+  231 passed (2 ignored), with its Python-peer tests running against
+  upstream's rngit; `python_interop` 6 passed (1 ignored);
+  `utility_interop -- --ignored` 34 passed; `placeholders -- --ignored`
+  1 passed. 0 failures.
+- `cargo test --workspace`: 3,861 passed, 0 failed, 76 ignored (the known
+  flaky direct-link test passed in this run).
+- `cargo fmt --all --check` and `bash scripts/lint-host.sh` clean (lint run
+  on the 840eb369 mapping; the later commits change only Markdown).
+- The ignored real-backend media tests pass with ImageMagick 6 `convert` and
+  with ffmpeg on this host.
+- `scripts/check_upstream_drift.py` (2026-11-20 21:17 UTC, both remotes
+  fresh) reports drift from `cff4d03f`: GitHub tip `f55c0c6e`, rgit tip
+  `606a1691`, the two audited commits plus `606a1691`, which is outside this
+  audit.
+- Not run: `--features rns-hooks` and the other feature suites,
+  `python_interop` under the compact-threads and parallel engines,
+  `rnodeconf` interop, ARMv7 and ESP32 builds, Docker E2E, the dual-VPS
+  Backbone smoke and hardware validation. None of them reaches rns-git's
+  media code. CI's interop pin stays at the signed `1.6.1` tag commit
+  `cff4d03f`, as it stayed at the signed release for the earlier
+  same-version rgit advancements, so the promotion pull request's CI does
+  not exercise `f55c0c6e`; the exact-target run above does.
