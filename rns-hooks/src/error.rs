@@ -9,22 +9,12 @@ pub enum HookError {
     CompileError(String),
     /// WASM module failed to instantiate.
     InstantiationError(String),
-    /// WASM execution ran out of fuel.
-    FuelExhausted,
-    /// Execution failed: a WASM trap (panic, out-of-bounds access, ...), a
-    /// native hook's non-zero return code, or a built-in hook's error.
+    /// Execution failed: a WASM trap (panic, out-of-bounds access, running
+    /// out of fuel, ...), a native hook's non-zero return code, or a built-in
+    /// hook's error.
     Trap(String),
     /// Hook returned invalid result data.
     InvalidResult(String),
-    /// Hook was auto-disabled after too many consecutive failures.
-    AutoDisabled {
-        /// Name of the program.
-        name: String,
-        /// Failures in a row that disabled it.
-        consecutive_traps: u32,
-    },
-    /// Hook point not found or invalid.
-    InvalidHookPoint(String),
     /// I/O error loading a WASM module.
     IoError(std::io::Error),
     /// A WASM module or native library was built against an incompatible
@@ -45,20 +35,8 @@ impl fmt::Display for HookError {
         match self {
             HookError::CompileError(msg) => write!(f, "compile error: {}", msg),
             HookError::InstantiationError(msg) => write!(f, "instantiation error: {}", msg),
-            HookError::FuelExhausted => write!(f, "fuel exhausted"),
             HookError::Trap(msg) => write!(f, "trap: {}", msg),
             HookError::InvalidResult(msg) => write!(f, "invalid result: {}", msg),
-            HookError::AutoDisabled {
-                name,
-                consecutive_traps,
-            } => {
-                write!(
-                    f,
-                    "hook '{}' auto-disabled after {} consecutive traps",
-                    name, consecutive_traps
-                )
-            }
-            HookError::InvalidHookPoint(msg) => write!(f, "invalid hook point: {}", msg),
             HookError::IoError(e) => write!(f, "I/O error: {}", e),
             HookError::AbiVersionMismatch {
                 hook_name,
