@@ -13,7 +13,6 @@ mod writers;
 use super::*;
 
 /// Maximum nesting depth for re-dispatching actions injected by hooks.
-#[cfg(feature = "hooks")]
 const MAX_HOOK_INJECTION_DEPTH: usize = 4;
 
 fn is_outbound_path_request(raw: &[u8], path_request_dest: &[u8; 16]) -> bool {

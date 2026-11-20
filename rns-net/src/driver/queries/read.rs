@@ -66,19 +66,7 @@ impl Driver {
                 QueryResponse::BackboneInterfaces(self.list_backbone_interfaces())
             }
             QueryRequest::ProviderBridgeStats => {
-                #[cfg(feature = "hooks")]
-                {
-                    QueryResponse::ProviderBridgeStats(
-                        self.hooks
-                            .provider_bridge
-                            .as_ref()
-                            .map(|bridge| bridge.stats()),
-                    )
-                }
-                #[cfg(not(feature = "hooks"))]
-                {
-                    QueryResponse::ProviderBridgeStats(None::<crate::event::ProviderBridgeStats>)
-                }
+                QueryResponse::ProviderBridgeStats(self.hooks.provider_bridge_stats())
             }
             QueryRequest::DrainStatus => QueryResponse::DrainStatus(self.drain_status()),
             QueryRequest::PathTable { max_hops } => self.handle_path_table_query(max_hops),

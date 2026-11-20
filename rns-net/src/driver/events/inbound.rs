@@ -312,46 +312,15 @@ impl Driver {
             return;
         }
 
-        #[cfg(feature = "hooks")]
-        let decoded_packet = if !self.hooks_attached(HookPoint::PreIngress) {
+        let decoded_packet = if !self.hooks.attached(HookPoint::PreIngress) {
             decoded_packet
         } else {
-            let packet = &decoded_packet.packet().raw;
-            let pkt_ctx = rns_hooks::PacketContext {
-                flags: if packet.is_empty() { 0 } else { packet[0] },
-                hops: if packet.len() > 1 { packet[1] } else { 0 },
-                destination_hash: extract_dest_hash(packet),
-                context: 0,
-                packet_hash: [0; 32],
-                interface_id: interface_id.0,
-                data_offset: 0,
-                data_len: packet.len() as u32,
-            };
-            let ctx = HookContext::Packet {
-                ctx: &pkt_ctx,
-                raw: packet,
-            };
-            let now = time::now();
-            let engine_ref = EngineRef {
-                engine: &self.engine,
-                interfaces: &self.interfaces,
-                link_manager: &self.link_manager,
-                now,
-            };
-            let provider_events_enabled = self.provider_events_enabled();
-            let mut outcome = PacketHookOutcome::Keep;
-            if let Some(ref e) = run_hook_inner(
-                &mut self.hooks.slots[HookPoint::PreIngress as usize].programs,
-                &self.hooks.manager,
-                &engine_ref,
-                &ctx,
-                now,
-                provider_events_enabled,
-            ) {
-                self.forward_hook_side_effects("PreIngress", e);
-                let max_len = self.hook_packet_limit(interface_id);
-                outcome = self.packet_hook_outcome(HookPoint::PreIngress, e, max_len);
-            }
+            let outcome = self.run_packet_hooks(
+                HookPoint::PreIngress,
+                &HookEvent::wire_packet(&decoded_packet.packet().raw, interface_id.0),
+                InjectedActions::Dispatch,
+                |driver| driver.hook_packet_limit(interface_id),
+            );
             // A packet the hook drops is filtered inbound, as any other
             // packet dropped before transport processes it.
             match outcome {
@@ -439,9 +408,9 @@ impl Driver {
         }
 
         // The engine consumes the packet; the hooks after it need the bytes.
-        #[cfg(feature = "hooks")]
         let dispatch_hook_packet = self
-            .hooks_attached(HookPoint::PreDispatch)
+            .hooks
+            .attached(HookPoint::PreDispatch)
             .then(|| decoded_packet.packet().raw.clone());
         let inbound_frame = DecodedInboundFrame {
             decoded: decoded_packet,
@@ -479,43 +448,15 @@ impl Driver {
             );
         }
 
-        #[cfg(feature = "hooks")]
         if let Some(packet) = dispatch_hook_packet {
-            let pkt_ctx = rns_hooks::PacketContext {
-                flags: if packet.is_empty() { 0 } else { packet[0] },
-                hops: if packet.len() > 1 { packet[1] } else { 0 },
-                destination_hash: extract_dest_hash(&packet),
-                context: 0,
-                packet_hash: [0; 32],
-                interface_id: interface_id.0,
-                data_offset: 0,
-                data_len: packet.len() as u32,
-            };
-            let ctx = HookContext::Packet {
-                ctx: &pkt_ctx,
-                raw: &packet,
-            };
-            let now = time::now();
-            let engine_ref = EngineRef {
-                engine: &self.engine,
-                interfaces: &self.interfaces,
-                link_manager: &self.link_manager,
-                now,
-            };
-            let provider_events_enabled = self.provider_events_enabled();
             // The engine has already handled this packet, so neither `Drop`
             // nor `Modify` can change it any more: both act as `Continue` here
             // and the replacement bytes of a `Modify` verdict are ignored.
-            if let Some(ref e) = run_hook_inner(
-                &mut self.hooks.slots[HookPoint::PreDispatch as usize].programs,
-                &self.hooks.manager,
-                &engine_ref,
-                &ctx,
-                now,
-                provider_events_enabled,
-            ) {
-                self.forward_hook_side_effects("PreDispatch", e);
-            }
+            self.run_hooks_with_effects(
+                HookPoint::PreDispatch,
+                &HookEvent::wire_packet(&packet, interface_id.0),
+                InjectedActions::Dispatch,
+            );
         }
 
         self.dispatch_all_with_ingress_class(actions, ingress_limited);

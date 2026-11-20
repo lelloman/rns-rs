@@ -5,8 +5,7 @@ mod construction;
 mod discovery_runtime;
 mod folded_state;
 mod hook_calls;
-#[cfg(feature = "hooks")]
-mod hook_support;
+mod hook_host;
 mod interface_state;
 mod path_responses;
 #[cfg(feature = "iface-backbone")]
@@ -16,8 +15,9 @@ mod settings;
 #[cfg(any(feature = "iface-backbone", feature = "iface-tcp"))]
 pub(crate) use discovery_runtime::*;
 pub(crate) use folded_state::*;
-#[cfg(feature = "hooks")]
-pub(crate) use hook_support::*;
+pub(crate) use hook_host::{
+    HookEnv, HookEvent, HookHost, HookPoint, HookRun, InjectedActions, PacketHookOutcome,
+};
 pub(crate) use interface_state::*;
 pub(crate) use path_responses::*;
 #[cfg(feature = "iface-backbone")]
@@ -40,13 +40,8 @@ use rns_core::transport::types::{InterfaceId, ReceivedAnnounce, TransportAction,
 use rns_core::transport::TransportEngine;
 use rns_crypto::{OsRng, Rng};
 
-#[cfg(feature = "hooks")]
-use crate::provider_bridge::ProviderBridge;
 use crate::stamper::PathRequestTarget;
-#[cfg(feature = "hooks")]
-use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookPoint, HookSlot};
 
-#[cfg(feature = "hooks")]
 use crate::event::BackbonePeerHookEvent;
 #[cfg(feature = "iface-backbone")]
 use crate::event::{BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus};
@@ -244,7 +239,6 @@ pub(crate) const PACKET_SIGNAL_CACHE_MAXSIZE: usize = 512;
 ///
 /// HEADER_1 (raw[0] & 0x40 == 0): dest at bytes 2..18
 /// HEADER_2 (raw[0] & 0x40 != 0): dest at bytes 18..34 (after transport ID)
-#[cfg(any(test, feature = "hooks"))]
 fn extract_dest_hash(raw: &[u8]) -> [u8; 16] {
     let mut dest = [0u8; 16];
     if raw.is_empty() {
@@ -393,8 +387,7 @@ pub struct Driver {
     pub(crate) blackhole: blackhole::BlackholeState,
     /// The programmable hook system: hook slots, their manager and the
     /// provider bridge.
-    #[cfg(feature = "hooks")]
-    pub(crate) hooks: Hooks,
+    pub(crate) hooks: HookHost,
 }
 
 pub(crate) struct PendingLinkFrame {
