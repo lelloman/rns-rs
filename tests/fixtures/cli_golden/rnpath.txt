@@ -1,9 +1,10 @@
 $ rnpath --help
 exit: Some(0)
 --- stdout
-usage: rnpath [-h] [--config CONFIG] [--version] [-t] [-u] [-m hops] [-r] [-d]
-              [-D] [-x] [-w seconds] [-R hash] [-i path] [-W seconds] [-b]
-              [-B] [-U] [--duration DURATION] [--reason REASON] [-p] [-j] [-v]
+usage: rnpath [-h] [--config CONFIG] [--version] [-t] [-a] [-u] [-V] [-E]
+              [-m hops] [-M hops] [-r] [-d] [-D] [-x] [-w seconds] [-R hash]
+              [-i path] [-W seconds] [-b] [-B] [-U] [--duration DURATION]
+              [--reason REASON] [-p] [-j] [-v]
               [destination] [list_filter]
 
 Reticulum Path Management Utility
@@ -17,8 +18,13 @@ options:
   --config CONFIG       path to alternative Reticulum config directory
   --version             show program's version number and exit
   -t, --table           show all known paths
+  -a, --active          show in-use paths only
   -u, --usage           show path usage time
+  -V, --vias            show via transport IDs
+  -E, --expiry          show path expiry times
   -m hops, --max hops   maximum hops to filter path table by
+  -M hops, --min-value hops
+                        minimum value to filter path table by
   -r, --rates           show announce rate info
   -d, --drop            remove the path to a destination
   -D, --drop-announces  drop all queued announces
@@ -51,9 +57,10 @@ $ rnpath --no-such-option
 exit: Some(2)
 --- stdout
 --- stderr
-usage: rnpath [-h] [--config CONFIG] [--version] [-t] [-u] [-m hops] [-r] [-d]
-              [-D] [-x] [-w seconds] [-R hash] [-i path] [-W seconds] [-b]
-              [-B] [-U] [--duration DURATION] [--reason REASON] [-p] [-j] [-v]
+usage: rnpath [-h] [--config CONFIG] [--version] [-t] [-a] [-u] [-V] [-E]
+              [-m hops] [-M hops] [-r] [-d] [-D] [-x] [-w seconds] [-R hash]
+              [-i path] [-W seconds] [-b] [-B] [-U] [--duration DURATION]
+              [--reason REASON] [-p] [-j] [-v]
               [destination] [list_filter]
 rnpath: error: unrecognized arguments: --no-such-option
 --- end
