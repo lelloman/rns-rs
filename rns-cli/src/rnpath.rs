@@ -466,6 +466,13 @@ fn cached_announce_name_hash(raw: &[u8]) -> Option<&[u8]> {
 /// cache keeps under a packet hash; `is_known_type` whether a name hash is
 /// in the destination type map. A path whose announce cannot be found is
 /// left out. `Err` is the exception upstream's analysis dies with.
+///
+/// Upstream 48ba76df wraps `announce_packet.unpack()` in a bare
+/// `try`/`except` that counts the path as unresolvable and continues, but
+/// `Packet.unpack` catches its own exceptions and returns False, so the
+/// guard never fires: a cached announce that `unpack` cannot read up to
+/// its data still makes the next line, `announce_packet.data[...]`, raise
+/// the `AttributeError` below, outside the guard.
 fn analyze_path_table(
     path_table: &[PickleValue],
     known_packet_hash: impl Fn(&[u8]) -> Option<[u8; 32]>,
@@ -483,6 +490,8 @@ fn analyze_path_table(
         let Some(raw) = cached_announce(&packet_hash) else {
             continue;
         };
+        // Not covered by upstream's 48ba76df guard: `unpack` never raises,
+        // the `data` read after it does.
         let name_hash = cached_announce_name_hash(&raw)
             .ok_or("AttributeError: 'Packet' object has no attribute 'data'")?
             .to_vec();
@@ -1871,7 +1880,12 @@ mod tests {
         );
 
         // Where upstream's Packet.unpack fails before it sets `data`, the
-        // analysis dies reading it.
+        // analysis dies reading it, alone or among readable announces.
+        // 48ba76df's guard around `unpack()` does not change this: its
+        // `analyze_tables`, run on the same inputs (Python 3.12, a
+        // disposable upstream worktree at 48ba76df), raised the same
+        // `AttributeError` for each of these, with `table[..1]` and with
+        // the whole table.
         let mut over_hops = h1(&[], 128);
         over_hops.push(0);
         for bad in [
@@ -1883,10 +1897,12 @@ mod tests {
         ] {
             let mut cache = cache.clone();
             cache.insert(packet_hash(1), bad);
-            assert_eq!(
-                analyze(&table[..1], &cache),
-                Err("AttributeError: 'Packet' object has no attribute 'data'")
-            );
+            for table in [&table[..1], &table[..]] {
+                assert_eq!(
+                    analyze(table, &cache),
+                    Err("AttributeError: 'Packet' object has no attribute 'data'")
+                );
+            }
         }
         assert_eq!(cached_announce_name_hash(&h2(&[], 0)), Some(&[][..]));
     }
