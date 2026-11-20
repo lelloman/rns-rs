@@ -33,6 +33,9 @@ impl LinkManager {
         keys: Option<(X25519PrivateKey, Ed25519PrivateKey)>,
         rng: &mut dyn Rng,
     ) -> (LinkId, Vec<LinkManagerAction>) {
+        // Upstream's `Link.ENABLED_MODES` is `[MODE_AES256_CBC]`, and since
+        // 4916017a `Link.__init__` refuses any other mode up front. No
+        // rns-net API takes a mode: every outbound link is AES-256-CBC.
         let mode = LinkMode::Aes256Cbc;
         let signalled_mtu = self.link_mtu_discovery.then_some(mtu);
         let (mut engine, request_data) = match keys {
