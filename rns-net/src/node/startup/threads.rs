@@ -1,7 +1,27 @@
-//! The node's background threads: announce verification and transport
-//! state persistence.
+//! The node's background threads: the timer, announce verification, the
+//! driver and transport state persistence.
 
 use super::*;
+
+/// The thread that sends the driver its ticks, at the interval
+/// `tick_interval_ms` holds, unless the driver keeps the tick itself
+/// (compact engine).
+pub(super) fn spawn_timer(tx: &EventSender, tick_interval_ms: &Arc<AtomicU64>) -> io::Result<()> {
+    if !crate::engine::FOLD_TIMERS {
+        let timer_tx = tx.clone();
+        let timer_interval = Arc::clone(tick_interval_ms);
+        thread::Builder::new()
+            .name("rns-timer".into())
+            .spawn(move || loop {
+                let ms = timer_interval.load(Ordering::Relaxed);
+                thread::sleep(Duration::from_millis(ms));
+                if timer_tx.send(Event::Tick).is_err() {
+                    break; // receiver dropped
+                }
+            })?;
+    }
+    Ok(())
+}
 
 /// The thread that verifies announces, unless the compact engine verifies
 /// them on its driver loop.
@@ -114,4 +134,49 @@ pub(super) fn spawn_transport_state_persister(
         None
     };
     Ok(threads)
+}
+
+/// The threads a node runs once started, and how to stop them.
+pub(super) struct NodeThreads {
+    pub(super) verify: Option<JoinHandle<()>>,
+    pub(super) verify_shutdown: Arc<crate::driver::WorkSignal>,
+    pub(super) driver: JoinHandle<()>,
+    pub(super) persist: Option<JoinHandle<()>>,
+    pub(super) persist_stop: Option<std::sync::mpsc::Sender<()>>,
+}
+
+/// Spawn the announce verifier, the driver and the transport state
+/// persister, once startup has set the driver up.
+pub(super) fn spawn_node_threads(
+    mut driver: Driver,
+    tx: &EventSender,
+    transport_state_dir: Option<std::path::PathBuf>,
+) -> io::Result<NodeThreads> {
+    let verify_shutdown = Arc::clone(&driver.announce_verify_signal);
+    let verify_handle =
+        spawn_announce_verifier(&driver.announce_verify_queue, &verify_shutdown, tx.clone())?;
+
+    // Spawn the driver after startup has registered local destinations and static interfaces.
+    // Interface readers can enqueue frames before this point; the bounded event queue preserves
+    // ordering and backpressures instead of dropping startup traffic.
+    log::debug!("rns-net {} engine", crate::engine::ENGINE);
+    // The compact engine persists transport state on the driver loop.
+    if crate::engine::FOLD_TIMERS {
+        driver.folded.persist_dir = transport_state_dir.clone();
+    }
+    let driver_handle = thread::Builder::new()
+        .name("rns-driver".into())
+        .spawn(move || {
+            driver.run();
+        })?;
+
+    let (persist_handle, persist_stop) =
+        spawn_transport_state_persister(transport_state_dir, tx.clone())?.unzip();
+    Ok(NodeThreads {
+        verify: verify_handle,
+        verify_shutdown,
+        driver: driver_handle,
+        persist: persist_handle,
+        persist_stop,
+    })
 }

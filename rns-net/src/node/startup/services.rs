@@ -1,5 +1,5 @@
 //! Setting up the driver's services as the node starts: hooks, interface
-//! runtime settings, the local server.
+//! runtime settings, the local server, the RPC servers.
 
 use super::*;
 
@@ -293,5 +293,139 @@ pub(super) fn start_local_server(
         Err(e) => {
             log::error!("Failed to start local shared instance server: {}", e);
         }
+    }
+}
+
+/// The RPC servers of a shared instance that run on threads of their own.
+pub(super) struct RpcServers {
+    /// The server on TCP.
+    pub(super) tcp: Option<crate::rpc::RpcServer>,
+    /// The server on the abstract Unix socket.
+    #[cfg(target_os = "linux")]
+    pub(super) unix: Option<crate::rpc::RpcServer>,
+}
+
+/// Start the RPC servers if share_instance is enabled: on threads, or on
+/// the driver loop when the compact engine folds services.
+///
+/// As upstream, the RPC server listens on the abstract Unix socket where
+/// the shared instance uses one, and on TCP only otherwise
+/// (`shared_instance_type = tcp`, other platforms, or when the socket
+/// cannot be bound): two instances on the default control port then do not
+/// collide. A server that fails to start is logged and left out.
+pub(super) fn start_rpc_servers(
+    driver: &mut Driver,
+    config: &NodeConfig,
+    rpc_auth_key: [u8; 32],
+    tx: &EventSender,
+) -> RpcServers {
+    let serve_rpc_threads = config.share_instance && !crate::engine::FOLD_SERVICES;
+    let rpc_on_unix = |bound: io::Result<()>| -> bool {
+        match bound {
+            Ok(()) => {
+                log::debug!(
+                    "RPC server started on abstract Unix socket for {}",
+                    config.instance_name
+                );
+                true
+            }
+            Err(e) => {
+                log::warn!("Abstract Unix RPC socket unavailable ({e}), serving RPC over TCP");
+                false
+            }
+        }
+    };
+    if config.share_instance && crate::engine::FOLD_SERVICES {
+        let mut service = crate::driver::RpcService::new(rpc_auth_key, Arc::clone(tx.poller()));
+        #[cfg(target_os = "linux")]
+        let on_unix = config.shared_instance.use_af_unix
+            && rpc_on_unix(
+                crate::rpc::bind_abstract_unix(&config.instance_name).and_then(|listener| {
+                    service.add_listener(crate::driver::RpcListener::Unix(listener))
+                }),
+            );
+        #[cfg(not(target_os = "linux"))]
+        let on_unix = false;
+        if !on_unix {
+            match std::net::TcpListener::bind(("127.0.0.1", config.rpc_port)).and_then(|listener| {
+                service.add_listener(crate::driver::RpcListener::Tcp(listener))
+            }) {
+                Ok(()) => log::debug!("RPC server started on 127.0.0.1:{}", config.rpc_port),
+                Err(e) => log::error!("Failed to start RPC server: {}", e),
+            }
+        }
+        driver.rpc_service = Some(service);
+    }
+    #[cfg(target_os = "linux")]
+    let rpc_unix_server = if serve_rpc_threads && config.shared_instance.use_af_unix {
+        let started = crate::rpc::RpcServer::start_abstract_unix(
+            &config.instance_name,
+            rpc_auth_key,
+            tx.clone(),
+        );
+        match started {
+            Ok(server) => rpc_on_unix(Ok(())).then_some(server),
+            Err(e) => {
+                rpc_on_unix(Err(e));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    #[cfg(target_os = "linux")]
+    let on_unix = rpc_unix_server.is_some();
+    #[cfg(not(target_os = "linux"))]
+    let on_unix = {
+        let _ = rpc_on_unix;
+        false
+    };
+    let rpc_server = if serve_rpc_threads && !on_unix {
+        let rpc_addr = crate::rpc::RpcAddr::Tcp("127.0.0.1".into(), config.rpc_port);
+        match crate::rpc::RpcServer::start(&rpc_addr, rpc_auth_key, tx.clone()) {
+            Ok(server) => {
+                log::debug!("RPC server started on 127.0.0.1:{}", config.rpc_port);
+                Some(server)
+            }
+            Err(e) => {
+                log::error!("Failed to start RPC server: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    RpcServers {
+        tcp: rpc_server,
+        #[cfg(target_os = "linux")]
+        unix: rpc_unix_server,
+    }
+}
+
+impl RnsNode {
+    /// The last steps of starting a node: open its destination stamp
+    /// store, and ask for the destination types it needs.
+    pub(super) fn finish_start(
+        &mut self,
+        storage_dir: Option<std::path::PathBuf>,
+        discover_interfaces: bool,
+    ) {
+        // Destination stamps live under `storage/stamps` next to the cache
+        // directory, the layout `from_config_dirs` uses; a node without a
+        // cache directory cannot stamp its announces.
+        if let Some(storage_dir) = storage_dir {
+            self.set_stamp_store(crate::stamps::DestinationStampStore::new(&storage_dir));
+        }
+        // InterfaceDiscovery (upstream 884f109b): an instance discovering
+        // interfaces wants their announces, so `required_only` keeps them.
+        #[cfg(feature = "iface-local")]
+        if discover_interfaces {
+            self.wants_destination_type(&format!(
+                "{}.discovery.interface",
+                crate::discovery::APP_NAME
+            ));
+        }
+        #[cfg(not(feature = "iface-local"))]
+        let _ = discover_interfaces;
     }
 }
