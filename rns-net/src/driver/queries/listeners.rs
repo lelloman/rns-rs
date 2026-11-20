@@ -110,7 +110,10 @@ impl Driver {
         };
         #[cfg(feature = "iface-local")]
         let bitrate = match listener.clients {
-            ListenerClients::Local(_) => self.forced_local_bitrate.or(listener.bitrate),
+            ListenerClients::Local(_) => self
+                .interface_settings
+                .forced_local_bitrate
+                .or(listener.bitrate),
             _ => listener.bitrate,
         };
         #[cfg(not(feature = "iface-local"))]

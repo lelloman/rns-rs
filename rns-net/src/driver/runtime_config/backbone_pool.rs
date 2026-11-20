@@ -188,7 +188,7 @@ impl Driver {
                 recursive_prs: false,
                 announces_from_internal: true,
                 announces_to_internal: self.discovery.autoconnect_announces_to_internal,
-                ingress_control: self.ingress_control_defaults,
+                ingress_control: self.interface_settings.ingress_control,
                 stamp_costs: Default::default(),
                 ifac_runtime,
                 ifac_enabled,
@@ -688,7 +688,7 @@ impl Driver {
             client.clone(),
             self.event_tx.clone(),
             wire_ifac_size,
-            self.underlay_mark,
+            self.interface_settings.underlay_mark,
             control.clone(),
         )?;
         let info = rns_core::transport::types::InterfaceInfo {

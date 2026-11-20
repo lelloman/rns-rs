@@ -462,7 +462,7 @@ impl RnsNode {
             id,
             &info.name,
             tx.clone(),
-            driver.interface_writer_queue_capacity,
+            driver.interface_settings.writer_queue_capacity,
         );
 
         driver.engine.register_interface(info.clone());
@@ -795,7 +795,7 @@ pub fn bench_shared_client_replay_once(
         id,
         &info.name,
         tx.clone(),
-        driver.interface_writer_queue_capacity,
+        driver.interface_settings.writer_queue_capacity,
     );
     driver.engine.register_interface(info.clone());
     driver.interfaces.insert(

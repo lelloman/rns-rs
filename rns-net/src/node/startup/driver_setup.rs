@@ -170,7 +170,7 @@ pub(super) fn new_driver(
     crate::stamps::set_worker_limits(config.stamps.max_workers, config.stamps.worker_niceness);
     *driver.engine.destination_filter_mut() = queue_config.filter.destination_filter();
     let stamp_targets = crate::stamper::StampTargets::from(&config.stamps);
-    driver.underlay_mark = config.underlay_mark;
+    driver.interface_settings.underlay_mark = config.underlay_mark;
     driver
         .link_manager
         .set_link_mtu_discovery(queue_config.link_mtu_discovery);
@@ -190,7 +190,7 @@ pub(super) fn new_driver(
     driver.known.max_entries = config.known_destinations_max_entries;
     driver.ratchet_store = config.ratchet_store.clone();
     driver.ratchet_expiry_secs = config.ratchet_expiry.as_secs_f64();
-    driver.interface_writer_queue_capacity = config.interface_writer_queue_capacity;
+    driver.interface_settings.writer_queue_capacity = config.interface_writer_queue_capacity;
     driver.set_announce_rate_defaults(config.announce_rate_defaults);
     driver.set_ingress_control_defaults(config.ingress_control_defaults);
     driver.runtime_config.defaults.known_destinations_ttl =
@@ -357,7 +357,7 @@ fn configure_discovery(
 ) {
     driver.discovery.enabled = config.discover_interfaces;
     driver.discovery.sources = config.discovery.interface_discovery_sources.clone();
-    driver.forced_local_bitrate = config.shared_instance.force_bitrate;
+    driver.interface_settings.forced_local_bitrate = config.shared_instance.force_bitrate;
     driver.network_identity = network_identity;
     driver.register_network_destinations();
     driver.discovery.autoconnect_mode = config.autoconnect_interface_mode;
