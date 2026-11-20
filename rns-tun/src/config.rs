@@ -1,3 +1,5 @@
+//! The rntun TOML configuration file and its validation.
+
 use std::fmt;
 use std::fs;
 use std::net::Ipv4Addr;
@@ -35,10 +37,15 @@ fn default_active() -> usize {
     64
 }
 
+/// Why a configuration could not be loaded or failed validation.
 #[derive(Debug)]
 pub enum ConfigError {
+    /// A file could not be read.
     Io(std::io::Error),
+    /// The file is not valid TOML or does not match the expected schema.
     Toml(String),
+    /// The file parsed but a value is out of range or inconsistent; the
+    /// message names the problem.
     Invalid(String),
 }
 impl fmt::Display for ConfigError {
@@ -57,63 +64,110 @@ impl From<std::io::Error> for ConfigError {
     }
 }
 
+/// A parsed rntun configuration file. Exactly one of `client` and `gateway`
+/// is set once [`Config::validate`] has passed.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    /// Configuration schema version; must be 1.
     pub version: u8,
+    /// Directory for identities, the Linux ownership journal and the default
+    /// status socket.
     pub state_dir: PathBuf,
+    /// Reticulum configuration directory of the private node rntun starts.
     pub node_config_dir: PathBuf,
+    /// Firewall mark put on the node's own sockets so their traffic bypasses
+    /// the tunnel. Must be nonzero; defaults to `0x5254`.
     #[serde(default = "default_mark")]
     pub underlay_mark: u32,
+    /// Path of the status Unix socket; `state_dir/status.sock` when unset.
     pub status_socket: Option<PathBuf>,
+    /// Client settings; present when this host connects to a gateway.
     #[serde(default)]
     pub client: Option<ClientConfig>,
+    /// Gateway settings; present when this host serves clients.
     #[serde(default)]
     pub gateway: Option<GatewayConfig>,
 }
+/// The `[client]` section.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClientConfig {
+    /// Client identity file; `state_dir/client_identity` when unset. Created
+    /// on first use.
     pub identity_file: Option<PathBuf>,
+    /// IPv4 CIDRs the client trusts the gateway to route; a granted route
+    /// outside all of them fails the handshake.
     #[serde(default)]
     pub allowed_routes: Vec<String>,
+    /// IPv4 CIDRs the client asks the gateway to route through the tunnel.
     #[serde(default)]
     pub requested_routes: Vec<String>,
+    /// Route all IPv4 traffic through the tunnel. Must be true exactly when
+    /// both route lists contain `0.0.0.0/0`, and needs `allowed_dns`.
     #[serde(default)]
     pub allow_default_route: bool,
+    /// DNS resolvers the client accepts from the gateway; any other
+    /// advertised resolver fails the handshake.
     #[serde(default)]
     pub allowed_dns: Vec<Ipv4Addr>,
+    /// TUN interface name; defaults to `rntun0`.
     #[serde(default = "default_client_tun")]
     pub tun_name: String,
+    /// Largest packet, in bytes, the client offers to carry, within
+    /// 576..=1500; 1280 when unset.
     pub tun_mtu: Option<u16>,
+    /// Policy routing table that holds the tunnel routes; defaults to
+    /// `0x5254`.
     #[serde(default = "default_table")]
     pub routing_table: u32,
+    /// Priority of the rule that sends marked underlay traffic to
+    /// `physical_table`; must be lower than `tunnel_rule_priority`.
     #[serde(default = "default_underlay_priority")]
     pub underlay_rule_priority: u32,
+    /// Priority of the rules that send traffic to `routing_table`.
     #[serde(default = "default_tunnel_priority")]
     pub tunnel_rule_priority: u32,
+    /// Routing table the underlay traffic uses; defaults to 254 (`main`).
     #[serde(default = "default_physical_table")]
     pub physical_table: u32,
 }
 fn default_physical_table() -> u32 {
     254
 }
+/// The `[gateway]` section.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GatewayConfig {
+    /// Gateway identity file; `state_dir/gateway_identity` when unset.
+    /// Created on first use.
     pub identity_file: Option<PathBuf>,
+    /// Gateway address and subnet as a CIDR (`10.77.0.1/24`), prefix /1
+    /// through /30. Validated here; the address in use comes from the policy
+    /// file.
     pub address: String,
+    /// Path of the client policy TOML (see
+    /// [`GatewayPolicy`](crate::policy::GatewayPolicy)). Reloaded when it
+    /// changes on disk.
     pub policy_file: PathBuf,
+    /// DNS resolvers advertised to full-tunnel clients; at most four.
     #[serde(default)]
     pub dns_servers: Vec<Ipv4Addr>,
+    /// TUN interface name; defaults to `rntung0`.
     #[serde(default = "default_gateway_tun")]
     pub tun_name: String,
+    /// Seconds between announces of the gateway destination; defaults to
+    /// 1800.
     #[serde(default = "default_announce")]
     pub announce_interval_seconds: u64,
+    /// Links that may be mid-handshake at once, 1..=64; defaults to 16.
     #[serde(default = "default_pending")]
     pub max_pending_links: usize,
+    /// Sessions that may be active at once, 1..=256; defaults to 64.
     #[serde(default = "default_active")]
     pub max_active_sessions: usize,
 }
 
 impl Config {
+    /// Read, parse and validate the file at `path`. Relative paths inside it
+    /// are resolved against the file's directory.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let content = fs::read_to_string(path)?;
         let mut cfg: Self =
@@ -153,6 +207,8 @@ impl Config {
             }
         }
     }
+    /// Check value ranges and cross-field rules. [`Config::load`] already
+    /// calls this; call it again after changing a loaded config.
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.version != 1 {
             return Err(ConfigError::Invalid("version must be 1".into()));
@@ -238,6 +294,8 @@ impl Config {
     }
 }
 
+/// `$XDG_CONFIG_HOME/rntun/config.toml`, else `$HOME/.config/rntun/config.toml`,
+/// else `rntun.toml` in the current directory.
 pub fn default_config_path() -> PathBuf {
     if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
         PathBuf::from(dir).join("rntun/config.toml")
@@ -256,6 +314,8 @@ pub fn validate_full_tunnel_node_config(config_dir: &Path) -> Result<(), ConfigE
     validate_full_tunnel_node_config_text(&content)
 }
 
+/// [`validate_full_tunnel_node_config`] for the contents of a Reticulum
+/// config file instead of its directory.
 pub fn validate_full_tunnel_node_config_text(content: &str) -> Result<(), ConfigError> {
     let parsed = rns_net::config::parse(content)
         .map_err(|error| ConfigError::Invalid(format!("invalid Reticulum config: {error}")))?;

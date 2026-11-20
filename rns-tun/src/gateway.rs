@@ -1,3 +1,6 @@
+//! The Linux gateway: serves authorized clients and forwards their packets
+//! through a TUN interface.
+
 use rns_core::display::hex;
 use std::collections::HashMap;
 use std::fs;
@@ -37,6 +40,12 @@ struct SessionEntry {
     last_activity: Duration,
 }
 
+/// Run the gateway until `stop` is set, keeping `status` current. Blocks
+/// the calling thread. Registers and periodically announces the gateway
+/// destination, configures the gateway TUN interface from the policy file,
+/// and reloads the policy when the file changes (a reload that changes the
+/// gateway address is ignored). Needs the `[gateway]` section and root
+/// privileges. The interface configuration is torn down before returning.
 pub fn run_linux_gateway(
     config: &Config,
     stop: &Arc<AtomicBool>,

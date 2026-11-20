@@ -1,3 +1,6 @@
+//! IPv4 packet validation and the fragmentation and reassembly of packets
+//! into rntun fragments.
+
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
@@ -7,19 +10,37 @@ use std::time::Duration;
 use crate::policy::{is_forbidden_special, Cidr};
 use crate::protocol::{PacketFragment, FRAGMENT_MAX, PACKET_MAX};
 
+/// Why a packet or fragment was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PacketError {
+    /// Shorter than a 20-byte IPv4 header.
     TooShort,
+    /// The version field is not 4.
     WrongVersion,
+    /// The header carries IP options (IHL is not 5).
     OptionsUnsupported,
+    /// The total-length field disagrees with the buffer length.
     InvalidLength,
+    /// Larger than the negotiated MTU or the protocol maximum.
     TooLarge,
+    /// The header checksum does not verify.
     InvalidChecksum,
+    /// An IP fragment (MF set, nonzero offset, or the reserved bit set);
+    /// only whole packets are tunnelled.
     NativeFragment,
+    /// The source or destination is a special-use address, or is not one
+    /// the session may use.
     InvalidAddress,
+    /// The TTL is zero.
     InvalidTtl,
+    /// A fragment with impossible bounds, or one that disagrees with earlier
+    /// fragments of the same packet on the total length.
     InvalidFragment,
+    /// A fragment rewrites bytes already received with different contents,
+    /// or partly overlaps received bytes.
     Overlap,
+    /// Reassembly is out of slots or memory, or the packet needs more
+    /// fragments than the protocol allows.
     ReassemblyLimit,
 }
 impl fmt::Display for PacketError {
@@ -29,14 +50,23 @@ impl fmt::Display for PacketError {
 }
 impl std::error::Error for PacketError {}
 
+/// Header fields of a packet that passed [`validate_ipv4`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ValidatedIpv4 {
+    /// Source address.
     pub source: Ipv4Addr,
+    /// Destination address.
     pub destination: Ipv4Addr,
+    /// IP protocol number (1 ICMP, 6 TCP, 17 UDP, ...).
     pub protocol: u8,
+    /// Packet length in bytes, header included.
     pub total_len: u16,
 }
 
+/// Check that `packet` is a single, whole IPv4 packet without options that
+/// fits in `negotiated_mtu` bytes, with a valid header checksum, a nonzero
+/// TTL and no special-use (zero, loopback, link-local, multicast or
+/// reserved) source or destination.
 pub fn validate_ipv4(packet: &[u8], negotiated_mtu: usize) -> Result<ValidatedIpv4, PacketError> {
     if packet.len() < 20 {
         return Err(PacketError::TooShort);
@@ -77,6 +107,8 @@ pub fn validate_ipv4(packet: &[u8], negotiated_mtu: usize) -> Result<ValidatedIp
     })
 }
 
+/// The Internet checksum (RFC 1071) of `header`. Over a header that already
+/// holds its checksum, a valid one gives 0.
 pub fn checksum(header: &[u8]) -> u16 {
     let mut sum = 0u32;
     for pair in header.chunks(2) {
@@ -93,6 +125,10 @@ pub fn checksum(header: &[u8]) -> u16 {
     !(sum as u16)
 }
 
+/// Whether `packet` is an ICMP error (destination unreachable, time
+/// exceeded or parameter problem) sent to the client at `assigned` about a
+/// packet that client sent into one of its `accepted` routes, judged by the
+/// quoted header.
 pub fn valid_icmp_error_exception(packet: &[u8], assigned: Ipv4Addr, accepted: &[Cidr]) -> bool {
     let Ok(outer) = validate_ipv4(packet, PACKET_MAX) else {
         return false;
@@ -121,6 +157,8 @@ struct PartialPacket {
     updated: Duration,
 }
 
+/// Rebuilds packets from [`PacketFragment`]s, keyed by session epoch and
+/// packet id, within fixed limits on pending packets and buffered bytes.
 pub struct Reassembler {
     entries: HashMap<(u64, u64), PartialPacket>,
     max_entries: usize,
@@ -129,6 +167,9 @@ pub struct Reassembler {
     expiry: Duration,
 }
 impl Reassembler {
+    /// A reassembler holding at most `max_entries` incomplete packets and
+    /// `max_bytes` of their buffers. An incomplete packet that receives no
+    /// fragment for longer than `expiry` is dropped.
     pub fn new(max_entries: usize, max_bytes: usize, expiry: Duration) -> Self {
         Self {
             entries: HashMap::new(),
@@ -138,6 +179,11 @@ impl Reassembler {
             expiry,
         }
     }
+    /// Add a fragment. `now` is the caller's monotonic clock, the same one
+    /// for every call; expired entries are dropped first. Returns the whole
+    /// packet once its last byte has arrived, `None` while it is incomplete
+    /// or when the fragment is an exact duplicate. An error leaves the
+    /// already buffered fragments in place.
     pub fn push(
         &mut self,
         fragment: PacketFragment,
@@ -208,6 +254,8 @@ impl Reassembler {
             Ok(None)
         }
     }
+    /// Drop incomplete packets idle for longer than the expiry and return
+    /// how many were dropped.
     pub fn expire(&mut self, now: Duration) -> usize {
         let before = self.entries.len();
         let expiry = self.expiry;
@@ -223,17 +271,24 @@ impl Reassembler {
         debug_assert_eq!(before - self.entries.len(), removed);
         removed
     }
+    /// Number of incomplete packets held.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+    /// Whether no incomplete packet is held.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+    /// Bytes reserved by incomplete packets (their full lengths).
     pub fn used_bytes(&self) -> usize {
         self.used_bytes
     }
 }
 
+/// Split `packet` into fragments carrying at most `max_payload` bytes each,
+/// all tagged with `epoch` and `packet_id`. Fails on an empty or oversized
+/// packet, a zero `max_payload`, or when more fragments than the protocol
+/// allows would be needed.
 pub fn fragment_packet(
     packet: &[u8],
     epoch: u64,

@@ -1,3 +1,5 @@
+//! The rntun application identity file.
+
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -47,7 +49,7 @@ fn set_private_permissions(_path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-pub fn signature_keys(identity: &Identity) -> io::Result<([u8; 32], [u8; 32])> {
+pub(crate) fn signature_keys(identity: &Identity) -> io::Result<([u8; 32], [u8; 32])> {
     let private = identity
         .get_private_key()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "identity has no private key"))?;

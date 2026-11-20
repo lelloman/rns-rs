@@ -1,17 +1,33 @@
+//! The rntun wire format: control messages, carried on a Reticulum Channel,
+//! and packet fragments, carried as Link packets.
+//!
+//! Every frame starts with [`MAGIC`], the protocol version, a kind byte and
+//! a 16-bit flags field that must be zero. Integers are big-endian.
+
 use std::fmt;
 use std::net::Ipv4Addr;
 
 use crate::policy::Cidr;
 
+/// The protocol version this crate speaks.
 pub const VERSION: u8 = 1;
+/// First four bytes of every frame.
 pub const MAGIC: [u8; 4] = *b"RNTU";
+/// Largest control frame in bytes, header included.
 pub const CONTROL_FRAME_MAX: usize = 384;
+/// Longest diagnostic string in a reject or close message, in bytes.
 pub const DIAGNOSTIC_MAX: usize = 128;
+/// Most routes a hello or accept message may carry.
 pub const ROUTE_MAX: usize = 32;
+/// Most DNS servers an accept or ready message may carry.
 pub const DNS_MAX: usize = 4;
+/// Most protocol versions a client hello may offer.
 pub const VERSION_MAX: usize = 4;
+/// Largest tunnelled IPv4 packet in bytes.
 pub const PACKET_MAX: usize = 1500;
+/// Most fragments one packet may be split into.
 pub const FRAGMENT_MAX: usize = 32;
+/// Size in bytes of a packet fragment's header, before its payload.
 pub const FRAGMENT_HEADER_LEN: usize = 30;
 
 const KIND_CLIENT_HELLO: u8 = 1;
@@ -25,16 +41,28 @@ const KIND_CLOSE: u8 = 8;
 const KIND_CLOSE_ACK: u8 = 9;
 const KIND_PACKET_FRAGMENT: u8 = 0x20;
 
+/// Why a frame could not be encoded or decoded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolError {
+    /// The frame ends before a field it must hold.
     Truncated,
+    /// The frame does not start with [`MAGIC`].
     InvalidMagic,
+    /// The frame's version byte is not [`VERSION`].
     UnsupportedVersion(u8),
+    /// The kind byte is not a known message (or not a fragment where one
+    /// was expected).
     UnknownKind(u8),
+    /// The flags field is not zero.
     UnknownFlags(u16),
+    /// A length field disagrees with the frame size, or bytes are left over.
     InvalidLength,
+    /// A count or size is over its protocol limit; names the field.
     LimitExceeded(&'static str),
+    /// A field holds a value the protocol forbids, such as a zero session
+    /// epoch; names the field.
     InvalidValue(&'static str),
+    /// A diagnostic string is not UTF-8.
     InvalidUtf8,
 }
 
@@ -56,53 +84,97 @@ impl fmt::Display for ProtocolError {
 
 impl std::error::Error for ProtocolError {}
 
+/// A control message. The handshake is `ClientHello`, `ServerAccept` (or
+/// `ServerReject`), `ClientReady`, `ServerReady`; after that packets flow.
+/// Session epochs are never zero.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlMessage {
+    /// Client's opening message.
     ClientHello {
+        /// Protocol versions the client speaks, 1..=[`VERSION_MAX`] of them.
         versions: Vec<u8>,
+        /// Capability bits; none are defined and clients send 0.
         capabilities: u32,
+        /// Largest IPv4 packet, in bytes, the client will send or receive.
         maximum_packet_size: u16,
+        /// Networks the client wants routed through the tunnel.
         requested_routes: Vec<Cidr>,
     },
+    /// Gateway's acceptance: the session's addressing and limits.
     ServerAccept {
+        /// Nonzero id of this session; tags every later message and
+        /// fragment.
         session_epoch: u64,
+        /// The client's tunnel address.
         assigned_address: Ipv4Addr,
+        /// Prefix length of the tunnel subnet.
         prefix_len: u8,
+        /// The gateway's tunnel address.
         gateway_address: Ipv4Addr,
+        /// The granted subset of the requested routes.
         accepted_routes: Vec<Cidr>,
+        /// Resolvers the client must use; set for a full tunnel.
         dns_servers: Vec<Ipv4Addr>,
+        /// Largest IPv4 packet in bytes either side may send.
         packet_mtu: u16,
+        /// Seconds the client has to send `ClientReady`.
         setup_timeout_secs: u16,
+        /// Seconds of inactivity after which the gateway drops the session;
+        /// 0 for never.
         idle_timeout_secs: u32,
     },
+    /// Gateway's refusal of a hello.
     ServerReject {
+        /// Reason code: 1 identity not authorized, 2 malformed message,
+        /// 3 DNS mismatch, 4 no common version or MTU, 5 no full-tunnel DNS
+        /// on the gateway, 6 gateway at capacity.
         reason: u16,
+        /// Human-readable detail, at most [`DIAGNOSTIC_MAX`] bytes.
         diagnostic: String,
     },
+    /// Client's confirmation that its tunnel interface is configured.
     ClientReady {
+        /// Epoch from `ServerAccept`.
         session_epoch: u64,
+        /// The resolvers the client actually applied; must match the ones
+        /// offered.
         dns_servers: Vec<Ipv4Addr>,
     },
+    /// Gateway's confirmation that the session is active.
     ServerReady {
+        /// Epoch from `ServerAccept`.
         session_epoch: u64,
     },
+    /// Liveness probe; answered with a `Pong` carrying the same nonce.
     Ping {
+        /// Value echoed by the `Pong`.
         nonce: u64,
     },
+    /// Answer to a `Ping`.
     Pong {
+        /// The `Ping`'s nonce.
         nonce: u64,
     },
+    /// Either side ends the session.
     Close {
+        /// Epoch of the session being closed.
         session_epoch: u64,
+        /// Reason code, application defined.
         reason: u16,
+        /// Human-readable detail, at most [`DIAGNOSTIC_MAX`] bytes.
         diagnostic: String,
     },
+    /// Acknowledges a `Close`.
     CloseAck {
+        /// Epoch from the `Close`.
         session_epoch: u64,
     },
 }
 
 impl ControlMessage {
+    /// Encode as one control frame. Fails when a list or string exceeds its
+    /// limit, an epoch is zero, or the frame would exceed
+    /// [`CONTROL_FRAME_MAX`].
     pub fn encode(&self) -> Result<Vec<u8>, ProtocolError> {
         let mut body = Vec::new();
         let kind = match self {
@@ -200,6 +272,8 @@ impl ControlMessage {
         Ok(frame)
     }
 
+    /// Decode one whole control frame, rejecting trailing bytes and every
+    /// limit [`ControlMessage::encode`] enforces.
     pub fn decode(frame: &[u8]) -> Result<Self, ProtocolError> {
         if frame.len() < 10 {
             return Err(ProtocolError::Truncated);
@@ -296,16 +370,25 @@ impl ControlMessage {
     }
 }
 
+/// One piece of a tunnelled IPv4 packet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PacketFragment {
+    /// Epoch of the session the packet belongs to; nonzero.
     pub session_epoch: u64,
+    /// Sender-chosen id shared by all fragments of one packet.
     pub packet_id: u64,
+    /// Length of the whole packet in bytes, 1..=[`PACKET_MAX`].
     pub total_len: u16,
+    /// Byte offset of `payload` within the packet.
     pub offset: u16,
+    /// The fragment's bytes; never empty.
     pub payload: Vec<u8>,
 }
 
 impl PacketFragment {
+    /// Encode as a [`FRAGMENT_HEADER_LEN`]-byte header followed by the
+    /// payload. Fails on a zero epoch, an empty payload or a range outside
+    /// `total_len`.
     pub fn encode(&self) -> Result<Vec<u8>, ProtocolError> {
         if self.session_epoch == 0 {
             return Err(ProtocolError::InvalidValue("session epoch"));
@@ -334,6 +417,8 @@ impl PacketFragment {
         Ok(frame)
     }
 
+    /// Decode one whole fragment frame, checking the same rules as
+    /// [`PacketFragment::encode`].
     pub fn decode(frame: &[u8]) -> Result<Self, ProtocolError> {
         if frame.len() < FRAGMENT_HEADER_LEN {
             return Err(ProtocolError::Truncated);
