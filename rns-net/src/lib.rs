@@ -150,7 +150,7 @@ pub use resource::{
     ReceivedResourceFile, ReceivedResourceStream, ResourceReceiveMode, ResourceTransferError,
     ResourceTransferId,
 };
-pub use rpc::{RpcAddr, RpcClient, RpcServer};
+pub use rpc::{RpcAddr, RpcClient, RpcServer, SharedInstanceRpc};
 pub use serial::Parity;
 #[cfg(feature = "iface-local")]
 pub use shared_client::SharedClientConfig;

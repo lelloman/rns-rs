@@ -30,7 +30,7 @@ use crate::interface::local::LocalClientConfig;
 use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::node::RnsNode;
 use crate::pickle::PickleValue;
-use crate::rpc::{RpcAddr, RpcClient};
+use crate::rpc::SharedInstanceRpc;
 use crate::storage;
 use crate::time;
 
@@ -85,7 +85,7 @@ pub(crate) struct DestinationTypeRequester {
     /// Whether this node is a shared instance client.
     shared_client: bool,
     /// Address and key of the shared instance's RPC server, when known.
-    shared_rpc: Option<(RpcAddr, [u8; 32])>,
+    shared_rpc: Option<SharedInstanceRpc>,
     /// Whether a type was registered with the shared instance, so the
     /// registrations are withdrawn on shutdown.
     registered: AtomicBool,
@@ -111,10 +111,10 @@ impl DestinationTypeRequester {
     /// Send one destination type call to the shared instance. A failed call
     /// or one the instance does not understand reports `false`.
     fn call_shared_instance(&self, key: &str, value: PickleValue) -> bool {
-        let Some((addr, auth_key)) = &self.shared_rpc else {
+        let Some(rpc) = &self.shared_rpc else {
             return false;
         };
-        call_destination_type_rpc(addr, auth_key, &self.destination_type_request(key, value))
+        call_destination_type_rpc(rpc, &self.destination_type_request(key, value))
     }
 
     fn destination_type_request(&self, key: &str, value: PickleValue) -> PickleValue {
@@ -136,8 +136,8 @@ impl DestinationTypeRequester {
 
     /// One call to the shared instance's RPC server, when it is known.
     pub(crate) fn call(&self, request: &PickleValue) -> Option<PickleValue> {
-        let (addr, auth_key) = self.shared_rpc.as_ref()?;
-        match RpcClient::connect(addr, auth_key).and_then(|mut client| client.call(request)) {
+        let rpc = self.shared_rpc.as_ref()?;
+        match rpc.connect().and_then(|mut client| client.call(request)) {
             Ok(response) => Some(response),
             Err(e) => {
                 log::error!("Shared instance RPC failed: {e}");
@@ -158,7 +158,7 @@ impl DestinationTypeRequester {
         if !self.registered.swap(false, Ordering::Relaxed) {
             return;
         }
-        let Some((addr, auth_key)) = self.shared_rpc.clone() else {
+        let Some(rpc) = self.shared_rpc.clone() else {
             return;
         };
         let request =
@@ -167,7 +167,7 @@ impl DestinationTypeRequester {
         let spawned = thread::Builder::new()
             .name("rns-withdraw-types".into())
             .spawn(move || {
-                let _ = done_tx.send(call_destination_type_rpc(&addr, &auth_key, &request));
+                let _ = done_tx.send(call_destination_type_rpc(&rpc, &request));
             });
         match spawned {
             Ok(_) => {
@@ -187,8 +187,8 @@ pub(crate) const SHARED_RPC_EXIT_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// One destination type call to a shared instance's RPC server. A failed
 /// call or one the instance does not understand reports `false`.
-fn call_destination_type_rpc(addr: &RpcAddr, auth_key: &[u8; 32], request: &PickleValue) -> bool {
-    match RpcClient::connect(addr, auth_key).and_then(|mut client| client.call(request)) {
+fn call_destination_type_rpc(rpc: &SharedInstanceRpc, request: &PickleValue) -> bool {
+    match rpc.connect().and_then(|mut client| client.call(request)) {
         Ok(response) => response.as_bool() == Some(true),
         // Debug level: a Python shared instance on Linux serves RPC on an
         // abstract Unix socket, which this TCP client cannot reach, and
@@ -570,8 +570,6 @@ impl RnsNode {
         );
         log::info!("Configuration loaded from {}", config_file.display());
         let shared_config = SharedClientConfig::from_reticulum(&rns_config.reticulum);
-        let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
-
         let mut node = Self::connect_shared_with_reconnect_wait(
             shared_config,
             callbacks,
@@ -582,7 +580,7 @@ impl RnsNode {
             rns_config.reticulum.static_transport_identity,
             destination_type_names,
         )?;
-        node.use_shared_instance_rpc(&config_dir, rpc_addr, rns_config.reticulum.rpc_key);
+        node.use_shared_instance_rpc(&config_dir, &rns_config.reticulum);
         // After the RPC is set up, which the split mode fallback needs
         // (upstream 48c77061 moved the load after `rpc_key` for this).
         let known_destinations = node.load_instance_known_destinations(&config_dir.join("storage"));
@@ -641,9 +639,7 @@ impl RnsNode {
             PickleValue::String("known_destinations".into()),
         )]);
         let response = match &self.destination_types.shared_rpc {
-            Some((addr, auth_key)) => {
-                RpcClient::connect(addr, auth_key).and_then(|mut client| client.call(&request))
-            }
+            Some(rpc) => rpc.connect().and_then(|mut client| client.call(&request)),
             None => Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 "no shared instance RPC key",
@@ -667,19 +663,13 @@ impl RnsNode {
     pub(crate) fn use_shared_instance_rpc(
         &mut self,
         config_dir: &Path,
-        rpc_addr: RpcAddr,
-        rpc_key: Option<[u8; 32]>,
+        reticulum: &crate::config::ReticulumSection,
     ) {
-        if let Some(auth_key) = rpc_key {
-            self.destination_types.shared_rpc = Some((rpc_addr, auth_key));
-            return;
-        }
-        match storage::load_identity(&config_dir.join("storage").join("transport_identity")) {
-            Ok(identity) => {
-                let auth_key =
-                    crate::rpc::derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
-                self.destination_types.shared_rpc = Some((rpc_addr, auth_key));
-            }
+        let rpc = SharedInstanceRpc::new(reticulum, || {
+            storage::load_identity(&config_dir.join("storage").join("transport_identity"))
+        });
+        match rpc {
+            Ok(rpc) => self.destination_types.shared_rpc = Some(rpc),
             Err(e) => log::debug!("No shared instance RPC key for destination type filters: {e}"),
         }
     }
@@ -1013,6 +1003,7 @@ fn load_or_create_transport_identity(storage_dir: &std::path::Path) -> io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rpc::{RpcAddr, RpcClient};
     use rns_core::packet::RawPacket;
     use rns_core::types::{DestHash, IdentityHash};
     use rns_crypto::identity::Identity;
@@ -1066,7 +1057,12 @@ mod tests {
         assert!(!daemon.required_announces_only(true));
 
         // Shutting the client down withdraws its registrations.
-        let auth_key = client.destination_types.shared_rpc.as_ref().unwrap().1;
+        let auth_key = client
+            .destination_types
+            .shared_rpc
+            .as_ref()
+            .unwrap()
+            .auth_key;
         let requester = client.destination_types.requester;
         client.shutdown();
         let mut rpc =
@@ -1505,7 +1501,10 @@ mod tests {
         let held = thread::spawn(move || listener.accept().map(|(stream, _)| stream));
         let requester = DestinationTypeRequester {
             shared_client: true,
-            shared_rpc: Some((RpcAddr::Tcp("127.0.0.1".into(), port), [0x11; 32])),
+            shared_rpc: Some(SharedInstanceRpc {
+                addr: RpcAddr::Tcp("127.0.0.1".into(), port),
+                auth_key: [0x11; 32],
+            }),
             registered: AtomicBool::new(true),
             ..Default::default()
         };
