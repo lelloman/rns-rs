@@ -17,11 +17,11 @@ use crate::{bridge, config, encode, server, state};
 /// Run `rns-ctl http` in the foreground: start the node (or attach to
 /// `rnsd` in daemon mode) and serve the control plane until interrupted. Exits
 /// with status 1 if it cannot start.
-pub fn run(args: Args) {
-    if let Err(err) = run_embedded(args, HttpRunOptions::standalone()) {
+pub fn run(args: Args) -> rns_cli::exit::Status {
+    run_embedded(args, HttpRunOptions::standalone()).map_err(|err| {
         eprintln!("rns-ctl http: {}", err);
-        std::process::exit(1);
-    }
+        rns_cli::exit::Exit::FAILURE
+    })
 }
 
 /// Process-wide side effects the HTTP control plane may take on when it

@@ -5,10 +5,11 @@
 use rns_core::encoding::hex;
 use std::io::Write;
 use std::path::Path;
-use std::process;
+use std::process::ExitCode;
 use std::time::Duration;
 
 use crate::args::{Args, Opt, OptionSpec};
+use crate::exit::{self, Exit, Status};
 use crate::format::{
     prettycost, python_float, python_json, upstream_prettytime, upstream_prettytime_compact,
 };
@@ -56,9 +57,13 @@ pub const OPTIONS: OptionSpec = OptionSpec {
 };
 
 /// The `rnpath` binary: options from the command line.
-pub fn main() {
+pub fn main() -> ExitCode {
     crate::stdout::exit_quietly_on_closed_stdout();
-    run_with_args(Args::parse_spec(&OPTIONS), "rnpath", "rnpath");
+    exit::exit_code(run_with_args(
+        Args::parse_spec(&OPTIONS),
+        "rnpath",
+        "rnpath",
+    ))
 }
 
 /// The destination a flag such as `-d` acts on: upstream's positional
@@ -75,18 +80,18 @@ fn flag_target(args: &Args, short: &str) -> Option<String> {
 /// printed in usage and errors (e.g. `rns-ctl rnpath`), `version_name` the one
 /// printed by `--version`.
 ///
-/// Blocks until the command is done, and exits the process itself on an
-/// argument error or a failure, with upstream's exit status.
-pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
+/// Blocks until the command is done, and gives upstream's exit status on a
+/// failure; exits the process itself on an argument error.
+pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) -> Status {
     crate::argparse::enforce(&args, "rnpath", usage_name);
     if args.has("version") {
         println!("{} {}", version_name, VERSION);
-        return;
+        return Ok(());
     }
 
     if args.has("help") || args.has("h") {
         print_usage(usage_name);
-        return;
+        return Ok(());
     }
 
     // `RNS.Reticulum(configdir, loglevel=3+verbosity)`.
@@ -137,7 +142,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         println!();
         print_usage(usage_name);
         println!();
-        return;
+        return Ok(());
     }
     crate::pylog::set_loglevel(crate::pylog::LOG_NOTICE + i32::from(args.verbosity));
 
@@ -182,7 +187,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
                 min_value,
             },
         };
-        remote_path(
+        return remote_path(
             remote,
             management_identity,
             config_path.as_deref(),
@@ -192,19 +197,17 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             list_filter.as_deref(),
             action,
         );
-        return;
     }
 
     // upstream's `-p <identity hash> [filter]`: the blackhole list that
     // transport instance publishes.
     if remote_blackholed && !show_blackholed {
-        published_blackhole_list(
+        return published_blackhole_list(
             config_path.as_deref(),
             destination.as_deref(),
             list_filter.as_deref(),
             remote_timeout,
         );
-        return;
     }
 
     let LocalInstance {
@@ -212,24 +215,24 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         paths,
         rpc,
         node,
-    } = LocalInstance::open(config_path.as_deref());
+    } = LocalInstance::open(config_path.as_deref())?;
 
     let mut client = match rpc.connect() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Could not connect to rnsd: {}", e);
-            process::exit(1);
+            return Err(Exit::FAILURE);
         }
     };
 
     // In upstream's order, for invocations that combine them.
     if show_blackholed {
         let local = client_transport_identity(&rns_config, &paths);
-        show_blackholed_list(&mut client, local.as_ref(), destination.as_deref());
+        show_blackholed_list(&mut client, local.as_ref(), destination.as_deref())?;
     } else if let Some(hash_str) = blackhole_hash {
-        do_blackhole(&mut client, &hash_str, duration_hours, reason);
+        do_blackhole(&mut client, &hash_str, duration_hours, reason)?;
     } else if let Some(hash_str) = unblackhole_hash {
-        do_unblackhole(&mut client, &hash_str);
+        do_unblackhole(&mut client, &hash_str)?;
     } else if analyze {
         drop(client);
         let status = analyze_tables(
@@ -240,9 +243,9 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         if let Some(node) = node {
             node.shutdown();
         }
-        process::exit(status);
+        return Err(Exit(status));
     } else if show_table {
-        let destination = destination_filter(destination.as_deref());
+        let destination = destination_filter(destination.as_deref())?;
         let filters = PathFilters {
             active,
             vias,
@@ -256,37 +259,37 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             show_usage,
             filters,
             destination,
-        );
+        )?;
     } else if show_rates {
-        let destination = destination_filter(destination.as_deref());
-        show_rate_table(&mut client, json_output, destination);
+        let destination = destination_filter(destination.as_deref())?;
+        show_rate_table(&mut client, json_output, destination)?;
     } else if drop_queues {
-        drop_announce_queues(&mut client);
+        drop_announce_queues(&mut client)?;
     } else if let Some(hash_str) = drop_hash {
-        drop_path(&mut client, &hash_str);
+        drop_path(&mut client, &hash_str)?;
     } else if let Some(hash_str) = drop_via {
-        drop_all_via(&mut client, &hash_str);
+        drop_all_via(&mut client, &hash_str)?;
     } else if let Some(hash_str) = destination {
         let timeout = args
             .get("w")
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(rns_core::constants::PATH_REQUEST_TIMEOUT);
         drop(client);
-        let connect = || match rpc.connect() {
-            Ok(c) => c,
-            Err(e) => {
+        let connect = || {
+            rpc.connect().map_err(|e| {
                 eprintln!("Could not connect to rnsd: {}", e);
-                process::exit(1);
-            }
+                Exit::FAILURE
+            })
         };
         // The next hop and its interface come from the instance.
-        lookup_path(&connect, node.as_ref(), &hash_str, timeout);
+        lookup_path(&connect, node.as_ref(), &hash_str, timeout)?;
     } else {
         print_usage(usage_name);
     }
     if let Some(node) = node {
         node.shutdown();
     }
+    Ok(())
 }
 
 /// One of the shared instance RPC calls `rnpath -A` makes, each on its own
@@ -366,8 +369,8 @@ struct LocalInstance {
 
 impl LocalInstance {
     /// Load the config in `config_path` and connect a client to the shared
-    /// instance; exits on an error.
-    fn open(config_path: Option<&str>) -> LocalInstance {
+    /// instance; prints the error and gives status 1 on one.
+    fn open(config_path: Option<&str>) -> Result<LocalInstance, Exit> {
         let config_dir = storage::resolve_config_dir(config_path.map(Path::new));
         let shared_instance::LocalInstance {
             config: rns_config,
@@ -377,7 +380,7 @@ impl LocalInstance {
             Ok(instance) => instance,
             Err(e) => {
                 eprintln!("{e}");
-                process::exit(1);
+                return Err(Exit::FAILURE);
             }
         };
 
@@ -392,12 +395,12 @@ impl LocalInstance {
             node.wants_destination_type("rnstransport.remote.management");
             node.wants_destination_type("rnstransport.info.blackhole");
         }
-        LocalInstance {
+        Ok(LocalInstance {
             rns_config,
             paths,
             rpc,
             node,
-        }
+        })
     }
 }
 
@@ -422,14 +425,16 @@ fn parse_destination(hash_str: &str) -> Result<[u8; 16], &'static str> {
 }
 
 /// The destination argument of a table view, or upstream's message and
-/// exit.
-fn destination_filter(destination: Option<&str>) -> Option<[u8; 16]> {
-    destination.map(|hash_str| {
-        parse_destination(hash_str).unwrap_or_else(|message| {
-            println!("{message}");
-            process::exit(1);
+/// status 1.
+fn destination_filter(destination: Option<&str>) -> Result<Option<[u8; 16]>, Exit> {
+    destination
+        .map(|hash_str| {
+            parse_destination(hash_str).map_err(|message| {
+                println!("{message}");
+                Exit::FAILURE
+            })
         })
-    })
+        .transpose()
 }
 
 /// A Python number (bools are ints there).
@@ -473,12 +478,14 @@ struct Rendered {
 }
 
 impl Rendered {
-    fn print_and_exit(self) {
+    /// Print the text; a status other than 0 stops the tool with it.
+    fn print(self) -> Status {
         print!("{}", self.text);
         let _ = std::io::stdout().flush();
         if self.status != 0 {
-            process::exit(self.status);
+            return Err(Exit(self.status));
         }
+        Ok(())
     }
 }
 
@@ -489,7 +496,7 @@ fn show_path_table(
     show_usage: bool,
     filters: PathFilters,
     destination: Option<[u8; 16]>,
-) {
+) -> Status {
     let max_hops_val = match max_hops {
         Some(h) => PickleValue::Int(h as i64),
         None => PickleValue::None,
@@ -505,13 +512,13 @@ fn show_path_table(
         Ok(r) => r,
         Err(e) => {
             eprintln!("RPC error: {}", e);
-            process::exit(1);
+            return Err(Exit::FAILURE);
         }
     };
 
     if response.as_list().is_none() {
         eprintln!("Unexpected response format");
-        process::exit(1);
+        return Err(Exit::FAILURE);
     }
     let view = TableView {
         destination,
@@ -520,7 +527,7 @@ fn show_path_table(
         sort: true,
         filters,
     };
-    render_path_table(&response, &view, rns_net::time::now()).print_and_exit();
+    render_path_table(&response, &view, rns_net::time::now()).print()
 }
 
 /// What a table view shows, as upstream's options choose it.
@@ -694,7 +701,11 @@ fn path_costs(entry: &PickleValue) -> String {
     )
 }
 
-fn show_rate_table(client: &mut RpcClient, json_output: bool, destination: Option<[u8; 16]>) {
+fn show_rate_table(
+    client: &mut RpcClient,
+    json_output: bool,
+    destination: Option<[u8; 16]>,
+) -> Status {
     let response = match client.call(&PickleValue::Dict(vec![(
         PickleValue::String("get".into()),
         PickleValue::String("rate_table".into()),
@@ -702,7 +713,7 @@ fn show_rate_table(client: &mut RpcClient, json_output: bool, destination: Optio
         Ok(r) => r,
         Err(e) => {
             eprintln!("RPC error: {}", e);
-            process::exit(1);
+            return Err(Exit::FAILURE);
         }
     };
 
@@ -713,7 +724,7 @@ fn show_rate_table(client: &mut RpcClient, json_output: bool, destination: Optio
         sort: true,
         filters: PathFilters::default(),
     };
-    render_rate_table(&response, &view, rns_net::time::now()).print_and_exit();
+    render_rate_table(&response, &view, rns_net::time::now()).print()
 }
 
 /// upstream's `rnpath -r`: by time last heard, `<hash> last heard 5
@@ -867,7 +878,7 @@ fn show_blackholed_list(
     client: &mut RpcClient,
     local_identity: Option<&[u8; 16]>,
     filter: Option<&str>,
-) {
+) -> Status {
     // Upstream's call first; an older rns-rs instance only knows `blackholed`.
     let response = match client.call(&PickleValue::Dict(vec![(
         PickleValue::String("get".into()),
@@ -883,7 +894,7 @@ fn show_blackholed_list(
         Ok(response) => render_blackholed_list(&response, local_identity, filter),
         Err(e) => {
             println!("Could not get blackholed identities from RNS instance: {e}");
-            process::exit(20);
+            Err(Exit(20))
         }
     }
 }
@@ -932,12 +943,15 @@ fn render_blackholed_list(
     response: &PickleValue,
     local_identity: Option<&[u8; 16]>,
     filter: Option<&str>,
-) {
+) -> Status {
     match blackholed_lines(response, local_identity, filter, rns_net::time::now()) {
-        Some(lines) => lines.iter().for_each(|line| println!("{line}")),
+        Some(lines) => {
+            lines.iter().for_each(|line| println!("{line}"));
+            Ok(())
+        }
         None => {
             println!("No blackholed identity data available");
-            process::exit(20);
+            Err(Exit(20))
         }
     }
 }
@@ -1029,12 +1043,12 @@ fn do_blackhole(
     hash_str: &str,
     duration_hours: Option<f64>,
     reason: Option<String>,
-) {
+) -> Status {
     let hash_bytes = match parse_hash(Some(hash_str)) {
         Ok(hash) => hash.to_vec(),
         Err(e) => {
             println!("Could not blackhole identity: {e}");
-            process::exit(20);
+            return Err(Exit(20));
         }
     };
     // Upstream's `blackhole_identity`, with an absolute expiry time.
@@ -1064,17 +1078,18 @@ fn do_blackhole(
         Ok(_) => println!("Could not blackhole identity {}", hex(&hash_bytes)),
         Err(e) => {
             eprintln!("RPC error: {}", e);
-            process::exit(1);
+            return Err(Exit::FAILURE);
         }
     }
+    Ok(())
 }
 
-fn do_unblackhole(client: &mut RpcClient, hash_str: &str) {
+fn do_unblackhole(client: &mut RpcClient, hash_str: &str) -> Status {
     let hash_bytes = match parse_hash(Some(hash_str)) {
         Ok(hash) => hash.to_vec(),
         Err(e) => {
             println!("Could not unblackhole identity: {e}");
-            process::exit(20);
+            return Err(Exit(20));
         }
     };
     match client.call(&PickleValue::Dict(vec![(
@@ -1090,15 +1105,20 @@ fn do_unblackhole(client: &mut RpcClient, hash_str: &str) {
         Ok(_) => println!("Could not unblackhole identity {}", hex(&hash_bytes)),
         Err(e) => {
             eprintln!("RPC error: {}", e);
-            process::exit(1);
+            return Err(Exit::FAILURE);
         }
     }
+    Ok(())
 }
 
 /// One RPC `get` for a destination, as upstream's shared-instance clients
 /// make it.
-fn get_for(connect: &dyn Fn() -> RpcClient, what: &str, dest_hash: &[u8; 16]) -> PickleValue {
-    match connect().call(&PickleValue::Dict(vec![
+fn get_for(
+    connect: &dyn Fn() -> Result<RpcClient, Exit>,
+    what: &str,
+    dest_hash: &[u8; 16],
+) -> Result<PickleValue, Exit> {
+    match connect()?.call(&PickleValue::Dict(vec![
         (
             PickleValue::String("get".into()),
             PickleValue::String(what.into()),
@@ -1108,16 +1128,19 @@ fn get_for(connect: &dyn Fn() -> RpcClient, what: &str, dest_hash: &[u8; 16]) ->
             PickleValue::Bytes(dest_hash.to_vec()),
         ),
     ])) {
-        Ok(r) => r,
+        Ok(r) => Ok(r),
         Err(e) => {
             eprintln!("RPC error: {}", e);
-            process::exit(1);
+            Err(Exit::FAILURE)
         }
     }
 }
 
-fn hops_to(connect: &dyn Fn() -> RpcClient, dest_hash: &[u8; 16]) -> i64 {
-    let table = connect()
+fn hops_to(
+    connect: &dyn Fn() -> Result<RpcClient, Exit>,
+    dest_hash: &[u8; 16],
+) -> Result<i64, Exit> {
+    let table = connect()?
         .call(&PickleValue::Dict(vec![
             (
                 PickleValue::String("get".into()),
@@ -1126,7 +1149,7 @@ fn hops_to(connect: &dyn Fn() -> RpcClient, dest_hash: &[u8; 16]) -> i64 {
             (PickleValue::String("max_hops".into()), PickleValue::None),
         ]))
         .unwrap_or(PickleValue::None);
-    table
+    Ok(table
         .as_list()
         .and_then(|entries| {
             entries.iter().find(|entry| {
@@ -1134,7 +1157,7 @@ fn hops_to(connect: &dyn Fn() -> RpcClient, dest_hash: &[u8; 16]) -> i64 {
             })
         })
         .and_then(|entry| entry.get("hops").and_then(|v| v.as_int()))
-        .unwrap_or(rns_core::constants::PATHFINDER_M as i64)
+        .unwrap_or(rns_core::constants::PATHFINDER_M as i64))
 }
 
 /// upstream's `rnpath <destination>`: request a path unless one is known,
@@ -1146,38 +1169,40 @@ struct NoCallbacks;
 impl rns_net::Callbacks for NoCallbacks {}
 
 fn lookup_path(
-    connect: &dyn Fn() -> RpcClient,
+    connect: &dyn Fn() -> Result<RpcClient, Exit>,
     node: Option<&rns_net::RnsNode>,
     hash_str: &str,
     timeout: f64,
-) {
+) -> Status {
     if hash_str.len() != 32 {
         println!("Destination length is invalid, must be 32 hexadecimal characters (16 bytes).");
-        process::exit(1);
+        return Err(Exit::FAILURE);
     }
     let Some(hash_bytes) = parse_hex_hash(hash_str) else {
         println!("Invalid destination entered. Check your input.");
-        process::exit(1);
+        return Err(Exit::FAILURE);
     };
     let mut dest_hash = [0u8; 16];
     dest_hash.copy_from_slice(&hash_bytes);
     let pretty = pretty(&dest_hash);
-    let has_path = || match node {
-        Some(node) => node
-            .has_path(&rns_net::DestHash(dest_hash))
-            .unwrap_or(false),
-        None => get_for(connect, "next_hop", &dest_hash)
-            .as_bytes()
-            .is_some(),
+    let has_path = || -> Result<bool, Exit> {
+        Ok(match node {
+            Some(node) => node
+                .has_path(&rns_net::DestHash(dest_hash))
+                .unwrap_or(false),
+            None => get_for(connect, "next_hop", &dest_hash)?
+                .as_bytes()
+                .is_some(),
+        })
     };
 
-    if !has_path() {
+    if !has_path()? {
         match node {
             Some(node) => {
                 let _ = node.request_path(&rns_net::DestHash(dest_hash));
             }
             None => {
-                let _ = connect().call(&PickleValue::Dict(vec![(
+                let _ = connect()?.call(&PickleValue::Dict(vec![(
                     PickleValue::String("request_path".into()),
                     PickleValue::Bytes(dest_hash.to_vec()),
                 )]));
@@ -1187,7 +1212,7 @@ fn lookup_path(
         let _ = std::io::stdout().flush();
     }
 
-    let medium = connect()
+    let medium = connect()?
         .call(&PickleValue::Dict(vec![(
             PickleValue::String("get".into()),
             PickleValue::String("medium_path_timeout".into()),
@@ -1204,14 +1229,14 @@ fn lookup_path(
         .unwrap_or(now + std::time::Duration::from_secs(u32::MAX as u64));
     let syms: Vec<char> = "⢄⢂⢁⡁⡈⡐⡠".chars().collect();
     let mut i = 0;
-    while !has_path() && std::time::Instant::now() < limit {
+    while !has_path()? && std::time::Instant::now() < limit {
         std::thread::sleep(std::time::Duration::from_millis(100));
         print!("\x08\x08{} ", syms[i]);
         let _ = std::io::stdout().flush();
         i = (i + 1) % syms.len();
     }
 
-    if has_path() {
+    if has_path()? {
         let hops = match node {
             Some(node) => node
                 .hops_to(&rns_net::DestHash(dest_hash))
@@ -1219,15 +1244,15 @@ fn lookup_path(
                 .flatten()
                 .map(i64::from)
                 .unwrap_or(rns_core::constants::PATHFINDER_M as i64),
-            None => hops_to(connect, &dest_hash),
+            None => hops_to(connect, &dest_hash)?,
         };
-        let next_hop = get_for(connect, "next_hop", &dest_hash);
+        let next_hop = get_for(connect, "next_hop", &dest_hash)?;
         let Some(next_hop) = next_hop.as_bytes() else {
             println!("\r                                                       \rError: Invalid path data returned");
-            process::exit(1);
+            return Err(Exit::FAILURE);
         };
         let next_hop = crate::pyfmt::prettyhexrep(next_hop);
-        let interface = get_for(connect, "next_hop_if_name", &dest_hash)
+        let interface = get_for(connect, "next_hop_if_name", &dest_hash)?
             .as_str()
             .map(str::to_string)
             .unwrap_or_else(|| "None".into());
@@ -1235,17 +1260,18 @@ fn lookup_path(
         println!(
             "\rPath found, destination {pretty} is {hops} hop{ms} away via {next_hop} on {interface}"
         );
+        Ok(())
     } else {
         println!("\r                                                       \rPath not found");
-        process::exit(1);
+        Err(Exit::FAILURE)
     }
 }
 
-fn drop_path(client: &mut RpcClient, hash_str: &str) {
-    let dest_hash = parse_destination(hash_str).unwrap_or_else(|message| {
+fn drop_path(client: &mut RpcClient, hash_str: &str) -> Status {
+    let dest_hash = parse_destination(hash_str).map_err(|message| {
         println!("{message}");
-        process::exit(1);
-    });
+        Exit::FAILURE
+    })?;
     let response = match client.call(&PickleValue::Dict(vec![
         (
             PickleValue::String("drop".into()),
@@ -1259,26 +1285,27 @@ fn drop_path(client: &mut RpcClient, hash_str: &str) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("RPC error: {}", e);
-            process::exit(1);
+            return Err(Exit::FAILURE);
         }
     };
 
     if truthy(&response) {
         println!("Dropped path to {}", pretty(&dest_hash));
+        Ok(())
     } else {
         println!(
             "Unable to drop path to {}. Does it exist?",
             pretty(&dest_hash)
         );
-        process::exit(1);
+        Err(Exit::FAILURE)
     }
 }
 
-fn drop_all_via(client: &mut RpcClient, hash_str: &str) {
-    let transport_hash = parse_destination(hash_str).unwrap_or_else(|message| {
+fn drop_all_via(client: &mut RpcClient, hash_str: &str) -> Status {
+    let transport_hash = parse_destination(hash_str).map_err(|message| {
         println!("{message}");
-        process::exit(1);
-    });
+        Exit::FAILURE
+    })?;
     let response = match client.call(&PickleValue::Dict(vec![
         (
             PickleValue::String("drop".into()),
@@ -1292,31 +1319,33 @@ fn drop_all_via(client: &mut RpcClient, hash_str: &str) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("RPC error: {}", e);
-            process::exit(1);
+            return Err(Exit::FAILURE);
         }
     };
 
     // upstream reports the number of paths dropped only as success.
     if truthy(&response) {
         println!("Dropped all paths via {}", pretty(&transport_hash));
+        Ok(())
     } else {
         println!(
             "Unable to drop paths via {}. Does the transport instance exist?",
             pretty(&transport_hash)
         );
-        process::exit(1);
+        Err(Exit::FAILURE)
     }
 }
 
-fn drop_announce_queues(client: &mut RpcClient) {
+fn drop_announce_queues(client: &mut RpcClient) -> Status {
     println!("Dropping announce queues on all interfaces...");
     if let Err(e) = client.call(&PickleValue::Dict(vec![(
         PickleValue::String("drop".into()),
         PickleValue::String("announce_queues".into()),
     )])) {
         eprintln!("RPC error: {}", e);
-        process::exit(1);
+        return Err(Exit::FAILURE);
     }
+    Ok(())
 }
 
 /// upstream's `output_rst_str`: blank the line the progress was on.
@@ -1368,7 +1397,7 @@ fn remote_client(
     config_path: Option<&str>,
     management_identity: Option<rns_crypto::identity::Identity>,
     remote_timeout: f64,
-) -> rns_net::remote_management::RemoteManagementClient {
+) -> Result<rns_net::remote_management::RemoteManagementClient, Exit> {
     let timeout = Duration::try_from_secs_f64(remote_timeout.max(0.2)).unwrap_or(Duration::MAX);
     let mut client = match rns_net::remote_management::RemoteManagementClient::connect_with_identity(
         config_path.map(Path::new),
@@ -1378,7 +1407,7 @@ fn remote_client(
         Ok(client) => client,
         Err(e) => {
             eprintln!("Could not connect to rnsd: {e}");
-            process::exit(1);
+            return Err(Exit::FAILURE);
         }
     };
     let medium = client.medium_path_timeout().unwrap_or(0.0);
@@ -1386,12 +1415,12 @@ fn remote_client(
         Duration::try_from_secs_f64(remote_timeout.max(medium).max(0.2)).unwrap_or(Duration::MAX),
     );
     print_progress(&mut client);
-    client
+    Ok(client)
 }
 
 /// A failed remote request, reported as upstream's link callbacks and
-/// request checks report it, then exit.
-fn remote_failure(error: rns_net::remote_management::RemoteManagementError, failed: &str) -> ! {
+/// request checks report it, and the status to exit with.
+fn remote_failure(error: rns_net::remote_management::RemoteManagementError, failed: &str) -> Exit {
     use rns_net::remote_management::RemoteManagementError as E;
     let (message, code) = match error {
         E::PathTimeout(_) | E::RecallTimeout(_) => ("Path request timed out", 12),
@@ -1405,7 +1434,7 @@ fn remote_failure(error: rns_net::remote_management::RemoteManagementError, fail
         _ => (failed, 10),
     };
     println!("{RST}{message}");
-    process::exit(code);
+    Exit(code)
 }
 
 /// upstream's `-p <identity hash> [filter]` without `-R`: request the
@@ -1416,16 +1445,16 @@ fn published_blackhole_list(
     destination: Option<&str>,
     filter: Option<&str>,
     remote_timeout: f64,
-) {
+) -> Status {
     use rns_net::remote_management::RemotePurpose;
-    let identity_hash = parse_hash(destination).unwrap_or_else(|e| {
+    let identity_hash = parse_hash(destination).map_err(|e| {
         println!("{e}");
-        process::exit(20);
-    });
-    let mut client = remote_client(config_path, None, remote_timeout);
+        Exit(20)
+    })?;
+    let mut client = remote_client(config_path, None, remote_timeout)?;
     let failed = "The remote request failed.";
     if let Err(e) = client.open_link(RemotePurpose::Blackhole, identity_hash) {
-        remote_failure(e, failed);
+        return Err(remote_failure(e, failed));
     }
     say(&format!("{RST}Sending request... "));
     let response = client
@@ -1434,12 +1463,12 @@ fn published_blackhole_list(
             "/list",
             &rns_core::msgpack::pack(&rns_core::msgpack::Value::Nil),
         )
-        .unwrap_or_else(|e| remote_failure(e, failed));
-    show_published_list(&response, config_path, filter);
+        .map_err(|e| remote_failure(e, failed))?;
+    show_published_list(&response, config_path, filter)
 }
 
 /// A `/list` response: the blackhole dict, or upstream's failure.
-fn show_published_list(response: &[u8], config_path: Option<&str>, filter: Option<&str>) {
+fn show_published_list(response: &[u8], config_path: Option<&str>, filter: Option<&str>) -> Status {
     let list = rns_core::msgpack::unpack_exact(response)
         .ok()
         .map(|value| rns_net::remote_management::msgpack_to_pickle(&value));
@@ -1447,11 +1476,11 @@ fn show_published_list(response: &[u8], config_path: Option<&str>, filter: Optio
         Some(list @ PickleValue::Dict(_)) => {
             say(RST);
             let local = client_transport_identity_at(config_path);
-            render_blackholed_list(&list, local.as_ref(), filter);
+            render_blackholed_list(&list, local.as_ref(), filter)
         }
         _ => {
             println!("{RST}The remote request failed.");
-            process::exit(10);
+            Err(Exit(10))
         }
     }
 }
@@ -1471,58 +1500,58 @@ fn remote_path(
     view: &TableView,
     list_filter: Option<&str>,
     action: RemoteAction,
-) {
+) -> Status {
     use rns_core::msgpack::{self, Value};
     use rns_net::remote_management::RemotePurpose;
 
-    let fail = |message: &str| -> ! {
+    let fail = |message: &str| -> Status {
         println!("{message}");
-        process::exit(20);
+        Err(Exit(20))
     };
     let transport_hash = match parse_destination(hash_str) {
         Ok(hash) => hash,
-        Err(message) => fail(message),
+        Err(message) => return fail(message),
     };
     let Some(identity_path) = management_identity else {
-        fail("expected str, bytes or os.PathLike object, not NoneType");
+        return fail("expected str, bytes or os.PathLike object, not NoneType");
     };
     let Some(identity) = crate::pylog::identity_from_file(&crate::pylog::expanduser(identity_path))
     else {
-        fail(&format!(
+        return fail(&format!(
             "Could not load management identity from {identity_path}"
         ));
     };
-    let mut client = remote_client(config_path, Some(identity), remote_timeout);
+    let mut client = remote_client(config_path, Some(identity), remote_timeout)?;
     let auth_failed = "The remote request failed. Likely authentication failure.";
     if let Err(e) = client.open_link(RemotePurpose::Management, transport_hash) {
-        remote_failure(e, auth_failed);
+        return Err(remote_failure(e, auth_failed));
     }
 
     let request = |client: &mut rns_net::remote_management::RemoteManagementClient,
                    path: &str,
                    data: Value,
                    failed: &str|
-     -> Vec<u8> {
+     -> Result<Vec<u8>, Exit> {
         say(&format!("{RST}Sending request... "));
         client
             .request_on(RemotePurpose::Management, path, &msgpack::pack(&data))
-            .unwrap_or_else(|e| remote_failure(e, failed))
+            .map_err(|e| remote_failure(e, failed))
     };
     let table = |client: &mut rns_net::remote_management::RemoteManagementClient,
                  data: Value|
-     -> PickleValue {
-        let response = request(client, "/path", data, auth_failed);
+     -> Result<PickleValue, Exit> {
+        let response = request(client, "/path", data, auth_failed)?;
         let value = msgpack::unpack_exact(&response)
             .ok()
             .map(|value| rns_net::remote_management::msgpack_to_pickle(&value));
         match value {
             Some(value) if truthy(&value) => {
                 say(RST);
-                value
+                Ok(value)
             }
             _ => {
                 println!("{RST}{auth_failed}");
-                process::exit(10);
+                Err(Exit(10))
             }
         }
     };
@@ -1531,51 +1560,51 @@ fn remote_path(
     match action {
         RemoteAction::Blackholed => {
             println!("{RST}Listing blackholed identities on remote instances not yet implemented");
-            process::exit(255);
+            Err(Exit(255))
         }
         RemoteAction::PublishedList(destination) => {
-            let identity_hash = parse_hash(destination.as_deref()).unwrap_or_else(|e| {
+            let identity_hash = parse_hash(destination.as_deref()).map_err(|e| {
                 println!("{e}");
-                process::exit(20);
-            });
+                Exit(20)
+            })?;
             let blackhole = rns_net::management::blackhole_dest_hash(&identity_hash);
             if let Err(e) = client.locate(blackhole) {
-                remote_failure(e, "The remote request failed.");
+                return Err(remote_failure(e, "The remote request failed."));
             }
             let response = request(
                 &mut client,
                 "/list",
                 Value::Nil,
                 "The remote request failed.",
-            );
-            show_published_list(&response, config_path, list_filter);
+            )?;
+            show_published_list(&response, config_path, list_filter)
         }
         RemoteAction::Table(destination) => {
-            let destination = destination_filter(destination.as_deref());
+            let destination = destination_filter(destination.as_deref())?;
             let data = Value::Array(vec![
                 Value::Str("table".into()),
                 hash_value(destination),
                 max_hops.map_or(Value::Nil, |h| Value::UInt(h.into())),
             ]);
-            let response = table(&mut client, data);
+            let response = table(&mut client, data)?;
             let view = TableView {
                 destination,
                 ..*view
             };
-            render_path_table(&response, &view, rns_net::time::now()).print_and_exit();
+            render_path_table(&response, &view, rns_net::time::now()).print()
         }
         RemoteAction::Rates(destination) => {
-            let destination = destination_filter(destination.as_deref());
+            let destination = destination_filter(destination.as_deref())?;
             let data = Value::Array(vec![Value::Str("rates".into()), hash_value(destination)]);
-            let response = table(&mut client, data);
+            let response = table(&mut client, data)?;
             let view = TableView {
                 destination,
                 ..*view
             };
-            render_rate_table(&response, &view, rns_net::time::now()).print_and_exit();
+            render_rate_table(&response, &view, rns_net::time::now()).print()
         }
         RemoteAction::Analyze(capture) => {
-            let local = LocalInstance::open(config_path);
+            let local = LocalInstance::open(config_path)?;
             let status = analyze_tables(
                 &|| local.rpc.connect(),
                 capture.as_deref(),
@@ -1584,11 +1613,11 @@ fn remote_path(
             if let Some(node) = local.node {
                 node.shutdown();
             }
-            process::exit(status);
+            Err(Exit(status))
         }
         RemoteAction::Unsupported(message) => {
             println!("{RST}{message}");
-            process::exit(255);
+            Err(Exit(255))
         }
     }
 }

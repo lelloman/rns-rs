@@ -3,10 +3,11 @@
 //! Connects to a running rnsd via RPC and displays interface statistics.
 
 use std::path::Path;
-use std::process;
+use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use crate::args::{Args, Opt, OptionSpec};
+use crate::exit::{self, Exit, Status};
 use crate::pyfmt::{prettyhexrep, Num};
 use crate::rnstatus_view::{
     render, render_discovered, render_discovered_json, upstream_discovery_record, Extras,
@@ -60,27 +61,31 @@ pub const OPTIONS: OptionSpec = OptionSpec {
 };
 
 /// The `rnstatus` binary: options from the command line.
-pub fn main() {
+pub fn main() -> ExitCode {
     crate::stdout::exit_quietly_on_closed_stdout();
-    run_with_args(Args::parse_spec(&OPTIONS), "rnstatus", "rnstatus");
+    exit::exit_code(run_with_args(
+        Args::parse_spec(&OPTIONS),
+        "rnstatus",
+        "rnstatus",
+    ))
 }
 
 /// Runs `rnstatus` on already parsed `args`. `usage_name` is the program name
 /// printed in usage and errors (e.g. `rns-ctl rnstatus`), `version_name` the one
 /// printed by `--version`.
 ///
-/// Blocks until the command is done, and exits the process itself on an
-/// argument error or a failure, with upstream's exit status.
-pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
+/// Blocks until the command is done, and gives upstream's exit status on a
+/// failure; exits the process itself on an argument error.
+pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) -> Status {
     crate::argparse::enforce(&args, "rnstatus", usage_name);
     if args.has("version") {
         println!("{} {}", version_name, VERSION);
-        return;
+        return Ok(());
     }
 
     if args.has("help") || args.has("h") {
         print_usage(usage_name);
-        return;
+        return Ok(());
     }
 
     // `RNS.Reticulum(configdir, loglevel=3+verbosity)`.
@@ -144,12 +149,12 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     };
     if management_actions.len() > 1 || (remote_hash.is_some() && !management_actions.is_empty()) {
         eprintln!("Choose one local interface management action");
-        process::exit(1);
+        return Err(Exit::FAILURE);
     }
 
     // Remote management query via -R flag
     if let Some(ref hash_str) = remote_hash {
-        remote_status(
+        return remote_status(
             hash_str,
             management_identity,
             config_path.as_deref(),
@@ -160,7 +165,6 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             &view,
             show_profiling,
         );
-        return;
     }
 
     // Discovered interfaces query via -d or -D flag
@@ -172,14 +176,14 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             Ok(instance) => instance,
             Err(e) => {
                 eprintln!("{e}");
-                process::exit(1);
+                return Err(Exit::FAILURE);
             }
         };
 
         let _instance_client = attach_to_instance(&config_dir);
         let Ok(mut client) = rpc.connect() else {
             println!("No shared RNS instance available to get status from");
-            process::exit(1);
+            return Err(Exit::FAILURE);
         };
 
         show_discovered_interfaces(
@@ -191,7 +195,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             filter.as_deref(),
             &paths.discovered_interfaces,
         );
-        return;
+        return Ok(());
     }
 
     // Load config to get RPC address and auth key
@@ -201,7 +205,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         Ok(instance) => instance.rpc,
         Err(e) => {
             eprintln!("{e}");
-            process::exit(1);
+            return Err(Exit::FAILURE);
         }
     };
 
@@ -209,7 +213,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     if let Some((operation, name)) = management_actions.first().copied() {
         let Ok(mut client) = rpc.connect() else {
             println!("No shared RNS instance available to get status from");
-            process::exit(1);
+            return Err(Exit::FAILURE);
         };
         let rpc_operation = format!("{operation}_interface");
         let request = PickleValue::Dict(vec![
@@ -226,13 +230,13 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         match client.call(&request) {
             Ok(PickleValue::Bool(true)) => {
                 println!("Interface {name} was {operation}ed");
-                return;
+                return Ok(());
             }
             Ok(PickleValue::Bool(false)) => println!("Could not {operation} interface {name}"),
             Ok(PickleValue::None) => println!("The interface {name} does not exist"),
             _ => println!("Unknown error while {operation}ing interface {name}"),
         }
-        process::exit(1);
+        return Err(Exit::FAILURE);
     }
 
     // Like upstream's client, each query is a connection of its own.
@@ -244,7 +248,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     };
     if rpc.connect().is_err() {
         println!("No shared RNS instance available to get status from");
-        process::exit(1);
+        return Err(Exit::FAILURE);
     }
 
     loop {
@@ -271,7 +275,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
                     continue;
                 }
                 println!("Could not get RNS status");
-                process::exit(2);
+                return Err(Exit(2));
             }
         };
 
@@ -302,6 +306,7 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             monitor_started.elapsed(),
         ));
     }
+    Ok(())
 }
 
 struct NoCallbacks;
@@ -390,22 +395,24 @@ fn remote_status(
     monitor_interval: f64,
     view: &ViewOptions,
     show_profiling: bool,
-) {
+) -> Status {
     use rns_net::remote_management::{RemoteManagementError as E, RemoteProgress};
 
-    let fail = |message: &str| -> ! {
+    let fail = |message: &str| -> Status {
         println!("{message}");
-        process::exit(20);
+        Err(Exit(20))
     };
     let Some(identity_path) = management_identity else {
-        fail("Remote management requires an identity file. Use -i to specify the path to a management identity.");
+        return fail("Remote management requires an identity file. Use -i to specify the path to a management identity.");
     };
     if hash_str.chars().count() != 32 {
-        fail("Destination length is invalid, must be 32 hexadecimal characters (16 bytes).");
+        return fail(
+            "Destination length is invalid, must be 32 hexadecimal characters (16 bytes).",
+        );
     }
     let Ok(transport_hash) = rns_net::remote_management::parse_transport_identity_hash(hash_str)
     else {
-        fail("Invalid destination entered. Check your input.");
+        return fail("Invalid destination entered. Check your input.");
     };
     let identity_path = crate::app::expand_path(identity_path);
     let timeout = Duration::try_from_secs_f64(remote_timeout.max(0.2)).unwrap_or(Duration::MAX);
@@ -415,13 +422,15 @@ fn remote_status(
         timeout,
     ) {
         Ok(client) => client,
-        Err(E::IdentityLoad(_)) => fail(&format!(
-            "Could not load management identity from {}",
-            management_identity.unwrap_or_default()
-        )),
+        Err(E::IdentityLoad(_)) => {
+            return fail(&format!(
+                "Could not load management identity from {}",
+                management_identity.unwrap_or_default()
+            ))
+        }
         Err(_) => {
             println!("No shared RNS instance available to get status from");
-            process::exit(1);
+            return Err(Exit::FAILURE);
         }
     };
 
@@ -462,22 +471,22 @@ fn remote_status(
             Err(E::PathTimeout(_) | E::RecallTimeout(_)) => {
                 say("Path request timed out");
                 finish_frame(&out, monitor_mode);
-                process::exit(12);
+                return Err(Exit(12));
             }
             Err(E::LinkTimeout(_)) | Err(E::LinkClosed(Some(TeardownReason::Timeout))) => {
                 say("The link timed out, exiting now");
                 finish_frame(&out, monitor_mode);
-                process::exit(10);
+                return Err(Exit(10));
             }
             Err(E::LinkClosed(Some(TeardownReason::DestinationClosed))) => {
                 say("The link was closed by the server, exiting now");
                 finish_frame(&out, monitor_mode);
-                process::exit(10);
+                return Err(Exit(10));
             }
             Err(E::LinkClosed(_)) => {
                 say("Link closed unexpectedly, exiting now");
                 finish_frame(&out, monitor_mode);
-                process::exit(10);
+                return Err(Exit(10));
             }
             Err(E::RequestTimeout(_) | E::SendFailed) => {
                 say("The remote status request failed. Likely authentication failure.");
@@ -513,7 +522,7 @@ fn remote_status(
                     prettyhexrep(&transport_hash)
                 ));
                 if !monitor_mode {
-                    process::exit(2);
+                    return Err(Exit(2));
                 }
                 finish_frame(&out, monitor_mode);
             }
@@ -528,6 +537,7 @@ fn remote_status(
             monitor_started.elapsed(),
         ));
     }
+    Ok(())
 }
 
 /// In monitor mode, show what was buffered for this frame.

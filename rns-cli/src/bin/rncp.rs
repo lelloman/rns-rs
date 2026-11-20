@@ -1,4 +1,4 @@
-fn main() {
+fn main() -> std::process::ExitCode {
     rns_cli::stdout::exit_quietly_on_closed_stdout();
-    std::process::exit(rns_cli::rncp::main());
+    rns_cli::exit::code(rns_cli::rncp::main())
 }

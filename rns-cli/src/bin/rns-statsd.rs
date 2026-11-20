@@ -1,3 +1,3 @@
-fn main() {
-    rns_cli::statsd::main_entry();
+fn main() -> std::process::ExitCode {
+    rns_cli::statsd::main_entry()
 }

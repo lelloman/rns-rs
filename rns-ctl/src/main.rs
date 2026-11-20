@@ -1,8 +1,10 @@
+use std::process::ExitCode;
+
 use rns_cli::args::Args;
 use rns_ctl::cli;
 use rns_ctl::cmd;
 
-fn main() {
+fn main() -> ExitCode {
     rns_cli::stdout::exit_quietly_on_closed_stdout();
     let argv: Vec<String> = std::env::args().skip(1).collect();
 
@@ -25,7 +27,7 @@ fn main() {
     let top = cli::TOP.parse("rns-ctl", head.to_vec());
     if top.has("version") {
         println!("rns-ctl {}", env!("FULL_VERSION"));
-        return;
+        return ExitCode::SUCCESS;
     }
     let Some((command, tail)) = tail.split_first() else {
         cli::TOP.error(
@@ -44,7 +46,7 @@ fn main() {
         None => tail.to_vec(),
     };
 
-    match command.as_str() {
+    let status = match command.as_str() {
         "config" => cmd::config::run(cli::parse(&cli::CONFIG, "config", tail)),
         "backbone" => cmd::backbone::run(cli::parse(&cli::BACKBONE, "backbone", tail)),
         "http" => cmd::http::run(cli::parse(&cli::HTTP, "http", tail)),
@@ -68,5 +70,6 @@ fn main() {
                 ),
             );
         }
-    }
+    };
+    rns_cli::exit::exit_code(status)
 }

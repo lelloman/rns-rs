@@ -1,4 +1,5 @@
 use std::net::TcpListener;
+use std::process::ExitCode;
 use std::thread;
 
 use rns_cli::args::Args as CliArgs;
@@ -9,21 +10,21 @@ use rns_server::config::ServerConfig;
 use rns_server::control_plane::{install_config_bridge, new_supervised_state};
 use rns_server::supervisor::Supervisor;
 
-fn main() {
+fn main() -> ExitCode {
     let args = Args::parse();
 
     if let Some(role) = args.get("internal-role") {
-        run_internal_role(role);
+        return run_internal_role(role);
     }
 
     if args.has("version") {
         println!("rns-server {}", env!("FULL_VERSION"));
-        return;
+        return ExitCode::SUCCESS;
     }
 
     if args.has("help") || args.positional.is_empty() {
         print_help();
-        return;
+        return ExitCode::SUCCESS;
     }
 
     init_logging(&args);
@@ -33,15 +34,17 @@ fn main() {
         other => {
             eprintln!("Unknown subcommand: {}", other);
             print_help();
-            std::process::exit(1);
+            ExitCode::FAILURE
         }
     }
 }
 
-fn run_internal_role(role: &str) -> ! {
+fn run_internal_role(role: &str) -> ExitCode {
     let argv = sanitized_internal_argv();
     match role {
-        "rnsd" => rns_cli::rnsd::main_entry_from(CliArgs::parse_from(argv)),
+        "rnsd" => {
+            rns_cli::exit::exit_code(rns_cli::rnsd::main_entry_from(CliArgs::parse_from(argv)))
+        }
         #[cfg(any(
             feature = "rns-hooks-native",
             feature = "rns-hooks-wasm",
@@ -58,10 +61,9 @@ fn run_internal_role(role: &str) -> ! {
         "rns-statsd" => rns_cli::statsd::main_entry_from(rns_cli::statsd::parse_args(argv)),
         other => {
             eprintln!("rns-server: unknown internal role '{}'", other);
-            std::process::exit(1);
+            ExitCode::FAILURE
         }
     }
-    std::process::exit(0);
 }
 
 fn sanitized_internal_argv() -> Vec<String> {
@@ -77,12 +79,12 @@ fn sanitized_internal_argv() -> Vec<String> {
     sanitized
 }
 
-fn run_start(args: Args) {
+fn run_start(args: Args) -> ExitCode {
     let (shared_state, _control_tx, control_rx) = new_supervised_state();
     let config = ServerConfig::from_args(&args);
     if let Err(err) = config.ensure_runtime_bootstrap() {
         eprintln!("rns-server: {}", err);
-        std::process::exit(1);
+        return ExitCode::FAILURE;
     }
     install_config_bridge(&shared_state, &args, &config);
     let dry_run = args.has("dry-run");
@@ -95,7 +97,7 @@ fn run_start(args: Args) {
         if config.http_enabled() {
             println!("{}", config.control_http_command_line());
         }
-        return;
+        return ExitCode::SUCCESS;
     }
 
     let supervisor =
@@ -107,10 +109,10 @@ fn run_start(args: Args) {
         }
         Ok(())
     }) {
-        Ok(code) => std::process::exit(code),
+        Ok(code) => rns_cli::exit::code(code),
         Err(err) => {
             eprintln!("rns-server: {}", err);
-            std::process::exit(1);
+            ExitCode::FAILURE
         }
     }
 }

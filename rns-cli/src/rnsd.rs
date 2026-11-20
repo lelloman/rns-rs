@@ -5,8 +5,10 @@ use rns_core::encoding::hex;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 use crate::args::{Args, Opt, OptionSpec};
+use crate::exit::{self, Exit, Status};
 use crate::signals::{self, PipeWriter, SignalPipe};
 use rns_net::storage;
 use rns_net::{Callbacks, InterfaceId, RnsNode};
@@ -148,44 +150,49 @@ pub const OPTIONS: OptionSpec = OptionSpec {
 };
 
 /// Runs `rnsd` on the process's command line; see [`main_entry_from`].
-pub fn main_entry() {
-    main_entry_from(Args::parse_spec(&OPTIONS));
+pub fn main_entry() -> ExitCode {
+    exit::exit_code(main_entry_from(Args::parse_spec(&OPTIONS)))
 }
 
 /// Runs `rnsd` on already parsed `args`: starts the node and blocks until
 /// SIGINT or SIGTERM (or, with `-i`, the end of console input), then shuts
 /// it down. Installs the process's logger and SIGINT/SIGTERM handlers.
-/// Exits the process with status 1 when the node cannot start, and with 2
+/// Gives status 1 when the node cannot start, and exits the process with 2
 /// on an argument error.
-pub fn main_entry_from(args: Args) {
-    main_entry_impl(args, "rnsd", "rnsd", log::Level::Debug);
+pub fn main_entry_from(args: Args) -> Status {
+    main_entry_impl(args, "rnsd", "rnsd", log::Level::Debug)
 }
 
 /// [`main_entry_from`] for `rns-ctl daemon`: `usage_name` and
 /// `version_name` are the program names printed in usage and by
 /// `--version`, and received announces are logged at info rather than
 /// debug level.
-pub fn main_entry_from_named(args: Args, usage_name: &str, version_name: &str) {
+pub fn main_entry_from_named(args: Args, usage_name: &str, version_name: &str) -> Status {
     // `rns-ctl daemon` historically reported received announces at INFO,
     // while the standalone `rnsd` binary keeps them at DEBUG.
-    main_entry_impl(args, usage_name, version_name, log::Level::Info);
+    main_entry_impl(args, usage_name, version_name, log::Level::Info)
 }
 
-fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_level: log::Level) {
+fn main_entry_impl(
+    args: Args,
+    usage_name: &str,
+    version_name: &str,
+    announce_level: log::Level,
+) -> Status {
     crate::argparse::enforce(&args, "rnsd", usage_name);
     if args.has("version") {
         println!("{} {}", version_name, VERSION);
-        return;
+        return Ok(());
     }
 
     if args.has("help") || args.has("h") {
         print_usage(usage_name);
-        return;
+        return Ok(());
     }
 
     if args.has("exampleconfig") {
         print!("{}", EXAMPLE_CONFIG);
-        return;
+        return Ok(());
     }
 
     let service_mode = args.has("s");
@@ -203,7 +210,7 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
             Ok(writer) => Box::new(writer),
             Err(e) => {
                 eprintln!("Could not open logfile {}: {}", logfile_path.display(), e);
-                std::process::exit(1);
+                return Err(Exit::FAILURE);
             }
         }
     } else {
@@ -215,7 +222,7 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
     let interactive = args.has("interactive");
     if let Err(err) = register_native_sidecar_hooks() {
         log::error!("Failed to register built-in sidecar hooks: {}", err);
-        std::process::exit(1);
+        return Err(Exit::FAILURE);
     }
 
     let node = RnsNode::from_config(
@@ -227,7 +234,7 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
         Ok(n) => n,
         Err(e) => {
             log::error!("Failed to start: {}", e);
-            std::process::exit(1);
+            return Err(Exit::FAILURE);
         }
     };
     if node.is_connected_to_shared_instance() {
@@ -244,7 +251,7 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
         Ok(pipe) => pipe,
         Err(e) => {
             log::error!("Failed to set up signal handling: {}", e);
-            std::process::exit(1);
+            return Err(Exit::FAILURE);
         }
     };
     stop_rx.route(&[signals::SIGINT, signals::SIGTERM], 1);
@@ -263,6 +270,7 @@ fn main_entry_impl(args: Args, usage_name: &str, version_name: &str, announce_le
     log::debug!("Shutting down...");
     node.shutdown();
     log::debug!("rnsd stopped");
+    Ok(())
 }
 
 fn configured_logging(config_path: Option<&str>) -> rns_net::config::LoggingSection {
