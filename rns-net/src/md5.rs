@@ -1,6 +1,8 @@
 //! MD5 hash function (RFC 1321) and HMAC-MD5 (RFC 2104).
 //!
-//! Used only for legacy auth compatibility with Python `multiprocessing.connection`.
+//! HMAC-MD5 serves legacy auth compatibility with Python
+//! `multiprocessing.connection` and stays inside the crate; [`md5`] is
+//! public for the RNode EEPROM checksum.
 
 const S: [u32; 64] = [
     7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9,
@@ -77,7 +79,7 @@ pub fn md5(data: &[u8]) -> [u8; 16] {
 }
 
 /// Compute HMAC-MD5 (RFC 2104).
-pub fn hmac_md5(key: &[u8], message: &[u8]) -> [u8; 16] {
+pub(crate) fn hmac_md5(key: &[u8], message: &[u8]) -> [u8; 16] {
     const BLOCK_SIZE: usize = 64;
 
     // Step 1: If key > block size, hash it
