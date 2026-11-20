@@ -6,99 +6,51 @@
 //! which become readable when the process exits without reaping it, so the
 //! loop's `try_wait` still collects the status.
 
-#![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
+#![allow(unsafe_code, reason = "poll and pidfd_open through libc")]
 
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
+
+use rns_cli::signals::{PipeWriter, SignalPipe, SIGINT, SIGTERM};
 
 /// Written by a stop signal: SIGINT or SIGTERM.
 const STOP: u8 = b'S';
 /// Written when there is a control command to handle.
 const WORK: u8 = b'W';
 
-/// The write end of the latest run's pipe, for the signal handler; -1 when
-/// none. As with a stop channel, the latest run is the one stopped.
-static STOP_FD: AtomicI32 = AtomicI32::new(-1);
-
 /// A run's wake pipe.
-pub(crate) struct Wake {
-    read: OwnedFd,
-    write: Arc<OwnedFd>,
-}
+pub(crate) struct Wake(SignalPipe);
 
 /// Wakes a run's loop from another thread.
 #[derive(Clone)]
-pub(crate) struct Waker(Arc<OwnedFd>);
+pub(crate) struct Waker(PipeWriter);
 
 impl Waker {
     pub(crate) fn wake(&self) {
-        write_byte(self.0.as_raw_fd(), WORK);
+        self.0.write(WORK);
     }
-}
-
-fn write_byte(fd: RawFd, byte: u8) {
-    // SAFETY: one byte from a valid buffer. `write` is async-signal-safe;
-    // the pipe is non-blocking, so a full pipe (already waking the loop)
-    // drops the byte instead of blocking.
-    unsafe { libc::write(fd, (&byte as *const u8).cast(), 1) };
-}
-
-extern "C" fn stop_handler(_sig: libc::c_int) {
-    request_stop();
 }
 
 /// Ask the latest run to stop, as SIGINT and SIGTERM do.
+#[cfg(test)]
 pub(crate) fn request_stop() {
-    let fd = STOP_FD.load(Ordering::SeqCst);
-    if fd >= 0 {
-        write_byte(fd, STOP);
-    }
+    rns_cli::signals::notify_routed_pipe();
 }
 
 impl Wake {
     pub(crate) fn new() -> io::Result<Self> {
-        let mut fds = [0 as libc::c_int; 2];
-        // SAFETY: `fds` has room for the two descriptors.
-        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: both descriptors were just opened and are owned here.
-        let (read, write) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
-        for fd in [read.as_raw_fd(), write.as_raw_fd()] {
-            // SAFETY: valid descriptors; children must not inherit them.
-            unsafe {
-                libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
-                let flags = libc::fcntl(fd, libc::F_GETFL);
-                libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-            }
-        }
-        Ok(Self {
-            read,
-            write: Arc::new(write),
-        })
+        SignalPipe::new(true).map(Self)
     }
 
-    /// Route SIGINT and SIGTERM to this run.
+    /// Route SIGINT and SIGTERM to this run. As with a stop channel, the
+    /// latest run is the one stopped.
     pub(crate) fn install_signal_handlers(&self) {
-        STOP_FD.store(self.write.as_raw_fd(), Ordering::SeqCst);
-        // SAFETY: the handler only performs async-signal-safe calls.
-        unsafe {
-            libc::signal(
-                libc::SIGINT,
-                stop_handler as *const () as libc::sighandler_t,
-            );
-            libc::signal(
-                libc::SIGTERM,
-                stop_handler as *const () as libc::sighandler_t,
-            );
-        }
+        self.0.route(&[SIGINT, SIGTERM], STOP);
     }
 
     pub(crate) fn waker(&self) -> Waker {
-        Waker(Arc::clone(&self.write))
+        Waker(self.0.writer())
     }
 
     /// Sleep until woken, until one of `exits` (pidfds) is readable, or for
@@ -106,7 +58,7 @@ impl Wake {
     pub(crate) fn wait(&self, exits: &[RawFd], timeout: Duration) -> bool {
         let mut fds = Vec::with_capacity(1 + exits.len());
         fds.push(libc::pollfd {
-            fd: self.read.as_raw_fd(),
+            fd: self.0.read_fd(),
             events: libc::POLLIN,
             revents: 0,
         });
@@ -120,29 +72,7 @@ impl Wake {
         // interrupted wait (a signal) returns at once, and the pipe is read
         // below either way.
         unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout_ms) };
-        let mut stop = false;
-        let mut buf = [0u8; 64];
-        loop {
-            // SAFETY: reading into a valid buffer; the pipe is non-blocking.
-            let n =
-                unsafe { libc::read(self.read.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) };
-            if n <= 0 {
-                break;
-            }
-            stop |= buf[..n as usize].contains(&STOP);
-        }
-        stop
-    }
-}
-
-impl Drop for Wake {
-    fn drop(&mut self) {
-        let _ = STOP_FD.compare_exchange(
-            self.write.as_raw_fd(),
-            -1,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
+        self.0.drain_contains(STOP)
     }
 }
 

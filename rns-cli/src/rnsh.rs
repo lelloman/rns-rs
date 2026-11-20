@@ -68,10 +68,6 @@ const PROCESS_OUTPUT_BUFFER_MAX: usize = 1024 * 1024;
 
 static SIGWINCH_SEEN: AtomicBool = AtomicBool::new(false);
 
-extern "C" fn sigwinch_handler(_: libc::c_int) {
-    SIGWINCH_SEEN.store(true, Ordering::SeqCst);
-}
-
 #[derive(Debug)]
 enum RnshError {
     Io(io::Error),

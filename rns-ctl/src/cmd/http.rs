@@ -1,7 +1,5 @@
 //! HTTP/WebSocket control server subcommand.
 
-#![allow(unsafe_code, reason = "OS calls through libc and signal handlers")]
-
 use std::io::{IsTerminal, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -372,104 +370,31 @@ fn start_shared_node_connector(
         .ok();
 }
 
-/// Set up a shutdown signal handler for SIGINT and SIGTERM.
-fn ctrlc_handler<F: FnOnce() + Send + 'static>(handler: F) {
-    let handler = Mutex::new(Some(handler));
-    libc_signal(move || {
-        if let Some(f) = match handler.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                log::error!("recovering from poisoned signal handler lock");
-                poisoned.into_inner()
-            }
-        }
-        .take()
-        {
-            f();
-        }
-    });
-}
-
-/// Register a SIGINT and SIGTERM handler, run on a background thread. SIGTERM
-/// is what `docker stop`, `systemctl stop` and `kill` send; without it the
+/// Run `handler` on a background thread on SIGINT or SIGTERM. SIGTERM is
+/// what `docker stop`, `systemctl stop` and `kill` send; without it the
 /// process ran until the supervisor's kill timeout.
 ///
-/// The handler writes a byte to a pipe, which is async-signal-safe, and the
-/// thread sleeps reading it, rather than checking a flag every 100 ms.
-#[cfg(unix)]
-fn libc_signal<F: FnMut() + Send + 'static>(mut callback: F) {
-    use std::sync::atomic::{AtomicI32, Ordering};
-    static WRITE_FD: AtomicI32 = AtomicI32::new(-1);
-
-    extern "C" fn sig_handler(_: libc::c_int) {
-        let fd = WRITE_FD.load(Ordering::SeqCst);
-        if fd >= 0 {
-            let byte = 1u8;
-            // SAFETY: `write` is async-signal-safe; the descriptor stays
-            // open for the life of the process.
-            unsafe { libc::write(fd, (&byte as *const u8).cast(), 1) };
+/// The signal handler writes a byte to a pipe, which is async-signal-safe,
+/// and the thread sleeps reading it, rather than checking a flag every
+/// 100 ms.
+fn ctrlc_handler<F: FnOnce() + Send + 'static>(handler: F) {
+    use rns_cli::signals::{SignalPipe, SIGINT, SIGTERM};
+    let pipe = match SignalPipe::new(false) {
+        Ok(pipe) => pipe,
+        Err(e) => {
+            log::error!("cannot set up signal handling: {}", e);
+            return;
         }
-    }
-
-    let mut fds = [0 as libc::c_int; 2];
-    // SAFETY: `fds` has room for the two descriptors.
-    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-        log::error!(
-            "cannot set up signal handling: {}",
-            std::io::Error::last_os_error()
-        );
-        return;
-    }
-    for fd in fds {
-        // SAFETY: a descriptor just opened; children must not inherit it.
-        unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
-    }
-    if WRITE_FD
-        .compare_exchange(-1, fds[1], Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        // Already registered in this process.
-        // SAFETY: both descriptors were opened above and are unused.
-        unsafe {
-            libc::close(fds[0]);
-            libc::close(fds[1]);
-        }
-        return;
-    }
-    let read_fd = fds[0];
-    // SAFETY: the handler only performs async-signal-safe calls.
-    unsafe {
-        libc::signal(libc::SIGINT, sig_handler as *const () as libc::sighandler_t);
-        libc::signal(
-            libc::SIGTERM,
-            sig_handler as *const () as libc::sighandler_t,
-        );
-    }
-    std::thread::Builder::new()
+    };
+    pipe.route(&[SIGINT, SIGTERM], 1);
+    thread::Builder::new()
         .name("signal-handler".into())
-        .spawn(move || {
-            let mut byte = 0u8;
-            loop {
-                // SAFETY: one byte into a valid buffer.
-                let n = unsafe { libc::read(read_fd, (&mut byte as *mut u8).cast(), 1) };
-                if n > 0 {
-                    callback();
-                    return;
-                }
-                if n < 0
-                    && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
-                {
-                    continue;
-                }
-                log::warn!("signal pipe closed; not waiting for signals any more");
-                return;
-            }
+        .spawn(move || match pipe.wait() {
+            Ok(_) => handler(),
+            Err(_) => log::warn!("signal pipe closed; not waiting for signals any more"),
         })
         .ok();
 }
-
-#[cfg(not(unix))]
-fn libc_signal<F: FnMut() + Send + 'static>(_callback: F) {}
 
 #[cfg(test)]
 mod tests {
