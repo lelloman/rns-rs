@@ -15919,8 +15919,9 @@ fn single_packet_proofs_are_signed_and_checked_on_the_proof_pool() {
     take_outcomes(&mut driver, &|_| !sent.lock().unwrap().is_empty());
     let proof = RawPacket::unpack(&sent.lock().unwrap()[0]).unwrap();
     assert_eq!(proof.flags.packet_type, constants::PACKET_TYPE_PROOF);
-    assert_eq!(&proof.data()[..32], &received);
-    assert!(signing.verify(&proof.data()[32..96].try_into().unwrap(), &received));
+    // Implicit by default, as upstream: the signature alone.
+    assert_eq!(proof.data().len(), 64);
+    assert!(signing.verify(&proof.data()[..64].try_into().unwrap(), &received));
 
     // Checking proofs of sent packets: the good one completes its receipt,
     // the forged one does not.
