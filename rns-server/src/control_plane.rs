@@ -35,6 +35,13 @@ fn read_shared_state<'a>(
     }
 }
 
+/// Creates the control-plane state for a supervised server.
+///
+/// The state is in `supervised` mode with an entry for every managed process
+/// (`rnsd`, plus `rns-sentineld` and `rns-statsd` in hook-enabled builds) and
+/// holds a clone of the returned sender, so control-plane requests to start,
+/// stop or restart a process arrive on the returned receiver. Pass that
+/// receiver to the [`Supervisor`](crate::supervisor::Supervisor).
 pub fn new_supervised_state() -> (
     SharedState,
     mpsc::Sender<ProcessControlCommand>,
@@ -50,6 +57,13 @@ pub fn new_supervised_state() -> (
     (shared_state, control_tx, control_rx)
 }
 
+/// Lets the control plane read, validate, save and apply the server config.
+///
+/// Publishes `config`'s snapshot and schema to `shared_state` and installs a
+/// validator and a mutator. Saving writes `rns-server.json`; applying also
+/// queues restarts of the affected processes, reloads embedded HTTP auth in
+/// place when only the token or `disable_auth` changed, and republishes the
+/// snapshot re-read from `args` and the file.
 pub fn install_config_bridge(shared_state: &SharedState, args: &Args, config: &ServerConfig) {
     set_server_config(shared_state, config.snapshot());
     set_server_config_schema(shared_state, config.schema_snapshot());

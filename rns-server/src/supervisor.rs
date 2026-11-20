@@ -30,14 +30,20 @@ use self::process::{
 use self::readiness::ready_file_path_for_role;
 pub use self::readiness::{ProcessReadiness, ReadinessTarget};
 
+/// A process the supervisor can manage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
+    /// The Reticulum daemon.
     Rnsd,
+    /// The `rns-sentineld` hook sidecar.
     Sentineld,
+    /// The `rns-statsd` statistics sidecar.
     Statsd,
 }
 
 impl Role {
+    /// Process name used in logs, control-plane state and `--internal-role`:
+    /// `rnsd`, `rns-sentineld` or `rns-statsd`.
     pub fn display_name(self) -> &'static str {
         match self {
             Role::Rnsd => "rnsd",
@@ -47,14 +53,21 @@ impl Role {
     }
 }
 
+/// How to launch one supervised process.
 #[derive(Debug, Clone)]
 pub struct ProcessSpec {
+    /// Which process this is.
     pub role: Role,
+    /// The executable to run.
     pub command: ProcessCommand,
+    /// Arguments passed after the command (and after `--internal-role
+    /// <name>` for [`ProcessCommand::SelfInvoke`]).
     pub args: Vec<String>,
 }
 
 impl ProcessSpec {
+    /// Human-readable command line, with arguments joined by spaces and not
+    /// quoted. For display only.
     pub fn command_line(&self) -> String {
         let mut parts = vec![self.command.display(self.role)];
         parts.extend(self.args.iter().cloned());
@@ -62,13 +75,18 @@ impl ProcessSpec {
     }
 }
 
+/// The executable a [`ProcessSpec`] runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessCommand {
+    /// A separate binary at this path.
     External(PathBuf),
+    /// The running `rns-server` binary, re-executed with `--internal-role
+    /// <name>` (via `/proc/self/exe`, falling back to `current_exe()`).
     SelfInvoke,
 }
 
 impl ProcessCommand {
+    /// Human-readable form of the command for `role`, for display only.
     pub fn display(&self, role: Role) -> String {
         match self {
             ProcessCommand::External(path) => path.display().to_string(),
@@ -83,15 +101,27 @@ impl ProcessCommand {
     }
 }
 
+/// Everything a [`Supervisor`] needs; usually built by
+/// [`ServerConfig::supervisor_config`](crate::config::ServerConfig::supervisor_config).
 pub struct SupervisorConfig {
+    /// Processes to start, in order.
     pub specs: Vec<ProcessSpec>,
+    /// Control-plane state to report process status, readiness and output
+    /// to. Without it, readiness is not probed and child output is not read.
     pub shared_state: Option<SharedState>,
+    /// Start, stop and restart requests from the control plane.
     pub control_rx: Option<mpsc::Receiver<ProcessControlCommand>>,
+    /// Readiness probes, at most one per role.
     pub readiness: Vec<ProcessReadiness>,
+    /// Directory and rotation policy for per-process log files; `None`
+    /// writes no log files.
     pub log_dir: Option<(PathBuf, LogPolicy)>,
+    /// How to ask `rnsd` to drain before it is stopped; `None` stops it
+    /// without draining.
     pub rnsd_drain: Option<RnsdDrainConfig>,
 }
 
+/// Runs a set of child processes until shutdown.
 pub struct Supervisor {
     specs: Vec<ProcessSpec>,
     shared_state: Option<SharedState>,
@@ -114,15 +144,23 @@ fn read_shared_state<'a>(
     }
 }
 
+/// How the supervisor asks `rnsd` to drain over RPC before stopping or
+/// restarting it.
 #[derive(Debug, Clone)]
 pub struct RnsdDrainConfig {
+    /// Where `rnsd` serves RPC.
     pub rpc_addr: RpcAddr,
+    /// RPC authentication key, derived from the node's RPC identity.
     pub auth_key: [u8; 32],
+    /// How long to wait for the drain to finish before stopping `rnsd`
+    /// anyway.
     pub timeout: Duration,
+    /// How often the drain status is polled while waiting.
     pub poll_interval: Duration,
 }
 
 impl Supervisor {
+    /// Creates a supervisor; no process is started until a run.
     pub fn new(config: SupervisorConfig) -> Self {
         Self {
             specs: config.specs,
@@ -136,14 +174,31 @@ impl Supervisor {
         }
     }
 
+    /// The processes this supervisor starts, in start order.
     pub fn specs(&self) -> &[ProcessSpec] {
         &self.specs
     }
 
+    /// [`run_with_started_hook`](Self::run_with_started_hook) with no hook.
     pub fn run(&self) -> Result<i32, String> {
         self.run_with_started_hook(|| Ok(()))
     }
 
+    /// Starts every process, calls `on_started`, then supervises until
+    /// shutdown; blocks the calling thread throughout.
+    ///
+    /// Installs process-wide SIGINT and SIGTERM handlers. On either signal it
+    /// drains `rnsd` (if configured), stops all children and returns
+    /// `Ok(0)`. A child that exits unexpectedly is restarted, up to three
+    /// times per role; after that every child is stopped and its exit code
+    /// is returned (1 if it was killed by a signal).
+    ///
+    /// # Errors
+    ///
+    /// A process that fails to start or restart, an error from
+    /// `on_started`, a failure to wait on a child, or a control command
+    /// naming an unknown process. Children still running are not stopped
+    /// when an error is returned.
     pub fn run_with_started_hook<F>(&self, on_started: F) -> Result<i32, String>
     where
         F: FnOnce() -> Result<(), String>,

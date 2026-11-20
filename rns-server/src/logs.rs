@@ -4,12 +4,19 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Default size, in bytes, at which an active process log is rotated.
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+/// Default number of rotated archives kept per process.
 pub const DEFAULT_MAX_ARCHIVES: usize = 4;
 
+/// Rotation limits for supervised-process logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LogPolicy {
+    /// Size in bytes an active log may reach; a write that would exceed it
+    /// rotates the file first.
     pub max_file_bytes: u64,
+    /// Rotated files kept per process (`<name>.log.1` is the newest). Zero
+    /// keeps none: a full log is deleted instead of archived.
     pub max_archives: usize,
 }
 
@@ -22,19 +29,21 @@ impl Default for LogPolicy {
     }
 }
 
+/// Directory of per-process log files, shared across clones.
 #[derive(Clone)]
-pub struct LogStore {
+pub(crate) struct LogStore {
     dir: PathBuf,
     policy: LogPolicy,
     write_lock: Arc<Mutex<()>>,
 }
 
 impl LogStore {
-    pub fn new(dir: PathBuf) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(dir: PathBuf) -> Self {
         Self::with_policy(dir, LogPolicy::default())
     }
 
-    pub fn with_policy(dir: PathBuf, policy: LogPolicy) -> Self {
+    pub(crate) fn with_policy(dir: PathBuf, policy: LogPolicy) -> Self {
         Self {
             dir,
             policy,
@@ -42,11 +51,18 @@ impl LogStore {
         }
     }
 
-    pub fn process_log_path(&self, process: &str) -> PathBuf {
+    pub(crate) fn process_log_path(&self, process: &str) -> PathBuf {
         self.dir.join(format!("{process}.log"))
     }
 
-    pub fn append_line(&self, process: &str, stream: &str, line: &str) -> Result<(), String> {
+    /// Appends `line` with a Unix timestamp and the `stream` label,
+    /// rotating first if the file would exceed the policy size.
+    pub(crate) fn append_line(
+        &self,
+        process: &str,
+        stream: &str,
+        line: &str,
+    ) -> Result<(), String> {
         let rendered = format!("{} [{}] {}\n", unix_timestamp_secs(), stream, line);
         let _guard = self
             .write_lock

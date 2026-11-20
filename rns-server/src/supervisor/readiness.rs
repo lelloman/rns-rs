@@ -1,27 +1,42 @@
 use super::*;
 
+/// What a readiness probe checks.
 #[derive(Clone)]
 pub enum ReadinessTarget {
+    /// Ready once a TCP connection to the address succeeds within 150 ms.
     Tcp(SocketAddr),
     /// An RPC server, reached as its clients reach it.
     Rpc(RpcAddr),
+    /// Ready once a Unix stream socket at the path accepts a connection.
     UnixSocket(PathBuf),
+    /// Ready once the process writes a readiness file at the path with
+    /// `status=ready`, its own process name and the pid the supervisor
+    /// started.
     ReadyFile(PathBuf),
+    /// Ready once `rnsd` reports every required hook loaded and enabled.
     HookSet {
+        /// Where `rnsd` serves RPC.
         rpc_addr: RpcAddr,
+        /// RPC authentication key.
         auth_key: [u8; 32],
+        /// Required hooks as `(name, attach point)` pairs.
         required_hooks: Vec<(String, String)>,
     },
+    /// Ready once the process has been running for at least this long.
     ProcessAge(Duration),
 }
 
+/// A readiness probe for one supervised process.
 #[derive(Clone)]
 pub struct ProcessReadiness {
+    /// The process probed.
     pub role: Role,
+    /// What the probe checks.
     pub target: ReadinessTarget,
 }
 
 impl ProcessReadiness {
+    /// Display name of the probed process.
     pub fn name(&self) -> &'static str {
         self.role.display_name()
     }

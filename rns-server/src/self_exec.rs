@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-pub fn resolve_self_exec() -> Result<PathBuf, String> {
+pub(crate) fn resolve_self_exec() -> Result<PathBuf, String> {
     let proc_self = PathBuf::from("/proc/self/exe");
     if proc_self.exists() {
         return Ok(proc_self);
@@ -9,7 +9,7 @@ pub fn resolve_self_exec() -> Result<PathBuf, String> {
     std::env::current_exe().map_err(|err| format!("failed to resolve current executable: {}", err))
 }
 
-pub fn self_exec_display() -> &'static str {
+pub(crate) fn self_exec_display() -> &'static str {
     "/proc/self/exe"
 }
 

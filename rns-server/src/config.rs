@@ -24,49 +24,80 @@ const DEFAULT_STATS_MAX_AGE_DAYS: u64 = 30;
 pub const API_READ_ONLY_KEYS: [&str; 4] = ["rnsd_bin", "sentineld_bin", "statsd_bin", "hooks_dir"];
 const DEFAULT_STATS_MAX_SIZE_MB: u64 = 4096;
 
+/// Effective server configuration: command-line flags and `RNSCTL_*`
+/// environment variables over `rns-server.json` over defaults.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
+    /// Config directory given on the command line, passed on to children.
     pub config_path: Option<PathBuf>,
+    /// Config directory in use: `config_path` or the default location.
     pub resolved_config_dir: PathBuf,
+    /// Path of `rns-server.json` in the config directory.
     pub server_config_file_path: PathBuf,
+    /// Whether `rns-server.json` existed and loaded without error.
     pub server_config_file_present: bool,
+    /// Contents of `rns-server.json`, or defaults when absent or invalid.
     pub file_config: ServerConfigFile,
+    /// Rotation limits for supervised-process logs.
     pub log_policy: LogPolicy,
+    /// Retention limits passed to `rns-statsd`.
     pub stats_policy: StatsPolicy,
+    /// SQLite database `rns-statsd` writes to.
     pub stats_db_path: PathBuf,
+    /// `rnsd` executable; empty means self-invoke.
     pub rnsd_bin: PathBuf,
+    /// `rns-sentineld` executable; empty means self-invoke.
     pub sentineld_bin: PathBuf,
+    /// `rns-statsd` executable; empty means self-invoke.
     pub statsd_bin: PathBuf,
+    /// Embedded HTTP control plane settings.
     pub http: HttpConfig,
     /// Where rnsd serves RPC: as its shared instance clients reach it.
     pub rnsd_rpc_addr: RpcAddr,
 }
 
+/// Effective settings of the embedded HTTP control plane.
 #[derive(Debug, Clone)]
 pub struct HttpConfig {
+    /// Whether the control plane is started (off with `--no-http`).
     pub enabled: bool,
+    /// Bind host; defaults to `127.0.0.1`.
     pub host: String,
+    /// Bind port; defaults to 8080.
     pub port: u16,
+    /// Fixed bearer token. When auth is enabled and this is `None`, the
+    /// control plane generates one.
     pub auth_token: Option<String>,
+    /// Serve without authentication.
     pub disable_auth: bool,
+    /// Run the control plane in daemon mode (always true for the server).
     pub daemon_mode: bool,
 }
 
+/// Statistics retention limits; `None` disables that kind of pruning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StatsPolicy {
+    /// Maximum age of raw history, in days.
     pub max_age_days: Option<u64>,
+    /// Maximum database size, in MiB.
     pub max_size_mb: Option<u64>,
 }
 
+/// Contents of `rns-server.json`. Unknown keys are rejected; every key is
+/// optional.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfigFile {
+    /// SQLite database for `rns-statsd`; unset uses `<config dir>/stats.db`.
     #[serde(default)]
     pub stats_db_path: Option<String>,
+    /// `rnsd` executable; unset self-invokes `rns-server`.
     #[serde(default)]
     pub rnsd_bin: Option<String>,
+    /// `rns-sentineld` executable; unset self-invokes `rns-server`.
     #[serde(default)]
     pub sentineld_bin: Option<String>,
+    /// `rns-statsd` executable; unset self-invokes `rns-server`.
     #[serde(default)]
     pub statsd_bin: Option<String>,
     /// Directory the control plane may load native hooks from through the API.
@@ -74,28 +105,39 @@ pub struct ServerConfigFile {
     /// `<config dir>/hooks`.
     #[serde(default)]
     pub hooks_dir: Option<String>,
+    /// The `logs` section.
     #[serde(default)]
     pub logs: ServerLogConfigFile,
+    /// The `stats` section.
     #[serde(default)]
     pub stats: ServerStatsConfigFile,
+    /// The `http` section.
     #[serde(default)]
     pub http: ServerHttpConfigFile,
 }
 
+/// The `logs` section of `rns-server.json`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerLogConfigFile {
+    /// Size in MiB (1 to 10240) at which a process log is rotated; default
+    /// 64.
     #[serde(default)]
     pub max_file_size_mb: Option<u64>,
+    /// Rotated files kept per process (at most 100); default 4.
     #[serde(default)]
     pub max_archives: Option<usize>,
 }
 
+/// The `stats` section of `rns-server.json`. A missing key takes its
+/// default; an explicit `null` disables that limit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerStatsConfigFile {
+    /// Maximum age of raw history in days (1 to 3650); default 30.
     #[serde(default = "default_stats_max_age_days")]
     pub max_age_days: Option<u64>,
+    /// Maximum database size in MiB (64 to 1048576); default 4096.
     #[serde(default = "default_stats_max_size_mb")]
     pub max_size_mb: Option<u64>,
 }
@@ -117,22 +159,36 @@ fn default_stats_max_size_mb() -> Option<u64> {
     Some(DEFAULT_STATS_MAX_SIZE_MB)
 }
 
+/// The `http` section of `rns-server.json`; see [`HttpConfig`] for the
+/// defaults.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerHttpConfigFile {
+    /// Start the embedded HTTP control plane.
     #[serde(default)]
     pub enabled: Option<bool>,
+    /// Bind host.
     #[serde(default)]
     pub host: Option<String>,
+    /// Bind port.
     #[serde(default)]
     pub port: Option<u16>,
+    /// Fixed bearer token.
     #[serde(default)]
     pub auth_token: Option<String>,
+    /// Serve without authentication.
     #[serde(default)]
     pub disable_auth: Option<bool>,
 }
 
 impl ServerConfig {
+    /// Builds the configuration from `args`, the `RNSCTL_HOST`,
+    /// `RNSCTL_HTTP_PORT`, `RNSCTL_AUTH_TOKEN` and `RNSCTL_DISABLE_AUTH`
+    /// environment variables, `rns-server.json` and the Reticulum config
+    /// (for the `rnsd` RPC address).
+    ///
+    /// Never fails: an unreadable or invalid `rns-server.json` is logged and
+    /// replaced by defaults.
     pub fn from_args(args: &Args) -> Self {
         let config_path = args.config_path().map(PathBuf::from);
         let resolved_config_dir =
@@ -157,6 +213,13 @@ impl ServerConfig {
         )
     }
 
+    /// Checks a submitted `rns-server.json` body against the current
+    /// configuration without writing anything.
+    ///
+    /// # Errors
+    ///
+    /// Invalid JSON, a value out of range, or a changed
+    /// [`API_READ_ONLY_KEYS`] value.
     pub fn validate_json_with_current_context(
         &self,
         body: &[u8],
@@ -208,6 +271,18 @@ impl ServerConfig {
         Ok(())
     }
 
+    /// Validates a submitted `rns-server.json` body and writes it to
+    /// [`server_config_file_path`](Self::server_config_file_path).
+    ///
+    /// Read-only keys omitted from `body` keep their current values. With
+    /// [`ServerConfigMutationMode::Apply`], a restart of every process the
+    /// change affects is also sent on `control_tx`. The returned result
+    /// describes the new configuration and what must be restarted.
+    ///
+    /// # Errors
+    ///
+    /// As for [`validate_json_with_current_context`](Self::validate_json_with_current_context),
+    /// plus failure to write the file or to queue a restart.
     pub fn mutate_json_with_current_context(
         &self,
         mode: ServerConfigMutationMode,
@@ -259,6 +334,9 @@ impl ServerConfig {
         })
     }
 
+    /// Supervisor settings for this configuration: process specs, readiness
+    /// probes, `<config dir>/logs` for process logs, and an `rnsd` drain
+    /// config when the RPC identity can be loaded.
     pub fn supervisor_config(
         &self,
         shared_state: Option<SharedState>,
@@ -274,6 +352,12 @@ impl ServerConfig {
         }
     }
 
+    /// Creates the storage directories and the node identity if missing;
+    /// call before starting the children.
+    ///
+    /// # Errors
+    ///
+    /// The directories or identity cannot be created or read.
     pub fn ensure_runtime_bootstrap(&self) -> Result<(), String> {
         let paths = rns_net::storage::ensure_storage_dirs(&self.resolved_config_dir)
             .map_err(|err| format!("failed to create runtime storage dirs: {}", err))?;
@@ -282,6 +366,8 @@ impl ServerConfig {
         Ok(())
     }
 
+    /// Processes to launch: `rnsd`, plus `rns-sentineld` and `rns-statsd` in
+    /// hook-enabled builds.
     pub fn process_specs(&self) -> Vec<ProcessSpec> {
         #[cfg(not(any(
             feature = "rns-hooks-native",
@@ -323,6 +409,8 @@ impl ServerConfig {
         }
     }
 
+    /// Control-plane view of the configuration and launch plan. Reports only
+    /// whether an auth token is configured, not the token.
     pub fn snapshot(&self) -> ServerConfigSnapshot {
         ServerConfigSnapshot {
             config_path: self
@@ -362,6 +450,8 @@ impl ServerConfig {
         }
     }
 
+    /// Description of every `rns-server.json` field, its default and the
+    /// effect of changing it, for the control plane.
     pub fn schema_snapshot(&self) -> ServerConfigSchemaSnapshot {
         ServerConfigSchemaSnapshot {
             format: "rns-server.json".into(),
@@ -502,10 +592,13 @@ impl ServerConfig {
             .map(|dir| self.resolved_config_dir.join(dir))
     }
 
+    /// Whether the embedded HTTP control plane is enabled.
     pub fn http_enabled(&self) -> bool {
         self.http.enabled
     }
 
+    /// `rns-ctl http` arguments that start the embedded control plane with
+    /// these HTTP settings, the hooks directory and `verbosity` (`-v` count).
     pub fn ctl_args(&self, verbosity: u8) -> rns_ctl::args::Args {
         let mut argv = vec!["--daemon".to_string()];
         if let Some(config_path) = &self.config_path {
@@ -533,6 +626,8 @@ impl ServerConfig {
         rns_ctl::args::Args::parse_from(argv)
     }
 
+    /// Human-readable description of the embedded control plane's command
+    /// line, for `--dry-run`. Includes the auth token if one is configured.
     pub fn control_http_command_line(&self) -> String {
         let mut parts = vec!["embedded rns-ctl http".to_string(), "--daemon".to_string()];
         if let Some(config) = &self.config_path {

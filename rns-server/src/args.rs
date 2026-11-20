@@ -1,18 +1,32 @@
 use std::collections::HashMap;
 
+/// Parsed `rns-server` command line.
 #[derive(Clone)]
 pub struct Args {
+    /// Long options by name without the leading `--`. Boolean options and an
+    /// option given last without a value map to `"true"`; `-h` is stored as
+    /// `help` and `-c` as `config`.
     pub flags: HashMap<String, String>,
+    /// Positional arguments in order, including everything after `--`.
     pub positional: Vec<String>,
+    /// Number of `-v` occurrences.
     pub verbosity: u8,
+    /// Number of `-q` occurrences.
     pub quiet: u8,
 }
 
 impl Args {
+    /// Parses the process arguments, skipping the program name.
     pub fn parse() -> Self {
         Self::parse_from(std::env::args().skip(1).collect())
     }
 
+    /// Parses `args`, which must not include the program name.
+    ///
+    /// Never fails: unknown options are kept in [`flags`](Self::flags). A
+    /// long option other than `help`, `version`, `dry-run`, `disable-auth`
+    /// and `no-http` takes the next argument as its value unless written as
+    /// `--key=value`.
     pub fn parse_from(args: Vec<String>) -> Self {
         let mut flags = HashMap::new();
         let mut positional = Vec::new();
@@ -80,14 +94,17 @@ impl Args {
         }
     }
 
+    /// Value of the long option `key` (name without `--`), if given.
     pub fn get(&self, key: &str) -> Option<&str> {
         self.flags.get(key).map(|s| s.as_str())
     }
 
+    /// Whether the long option `key` (name without `--`) was given.
     pub fn has(&self, key: &str) -> bool {
         self.flags.contains_key(key)
     }
 
+    /// Config directory from `--config` or `-c`, if given.
     pub fn config_path(&self) -> Option<&str> {
         self.get("config")
     }
