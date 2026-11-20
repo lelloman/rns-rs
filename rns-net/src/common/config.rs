@@ -185,8 +185,14 @@ pub struct ReticulumSection {
     /// How discovered interfaces are auto-connected (`autoconnect_policy`).
     pub autoconnect_policy: AutoconnectPolicy,
     /// Upstream's `autoconnect_discovered_interfaces`: how many discovered
-    /// interfaces to auto-connect; 0 auto-connects none.
+    /// interfaces to auto-connect; 0 auto-connects none. As written: the
+    /// node caps it at startup unless the caps are disabled.
     pub autoconnect_discovered_interfaces: usize,
+    /// Upstream's `autoconnect_discovered_interfaces_disable_caps`, as
+    /// upstream applies it: upstream reads `[reticulum]` options in file
+    /// order and only honours the key when it comes before
+    /// `autoconnect_discovered_interfaces`, so it is true only then.
+    pub autoconnect_discovered_interfaces_caps_disabled: bool,
     /// Minimum stamp value for accepting discovered interfaces, fractional
     /// since upstream 796ef2d4. A value of 0 or less leaves the default.
     pub required_discovery_value: Option<StampCost>,
@@ -339,6 +345,7 @@ impl Default for ReticulumSection {
             autoconnect_unverified_implementations: false,
             autoconnect_policy: AutoconnectPolicy::Upstream,
             autoconnect_discovered_interfaces: 0,
+            autoconnect_discovered_interfaces_caps_disabled: false,
             required_discovery_value: None,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,

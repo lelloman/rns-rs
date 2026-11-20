@@ -5,6 +5,7 @@ use super::*;
 
 pub(super) fn build_reticulum_section(
     kvs: &HashMap<String, String>,
+    key_order: &[String],
 ) -> Result<ReticulumSection, ConfigError> {
     let keys = Keys(kvs);
     let mut section = ReticulumSection::default();
@@ -154,6 +155,18 @@ pub(super) fn build_reticulum_section(
     // Reticulum.py reads it with `as_int` and uses it only when `> 0`.
     if let Some(n) = keys.parse::<i64>("autoconnect_discovered_interfaces")? {
         s.autoconnect_discovered_interfaces = n.max(0) as usize;
+    }
+    // Upstream aecc1547 reads the options in file order and applies the
+    // caps when it reads the count, so disabling them only takes effect
+    // when the disable key comes first.
+    let disable_caps_key = "autoconnect_discovered_interfaces_disable_caps";
+    if keys.bool(disable_caps_key)? == Some(true) {
+        let position = |key: &str| key_order.iter().position(|k| k == key);
+        s.autoconnect_discovered_interfaces_caps_disabled =
+            match position("autoconnect_discovered_interfaces") {
+                Some(count) => position(disable_caps_key).is_some_and(|disable| disable < count),
+                None => true,
+            };
     }
     // Reticulum.py: `v = as_float(option)`, used only when `v > 0`.
     if let Some(v) = keys.with("required_discovery_value", parse_config_float)? {
