@@ -21,9 +21,9 @@ pub(super) fn create_state_dirs(
     cache_dir: Option<&Path>,
     storage_dir: Option<&Path>,
 ) -> io::Result<()> {
-    if let (Some(cache_dir), Some(storage_dir)) = (cache_dir, storage_dir) {
+    if let (Some(_), Some(storage_dir)) = (cache_dir, storage_dir) {
         for dir in [
-            cache_dir.join("announces"),
+            crate::announce_cache::announce_cache_base(storage_dir),
             storage_dir.join("discovery").join("interfaces"),
             storage_dir.join("blackhole"),
         ] {
@@ -237,10 +237,18 @@ pub(super) fn configure_driver_services(
     #[cfg(feature = "hooks")]
     start_provider_bridge(driver, config.provider_bridge.clone(), tx);
 
-    // Set up announce cache if cache directory is configured
+    // Set up the announce cache if a cache directory is configured, in
+    // upstream's `storage/cache`, moving one rns-rs kept in the cache
+    // directory itself.
     if let Some(ref cache_dir) = config.cache_dir {
-        let announces_dir = cache_dir.join("announces");
-        driver.announce_cache = Some(crate::announce_cache::AnnounceCache::new(announces_dir));
+        if let Some(storage_dir) = node_storage_dir(Some(cache_dir)) {
+            let announces_dir = crate::announce_cache::announce_cache_base(&storage_dir);
+            crate::announce_cache::migrate_announce_cache(
+                &cache_dir.join("announces"),
+                &announces_dir,
+            );
+            driver.announce_cache = Some(crate::announce_cache::AnnounceCache::new(announces_dir));
+        }
     }
     let probe_server = start_probe_server(driver, config, tx);
 

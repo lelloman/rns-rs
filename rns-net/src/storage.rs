@@ -23,7 +23,11 @@ pub struct StoragePaths {
     pub config_dir: PathBuf,
     /// `<config_dir>/storage`.
     pub storage: PathBuf,
-    /// `<config_dir>/cache`.
+    /// `<config_dir>/cache`, the node's cache directory setting, beside
+    /// `storage`. Nothing is kept in it: the announce cache is in
+    /// `storage/cache`, as upstream keeps it (see
+    /// [`crate::announce_cache::announce_cache_base`]), and is moved there
+    /// from this directory at startup. It is not created.
     pub cache: PathBuf,
     /// `storage/identities`.
     pub identities: PathBuf,
@@ -476,11 +480,10 @@ pub fn ensure_storage_dirs(config_dir: &Path) -> io::Result<StoragePaths> {
     let cache = config_dir.join("cache");
     let identities = storage.join("identities");
     let ratchets = storage.join("ratchets");
-    let announces = cache.join("announces");
+    let announces = crate::announce_cache::announce_cache_base(&storage);
     let discovered_interfaces = storage.join("discovery").join("interfaces");
 
     fs::create_dir_all(&storage)?;
-    fs::create_dir_all(&cache)?;
     fs::create_dir_all(&identities)?;
     fs::create_dir_all(&ratchets)?;
     fs::create_dir_all(&announces)?;
@@ -1710,7 +1713,10 @@ mod tests {
         let paths = ensure_storage_dirs(&dir).unwrap();
 
         assert!(paths.storage.exists());
-        assert!(paths.cache.exists());
+        // As upstream: the announce cache in `storage/cache`, and no
+        // `cache` beside `storage`.
+        assert!(dir.join("storage/cache/announces").is_dir());
+        assert!(!paths.cache.exists());
         assert!(paths.identities.exists());
         assert!(paths.ratchets.exists());
         assert!(paths.discovered_interfaces.exists());

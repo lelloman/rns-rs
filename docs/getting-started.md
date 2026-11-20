@@ -24,7 +24,11 @@ identities, path tables, logs, and the `rns-server.json` product config. The
 default is `~/.reticulum`; pass `--config PATH` to use another location.
 
 Known destinations and received ratchets are persisted in
-`storage/known_destinations.db`, and cached announces in `cache/announces.db`.
+`storage/known_destinations.db`, and cached announces in
+`storage/cache/announces.db`, where upstream keeps them. Earlier releases kept
+the announce cache in `cache/announces.db`; at startup it is moved to the new
+location, with its SQLite `-wal` and `-shm` files, unless one is already
+there, and the emptied `cache` directory is removed.
 Changes to known destinations are written every 10 seconds, as upstream does;
 programs attached to the shared instance read them from there when they
 start. A program that cannot open that database, because it runs with its own

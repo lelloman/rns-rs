@@ -46,7 +46,9 @@ rgit. The range has 34 commits:
 `unresponsive_path_recovery` (default `native`) keeps rns-rs's own path
 updates, including its recovery of unresponsive paths, or decides every
 path update as upstream with `upstream`, which also drops rns-rs's
-filter of announce emission times more than a day in the future.
+filter of announce emission times more than a day in the future. The
+announce cache is kept in upstream's `storage/cache/announces.db`; one in
+rns-rs's former `cache/announces.db` is moved there at startup.
 Acceptance evidence is in
 [`docs/upstream-parity/reticulum-1.6.1-rgit-parity.md`](docs/upstream-parity/reticulum-1.6.1-rgit-parity.md)
 and the detailed audit is

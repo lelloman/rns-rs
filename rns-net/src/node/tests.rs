@@ -1157,9 +1157,11 @@ share_instance = False
         &[0xA5; 32],
     )
     .unwrap();
-    crate::announce_cache::AnnounceCache::new(paths.cache.join("announces"))
-        .store(&packet.packet_hash, &packet.raw, None)
-        .unwrap();
+    crate::announce_cache::AnnounceCache::new(crate::announce_cache::announce_cache_base(
+        &paths.storage,
+    ))
+    .store(&packet.packet_hash, &packet.raw, None)
+    .unwrap();
     let now = time::now();
     let route = PersistedPath {
         destination_hash,
@@ -1524,6 +1526,35 @@ fn from_config_creates_identity() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A node started on a config directory whose announce cache is still in
+/// `cache/announces.db`, where rns-rs kept it, moves it to upstream's
+/// `storage/cache/announces.db` with its contents.
+#[test]
+fn startup_moves_the_announce_cache_to_upstreams_location() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = "[reticulum]\nshare_instance = No\nenable_transport = False\n";
+    fs::write(dir.path().join("config"), config).unwrap();
+    let old_base = dir.path().join("cache").join("announces");
+    fs::create_dir_all(&old_base).unwrap();
+    crate::announce_cache::AnnounceCache::new(old_base)
+        .store(&[0x42; 32], &[1, 2, 3], None)
+        .unwrap();
+    assert!(dir.path().join("cache/announces.db").exists());
+
+    let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+    node.shutdown();
+
+    assert!(!dir.path().join("cache").exists());
+    assert!(dir.path().join("storage/cache/announces.db").exists());
+    let cache = crate::announce_cache::AnnounceCache::new(
+        crate::announce_cache::announce_cache_base(&dir.path().join("storage")),
+    );
+    assert_eq!(
+        cache.get(&[0x42; 32]).unwrap().map(|(raw, _)| raw),
+        Some(vec![1, 2, 3])
+    );
+}
+
 #[test]
 fn startup_creates_state_directories_or_fails() {
     let dir = tempfile::tempdir().unwrap();
@@ -1532,7 +1563,7 @@ fn startup_creates_state_directories_or_fails() {
     let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
     node.shutdown();
     for made in [
-        "cache/announces",
+        "storage/cache/announces",
         "storage/discovery/interfaces",
         "storage/blackhole",
     ] {

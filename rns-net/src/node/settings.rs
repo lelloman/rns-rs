@@ -82,7 +82,10 @@ pub struct NodeConfig {
     pub shared_instance_port: u16,
     /// RPC control port (default 37429). Only used when share_instance is true.
     pub rpc_port: u16,
-    /// Cache directory for announce cache. If None, announce caching is disabled.
+    /// Cache directory; `storage` beside it holds the node's state, and the
+    /// announce cache in `storage/cache` as upstream (one in this
+    /// directory, where rns-rs kept it, is moved there at startup). If
+    /// None, announce caching is disabled.
     pub cache_dir: Option<std::path::PathBuf>,
     /// Store for received ratchets. If None, received ratchets are not persisted or used.
     pub ratchet_store: Option<Arc<dyn storage::RatchetStore>>,
