@@ -123,6 +123,7 @@ impl TransportEngine {
             self.config.prefer_shorter_path,
             current_gravity,
             announce_gravity,
+            self.config.unresponsive_path_recovery,
         );
 
         if mp_decision == MultiPathDecision::Reject {
@@ -176,11 +177,21 @@ impl TransportEngine {
 
         let expires = compute_path_expires(ctx.now, interface_mode);
 
-        // Get existing random blobs from the matching path (same next_hop) or empty
+        // Get existing random blobs from the matching path (same next_hop)
+        // or empty; the replaced path's when an unresponsive path is
+        // replaced as upstream does.
+        let replaces_unresponsive =
+            matches!(mp_decision, MultiPathDecision::ReplaceUnresponsive { .. });
         let existing_blobs = self
             .path_table
             .get(&ctx.packet.destination_hash)
-            .and_then(|ps| ps.find_by_next_hop(&ctx.received_from))
+            .and_then(|ps| {
+                if replaces_unresponsive {
+                    ps.primary()
+                } else {
+                    ps.find_by_next_hop(&ctx.received_from)
+                }
+            })
             .map(|e| e.random_blobs.clone())
             .unwrap_or_default();
 
@@ -228,12 +239,21 @@ impl TransportEngine {
 
         // Upstream 8c73e203: an announce accepted only because the path
         // is unresponsive updates the path table but is not rebroadcast.
-        let table_insertion_only = mp_decision == MultiPathDecision::RecoverUnresponsive;
+        let table_insertion_only = matches!(
+            mp_decision,
+            MultiPathDecision::RecoverUnresponsive
+                | MultiPathDecision::ReplaceUnresponsive { rebroadcast: false }
+        );
 
         // Store path via upsert into PathSet
         match mp_decision {
             MultiPathDecision::ReplacePrimary | MultiPathDecision::RecoverUnresponsive => self
                 .upsert_primary_path_destination(ctx.packet.destination_hash, path_entry, ctx.now),
+            MultiPathDecision::ReplaceUnresponsive { .. } => self.replace_primary_path_destination(
+                ctx.packet.destination_hash,
+                path_entry,
+                ctx.now,
+            ),
             MultiPathDecision::AddAlternative => {
                 self.upsert_path_destination(ctx.packet.destination_hash, path_entry, ctx.now)
             }

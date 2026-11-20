@@ -49,6 +49,21 @@ impl TransportEngine {
             .insert(dest_hash, PathSet::from_single(entry, max_paths));
     }
 
+    /// Replace the primary path to `dest_hash` with `entry`, whatever its
+    /// next hop (`unresponsive_path_recovery = upstream`).
+    pub(crate) fn replace_primary_path_destination(
+        &mut self,
+        dest_hash: [u8; 16],
+        entry: PathEntry,
+        now: f64,
+    ) {
+        if let Some(path_set) = self.path_table.get_mut(&dest_hash) {
+            path_set.replace_primary(entry);
+            return;
+        }
+        self.upsert_primary_path_destination(dest_hash, entry, now);
+    }
+
     /// Linger time for never-used paths on this instance.
     pub(crate) fn unused_path_linger(&self) -> f64 {
         if self.config.transport_enabled {

@@ -67,6 +67,53 @@ which were inherited. Physical radio hardware validation remains unclaimed.
   `cargo test -p rns-net --test direct_link_python_interop -- --ignored`
   checks this against a Python peer with and without a channel.
 
+## Unresponsive path recovery
+
+A path is marked unresponsive when a link through it is never
+established, and an announce may then replace it where it otherwise would
+not. Upstream (Transport.py at `cff4d03f`) decides on its single path per
+destination: an announce it has already heard (the same emission time)
+replaces an unresponsive path when it arrives over more hops, through
+whatever next hop, and since `8c73e203` that replacement updates the path
+table without being rebroadcast.
+
+rns-rs's own rules, the default (`unresponsive_path_recovery = native`),
+differ:
+
+- An already-heard announce through a next hop other than the path's is
+  rejected, so an unresponsive path is not recovered through a neighbour
+  that relays the same announce. This is the main difference.
+- It is also taken over the same or fewer hops, which upstream does not.
+- It is also taken for an expired path, where upstream takes only an
+  announce it has not heard.
+- "The same emission time" is the newest of the path's random blobs, where
+  upstream scans them in order and stops at the first that reaches the
+  announce's.
+- A newer announce through another next hop is added as an alternative
+  path; with one path per destination the shorter, unresponsive path is
+  kept.
+
+In both modes a replacement accepted only because the path is unresponsive
+is not rebroadcast.
+
+`unresponsive_path_recovery = upstream` decides an announce for an
+unresponsive path as upstream does, and an accepted announce replaces the
+path whatever its next hop, keeping the replaced path's random blobs. For
+a path that is not unresponsive both modes behave the same. Both keep this
+implementation's distrust of emission times implausibly far in the future
+(`MAX_EMISSION_TIME_SKEW_SECS` in `rns-core/src/transport/pathfinder.rs`).
+
+The rns-rs-only path options combine with it as follows:
+
+- `max_paths_per_destination` above 1: marking a path unresponsive promotes
+  an alternative when the destination has one, so a destination stays
+  unresponsive only while it has a single path. Under `upstream` an
+  accepted announce replaces that path instead of being stored beside it.
+- `prefer_shorter_path`: a strictly shorter announce is still taken for an
+  unresponsive path, in either mode, as it is for any path, and is
+  rebroadcast. Upstream has no such option, so with it set `upstream`
+  differs from upstream for these announces.
+
 ## Performance claims
 
 rns-rs prioritises reliability, correctness, security, traffic management,

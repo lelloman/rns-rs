@@ -148,6 +148,9 @@ pub struct NodeConfig {
     /// Maximum number of alternative paths stored per destination.
     /// Default 1 (single path, backward-compatible).
     pub max_paths_per_destination: usize,
+    /// How an announce may recover an unresponsive path. Default `Native`;
+    /// `Upstream` decides it as upstream Transport.py does.
+    pub unresponsive_path_recovery: rns_core::transport::types::UnresponsivePathRecovery,
     /// Maximum number of packet hashes retained for duplicate suppression.
     pub packet_hashlist_max_entries: usize,
     /// Startup allocation policy for the packet hashlist payload pages.
@@ -242,6 +245,8 @@ impl Default for NodeConfig {
             use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Lazy,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,

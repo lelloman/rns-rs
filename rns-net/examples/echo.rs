@@ -183,6 +183,8 @@ fn main() {
             use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -289,6 +291,8 @@ fn main() {
             use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,

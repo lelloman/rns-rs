@@ -312,6 +312,7 @@ fn test_transport_config(transport_enabled: bool) -> TransportConfig {
         local_hops_delta: 0,
         prefer_shorter_path: false,
         max_paths_per_destination: 1,
+        unresponsive_path_recovery: rns_core::transport::types::UnresponsivePathRecovery::Native,
         packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
         packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
         max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -1024,6 +1025,8 @@ fn start_and_shutdown() {
             use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -1388,6 +1391,8 @@ fn start_with_identity() {
             use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -1464,6 +1469,8 @@ fn start_generates_identity() {
             use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -2567,6 +2574,8 @@ fn announce_builds_valid_packet() {
             use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -2652,6 +2661,8 @@ fn has_path_and_hops_to() {
             use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -2733,6 +2744,8 @@ fn recall_identity_none_when_unknown() {
             use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -2811,6 +2824,8 @@ fn request_path_does_not_crash() {
             use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -2929,6 +2944,8 @@ fn send_packet_plain() {
             use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3015,6 +3032,8 @@ fn send_packet_single_requires_public_key() {
             use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3099,6 +3118,8 @@ fn send_packet_single_encrypts() {
             use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3196,6 +3217,8 @@ fn register_destination_with_proof_prove_all() {
             use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
@@ -3283,6 +3306,8 @@ fn register_destination_with_proof_prove_none() {
             use_implicit_proof: true,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            unresponsive_path_recovery:
+                rns_core::transport::types::UnresponsivePathRecovery::Native,
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             packet_hashlist_allocation: rns_core::transport::types::PacketHashlistAllocation::Eager,
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,

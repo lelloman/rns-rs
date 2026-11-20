@@ -218,6 +218,16 @@ impl PathSet {
         self.paths.truncate(self.capacity);
     }
 
+    /// Replace the primary path with `entry`, whatever its next hop, as
+    /// upstream replaces its single path. Other paths stay, ranked as
+    /// usual.
+    pub fn replace_primary(&mut self, entry: PathEntry) {
+        if !self.paths.is_empty() {
+            self.paths.remove(0);
+        }
+        self.upsert_primary(entry);
+    }
+
     /// Promote the next-best path after the current primary becomes
     /// unresponsive.
     ///
