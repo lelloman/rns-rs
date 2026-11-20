@@ -194,10 +194,9 @@ Implemented so far:
 - `-a` runs upstream's autoinstall wizard: choose the port (from a menu
   when none is given), the kind of device and its model, confirm, and it
   fetches the firmware, creates the signing keys if missing, flashes the
-  board and bootstraps its EEPROM. Its menus are translated from
-  upstream's source by `rns-rnodeconf/tools/translate_wizard.py`, so they
-  read exactly as upstream's. Like `-e`, it uses a port upstream does not
-  list (upstream exits) as given.
+  board and bootstraps its EEPROM. Its menus are transcribed from
+  upstream's source, so they read exactly as upstream's. Like `-e`, it
+  uses a port upstream does not list (upstream exits) as given.
 
 Every option is implemented and compared with upstream's Python
 `rnodeconf` against fake devices, release sites and flashers, and the
