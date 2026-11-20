@@ -64,11 +64,11 @@ evidence exist; until then nothing here is claimed as passed.
 | 5 | `25cce0a8` | 2026-11-17 | Ensure transport identity availability before early tunnel synthesis | Structurally covered | `a097a14e`; `a_dialing_tcp_client_first_sends_a_synthesis_signed_by_the_transport_identity` |
 | 6 | `cc5d6dd0` | 2026-11-17 | Logging | Structurally covered | `fa13858a`; invariant comment in `rns-cli/src/rnsh/initiator.rs` |
 | 7 | `12b2b8c0` | 2026-11-17 | Updated link tests | Non-runtime | `39b2b2dd`; doc comment on `wait_for_link_established` (`rns-net/tests/e2e.rs`) |
-| 8 | `4916017a` | 2026-11-17 | Abort early on non-enabled link mode | Structurally covered | `2309725b`; `every_outbound_link_request_signals_aes_256_cbc`; follow-up `59af6496` (decision 7) |
+| 8 | `4916017a` | 2026-11-17 | Abort early on non-enabled link mode | Structurally covered | `2309725b`; `every_outbound_link_request_signals_aes_256_cbc`; follow-ups `59af6496` and `26b4e735` (decision 7) |
 | 9 | `48c77061` | 2026-11-17 | Load known destinations over RPC in split mode | Integrated | `55dc3aa5`; `known_destinations_rpc_answers_upstreams_dict`, `known_destination_entries_rpc_keeps_the_native_list`, `a_split_mode_client_loads_known_destinations_over_rpc`, `python_split_mode_client_loads_rust_known_destinations_over_rpc` |
-| 10 | `f876ed8d` | 2026-11-17 | Show remote transport status on tunnels | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
-| 11 | `0123133e` | 2026-11-17 | Fixed CPython process fork stdin close deadlock | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
-| 12 | `05ac4bba` | 2026-11-17 | Added ability to configure destination value and link cost to rngit | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
+| 10 | `f876ed8d` | 2026-11-17 | Show remote transport status on tunnels | Integrated | `23b51e35`; `rnstatus_view_matches_upstream` (fixtures regenerated at `f876ed8d`, new case `tunnels_remote_transport`) |
+| 11 | `0123133e` | 2026-11-17 | Fixed CPython process fork stdin close deadlock | Structurally covered | `3312039e`; module comment in `rns-net/src/stamps.rs` |
+| 12 | `05ac4bba` | 2026-11-17 | Added ability to configure destination value and link cost to rngit | Integrated | `3bbe4252`; `destination_costs_default_to_upstreams`, `parses_and_quantizes_destination_costs`, `invalid_destination_costs_are_errors`, `rngit_destinations_carry_their_link_cost_and_stamp_value`, `rngit_invalid_page_cost_fails_the_page_destination` |
 | 13 | `833f6cf2` | 2026-11-17 | Fixed path table culling being able to remove an instance's own local destination paths. Doh. | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
 | 14 | `d72cfdd7` | 2026-11-17 | Mark local client paths responsive on PR responses | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
 | 15 | `5bd93ad9` | 2026-11-17 | Ensure link-based rediscovery does not occur for instance-local paths | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
@@ -356,8 +356,8 @@ stamp work, and `new_responder` refuses an AES-128-CBC request. rns-net drops
 such a request with upstream's debug line, sends no proof and does not count
 a protocol violation (it is well formed). Modes 2-7 were already refused, as
 malformed requests (`ProtocolViolation`, log "LINKREQUEST rejected:
-Unsupported link mode"); their log text still differs from upstream's
-"Invalid link mode N on <link>". `docs/protocol-spec.md` 11.1 and 16 now say
+Unsupported link mode"); that is resolved by `26b4e735`, below.
+`docs/protocol-spec.md` 11.1 and 16 now say
 only AES-256-CBC is enabled. `test_aes128_mode_handshake` became
 `an_aes_128_link_is_refused_by_initiator_and_responder`, and rns-net gained
 `an_aes_128_link_request_is_dropped_without_a_proof`, which failed with the
@@ -373,6 +373,60 @@ rns-net` passed (rns-core lib 1155 and its integration suites, rns-net lib
 1586, `e2e.rs` 74 with 1 ignored, `e2e_direct_connect.rs` 19,
 `python_interop.rs` 6 with 1 ignored, no failures); `cargo fmt --check` and
 `bash scripts/lint-host.sh` passed.
+
+Decision 7 was completed by a second separate commit, `26b4e735` (`link:
+refuse a reserved link mode as upstream does`, no `Upstream-Commit`
+trailer). Upstream at `cff4d03f`, for a request signalling a reserved mode
+(2-7): `validate_request` checks the stamp first (without reading the
+mode), logs "Incoming link request with mode MODE_AES256_GCM" (the
+`MODE_DESCRIPTIONS` name) at debug, then `handshake()` raises "Invalid link
+mode 2 on <link_id>", so the request is dropped without a proof, logged at
+debug as "Validating incoming link request failed: Invalid link mode 2 on
+<...>", and nothing else happens: no link and no protocol violation, as for
+any request `validate_request` refuses. rns-rs counted a protocol violation
+(a per-interface counter, as upstream's, shown by rnstatus) and skipped the
+stamp check for such requests. Now `new_responder` fails with
+`LinkError::InvalidMode { mode, link_id }` (upstream's text), rns-net drops
+it like `ModeNotEnabled` with upstream's debug line and no violation, the
+stamp is read without the mode, and rns-net logs the "Incoming link request
+with mode" line; `mode_description()` names all eight values.
+
+Reading Transport for the same request found a second refusal that
+`59af6496` missed, for any mode outside `ENABLED_MODES` (AES-128-CBC
+included): when Transport lowers the MTU a link request signals, forwarding
+it or delivering it locally, it rebuilds the signalling with
+`Link.signalling_bytes`, which raises, so the request is dropped with
+`protocol_violation("Undecodable path MTU signalling bytes")` on the
+receiving interface and "Dropping link request packet. The contained
+exception was: Requested link mode X not enabled" (debug when forwarding,
+warning with "... packet to local destination ..." when delivering).
+`clamp_forwarded_link_request_mtu` and `clamp_local_link_request_mtu` now
+return the mode in that case, and the transport engine drops the request
+before any link table entry, transmission or path use, logs upstream's
+lines and emits `ProtocolViolation`. Signalling that fits, or is stripped,
+passes whatever its mode, as upstream. Two existing clamp tests that clamped
+AES-128-CBC requests now use AES-256-CBC.
+
+Tests, each failing before the change: `a_reserved_link_mode_is_refused_by_the_responder`
+(rns-core), `a_reserved_link_mode_request_is_dropped_without_a_proof`
+(rns-net; failed with `establishment.rs` reverted, a `ProtocolViolation`
+came back), `lowering_the_mtu_of_a_mode_that_is_not_enabled_is_refused`,
+`forwarded_link_request_needing_a_clamp_in_a_mode_not_enabled_is_dropped`
+and `local_link_request_needing_a_clamp_in_a_mode_not_enabled_is_dropped`
+(rns-core transport; both engine tests failed with the mode check
+disabled). Tests run: `cargo test -p rns-core` passed (lib 1160 and its
+integration suites); `cargo test -p rns-net` passed (lib 1591, `e2e.rs` 74
+with 1 ignored, `e2e_direct_connect.rs` 19, `python_interop.rs` 6 with 1
+ignored against the accepted checkout, no failures); `cargo fmt --check`
+and `bash scripts/lint-host.sh` passed.
+
+Left as they are, outside decision 7 (not link modes): upstream drops a
+link request of a payload size other than 64 or 67 bytes without a protocol
+violation ("Invalid link request payload size of N bytes, dropping
+request"), where rns-rs counts one ("LINKREQUEST rejected: Invalid data");
+and upstream's forwarding computes `min(nh_mtu, ph_mtu)`, which raises (and
+drops the request as undecodable) when the receiving interface has no
+hardware MTU, a case rns-rs interfaces do not produce.
 
 **Final disposition:** Structurally covered.
 
@@ -469,10 +523,25 @@ clients, and appends `, transport enabled` / `, no transport` to
 **Rust applicability:** `rns-cli/src/rnstatus_view.rs:340-368` prints the
 old format. The daemon already sends `rem_is_tn`.
 
-**Local handling:** Port both changes and regenerate the rnstatus fixtures at
-`f876ed8d` in a disposable worktree.
+**Local handling and evidence:** `23b51e35`. `render_tunnel` prints the
+Tunnel ID line only when the interface's `clients` is not truthy (none or
+0, as Python's `not clients`) and appends ", transport enabled" / ", no
+transport" from `rem_is_tn` to a known remote version. The fixtures were
+regenerated with `tests/generate_rnstatus_fixtures.py` from a disposable
+upstream worktree at exactly `f876ed8d` (removed afterwards); the
+generator's docstring pin moved from `884f109b` to `f876ed8d`, as `c4e6fbdc`
+moved it before. Only `tunnels.txt` changed (Tunnel ID lines gone from the
+interfaces with clients, ", transport enabled" on the TCP server), and a new
+case `tunnels_remote_transport` covers ", no transport" and a server with 0
+clients that keeps its Tunnel ID. `rnstatus_view_matches_upstream` failed
+on `tunnels` and `tunnels_remote_transport` with the view change stashed and
+passes with it. Tests run: `cargo test -p rns-cli` passed (lib 133,
+`cli_golden.rs` 1, `jemalloc_smoke.rs` 3, `placeholders.rs` 2 with 1
+ignored, `rnid_cli.rs` 4, `rnsd_cli.rs` 10, `rnsh_cli.rs` 4,
+`utility_interop.rs` 5 with 33 ignored, no failures); `cargo fmt --check` and
+`bash scripts/lint-host.sh` passed.
 
-**Proposed disposition:** Needs port.
+**Final disposition:** Integrated.
 
 ### 11. `0123133e` — Fixed CPython process fork stdin close deadlock
 
@@ -484,10 +553,19 @@ CPython-specific.
 `stamper.rs`). The one `fork` (`rns-cli/src/rnsh/process.rs:151`) only makes
 async-signal-safe calls before `execve` and never touches the stdin lock.
 
-**Local handling:** A doc comment in `stamps.rs` recording why the deadlock
-cannot occur.
+**Local handling and evidence:** `3312039e`. Verified: stamp searches run on
+threads (`SearchPool`: a rayon scope or scoped threads in `stamps.rs`; the
+stamper's queue worker is a `std::thread`), and nothing forks to search. The
+forks rns-rs does make, rnsh's `libc::fork` (`rns-cli/src/rnsh/process.rs`)
+and `std::process::Command` children (rnx's `pre_exec` only calls `setsid`),
+make only async-signal-safe calls before `exec` and never take Rust's
+`Stdin` lock. A module comment in `rns-net/src/stamps.rs` records why the
+deadlock cannot occur. Tests run: `cargo test -p rns-net` passed (lib 1591,
+`e2e.rs` 74 with 1 ignored, `e2e_direct_connect.rs` 19, `python_interop.rs`
+6 with 1 ignored, no failures); `cargo fmt --check` and `bash
+scripts/lint-host.sh` passed.
 
-**Proposed disposition:** Structurally covered.
+**Final disposition:** Structurally covered.
 
 ### 12. `05ac4bba` — Added ability to configure destination value and link cost to rngit
 
@@ -499,12 +577,44 @@ of 18.0 by default instead of 12.5, which initiators see on the wire.
 `server.rs` / `pages.rs` announce the default 12.5. `RnsNode::set_link_cost`
 and `Destination::set_value` already exist.
 
-**Local handling:** Parse and quantize both keys per section, default link
-cost 18.0, apply on registration, keep the value for re-announces, update
-`docs/rns-git.md`. The e2e harness may need `link_cost = 0` to keep debug-build
-tests fast.
+**Local handling and evidence:** `3bbe4252`, per decision 5.
+`ServerConfig` gains `costs` (`[rngit]`) and `pages_costs` (`[pages]`), each a
+`DestinationCosts { link_cost, stamp_value }`. Each key is
+`quantize_cost(as_float(v))`: Python float syntax (underscores between
+digits included), `StampCost::from_f64` rounding to 1/256 and clamping to
+0..=100. The link cost defaults to 18.0 for both destinations and is applied
+with `set_link_cost` (clamped to `LINK_COST_CAP` by the node); `stamp_value`
+is applied with `set_value` only when non-zero, as upstream's `if
+self.stamp_value:`. Both are applied as each destination is built, before
+registration and the first announce; the returned `Destination` keeps the
+target for re-announces. An invalid value (not a float, NaN, infinite) is a
+startup error where upstream raises: `[rngit]` when the config is loaded
+(before `--print-identity`, as upstream's `__apply_config`), `[pages]` only
+when the page destination is registered (upstream reads it in
+`NomadNetworkNode.__init__`), so `pages_costs` is a `Result`. The read order
+per section follows upstream (`stamp_value` first in `[rngit]`,
+`link_cost` first in `[pages]`). The generated `server_config` carries
+upstream's new commented lines verbatim in both sections (rns-git's default
+config is otherwise its own compact form), and `docs/rns-git.md` documents the
+keys with upstream's example.
 
-**Proposed disposition:** Needs port.
+The 18.0 default does not slow the e2e tests: the harness turns destination
+stamping off, so announces carry no link cost and clients grind no link
+stamps; `e2e.rs` ran in 0.9-1.8 s, and no test-only cost was needed.
+
+Tests (new, not compiling before the change):
+`destination_costs_default_to_upstreams`,
+`parses_and_quantizes_destination_costs`,
+`invalid_destination_costs_are_errors`,
+`rngit_destinations_carry_their_link_cost_and_stamp_value`,
+`rngit_invalid_page_cost_fails_the_page_destination`. Tests run: `cargo test
+-p rns-git` passed (lib 223 with 2 ignored, `e2e.rs` 8 with 1 ignored,
+`releases.rs` 11, `stats.rs` 6, no failures); `python_work_lifecycle_interop`
+(ignored by default) passed with `PYTHONPATH` at a disposable upstream
+worktree at `05ac4bba`; `cargo fmt --check` and `bash scripts/lint-host.sh`
+passed.
+
+**Final disposition:** Integrated.
 
 ### 13. `833f6cf2` — Fixed path table culling being able to remove an instance's own local destination paths
 
@@ -852,14 +962,18 @@ utilities included.
    only takes effect when it appears before the count. The parser records key
    order for this.
 5. **Commit 12:** default link cost 18.0, and an invalid `link_cost` or
-   `stamp_value` is a startup error, as upstream.
+   `stamp_value` is a startup error, as upstream. Implemented in
+   `3bbe4252`, see commit 12.
 6. **Commit 19:** the `lossless_medium` flag is added with upstream's
    per-class values, unread, marked `#[allow(dead_code)]` with the reason.
 7. **AES-128 (found via commit 8, pre-existing):** match upstream. Only
    AES-256-CBC is enabled; a responder refuses any other signalled mode.
    Separate commit without an `Upstream-Commit` trailer. Implemented in
-   `59af6496` (`link: only AES-256-CBC is enabled, as upstream`), see
-   commit 8.
+   `59af6496` (`link: only AES-256-CBC is enabled, as upstream`) and
+   completed in `26b4e735` (`link: refuse a reserved link mode as upstream
+   does`: a reserved mode is refused as upstream's `handshake()` refuses
+   it, and Transport drops a request in a mode that is not enabled when it
+   must lower its MTU), see commit 8.
 8. **New-next-hop recovery of an unresponsive path (found via commit 17,
    pre-existing):** rns-rs keeps its behaviour by default, the divergence is
    documented, and a runtime `[reticulum]` option selects upstream's
