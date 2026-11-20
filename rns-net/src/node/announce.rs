@@ -391,6 +391,7 @@ impl RnsNode {
 
     /// Share the driver's stamper and `STAMP_DESTINATIONS` flag, so this
     /// handle stamps announces as the driver is configured to.
+    #[cfg(feature = "iface-local")]
     pub(crate) fn attach_stamper(
         &mut self,
         stamper: Arc<crate::stamper::Stamper>,

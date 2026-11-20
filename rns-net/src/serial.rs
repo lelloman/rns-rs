@@ -6,6 +6,8 @@
 
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+#[cfg(any(feature = "iface-serial", feature = "iface-kiss"))]
+use std::time::Duration;
 
 /// Serial port parity setting.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -265,6 +267,48 @@ fn baud_to_speed(baud: u32) -> io::Result<libc::speed_t> {
             io::ErrorKind::InvalidInput,
             format!("unsupported baud rate: {}", baud),
         )),
+    }
+}
+
+/// Reopen a serial port the reader thread lost, for the Serial and KISS
+/// interfaces (`kind` names it in the log): every 5 seconds, open it,
+/// wait `settle`, then `prepare` its writer, until that works or the
+/// interface stops. Returns the reader and the writer.
+#[cfg(any(feature = "iface-serial", feature = "iface-kiss"))]
+pub(crate) fn reopen_serial_port(
+    name: &str,
+    kind: &str,
+    serial_config: &SerialConfig,
+    control: &crate::interface::ListenerControl,
+    settle: Duration,
+    mut prepare: impl FnMut(&mut std::fs::File) -> io::Result<()>,
+) -> Option<(std::fs::File, std::fs::File)> {
+    loop {
+        if !crate::interface::wait_while_active(control, Duration::from_secs(5)) {
+            return None;
+        }
+        log::info!(
+            "[{}] attempting to reconnect {} port {}...",
+            name,
+            kind,
+            serial_config.path
+        );
+        match SerialPort::open(serial_config) {
+            Ok(port) => match (port.reader(), port.writer()) {
+                (Ok(reader), Ok(mut writer)) => {
+                    if !crate::interface::wait_while_active(control, settle) {
+                        return None;
+                    }
+                    if let Err(e) = prepare(&mut writer) {
+                        log::warn!("[{}] {} port setup failed: {}", name, kind, e);
+                        continue;
+                    }
+                    return Some((reader, writer));
+                }
+                _ => log::warn!("[{}] failed to get handles from {} port", name, kind),
+            },
+            Err(e) => log::warn!("[{}] {} reconnect failed: {}", name, kind, e),
+        }
     }
 }
 

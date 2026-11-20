@@ -327,6 +327,7 @@ pub(super) fn extract_discovery_config(
     })
 }
 
+#[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
 pub(super) fn default_discovery_runtime_config(
     interface_name: &str,
     interface_type: &str,
@@ -362,6 +363,7 @@ pub(super) fn parse_discovery_lxmf_address(value: &str) -> Option<[u8; 16]> {
     Some(address)
 }
 
+#[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
 pub(super) fn discovery_runtime_ifac_fields(
     ifac: Option<&IfacConfig>,
 ) -> (Option<String>, Option<String>) {

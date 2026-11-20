@@ -30,11 +30,14 @@ pub(crate) struct ListenerStat {
 pub(crate) enum ListenerClients {
     /// The interfaces registered with this listener as their parent,
     /// counted as its `clients`.
+    #[cfg(feature = "iface-tcp")]
     Spawned,
     /// The shared instance's local clients, on this endpoint.
+    #[cfg(feature = "iface-local")]
     Local(crate::interface::display::LocalEndpoint),
     /// An `AutoInterface`'s peers, registered with it as their parent:
     /// upstream counts them as its `peers` and reports no `clients`.
+    #[cfg(feature = "iface-auto")]
     AutoPeers,
     /// An `I2PInterface`'s peers, registered with it as their parent.
     #[cfg(feature = "iface-i2p")]

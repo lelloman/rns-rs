@@ -24,6 +24,7 @@ pub(crate) use path_responses::*;
 pub use peer_pool::*;
 
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "iface-backbone")]
 use std::io;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -46,13 +47,14 @@ use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookP
 
 #[cfg(feature = "hooks")]
 use crate::event::BackbonePeerHookEvent;
+#[cfg(feature = "iface-backbone")]
+use crate::event::{BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus};
 use crate::event::{
-    BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus, BackbonePeerStateEntry, BlackholeInfo,
-    DrainStatus, Event, EventReceiver, InterfaceStatsResponse, KnownDestinationEntry,
-    LifecycleState, LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest,
-    QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
-    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
-    TrafficDetail,
+    BackbonePeerStateEntry, BlackholeInfo, DrainStatus, Event, EventReceiver,
+    InterfaceStatsResponse, KnownDestinationEntry, LifecycleState, LocalDestinationEntry,
+    NextHopResponse, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
+    RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
+    RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat, TrafficDetail,
 };
 use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::ifac;
@@ -167,6 +169,7 @@ fn inject_transport_header(raw: &[u8], next_hop: &[u8; 16]) -> Vec<u8> {
     new_raw
 }
 
+#[cfg(runtime_config_ifaces)]
 fn recover_mutex_guard<'a, T>(mutex: &'a Mutex<T>, label: &str) -> std::sync::MutexGuard<'a, T> {
     match mutex.lock() {
         Ok(guard) => guard,

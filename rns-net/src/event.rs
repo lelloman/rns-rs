@@ -139,11 +139,18 @@ pub(crate) enum SourceStatus {
     /// Stop reading until the next tick-time
     /// [`EventReceiver::resume_paused_sources`], e.g. after an error that
     /// readiness alone would report again at once.
+    #[cfg(any(
+        feature = "iface-tcp",
+        feature = "iface-local",
+        feature = "iface-auto",
+        feature = "iface-backbone"
+    ))]
     Pause,
     /// Deregister and drop the source.
     Remove,
     /// Keep the source but leave it unwatched: whoever made it hold (the
     /// source's own logic, e.g. an ingress throttle) arms it again.
+    #[cfg(feature = "iface-backbone")]
     Hold,
 }
 
@@ -488,6 +495,7 @@ impl EventSender {
 
     /// Watch a registered loop source for readability again, or stop
     /// watching it, in the mode sources are registered with.
+    #[cfg(feature = "iface-backbone")]
     pub(crate) fn set_source_readable(
         &self,
         fd: std::os::fd::BorrowedFd<'_>,
@@ -1044,10 +1052,17 @@ impl EventReceiver {
                     self.shared.disarm_source(event.key, source.as_ref());
                     registry.suspended.push(event.key);
                 }
+                #[cfg(any(
+                    feature = "iface-tcp",
+                    feature = "iface-local",
+                    feature = "iface-auto",
+                    feature = "iface-backbone"
+                ))]
                 SourceStatus::Pause => {
                     self.shared.disarm_source(event.key, source.as_ref());
                     registry.paused.push(event.key);
                 }
+                #[cfg(feature = "iface-backbone")]
                 SourceStatus::Hold => self.shared.disarm_source(event.key, source.as_ref()),
                 SourceStatus::Remove => {}
             }

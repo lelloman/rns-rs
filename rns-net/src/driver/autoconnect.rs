@@ -27,9 +27,11 @@ pub(crate) const DETACH_THRESHOLD: f64 = 12.0;
 
 /// The bitrate upstream configures on an auto-connected interface
 /// (`_add_interface(..., configured_bitrate=5E6)`).
+#[cfg(feature = "iface-backbone")]
 pub(crate) const AUTOCONNECT_BITRATE: u64 = 5_000_000;
 
 /// Addresses upstream never auto-connects to (`INVALID_IP_ADDRESSES`).
+#[cfg(feature = "iface-backbone")]
 const INVALID_IP_ADDRESSES: [&str; 2] = ["127.0.0.1", "0.0.0.0"];
 
 pub(crate) struct UpstreamAutoconnect {
@@ -46,6 +48,7 @@ pub(crate) struct UpstreamAutoconnect {
     bootstrap_interfaces: Vec<String>,
     /// Targets of the configured client interfaces, which an auto-connect
     /// must not duplicate.
+    #[cfg(feature = "iface-backbone")]
     configured_targets: Vec<(String, u16)>,
 }
 
@@ -53,9 +56,11 @@ struct AutoconnectMember {
     id: InterfaceId,
     name: String,
     /// `endpoint_hash`: the SHA-256 of `reachable_on:port`.
+    #[cfg(feature = "iface-backbone")]
     endpoint_hash: [u8; 32],
     /// `autoconnect_source`: the network that announced it, as hex.
     source: String,
+    #[cfg(feature = "iface-backbone")]
     target: (String, u16),
     #[cfg(feature = "iface-backbone")]
     control: Option<crate::interface::ListenerControl>,
@@ -67,7 +72,7 @@ impl UpstreamAutoconnect {
     pub(crate) fn new(
         max: usize,
         bootstrap_interfaces: Vec<String>,
-        configured_targets: Vec<(String, u16)>,
+        #[cfg(feature = "iface-backbone")] configured_targets: Vec<(String, u16)>,
     ) -> Self {
         Self {
             max,
@@ -76,6 +81,7 @@ impl UpstreamAutoconnect {
             monitoring: false,
             last_monitor: 0.0,
             bootstrap_interfaces,
+            #[cfg(feature = "iface-backbone")]
             configured_targets,
         }
     }
@@ -88,6 +94,7 @@ impl UpstreamAutoconnect {
 
 /// upstream `endpoint_hash`: the SHA-256 of `reachable_on` followed by
 /// `:port`.
+#[cfg(feature = "iface-backbone")]
 fn endpoint_hash(reachable_on: &str, port: Option<u16>) -> [u8; 32] {
     let mut specifier = reachable_on.to_string();
     if let Some(port) = port {
@@ -99,6 +106,7 @@ fn endpoint_hash(reachable_on: &str, port: Option<u16>) -> [u8; 32] {
 /// Addresses upstream does not auto-connect to: Yggdrasil and onion
 /// addresses, whose networks it cannot tell are reachable, and the invalid
 /// IP addresses.
+#[cfg(feature = "iface-backbone")]
 fn unreachable_address(reachable_on: &str) -> bool {
     if reachable_on.to_ascii_lowercase().ends_with(".onion") {
         return true;
@@ -121,7 +129,7 @@ impl Driver {
         &mut self,
         max: usize,
         bootstrap_interfaces: Vec<String>,
-        configured_targets: Vec<(String, u16)>,
+        #[cfg(feature = "iface-backbone")] configured_targets: Vec<(String, u16)>,
     ) {
         if max == 0 {
             return;
@@ -130,6 +138,7 @@ impl Driver {
         self.upstream_autoconnect = Some(UpstreamAutoconnect::new(
             max,
             bootstrap_interfaces,
+            #[cfg(feature = "iface-backbone")]
             configured_targets,
         ));
     }
@@ -161,6 +170,7 @@ impl Driver {
 
     /// Whether an interface already reaches the discovered endpoint
     /// (`interface_exists`).
+    #[cfg(feature = "iface-backbone")]
     fn autoconnect_endpoint_exists(&self, reachable_on: &str, port: Option<u16>) -> bool {
         let Some(autoconnect) = self.upstream_autoconnect.as_ref() else {
             return false;
@@ -483,11 +493,10 @@ impl Driver {
         else {
             return;
         };
-        #[cfg_attr(not(feature = "iface-backbone"), allow(unused_mut))]
-        let mut member = autoconnect.members.remove(index);
+        let member = autoconnect.members.remove(index);
         #[cfg(feature = "iface-backbone")]
         {
-            let control = member.control.take();
+            let control = member.control;
             if self.interfaces.contains_key(&id) {
                 self.stop_dynamic_backbone_client(id, control, member.name.clone());
                 self.callbacks.on_interface_down(id);

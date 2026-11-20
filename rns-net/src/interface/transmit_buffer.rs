@@ -1,9 +1,12 @@
 //! Coalescing buffer for complete, on-wire interface frames.
 
+#[cfg(any(feature = "iface-local", feature = "iface-backbone"))]
 use std::collections::VecDeque;
+#[cfg(any(feature = "iface-local", feature = "iface-backbone"))]
 use std::io::{self, Write};
 use std::time::Duration;
 
+#[cfg(any(feature = "iface-local", feature = "iface-backbone"))]
 pub(crate) const COALESCE_TARGET: usize = 65_536;
 pub(crate) const EGRESS_MID_WATERMARK: usize = 128 * 1024;
 pub(crate) const EGRESS_HIGH_WATERMARK: usize = 4 * 1024 * 1024;
@@ -40,6 +43,7 @@ impl EgressController {
 
     /// Evaluate one interval. Returns `true` when the peer made no progress
     /// for upstream's dead-peer deadline and should be torn down.
+    #[cfg(feature = "iface-backbone")]
     pub(crate) fn evaluate(
         &mut self,
         now: Duration,
@@ -100,6 +104,7 @@ impl EgressController {
     }
 }
 
+#[cfg(any(feature = "iface-local", feature = "iface-backbone"))]
 struct Chunk {
     data: Vec<u8>,
     frames: usize,
@@ -109,6 +114,7 @@ struct Chunk {
 ///
 /// The producer appends finalized frames. The consumer drains immutable
 /// chunks, resuming at `head_offset` after a partial write.
+#[cfg(any(feature = "iface-local", feature = "iface-backbone"))]
 pub(crate) struct TransmitBuffer {
     chunks: VecDeque<Chunk>,
     tail: Vec<u8>,
@@ -121,6 +127,7 @@ pub(crate) struct TransmitBuffer {
     sent_frames: usize,
 }
 
+#[cfg(any(feature = "iface-local", feature = "iface-backbone"))]
 impl TransmitBuffer {
     pub(crate) fn new() -> Self {
         Self {
@@ -254,6 +261,7 @@ impl TransmitBuffer {
         self.visible_bytes.saturating_sub(self.sent_bytes)
     }
 
+    #[cfg(feature = "iface-backbone")]
     pub(crate) fn total_sent_bytes(&self) -> usize {
         self.sent_bytes
     }
@@ -269,6 +277,7 @@ impl TransmitBuffer {
     }
 }
 
+#[cfg(any(feature = "iface-local", feature = "iface-backbone"))]
 impl Default for TransmitBuffer {
     fn default() -> Self {
         Self::new()

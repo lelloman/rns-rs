@@ -382,6 +382,7 @@ pub struct EgressControl {
 }
 
 impl EgressControl {
+    #[cfg(feature = "iface-backbone")]
     pub(crate) fn new(byte_limit: usize) -> Self {
         Self {
             byte_limit,
@@ -468,6 +469,7 @@ pub fn tunnels_allowed(interface_type: &str) -> bool {
 }
 
 /// Hardware MTU tier shared by TCP and Backbone interfaces.
+#[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
 pub(crate) const fn auto_mtu_for_bitrate(bitrate: u64) -> Option<u32> {
     if bitrate >= 1_000_000_000 {
         Some(524_288)
@@ -496,9 +498,11 @@ pub(crate) const fn auto_mtu_for_bitrate(bitrate: u64) -> Option<u32> {
 
 /// Bitrate a TCP interface assumes when `bitrate` is not configured:
 /// upstream's `TCPClientInterface` / `TCPServerInterface` `BITRATE_GUESS`.
+#[cfg(feature = "iface-tcp")]
 pub(crate) const TCP_BITRATE_GUESS: u64 = 10_000_000;
 
 /// Bitrate of a TCP interface: the configured one, else [`TCP_BITRATE_GUESS`].
+#[cfg(feature = "iface-tcp")]
 pub(crate) fn tcp_bitrate(bitrate: Option<u64>) -> u64 {
     bitrate.unwrap_or(TCP_BITRATE_GUESS)
 }
@@ -506,6 +510,7 @@ pub(crate) fn tcp_bitrate(bitrate: Option<u64>) -> u64 {
 /// The optional `bitrate` and `fixed_mtu` keys of a TCP interface, with
 /// upstream's meaning: `fixed_mtu` sets the hardware MTU and must be at least
 /// the base MTU; `bitrate` is the interface bitrate.
+#[cfg(feature = "iface-tcp")]
 pub(crate) fn parse_tcp_rate_params(
     params: &HashMap<String, String>,
 ) -> Result<(Option<u64>, Option<u32>), String> {
@@ -535,6 +540,7 @@ pub(crate) fn parse_tcp_rate_params(
 /// How long a TCP interface lets a frame wait in the driver's write buffer
 /// when `flush_after_us` is not set: 25 µs in the parallel
 /// engine, otherwise until the end of the driver's pass.
+#[cfg(feature = "iface-tcp")]
 pub(crate) const DEFAULT_FLUSH_AFTER: Option<Duration> = if cfg!(feature = "engine-parallel") {
     Some(Duration::from_micros(25))
 } else {
@@ -545,6 +551,7 @@ pub(crate) const DEFAULT_FLUSH_AFTER: Option<Duration> = if cfg!(feature = "engi
 /// extension): microseconds a frame may wait in the driver's write buffer
 /// before it is written, instead of waiting for the end of the driver's pass;
 /// `off` waits for the end of the pass whatever the build's default.
+#[cfg(feature = "iface-tcp")]
 pub(crate) fn parse_flush_after(
     params: &HashMap<String, String>,
 ) -> Result<Option<Duration>, String> {
@@ -562,6 +569,7 @@ pub(crate) fn parse_flush_after(
 /// upstream's autoconfiguration tier for its bitrate ([`tcp_bitrate`]).
 /// Below the lowest tier upstream sets no hardware MTU, which leaves links
 /// at the base MTU.
+#[cfg(feature = "iface-tcp")]
 pub(crate) fn tcp_hardware_mtu(bitrate: Option<u64>, fixed_mtu: Option<u32>) -> u32 {
     fixed_mtu.unwrap_or_else(|| {
         auto_mtu_for_bitrate(tcp_bitrate(bitrate)).unwrap_or(rns_core::constants::MTU as u32)
@@ -593,6 +601,7 @@ impl ListenerControl {
         }
     }
 
+    #[cfg(any(feature = "iface-auto", feature = "iface-rnode"))]
     pub(crate) fn with_running_flag(running: Arc<AtomicBool>) -> Self {
         Self {
             stop: Arc::new(AtomicBool::new(false)),
@@ -603,6 +612,7 @@ impl ListenerControl {
     }
 
     /// Run `finish` from [`Self::finish`].
+    #[cfg(feature = "iface-rnode")]
     pub(crate) fn with_on_finish(mut self, finish: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_finish = Some(Arc::new(finish));
         self
@@ -628,6 +638,7 @@ impl ListenerControl {
     }
 
     /// Let [`Self::request_stop`] wake the listener thread's wait.
+    #[cfg(feature = "iface-local")]
     pub(crate) fn set_wake(&self, wake: crate::listen::ListenerWake) {
         let _ = self.wake.set(wake);
         // A stop requested before the wake was known is seen by the
@@ -645,6 +656,7 @@ impl ListenerControl {
 }
 
 /// Wait for serial input without keeping a detached reader blocked forever.
+#[cfg(any(feature = "iface-serial", feature = "iface-kiss"))]
 pub(crate) fn poll_readable(fd: std::os::fd::RawFd, timeout: Duration) -> io::Result<bool> {
     let timeout_ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
     let revents = match crate::sys::poll_in(fd, timeout_ms) {
@@ -661,6 +673,12 @@ pub(crate) fn poll_readable(fd: std::os::fd::RawFd, timeout: Duration) -> io::Re
     Ok(revents != 0)
 }
 
+#[cfg(any(
+    feature = "iface-tcp",
+    feature = "iface-serial",
+    feature = "iface-kiss",
+    feature = "iface-backbone"
+))]
 pub(crate) fn wait_while_active(control: &ListenerControl, duration: Duration) -> bool {
     let deadline = Instant::now() + duration;
     while !control.should_stop() {
@@ -673,8 +691,22 @@ pub(crate) fn wait_while_active(control: &ListenerControl, duration: Duration) -
     false
 }
 
+#[cfg(any(
+    feature = "iface-tcp",
+    feature = "iface-serial",
+    feature = "iface-kiss",
+    feature = "iface-backbone",
+    feature = "iface-i2p"
+))]
 pub(crate) struct UnavailableWriter;
 
+#[cfg(any(
+    feature = "iface-tcp",
+    feature = "iface-serial",
+    feature = "iface-kiss",
+    feature = "iface-backbone",
+    feature = "iface-i2p"
+))]
 impl Writer for UnavailableWriter {
     fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
         Err(io::Error::new(

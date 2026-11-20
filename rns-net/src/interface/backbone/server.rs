@@ -701,12 +701,12 @@ impl LoopSource for ListenerSource {
                         return SourceStatus::Remove;
                     }
                 }
-                Err(error) => match crate::interface::tcp_server::accept_error_step(&error) {
-                    crate::interface::tcp_server::AcceptStep::Drained => {
+                Err(error) => match crate::interface::stream_read::accept_error_step(&error) {
+                    crate::interface::stream_read::AcceptStep::Drained => {
                         return SourceStatus::Rearm
                     }
-                    crate::interface::tcp_server::AcceptStep::Next => {}
-                    crate::interface::tcp_server::AcceptStep::Pause => {
+                    crate::interface::stream_read::AcceptStep::Next => {}
+                    crate::interface::stream_read::AcceptStep::Pause => {
                         log::warn!("[{}] accept error, pausing accepts: {}", server.name, error);
                         return SourceStatus::Pause;
                     }

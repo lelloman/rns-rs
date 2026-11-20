@@ -79,6 +79,7 @@ impl Driver {
         was_registered
     }
 
+    #[cfg(feature = "iface-backbone")]
     pub(in crate::driver) fn dynamic_burst_counts(&self, parent_id: InterfaceId) -> (usize, usize) {
         self.dynamic_interface_parents
             .iter()

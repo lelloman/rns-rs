@@ -129,6 +129,7 @@ impl Driver {
         self.register_interface_runtime_defaults(&info);
         self.engine.register_interface(info.clone());
         if let Some(writer) = new_writer {
+            #[cfg(feature = "iface-local")]
             if info.is_local_client {
                 self.name_local_client(id);
             }

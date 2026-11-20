@@ -33,6 +33,10 @@ impl InterfaceRegistry {
 
     /// Create a registry pre-populated with all built-in interface types.
     pub fn with_builtins() -> Self {
+        #[cfg_attr(
+            not(any_iface),
+            allow(unused_mut, reason = "no built-in interface in this build")
+        )]
         let mut reg = Self::new();
         #[cfg(feature = "iface-tcp")]
         {

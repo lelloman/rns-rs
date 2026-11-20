@@ -13,6 +13,7 @@ use rns_core::transport::types::InterfaceId;
 
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
+use crate::interface::stream_read::{read_stream_frames, StreamRead};
 use crate::interface::{lock_or_recover, wait_while_active, ListenerControl, Writer};
 
 /// Upstream `TCPInterface.HW_MTU`.
@@ -263,8 +264,6 @@ fn start_with_ifac_control(
         control,
     ))
 }
-
-pub(crate) use super::stream_read::{read_stream_frames, StreamRead};
 
 /// What a client connection needs across reconnects.
 struct ClientLink {

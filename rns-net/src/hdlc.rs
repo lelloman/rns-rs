@@ -93,6 +93,7 @@ pub(crate) const WRITE_BATCH_BYTES: usize = 256 * 1024;
 /// possible, flushing whenever the pending batch reaches
 /// [`WRITE_BATCH_BYTES`]. The wire bytes are identical to writing each
 /// frame separately; only the number of system calls changes.
+#[cfg(any(feature = "iface-tcp", feature = "iface-local"))]
 pub(crate) fn write_frames<W: std::io::Write>(
     writer: &mut W,
     frames: &[crate::interface::FrameBytes],

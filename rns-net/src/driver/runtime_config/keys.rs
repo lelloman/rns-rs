@@ -4,6 +4,7 @@
 use super::*;
 
 impl Driver {
+    #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
     pub(super) fn is_discovery_runtime_setting(setting: &str) -> bool {
         matches!(
             setting,
@@ -19,6 +20,7 @@ impl Driver {
         )
     }
 
+    #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
     pub(super) fn discovery_runtime_entry(
         key: &str,
         setting: &str,
