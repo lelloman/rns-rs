@@ -13,51 +13,25 @@
 //! once its stream is served on the driver.
 
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::TcpStream;
 use std::os::fd::{AsFd, AsRawFd};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use rns_core::transport::types::InterfaceId;
 
 use super::sam::{self, Destination, SamError};
+use super::session::{ControlLines, Session, ACCEPT_RETRY_WAIT, MAX_SAM_LINE};
 use super::tunnel::PeerTunnel;
 use super::{
-    control_reply, frame_decoder, open_session_retrying, peer_info, peer_up, reopen_session,
-    template_ifac_size, I2pConfig, I2pEndpoint, I2pRuntime, I2pWriter, OutboundPeer,
+    frame_decoder, reopen_session, template_ifac_size, I2pConfig, I2pEndpoint, OutboundPeer,
 };
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
-use crate::interface::lock_or_recover;
 use crate::interface::loop_writer::read_key;
 use crate::interface::stream_read::{read_stream_frames, StreamRead};
-
-/// How long to wait before asking the bridge again after an accept failed.
-const ACCEPT_RETRY_WAIT: Duration = Duration::from_secs(1);
-
-/// Longest line the bridge may send ahead of an accepted stream's data: a
-/// destination in I2P base64 is well under this.
-const MAX_ACCEPT_LINE: usize = 4096;
-
-/// What the interface's streams share.
-struct Session {
-    sam_addr: SocketAddr,
-    session_id: String,
-    name: String,
-    tx: EventSender,
-    next_id: Arc<AtomicU64>,
-    runtime: Arc<Mutex<I2pRuntime>>,
-    ingress_control: rns_core::transport::types::IngressControlConfig,
-    dynamic_template: Option<crate::interface::DynamicInterfaceTemplate>,
-    underlay_mark: Option<u32>,
-    endpoint: Arc<Mutex<I2pEndpoint>>,
-    /// The interface's configuration, to open the session again with.
-    config: I2pConfig,
-    /// How long to wait before opening the session again.
-    sam_retry_wait: Duration,
-}
 
 /// Set the SAM session up and serve it on the driver loop. Runs on a setup
 /// thread, which ends once the first accept is armed.
@@ -68,241 +42,169 @@ pub(super) fn setup(
     next_id: Arc<AtomicU64>,
     dynamic_template: Option<crate::interface::DynamicInterfaceTemplate>,
 ) -> Result<(), SamError> {
-    let sam_addr: SocketAddr = format!("{}:{}", config.sam_host, config.sam_port)
-        .parse()
-        .map_err(|e| SamError::Io(io::Error::new(io::ErrorKind::InvalidInput, e)))?;
-    // One session carries every stream, outbound and inbound.
-    let (control, session_id) = open_session_retrying(&config, &sam_addr, config.sam_retry_wait());
-
-    let session = Arc::new(Session {
-        sam_addr,
-        session_id,
-        name: config.name.clone(),
-        tx,
-        next_id,
-        runtime: Arc::clone(&config.runtime),
-        ingress_control: config.ingress_control,
-        dynamic_template,
-        underlay_mark: config.underlay_mark,
-        endpoint: Arc::clone(&config.endpoint),
-        sam_retry_wait: config.sam_retry_wait(),
-        config: config.clone(),
-    });
+    let (session, control) = Session::open(config, tx, next_id, dynamic_template)?;
 
     // The session lasts as long as its control socket stays open.
-    session.serve_control(control).map_err(SamError::Io)?;
+    serve_control(&session, control).map_err(SamError::Io)?;
 
     for peer in peers {
         let session = Arc::clone(&session);
         thread::Builder::new()
             .name(format!("i2p-out-{}", peer.address))
-            .spawn(move || session.connect(peer, false))
+            .spawn(move || connect(session, peer, false))
             .map_err(SamError::Io)?;
     }
 
-    if config.connectable {
-        session.arm_accept();
-        super::I2pEndpoint::set_accepting(&config.endpoint);
+    if session.config.connectable {
+        arm_accept(&session);
+        super::I2pEndpoint::set_accepting(&session.endpoint);
     }
     Ok(())
 }
 
-impl Session {
-    fn reconnect_wait(&self) -> Duration {
-        lock_or_recover(&self.runtime, "i2p runtime").reconnect_wait
+/// Open the session again, on a thread of its own, after the bridge
+/// closed it, and serve its new control socket on the driver loop. Peers
+/// reconnect and accepts are asked for again meanwhile, under the same
+/// session id.
+fn reopen_later(session: &Arc<Session>) {
+    let session = Arc::clone(session);
+    let name = session.name.clone();
+    let spawned = thread::Builder::new()
+        .name(format!("i2p-session-{}", session.config.interface_id.0))
+        .spawn(move || {
+            let control =
+                reopen_session(&session.config, &session.sam_addr, session.sam_retry_wait);
+            if let Err(e) = serve_control(&session, control) {
+                log::error!("[{}] cannot serve the I2P session: {}", session.name, e);
+            }
+        });
+    if let Err(e) = spawned {
+        log::error!("[{}] cannot reopen the I2P session: {}", name, e);
     }
+}
 
-    /// Open the session again, on a thread of its own, after the bridge
-    /// closed it, and serve its new control socket on the driver loop.
-    /// Peers reconnect and accepts are asked for again meanwhile, under the
-    /// same session id.
-    fn reopen_later(self: &Arc<Self>) {
-        let session = Arc::clone(self);
-        let spawned = thread::Builder::new()
-            .name(format!("i2p-session-{}", self.config.interface_id.0))
-            .spawn(move || {
-                let control =
-                    reopen_session(&session.config, &session.sam_addr, session.sam_retry_wait);
-                if let Err(e) = session.serve_control(control) {
-                    log::error!("[{}] cannot serve the I2P session: {}", session.name, e);
-                }
-            });
-        if let Err(e) = spawned {
-            log::error!("[{}] cannot reopen the I2P session: {}", self.name, e);
+/// Serve the session's control socket on the driver loop.
+fn serve_control(session: &Arc<Session>, control: TcpStream) -> io::Result<()> {
+    control.set_nonblocking(true)?;
+    session.tx.register_source(
+        read_key(session.config.interface_id),
+        Box::new(ControlSource {
+            stream: control,
+            lines: ControlLines::default(),
+            session: Arc::clone(session),
+        }),
+    )
+}
+
+/// Connect to an outbound peer until it is served on the driver, waiting
+/// between attempts (and first, when `wait_first`).
+fn connect(session: Arc<Session>, peer: OutboundPeer, wait_first: bool) {
+    let mut wait = wait_first;
+    loop {
+        if wait {
+            thread::sleep(session.reconnect_wait());
         }
-    }
-
-    /// Serve the session's control socket on the driver loop.
-    fn serve_control(self: &Arc<Self>, control: TcpStream) -> io::Result<()> {
-        control.set_nonblocking(true)?;
-        self.tx.register_source(
-            read_key(self.config.interface_id),
-            Box::new(ControlSource {
-                stream: control,
-                line: Vec::new(),
-                session: Arc::clone(self),
-            }),
-        )
-    }
-
-    fn allocate_id(&self) -> InterfaceId {
-        InterfaceId(self.next_id.fetch_add(1, Ordering::Relaxed))
-    }
-
-    /// Connect to an outbound peer until it is served on the driver,
-    /// waiting between attempts (and first, when `wait_first`).
-    fn connect(self: Arc<Self>, outbound: OutboundPeer, wait_first: bool) {
-        let OutboundPeer { address: peer, id } = outbound;
-        let mut wait = wait_first;
-        loop {
-            if wait {
-                thread::sleep(self.reconnect_wait());
-            }
-            wait = true;
-            log::info!("[{}] connecting to I2P peer {}", self.name, peer);
-            let destination = if peer.ends_with(".i2p") {
-                match sam::naming_lookup_with_mark(&self.sam_addr, &peer, self.underlay_mark) {
-                    Ok(dest) => dest.to_i2p_base64(),
-                    Err(e) => {
-                        log::warn!("[{}] failed to resolve {}: {}", self.name, peer, e);
-                        continue;
-                    }
-                }
-            } else {
-                // Assume it's already a full base64 destination
-                peer.clone()
-            };
-            let stream = match sam::stream_connect_with_mark(
-                &self.sam_addr,
-                &self.session_id,
-                &destination,
-                self.underlay_mark,
-            ) {
-                Ok(stream) => stream,
-                Err(e) => {
-                    log::warn!(
-                        "[{}] failed to connect to I2P peer {}: {}",
-                        self.name,
-                        peer,
-                        e
-                    );
-                    continue;
-                }
-            };
-            log::info!(
-                "[{}] connected to I2P peer {} → id {}",
-                self.name,
-                peer,
-                id.0
-            );
-            let (event, tunnel, detached) = match self.writer(&stream, id, &peer, true) {
-                Ok(up) => up,
-                Err(e) => {
-                    log::warn!("[{}] failed to clone stream: {}", self.name, e);
-                    continue;
-                }
-            };
-            if self.tx.send(event).is_err() {
-                return; // Driver shut down
-            }
-            let source = StreamSource {
-                stream,
-                state: State::Peer(self.peer(id, Some(peer.clone()), tunnel, detached)),
-                session: Arc::clone(&self),
-            };
-            match self.tx.register_source(read_key(id), Box::new(source)) {
-                Ok(()) => return,
-                Err(e) => {
-                    log::warn!("[{}] cannot read I2P peer {}: {}", self.name, peer, e);
-                    let _ = self.tx.send(Event::InterfaceDown(id));
-                }
+        wait = true;
+        let Some((stream, up)) = session.connect_once(&peer) else {
+            continue;
+        };
+        if session.tx.send(up.event).is_err() {
+            return; // Driver shut down
+        }
+        let source = StreamSource {
+            stream,
+            state: State::Peer(new_peer(
+                &session,
+                peer.id,
+                Some(peer.clone()),
+                up.tunnel,
+                up.detached,
+            )),
+            session: Arc::clone(&session),
+        };
+        match session
+            .tx
+            .register_source(read_key(peer.id), Box::new(source))
+        {
+            Ok(()) => return,
+            Err(e) => {
+                log::warn!(
+                    "[{}] cannot read I2P peer {}: {}",
+                    session.name,
+                    peer.address,
+                    e
+                );
+                let _ = session.tx.send(Event::InterfaceDown(peer.id));
             }
         }
     }
+}
 
-    /// The event bringing up a peer whose writer writes `stream`, and the
-    /// peer's tunnel, now watched.
-    fn writer(
-        &self,
-        stream: &TcpStream,
-        id: InterfaceId,
-        remote: &str,
-        outbound: bool,
-    ) -> io::Result<(Event, Arc<PeerTunnel>, Arc<AtomicBool>)> {
-        let (writer, detached) = I2pWriter::new(stream.try_clone()?);
-        let writer = Box::new(writer);
-        let tunnel = I2pEndpoint::add_tunnel(&self.endpoint, id, Some(stream));
-        let up = peer_up(
-            id,
-            writer,
-            peer_info(id, remote, self.ingress_control, outbound),
-            self.dynamic_template.as_ref(),
-            crate::interface::display::i2p_peer_name(&self.name, remote, outbound),
-        );
-        Ok((up, tunnel, detached))
+fn new_peer(
+    session: &Session,
+    id: InterfaceId,
+    outbound: Option<OutboundPeer>,
+    tunnel: Arc<PeerTunnel>,
+    detached: Arc<AtomicBool>,
+) -> Peer {
+    Peer {
+        id,
+        decoder: frame_decoder(template_ifac_size(session.dynamic_template.as_ref())),
+        outbound,
+        tunnel,
+        detached,
     }
+}
 
-    fn peer(
-        &self,
-        id: InterfaceId,
-        outbound: Option<String>,
-        tunnel: Arc<PeerTunnel>,
-        detached: Arc<AtomicBool>,
-    ) -> Peer {
-        Peer {
-            id,
-            decoder: frame_decoder(template_ifac_size(self.dynamic_template.as_ref())),
-            outbound,
-            tunnel,
-            detached,
-        }
-    }
-
-    /// Ask the bridge for the next incoming connection and wait for it on
-    /// the driver loop. Blocks until the bridge agreed.
-    fn arm_accept(self: &Arc<Self>) {
-        loop {
-            match sam::stream_accept_begin(&self.sam_addr, &self.session_id, self.underlay_mark) {
-                Ok(stream) => {
-                    let id = self.allocate_id();
-                    let source = StreamSource {
-                        stream,
-                        state: State::Accepting {
-                            id,
-                            line: Vec::new(),
-                        },
-                        session: Arc::clone(self),
-                    };
-                    match self.tx.register_source(read_key(id), Box::new(source)) {
-                        Ok(()) => return,
-                        Err(e) => log::warn!("[{}] cannot wait for I2P peers: {}", self.name, e),
-                    }
+/// Ask the bridge for the next incoming connection and wait for it on the
+/// driver loop. Blocks until the bridge agreed.
+fn arm_accept(session: &Arc<Session>) {
+    loop {
+        match sam::stream_accept_begin(
+            &session.sam_addr,
+            &session.session_id,
+            session.underlay_mark,
+        ) {
+            Ok(stream) => {
+                let id = session.allocate_id();
+                let source = StreamSource {
+                    stream,
+                    state: State::Accepting {
+                        id,
+                        line: Vec::new(),
+                    },
+                    session: Arc::clone(session),
+                };
+                match session.tx.register_source(read_key(id), Box::new(source)) {
+                    Ok(()) => return,
+                    Err(e) => log::warn!("[{}] cannot wait for I2P peers: {}", session.name, e),
                 }
-                Err(e) => log::warn!("[{}] I2P accept failed: {}, retrying", self.name, e),
             }
-            thread::sleep(ACCEPT_RETRY_WAIT);
+            Err(e) => log::warn!("[{}] I2P accept failed: {}, retrying", session.name, e),
         }
+        thread::sleep(ACCEPT_RETRY_WAIT);
     }
+}
 
-    /// [`Session::arm_accept`] on a thread of its own, after `wait`.
-    fn arm_accept_later(self: &Arc<Self>, wait: Duration) {
-        let session = Arc::clone(self);
-        let spawned = thread::Builder::new()
-            .name("i2p-accept".into())
-            .spawn(move || {
-                thread::sleep(wait);
-                session.arm_accept();
-            });
-        if let Err(e) = spawned {
-            log::error!("[{}] cannot accept I2P peers any more: {}", self.name, e);
-        }
+/// [`arm_accept`] on a thread of its own, after `wait`.
+fn arm_accept_later(session: &Arc<Session>, wait: Duration) {
+    let session = Arc::clone(session);
+    let name = session.name.clone();
+    let spawned = thread::Builder::new()
+        .name("i2p-accept".into())
+        .spawn(move || {
+            thread::sleep(wait);
+            arm_accept(&session);
+        });
+    if let Err(e) = spawned {
+        log::error!("[{}] cannot accept I2P peers any more: {}", name, e);
     }
 }
 
 /// The session's control socket, read on the driver thread.
 struct ControlSource {
     stream: TcpStream,
-    line: Vec<u8>,
+    lines: ControlLines,
     session: Arc<Session>,
 }
 
@@ -320,30 +222,20 @@ impl LoopSource for ControlSource {
                         "[{}] the SAM bridge closed the I2P session",
                         self.session.name
                     );
-                    self.session.reopen_later();
+                    reopen_later(&self.session);
                     return SourceStatus::Remove;
                 }
                 Ok(n) => {
-                    for &byte in &buf[..n] {
-                        if byte != b'\n' {
-                            if self.line.len() < MAX_ACCEPT_LINE {
-                                self.line.push(byte);
-                            }
-                            continue;
-                        }
-                        let line = String::from_utf8_lossy(&self.line).into_owned();
-                        self.line.clear();
-                        // Keep the session alive when the bridge checks on it.
-                        if let Some(reply) = control_reply(&line) {
-                            let _ = self.stream.write_all(reply.as_bytes());
-                        }
-                    }
+                    let stream = &mut self.stream;
+                    self.lines.feed(&buf[..n], |reply| {
+                        let _ = stream.write_all(reply.as_bytes());
+                    });
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => return SourceStatus::Rearm,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) => {
                     log::warn!("[{}] I2P session socket failed: {}", self.session.name, e);
-                    self.session.reopen_later();
+                    reopen_later(&self.session);
                     return SourceStatus::Remove;
                 }
             }
@@ -354,8 +246,8 @@ impl LoopSource for ControlSource {
 struct Peer {
     id: InterfaceId,
     decoder: hdlc::Decoder,
-    /// The address an outbound peer is reconnected to.
-    outbound: Option<String>,
+    /// The outbound peer, reconnected when its stream ends.
+    outbound: Option<OutboundPeer>,
     tunnel: Arc<PeerTunnel>,
     /// Set when the driver detaches the peer, which is then not reconnected.
     detached: Arc<AtomicBool>,
@@ -392,7 +284,7 @@ impl StreamSource {
             n if n > 0 => &cx.buf[..n as usize],
             0 => {
                 log::warn!("[{}] I2P accept closed by the bridge", session.name);
-                session.arm_accept_later(ACCEPT_RETRY_WAIT);
+                arm_accept_later(&session, ACCEPT_RETRY_WAIT);
                 return Some(SourceStatus::Remove);
             }
             _ => {
@@ -404,15 +296,15 @@ impl StreamSource {
                     return Some(SourceStatus::Rearm);
                 }
                 log::warn!("[{}] I2P accept failed: {}, retrying", session.name, e);
-                session.arm_accept_later(ACCEPT_RETRY_WAIT);
+                arm_accept_later(&session, ACCEPT_RETRY_WAIT);
                 return Some(SourceStatus::Remove);
             }
         };
         let Some(end) = read.iter().position(|&byte| byte == b'\n') else {
             line.extend_from_slice(read);
-            if line.len() > MAX_ACCEPT_LINE {
+            if line.len() > MAX_SAM_LINE {
                 log::warn!("[{}] I2P accept sent no destination", session.name);
-                session.arm_accept_later(ACCEPT_RETRY_WAIT);
+                arm_accept_later(&session, ACCEPT_RETRY_WAIT);
                 return Some(SourceStatus::Remove);
             }
             return Some(SourceStatus::Rearm);
@@ -426,26 +318,16 @@ impl StreamSource {
             Ok(dest) => dest.base32_address(),
             Err(e) => {
                 log::warn!("[{}] I2P accept failed: {}, retrying", session.name, e);
-                session.arm_accept_later(ACCEPT_RETRY_WAIT);
+                arm_accept_later(&session, ACCEPT_RETRY_WAIT);
                 return Some(SourceStatus::Remove);
             }
         };
         // The next peer may arrive meanwhile: ask for it at once.
-        session.arm_accept_later(Duration::ZERO);
-        log::info!(
-            "[{}] accepted I2P connection from {} → id {}",
-            session.name,
-            remote,
-            id.0
-        );
-        let (up, tunnel, detached) = match session.writer(&self.stream, id, &remote, false) {
-            Ok(up) => up,
-            Err(e) => {
-                log::warn!("[{}] failed to clone accepted stream: {}", session.name, e);
-                return Some(SourceStatus::Remove);
-            }
+        arm_accept_later(&session, Duration::ZERO);
+        let Some(up) = session.accepted(&self.stream, id, &remote) else {
+            return Some(SourceStatus::Remove);
         };
-        let mut peer = session.peer(id, None, tunnel, detached);
+        let mut peer = new_peer(&session, id, None, up.tunnel, up.detached);
         let frames = peer
             .decoder
             .feed(&data)
@@ -458,7 +340,7 @@ impl StreamSource {
             });
         if session
             .tx
-            .push_from_loop(std::iter::once(up).chain(frames))
+            .push_from_loop(std::iter::once(up.event).chain(frames))
             .is_err()
         {
             return Some(SourceStatus::Remove);
@@ -470,40 +352,18 @@ impl StreamSource {
     fn peer_lost(&self, peer: &Peer) {
         let session = &self.session;
         let _ = session.tx.push_from_loop([Event::InterfaceDown(peer.id)]);
-        let Some(address) = peer.outbound.clone() else {
+        let Some(outbound) = peer.outbound.clone() else {
             // Accepted peers are not reconnected.
             I2pEndpoint::remove_tunnel(&session.endpoint, peer.id);
             return;
         };
-        if peer.detached.load(Ordering::Relaxed) {
-            // Upstream's detached I2PInterfacePeer stays down.
-            log::info!(
-                "[{}] I2P peer {} was detached, not reconnecting",
-                session.name,
-                address
-            );
-            I2pEndpoint::remove_tunnel(&session.endpoint, peer.id);
+        if !session.outbound_lost(&outbound, &peer.detached) {
             return;
         }
-        log::warn!(
-            "[{}] I2P peer {} disconnected, reconnecting in {}s",
-            session.name,
-            address,
-            session.reconnect_wait().as_secs()
-        );
         let session = Arc::clone(session);
-        let peer_id = peer.id;
         let spawned = thread::Builder::new()
-            .name(format!("i2p-out-{}", address))
-            .spawn(move || {
-                session.connect(
-                    OutboundPeer {
-                        address,
-                        id: peer_id,
-                    },
-                    true,
-                )
-            });
+            .name(format!("i2p-out-{}", outbound.address))
+            .spawn(move || connect(session, outbound, true));
         if let Err(e) = spawned {
             log::error!(
                 "[{}] cannot reconnect to I2P peer, giving up: {}",
@@ -560,9 +420,13 @@ impl LoopSource for StreamSource {
 
 #[cfg(test)]
 mod tests {
+    use super::super::I2pRuntime;
     use super::*;
+    use crate::interface::lock_or_recover;
+    use std::net::SocketAddr;
     use std::net::TcpListener;
     use std::sync::mpsc;
+    use std::sync::Mutex;
 
     fn read_command(stream: &mut TcpStream) -> String {
         let mut line = Vec::new();
@@ -615,7 +479,7 @@ mod tests {
         let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let control = TcpStream::connect(control_listener.local_addr().unwrap()).unwrap();
         let (first, _) = control_listener.accept().unwrap();
-        session.serve_control(control).unwrap();
+        serve_control(&session, control).unwrap();
         I2pEndpoint::set_accepting(&config.endpoint);
 
         // The bridge answers the session opened again, and checks on it.
@@ -673,7 +537,7 @@ mod tests {
                 }
             }
         });
-        session.arm_accept();
+        arm_accept(&session);
         let mut first = accepts.recv_timeout(Duration::from_secs(2)).unwrap();
 
         // A peer arrives: its destination, then its first frame, together.
@@ -775,7 +639,7 @@ mod tests {
         };
         {
             let session = Arc::clone(&session);
-            thread::spawn(move || session.connect(peer, false));
+            thread::spawn(move || connect(session, peer, false));
         }
         let mut stream = connections.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(matches!(

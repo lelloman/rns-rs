@@ -9,7 +9,10 @@
 
 mod folded;
 pub mod sam;
+mod session;
 pub mod tunnel;
+
+use session::{ControlLines, Session, ACCEPT_RETRY_WAIT};
 
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
@@ -540,7 +543,7 @@ fn start_with_template(
     Ok(())
 }
 
-/// Coordinator thread: sets up SAM sessions and spawns peer threads.
+/// Coordinator thread: sets up the SAM session and spawns peer threads.
 fn coordinator(
     config: I2pConfig,
     peers: Vec<OutboundPeer>,
@@ -548,69 +551,24 @@ fn coordinator(
     next_id: Arc<AtomicU64>,
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
 ) -> Result<(), SamError> {
-    let ingress_control = config.ingress_control;
-    let sam_addr: SocketAddr = format!("{}:{}", config.sam_host, config.sam_port)
-        .parse()
-        .map_err(|e| SamError::Io(io::Error::new(io::ErrorKind::InvalidInput, e)))?;
-
-    let (control_socket, session_id) =
-        open_session_retrying(&config, &sam_addr, config.sam_retry_wait());
+    let (session, control_socket) = Session::open(config, tx, next_id, dynamic_template)?;
 
     // Spawn outbound peer threads
     for peer in peers {
-        let tx2 = tx.clone();
-        let sam_addr2 = sam_addr;
-        let session_id2 = session_id.clone();
-        let iface_name = config.name.clone();
-        let runtime = Arc::clone(&config.runtime);
-        let dynamic_template = dynamic_template.clone();
-        let endpoint = Arc::clone(&config.endpoint);
-
+        let session = Arc::clone(&session);
         thread::Builder::new()
             .name(format!("i2p-out-{}", peer.address))
-            .spawn(move || {
-                outbound_peer_loop(OutboundPeerContext {
-                    sam_addr: sam_addr2,
-                    session_id: session_id2,
-                    peer,
-                    iface_name,
-                    tx2,
-                    runtime,
-                    ingress_control,
-                    dynamic_template,
-                    underlay_mark: config.underlay_mark,
-                    endpoint,
-                });
-            })
+            .spawn(move || outbound_peer_loop(session, peer))
             .ok();
     }
 
     // Spawn acceptor thread if connectable
-    if config.connectable {
-        I2pEndpoint::set_accepting(&config.endpoint);
-        let tx2 = tx.clone();
-        let next_id2 = next_id.clone();
-        let sam_addr2 = sam_addr;
-        let session_id2 = session_id.clone();
-        let iface_name = config.name.clone();
-        let dynamic_template = dynamic_template.clone();
-        let endpoint = Arc::clone(&config.endpoint);
-
+    if session.config.connectable {
+        I2pEndpoint::set_accepting(&session.endpoint);
+        let session = Arc::clone(&session);
         thread::Builder::new()
             .name("i2p-acceptor".into())
-            .spawn(move || {
-                acceptor_loop(AcceptorContext {
-                    sam_addr: sam_addr2,
-                    session_id: session_id2,
-                    iface_name,
-                    tx: tx2,
-                    next_id: next_id2,
-                    ingress_control,
-                    dynamic_template,
-                    underlay_mark: config.underlay_mark,
-                    endpoint,
-                });
-            })
+            .spawn(move || acceptor_loop(session))
             .ok();
     }
 
@@ -619,8 +577,8 @@ fn coordinator(
     // peers and the acceptor retry meanwhile, under the same session id.
     let mut control_socket = control_socket;
     loop {
-        watch_session(&mut control_socket, &config.name);
-        control_socket = reopen_session(&config, &sam_addr, config.sam_retry_wait());
+        watch_session(&mut control_socket, &session.name);
+        control_socket = reopen_session(&session.config, &session.sam_addr, session.sam_retry_wait);
     }
 }
 
@@ -634,7 +592,7 @@ fn control_reply(line: &str) -> Option<String> {
 /// Serve the session's control socket until the bridge closes it.
 fn watch_session(control: &mut std::net::TcpStream, name: &str) {
     let _ = control.set_read_timeout(None);
-    let mut line = Vec::new();
+    let mut lines = ControlLines::default();
     let mut buf = [0u8; 512];
     loop {
         match control.read(&mut buf) {
@@ -642,21 +600,9 @@ fn watch_session(control: &mut std::net::TcpStream, name: &str) {
                 log::warn!("[{}] the SAM bridge closed the I2P session", name);
                 return;
             }
-            Ok(n) => {
-                for &byte in &buf[..n] {
-                    if byte != b'\n' {
-                        if line.len() < 4096 {
-                            line.push(byte);
-                        }
-                        continue;
-                    }
-                    let text = String::from_utf8_lossy(&line).into_owned();
-                    line.clear();
-                    if let Some(reply) = control_reply(&text) {
-                        let _ = control.write_all(reply.as_bytes());
-                    }
-                }
-            }
+            Ok(n) => lines.feed(&buf[..n], |reply| {
+                let _ = control.write_all(reply.as_bytes());
+            }),
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
             Err(e) => {
                 log::warn!("[{}] I2P session socket failed: {}", name, e);
@@ -689,220 +635,75 @@ fn reopen_session(
     control
 }
 
-/// Outbound peer thread: connects to a remote I2P destination, runs HDLC reader loop.
-/// Reconnects on failure.
-struct OutboundPeerContext {
-    sam_addr: SocketAddr,
-    session_id: String,
-    peer: OutboundPeer,
-    iface_name: String,
-    tx2: EventSender,
-    runtime: Arc<Mutex<I2pRuntime>>,
-    ingress_control: rns_core::transport::types::IngressControlConfig,
-    dynamic_template: Option<super::DynamicInterfaceTemplate>,
-    underlay_mark: Option<u32>,
-    endpoint: Arc<Mutex<I2pEndpoint>>,
-}
-
-fn outbound_peer_loop(context: OutboundPeerContext) {
-    let OutboundPeerContext {
-        sam_addr,
-        session_id,
-        peer: OutboundPeer {
-            address: peer_addr,
-            id: client_id,
-        },
-        iface_name,
-        tx2: tx,
-        runtime,
-        ingress_control,
-        dynamic_template,
-        underlay_mark,
-        endpoint,
-    } = context;
+/// Outbound peer thread: connects to a remote I2P destination, runs HDLC
+/// reader loop. Reconnects on failure.
+fn outbound_peer_loop(session: Arc<Session>, peer: OutboundPeer) {
     loop {
-        log::info!("[{}] connecting to I2P peer {}", iface_name, peer_addr);
-
-        // Resolve .b32.i2p address if needed
-        let destination = if peer_addr.ends_with(".i2p") {
-            match sam::naming_lookup_with_mark(&sam_addr, &peer_addr, underlay_mark) {
-                Ok(dest) => dest.to_i2p_base64(),
-                Err(e) => {
-                    log::warn!("[{}] failed to resolve {}: {}", iface_name, peer_addr, e);
-                    thread::sleep(lock_or_recover(&runtime, "i2p runtime").reconnect_wait);
-                    continue;
-                }
+        if let Some((stream, up)) = session.connect_once(&peer) {
+            if session.tx.send(up.event).is_err() {
+                return; // Driver shut down
             }
-        } else {
-            // Assume it's already a full base64 destination
-            peer_addr.to_string()
-        };
 
-        // Connect via SAM
-        match sam::stream_connect_with_mark(&sam_addr, &session_id, &destination, underlay_mark) {
-            Ok(stream) => {
-                log::info!(
-                    "[{}] connected to I2P peer {} → id {}",
-                    iface_name,
-                    peer_addr,
-                    client_id.0
-                );
+            // Run HDLC reader loop (blocks until disconnect)
+            peer_reader_loop(
+                stream,
+                peer.id,
+                &session.name,
+                &session.tx,
+                template_ifac_size(session.dynamic_template.as_ref()),
+                &up.tunnel,
+            );
 
-                // Clone stream for writer/reader split
-                let writer_stream = match stream.try_clone() {
-                    Ok(s) => s,
-                    Err(e) => {
-                        log::warn!("[{}] failed to clone stream: {}", iface_name, e);
-                        thread::sleep(lock_or_recover(&runtime, "i2p runtime").reconnect_wait);
-                        continue;
-                    }
-                };
-
-                let (writer, detached) = I2pWriter::new(writer_stream);
-                let writer: Box<dyn Writer> = Box::new(writer);
-
-                let tunnel = I2pEndpoint::add_tunnel(&endpoint, client_id, Some(&stream));
-                let event = peer_up(
-                    client_id,
-                    writer,
-                    peer_info(client_id, &peer_addr, ingress_control, true),
-                    dynamic_template.as_ref(),
-                    crate::interface::display::i2p_peer_name(&iface_name, &peer_addr, true),
-                );
-                if tx.send(event).is_err() {
-                    return; // Driver shut down
-                }
-
-                // Run HDLC reader loop (blocks until disconnect)
-                peer_reader_loop(
-                    stream,
-                    client_id,
-                    &iface_name,
-                    &tx,
-                    template_ifac_size(dynamic_template.as_ref()),
-                    &tunnel,
-                );
-
-                // Disconnected
-                let _ = tx.send(Event::InterfaceDown(client_id));
-                if detached.load(Ordering::Relaxed) {
-                    log::info!(
-                        "[{}] I2P peer {} was detached, not reconnecting",
-                        iface_name,
-                        peer_addr
-                    );
-                    I2pEndpoint::remove_tunnel(&endpoint, client_id);
-                    return;
-                }
-                log::warn!(
-                    "[{}] I2P peer {} disconnected, reconnecting in {}s",
-                    iface_name,
-                    peer_addr,
-                    lock_or_recover(&runtime, "i2p runtime")
-                        .reconnect_wait
-                        .as_secs()
-                );
-            }
-            Err(e) => {
-                log::warn!(
-                    "[{}] failed to connect to I2P peer {}: {}",
-                    iface_name,
-                    peer_addr,
-                    e
-                );
+            // Disconnected
+            let _ = session.tx.send(Event::InterfaceDown(peer.id));
+            if !session.outbound_lost(&peer, &up.detached) {
+                return;
             }
         }
 
-        thread::sleep(lock_or_recover(&runtime, "i2p runtime").reconnect_wait);
+        thread::sleep(session.reconnect_wait());
     }
 }
 
 /// Acceptor thread: loops accepting inbound connections on the session.
-struct AcceptorContext {
-    sam_addr: SocketAddr,
-    session_id: String,
-    iface_name: String,
-    tx: EventSender,
-    next_id: Arc<AtomicU64>,
-    ingress_control: rns_core::transport::types::IngressControlConfig,
-    dynamic_template: Option<super::DynamicInterfaceTemplate>,
-    underlay_mark: Option<u32>,
-    endpoint: Arc<Mutex<I2pEndpoint>>,
-}
-
-fn acceptor_loop(context: AcceptorContext) {
-    let AcceptorContext {
-        sam_addr,
-        session_id,
-        iface_name,
-        tx,
-        next_id,
-        ingress_control,
-        dynamic_template,
-        underlay_mark,
-        endpoint,
-    } = context;
-
+fn acceptor_loop(session: Arc<Session>) {
     loop {
-        match sam::stream_accept_with_mark(&sam_addr, &session_id, underlay_mark) {
+        match sam::stream_accept_with_mark(
+            &session.sam_addr,
+            &session.session_id,
+            session.underlay_mark,
+        ) {
             Ok((stream, remote_dest)) => {
-                let client_id = InterfaceId(next_id.fetch_add(1, Ordering::Relaxed));
+                let client_id = session.allocate_id();
                 let remote_b32 = remote_dest.base32_address();
-
-                log::info!(
-                    "[{}] accepted I2P connection from {} → id {}",
-                    iface_name,
-                    remote_b32,
-                    client_id.0
-                );
-
-                // Clone stream for writer/reader split
-                let writer_stream = match stream.try_clone() {
-                    Ok(s) => s,
-                    Err(e) => {
-                        log::warn!("[{}] failed to clone accepted stream: {}", iface_name, e);
-                        continue;
-                    }
+                let Some(up) = session.accepted(&stream, client_id, &remote_b32) else {
+                    continue;
                 };
-
-                let writer: Box<dyn Writer> = Box::new(I2pWriter::new(writer_stream).0);
-
-                let tunnel = I2pEndpoint::add_tunnel(&endpoint, client_id, Some(&stream));
-                let event = peer_up(
-                    client_id,
-                    writer,
-                    peer_info(client_id, &remote_b32, ingress_control, false),
-                    dynamic_template.as_ref(),
-                    crate::interface::display::i2p_peer_name(&iface_name, &remote_b32, false),
-                );
-                if tx.send(event).is_err() {
+                if session.tx.send(up.event).is_err() {
                     return; // Driver shut down
                 }
 
                 // Spawn per-client reader thread (accepted peers don't reconnect)
-                let client_tx = tx.clone();
-                let client_name = iface_name.to_string();
-                let ifac_size = template_ifac_size(dynamic_template.as_ref());
-                let client_endpoint = Arc::clone(&endpoint);
+                let session = Arc::clone(&session);
                 thread::Builder::new()
                     .name(format!("i2p-client-{}", client_id.0))
                     .spawn(move || {
                         peer_reader_loop(
                             stream,
                             client_id,
-                            &client_name,
-                            &client_tx,
-                            ifac_size,
-                            &tunnel,
+                            &session.name,
+                            &session.tx,
+                            template_ifac_size(session.dynamic_template.as_ref()),
+                            &up.tunnel,
                         );
-                        I2pEndpoint::remove_tunnel(&client_endpoint, client_id);
-                        let _ = client_tx.send(Event::InterfaceDown(client_id));
+                        I2pEndpoint::remove_tunnel(&session.endpoint, client_id);
+                        let _ = session.tx.send(Event::InterfaceDown(client_id));
                     })
                     .ok();
             }
             Err(e) => {
-                log::warn!("[{}] I2P accept failed: {}, retrying", iface_name, e);
-                thread::sleep(Duration::from_secs(1));
+                log::warn!("[{}] I2P accept failed: {}, retrying", session.name, e);
+                thread::sleep(ACCEPT_RETRY_WAIT);
             }
         }
     }
@@ -1251,23 +1052,26 @@ mod tests {
         let (tx, rx) = crate::event::channel();
         let (done_tx, done) = std::sync::mpsc::channel();
         {
-            let context = OutboundPeerContext {
+            let session = Arc::new(Session {
                 sam_addr,
                 session_id: "I2P_peer".into(),
-                peer: OutboundPeer {
-                    address: "peer-destination".into(),
-                    id: InterfaceId(7),
-                },
-                iface_name: "I2P".into(),
-                tx2: tx,
+                name: "I2P".into(),
+                tx,
+                next_id: Arc::new(AtomicU64::new(0)),
                 runtime: Arc::clone(&config.runtime),
                 ingress_control: config.ingress_control,
                 dynamic_template: None,
                 underlay_mark: None,
                 endpoint: Arc::clone(&config.endpoint),
+                sam_retry_wait: config.sam_retry_wait(),
+                config: config.clone(),
+            });
+            let peer = OutboundPeer {
+                address: "peer-destination".into(),
+                id: InterfaceId(7),
             };
             thread::spawn(move || {
-                outbound_peer_loop(context);
+                outbound_peer_loop(session, peer);
                 let _ = done_tx.send(());
             });
         }
