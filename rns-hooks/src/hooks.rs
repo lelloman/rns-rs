@@ -212,21 +212,6 @@ pub fn create_hook_slots() -> [HookSlot; HookPoint::COUNT] {
     })
 }
 
-/// Dispatch a hook call through the slot's function pointer.
-///
-/// When the `rns-hooks` feature is enabled in `rns-net`, this macro is used
-/// at each integration point. When no programs are attached, the noop runner
-/// returns `None` immediately.
-///
-/// When `rns-hooks` is **not** enabled, the call site wraps this in
-/// `#[cfg(feature = "rns-hooks")]` so it compiles to nothing.
-#[macro_export]
-macro_rules! run_hook {
-    ($driver:expr, $point:expr, $ctx:expr) => {{
-        ($driver.hook_slots[$point as usize].runner)(&$driver.hook_slots[$point as usize], &$ctx)
-    }};
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,23 +244,6 @@ mod tests {
             let ctx = HookContext::Tick;
             assert!((slot.runner)(slot, &ctx).is_none());
         }
-    }
-
-    #[test]
-    fn test_run_hook_macro() {
-        struct FakeDriver {
-            hook_slots: [HookSlot; HookPoint::COUNT],
-        }
-        let driver = FakeDriver {
-            hook_slots: create_hook_slots(),
-        };
-        let ctx = HookContext::Tick;
-        let result = run_hook!(driver, HookPoint::Tick, ctx);
-        assert!(result.is_none());
-
-        let ctx2 = HookContext::Interface { interface_id: 42 };
-        let result2 = run_hook!(driver, HookPoint::InterfaceUp, ctx2);
-        assert!(result2.is_none());
     }
 
     #[test]
