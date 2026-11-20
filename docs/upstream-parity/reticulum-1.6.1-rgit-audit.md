@@ -69,12 +69,12 @@ evidence exist; until then nothing here is claimed as passed.
 | 10 | `f876ed8d` | 2026-11-17 | Show remote transport status on tunnels | Integrated | `23b51e35`; `rnstatus_view_matches_upstream` (fixtures regenerated at `f876ed8d`, new case `tunnels_remote_transport`) |
 | 11 | `0123133e` | 2026-11-17 | Fixed CPython process fork stdin close deadlock | Structurally covered | `3312039e`; module comment in `rns-net/src/stamps.rs` |
 | 12 | `05ac4bba` | 2026-11-17 | Added ability to configure destination value and link cost to rngit | Integrated | `3bbe4252`; `destination_costs_default_to_upstreams`, `parses_and_quantizes_destination_costs`, `invalid_destination_costs_are_errors`, `rngit_destinations_carry_their_link_cost_and_stamp_value`, `rngit_invalid_page_cost_fails_the_page_destination` |
-| 13 | `833f6cf2` | 2026-11-17 | Fixed path table culling being able to remove an instance's own local destination paths. Doh. | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
-| 14 | `d72cfdd7` | 2026-11-17 | Mark local client paths responsive on PR responses | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
-| 15 | `5bd93ad9` | 2026-11-17 | Ensure link-based rediscovery does not occur for instance-local paths | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
-| 16 | `70eb417d` | 2026-11-17 | Fixed non path table resident shared local instance destination path response announces broadcasting on all interfaces instead of requestor only | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
-| 17 | `8c73e203` | 2026-11-18 | Don't rebroadcast on unresponsive path lenient table insertions | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
-| 18 | `4a058544` | 2026-11-18 | Well, yeah | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
+| 13 | `833f6cf2` | 2026-11-17 | Fixed path table culling being able to remove an instance's own local destination paths. Doh. | Integrated | `8a7ced49`; `a_local_clients_announce_marks_its_path_responsive`, `never_used_local_client_paths_stay_on_an_instance_serving_them` (replaced by 15's cull test) |
+| 14 | `d72cfdd7` | 2026-11-17 | Mark local client paths responsive on PR responses | Structurally covered | `f84da699`; `a_local_clients_path_response_marks_its_path_responsive` |
+| 15 | `5bd93ad9` | 2026-11-17 | Ensure link-based rediscovery does not occur for instance-local paths | Integrated | `00431be5`; `failed_own_link_to_an_instance_local_destination_is_not_rediscovered`, `local_client_link_to_an_instance_local_destination_is_not_rediscovered`, `instance_local_paths_go_only_with_their_interface_or_the_pool_cap` |
+| 16 | `70eb417d` | 2026-11-17 | Fixed non path table resident shared local instance destination path response announces broadcasting on all interfaces instead of requestor only | Integrated | `edb988ac`; `only_a_local_clients_path_response_answers_a_pending_request` (updated), `a_local_clients_path_response_answers_only_the_requesting_interface`, `test_shared_instance_without_transport_relays_path_request_to_local_client` (updated) |
+| 17 | `8c73e203` | 2026-11-18 | Don't rebroadcast on unresponsive path lenient table insertions | Integrated | `b789aa30`; `unresponsive_path_replacement_is_not_rebroadcast`; follow-up `dac604d7` (decision 8) |
+| 18 | `4a058544` | 2026-11-18 | Well, yeah | Structurally covered | `f2e7fdcf`; doc comment on `persist_known_destinations` (`rns-net/src/node/known_destinations.rs`) |
 | 19 | `8e7dc8b7` | 2026-11-18 | Added medium reliability flag to interfaces | Proposed: Integrated | Reviewed 2026-11-20; no mapping commit yet |
 | 20 | `9568b704` | 2026-11-18 | Improved rnpath display and filtering options | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
 | 21 | `c90a5d58` | 2026-11-18 | Added destination type loading | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
@@ -628,11 +628,31 @@ has no exemption, and `process_verified_announce` always clears the path state
 (`verified_announce.rs:248`). A shared instance culls a local client's
 destination after the unused-path linger.
 
-**Local handling:** Call `mark_path_responsive` after storing a path from an
-interface that serves local clients, and exempt such paths in the cull.
-Regressions in inbound-engine and jobs tests.
+**Local handling and evidence:** `8a7ced49`. `process_verified_announce`
+calls `mark_path_responsive` (timestamp and `used` set to now, expiry from
+the receiving interface's mode, state responsive) right after the path is
+stored, when the announce came from an interface the engine serves as a
+shared instance (`serves_local_client`, the faithful counterpart of
+upstream's `from_local_client`: a shared instance client's connection to the
+instance is flagged `is_local_client` too but has no transport identity).
+The cull exemption went into a new `cull_path_table_on_instance`, taking
+whether the engine serves local clients (transport identity present), used
+by the tick cull and the path destination cap; the public
+`cull_path_table` kept its behaviour. Commit 15 removed that exemption
+again.
 
-**Proposed disposition:** Needs port.
+Tests (new, failing before the change):
+`a_local_clients_announce_marks_its_path_responsive` (inbound engine: a
+served local client's announce leaves the path responsive with `used`,
+timestamp and expiry refreshed; one from the network, or from the instance
+connection of a shared instance client, does not) and
+`never_used_local_client_paths_stay_on_an_instance_serving_them` (jobs).
+Tests run: `cargo test -p rns-core` passed (lib 1162, integration suites
+19, 26, 12, 9, 9, 7 and 1, no failures); `cargo fmt --check` and
+`bash scripts/lint-host.sh` passed. rns-net was not changed by this commit;
+its full suite ran from commit 15 on.
+
+**Final disposition:** Integrated.
 
 ### 14. `d72cfdd7` — Mark local client paths responsive on PR responses
 
@@ -643,10 +663,25 @@ already covers it, so this adds no observable change.
 **Rust applicability:** Covered by commit 13's port, which marks every
 verified announce from a local client, path responses included.
 
-**Local handling:** A test that a local client's path response leaves the
-path responsive with `used == now`.
+**Local handling and evidence:** `f84da699`. Traced in upstream at
+`d72cfdd7`: the new call sits in the `elif is_from_local_client and
+packet.context == PATH_RESPONSE` branch, before the path table entry is
+written. It refreshes the old entry (or does nothing for an unknown
+destination); the entry written next is built with `path_used` read before
+the call; 833f6cf2's `mark_path_responsive` after the write then sets
+timestamp, expiry, `used` and state again, and nothing in between reads the
+path table. The outcome equals 13's alone, which rns-rs applies to every
+accepted announce from a served local client, path responses included. No
+code change; a pinning test.
 
-**Proposed disposition:** Structurally covered (after 13).
+Test: `a_local_clients_path_response_marks_its_path_responsive` (known or
+unknown destination, with or without a pending request: responsive, with
+timestamp, expiry and `used` set to now); the local client announce helper
+gains `announce_with_random_blob`. Tests run: `cargo test -p rns-core`
+passed (lib 1163, no failures); `cargo fmt --check` and
+`bash scripts/lint-host.sh` passed.
+
+**Final disposition:** Structurally covered.
 
 ### 15. `5bd93ad9` — Ensure link-based rediscovery does not occur for instance-local paths
 
@@ -662,11 +697,31 @@ unused-pool cap). Replaces commit 13's cull condition.
 cull closure. Rust's `drop_path` removes paths directly, so upstream's
 side effect on `rnpath -d` does not arise.
 
-**Local handling:** Hops-0 guards in all three places, replacing commit 13's
-exemption, with one focused test each. The rns-rs-only per-destination path cap
-(`retention.rs`) can still evict hops-0 paths; to be documented.
+**Local handling and evidence:** `00431be5`.
+`Driver::rediscover_path_after_failed_link` returns before expiring the
+path or queueing a request when the destination's primary path is hops 0.
+`rediscover_unproven_link_paths` keeps upstream's elif semantics: the
+`taken_hops == 0` case matches and, for a hops-0 destination, triggers
+nothing rather than falling through to the one-hop cases. The cull keeps a
+hops-0 path through expiry and the unused linger; a missing interface, the
+hop limiter and the never-used pool cap still remove it.
+`cull_path_table_on_instance` (commit 13) is gone and the engine calls
+`cull_path_table` again. rns-rs's own destination cap
+(`max_path_destinations`, `enforce_path_destination_cap` in `retention.rs`)
+is an rns-rs extension and keeps its behaviour: when the table is full it
+evicts the oldest destinations and can still evict a hops-0 path. Rust's
+`drop_path` removes a path directly, so upstream's side effect on `rnpath
+-d` does not arise.
 
-**Proposed disposition:** Needs port.
+Tests (new, each failing with its guard disabled):
+`failed_own_link_to_an_instance_local_destination_is_not_rediscovered`
+(driver), `local_client_link_to_an_instance_local_destination_is_not_rediscovered`
+(maintenance), `instance_local_paths_go_only_with_their_interface_or_the_pool_cap`
+(jobs, replacing 13's cull test). Tests run: `cargo test -p rns-core`
+passed (lib 1164); `cargo test -p rns-net` passed (1697 passed, 4 ignored,
+no failures); `cargo fmt --check` and `bash scripts/lint-host.sh` passed.
+
+**Final disposition:** Integrated.
 
 ### 16. `70eb417d` — Fixed non path table resident shared local instance destination path response announces broadcasting on all interfaces
 
@@ -679,12 +734,25 @@ requesting interface and builds the entry with `attached_interface: None,
 block_rebroadcasts: false`. The sending side already supports attached path
 responses.
 
-**Local handling:** Attach the requesting interface and block rebroadcasts.
-Update `only_a_local_clients_path_response_answers_a_pending_request`, which
-pins the old behaviour, and add a tick-level test that exactly one path
-response goes to the requester.
+**Local handling and evidence:** `edb988ac`. The announce table entry
+for a local client's path response that answers a pending request now
+carries the recorded requesting interface as `attached_interface` and
+`block_rebroadcasts: true`; the announce job sends it there only, and
+`build_retransmit_announce` gives it the path response context.
 
-**Proposed disposition:** Needs port.
+Tests: `only_a_local_clients_path_response_answers_a_pending_request`
+(updated: expects the requesting interface and blocked rebroadcasts), the
+new tick-level `a_local_clients_path_response_answers_only_the_requesting_interface`
+(exactly one packet, on the requesting interface, as a path response, no
+broadcast), and `test_shared_instance_without_transport_relays_path_request_to_local_client`
+(issue 183, found pinning the old context by the first full run; updated to
+expect the path response context). All three fail without the change. Tests
+run: `cargo test -p rns-core` first failed only on that issue 183 test,
+then passed after its update (1248 across all rns-core test binaries, no
+failures); `cargo test -p rns-net` passed (1697 passed, 4 ignored);
+`cargo fmt --check` and `bash scripts/lint-host.sh` passed.
+
+**Final disposition:** Integrated.
 
 ### 17. `8c73e203` — Don't rebroadcast on unresponsive path lenient table insertions
 
@@ -699,12 +767,28 @@ already-known announce arriving through a **new** next hop even when the path
 is unresponsive (`pathfinder.rs:304-323`), which is upstream's main recovery
 case. That second difference predates this range.
 
-**Local handling:** A shared predicate for "accepted only because unresponsive"
-and a table-insertion-only flag, with
-`unresponsive_path_replacement_is_not_rebroadcast`. The new-next-hop
-difference is listed under Open decisions.
+**Local handling and evidence:** `b789aa30`. `should_update_path`
+returns the new `PathDecision::AddForUnresponsive` for every case it
+accepts only because the path is unresponsive, and the multi-path decision
+maps it to `MultiPathDecision::RecoverUnresponsive`: stored as
+`ReplacePrimary`, but the announce table entry is not inserted. As
+upstream's flag, it does not affect a local client's path response
+answering a pending request. rns-rs's extra acceptances (over the same or
+fewer hops, and for an expired path over more hops, where upstream takes
+only an announce it has not heard) are made insertion-only too, by the
+default behaviour. The new-next-hop difference is decision 8, implemented
+in `dac604d7` (`transport: an option to recover unresponsive paths as
+upstream does`, no trailer): `[reticulum] unresponsive_path_recovery =
+native|upstream`, see decision 8.
 
-**Proposed disposition:** Needs port.
+Tests: `unresponsive_path_replacement_is_not_rebroadcast` (new, failing
+before the change); the pathfinder tests for the two unresponsive cases now
+expect `AddForUnresponsive` and are renamed `*_is_a_table_insertion`. Tests
+run: `cargo test -p rns-core` passed (1249 across all binaries); `cargo
+test -p rns-net` passed (1697 passed, 4 ignored); `cargo fmt --check` and
+`bash scripts/lint-host.sh` passed.
+
+**Final disposition:** Integrated.
 
 ### 18. `4a058544` — Well, yeah
 
@@ -716,9 +800,16 @@ difference is listed under Open decisions.
 shared clients are built without a store, which plays the role of upstream's
 shared-instance check.
 
-**Local handling:** A doc comment on `persist_known_destinations`.
+**Local handling and evidence:** `f2e7fdcf`. Verified: the known
+destinations and transport state are persisted only by methods of a
+constructed `RnsNode`, from its shutdown, and a shared instance client is
+built with `RnsNode::from_parts`, which leaves the known destinations store
+and path and `transport_state_dir` unset, so both return at once. A doc
+comment on `persist_known_destinations` records this. Tests run: `cargo
+test -p rns-net` passed (1698 passed, 4 ignored); `cargo fmt --check` and
+`bash scripts/lint-host.sh` passed.
 
-**Proposed disposition:** Structurally covered.
+**Final disposition:** Structurally covered.
 
 ### 19. `8e7dc8b7` — Added medium reliability flag to interfaces
 
@@ -978,6 +1069,30 @@ utilities included.
    pre-existing):** rns-rs keeps its behaviour by default, the divergence is
    documented, and a runtime `[reticulum]` option selects upstream's
    behaviour. Separate commit without an `Upstream-Commit` trailer.
+   Implemented in `dac604d7` (`transport: an option to recover
+   unresponsive paths as upstream does`): `unresponsive_path_recovery =
+   native` (default, unchanged) or `upstream`, any other value a config
+   error. Under `upstream`, an announce for an unresponsive path is
+   decided as Transport.py at `cff4d03f` decides it
+   (`upstream_unresponsive_path_decision`, after the higher-gravity case),
+   and an accepted one replaces the primary path whatever its next hop,
+   keeping the replaced path's random blobs; the lenient case is a table
+   insertion only, and the rns-rs-only acceptance over the same or fewer
+   hops does not happen. The emission-time plausibility filter applies in
+   both modes. With `max_paths_per_destination` above 1 a destination is
+   only unresponsive with a single path (marking promotes an alternative),
+   which `upstream` replaces rather than keeping beside the new one;
+   `prefer_shorter_path` still takes a strictly shorter announce for an
+   unresponsive path in either mode, so with it set `upstream` differs from
+   upstream for those announces. Documented in `docs/interoperability.md`
+   ("Unresponsive path recovery") and `docs/configuration.md`. Tests:
+   `unresponsive_path_recovery_native_and_upstream`,
+   `upstream_unresponsive_decision_scans_blobs_as_upstream`,
+   `parses_unresponsive_path_recovery`; `cargo test -p rns-core` (1251),
+   `-p rns-net` (1698, 4 ignored) and `-p rns-bench` (17, 1 ignored)
+   passed, as did `cargo fmt --check` and `bash scripts/lint-host.sh`.
+   `rns-esp32/src/main.rs` gained the field in its `TransportConfig`
+   literal but is outside the workspace and was not built.
 
 ## Integration Plan
 
