@@ -950,7 +950,7 @@ fn discovered_peer_pool_requires_affordable_stamp_costs() {
         },
         vec![],
     );
-    let targets = driver.stamper.targets();
+    let targets = driver.stamps.stamper.targets();
     let discovered = |name: &str, offset: u16, id: u8| {
         let mut iface = make_discovered_backbone(
             name,
@@ -2967,7 +2967,7 @@ fn graceful_shutdown_voids_async_announce_and_receipt_state() {
     let mut driver = new_test_driver();
     let (key, pending) = make_pending_verify_announce([0xD1; 16]);
     {
-        let mut queue = driver.announce_verify_queue.lock().unwrap();
+        let mut queue = driver.announce_verify.queue.lock().unwrap();
         assert!(queue.enqueue(key, pending));
         assert!(!queue.is_empty());
         assert!(queue.queued_bytes() > 0);
@@ -2982,7 +2982,7 @@ fn graceful_shutdown_voids_async_announce_and_receipt_state() {
 
     assert_eq!(driver.lifecycle.state, LifecycleState::Stopped);
     {
-        let queue = driver.announce_verify_queue.lock().unwrap();
+        let queue = driver.announce_verify.queue.lock().unwrap();
         assert!(queue.is_empty());
         assert_eq!(queue.queued_bytes(), 0);
     }
@@ -4363,7 +4363,7 @@ fn inbound_rejections_are_counted_by_reason() {
     let tagless = RawPacket::pack(
         path_request_flags,
         0,
-        &driver.path_request_dest,
+        &driver.builtin.path_request,
         None,
         constants::CONTEXT_NONE,
         &[0x44; 16],
@@ -4380,7 +4380,7 @@ fn inbound_rejections_are_counted_by_reason() {
     let tagged_request = RawPacket::pack(
         path_request_flags,
         0,
-        &driver.path_request_dest,
+        &driver.builtin.path_request,
         None,
         constants::CONTEXT_NONE,
         &tagged_request_data,
@@ -4619,7 +4619,7 @@ fn path_requests_of_invalid_length_are_protocol_violations_and_dropped() {
         let request = RawPacket::pack(
             flags,
             0,
-            &driver.path_request_dest,
+            &driver.builtin.path_request,
             None,
             constants::CONTEXT_NONE,
             &request_data,
@@ -4644,7 +4644,7 @@ fn path_requests_of_invalid_length_are_protocol_violations_and_dropped() {
         let request = RawPacket::pack(
             flags,
             0,
-            &driver.path_request_dest,
+            &driver.builtin.path_request,
             None,
             constants::CONTEXT_NONE,
             &request_data,
@@ -4685,7 +4685,7 @@ fn path_requests_shorter_than_a_destination_hash_are_dropped_silently() {
         let request = RawPacket::pack(
             flags,
             0,
-            &driver.path_request_dest,
+            &driver.builtin.path_request,
             None,
             constants::CONTEXT_NONE,
             &vec![0x47; len],
@@ -5773,7 +5773,7 @@ fn duplicate_and_in_flight_path_requests_are_filtered_inbound() {
                 packet_type: constants::PACKET_TYPE_DATA,
             },
             0,
-            &driver.path_request_dest,
+            &driver.builtin.path_request,
             None,
             constants::CONTEXT_NONE,
             &data,
@@ -5800,7 +5800,7 @@ fn duplicate_and_in_flight_path_requests_are_filtered_inbound() {
 #[test]
 fn announce_failing_its_queued_signature_check_is_filtered_inbound() {
     let mut driver = new_test_driver();
-    driver.async_announce_verification = true;
+    driver.announce_verify.async_enabled = true;
     register_test_generic_interface(&mut driver, 1, "queued-check");
     let mut tampered = build_announce_packet(&Identity::new(&mut OsRng));
     let last = tampered.len() - 1;
@@ -5811,7 +5811,8 @@ fn announce_failing_its_queued_signature_check_is_filtered_inbound() {
     assert_eq!(rx_and_filtered(&driver, 1), (len, 0, 1));
 
     let pending = driver
-        .announce_verify_queue
+        .announce_verify
+        .queue
         .lock()
         .unwrap()
         .take_pending(time::now());
@@ -7382,7 +7383,7 @@ fn management_announces_emitted_after_delay() {
         .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
     // Enable management announces
-    driver.management_config.enable_remote_management = true;
+    driver.management.config.enable_remote_management = true;
     driver.transport_identity = Some(identity);
 
     // Started long enough ago for the startup delay to have passed
@@ -7584,7 +7585,7 @@ fn runtime_config_stamp_flags_default_as_upstream_and_apply_to_engine_and_shared
         assert_eq!(entry.source, RuntimeConfigSource::Startup, "{key}");
     }
     assert!(driver.engine.stamp_prs());
-    assert!(driver.stamp_destinations.load(Ordering::Relaxed));
+    assert!(driver.stamps.stamp_destinations.load(Ordering::Relaxed));
 
     // The node handle reads the same flag the driver flips.
     let shared = Arc::new(AtomicBool::new(true));
@@ -7593,7 +7594,7 @@ fn runtime_config_stamp_flags_default_as_upstream_and_apply_to_engine_and_shared
     for ((key, read_back), (_, default)) in [
         (
             "global.stamp_destinations",
-            Box::new(|d: &Driver| d.stamp_destinations.load(Ordering::Relaxed))
+            Box::new(|d: &Driver| d.stamps.stamp_destinations.load(Ordering::Relaxed))
                 as Box<dyn Fn(&Driver) -> bool>,
         ),
         (
@@ -7617,7 +7618,7 @@ fn runtime_config_stamp_flags_default_as_upstream_and_apply_to_engine_and_shared
         ),
         (
             "global.always_stamp_link_requests",
-            Box::new(|d: &Driver| d.stamp_settings.always_stamp_lrs),
+            Box::new(|d: &Driver| d.stamps.settings.always_stamp_lrs),
         ),
     ]
     .into_iter()
@@ -7707,11 +7708,11 @@ fn runtime_config_stamp_link_requests_defaults_on_and_can_be_turned_off() {
         value: RuntimeConfigValue::Bool(false),
     });
     assert!(matches!(response, QueryResponse::RuntimeConfigSet(Ok(_))));
-    assert!(!driver.stamp_settings.stamp_lrs);
+    assert!(!driver.stamps.settings.stamp_lrs);
 
     let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig { key: key.into() });
     assert!(matches!(response, QueryResponse::RuntimeConfigReset(Ok(_))));
-    assert!(driver.stamp_settings.stamp_lrs);
+    assert!(driver.stamps.settings.stamp_lrs);
 }
 
 #[test]
@@ -9461,7 +9462,7 @@ fn management_announces_not_emitted_before_delay() {
         .interfaces
         .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
-    driver.management_config.enable_remote_management = true;
+    driver.management.config.enable_remote_management = true;
     driver.transport_identity = Some(identity);
     // Started just now - delay hasn't passed
     driver.started = time::now();
@@ -10440,7 +10441,7 @@ fn recursive_path_request_does_not_reach_offline_interface_writer() {
     };
     assert_eq!(*interface, InterfaceId(2));
     let packet = RawPacket::unpack(raw).expect("valid recursive path request");
-    assert_eq!(packet.destination_hash, driver.path_request_dest);
+    assert_eq!(packet.destination_hash, driver.builtin.path_request);
     assert_eq!(packet.data().len(), 48);
     assert_eq!(&packet.data()[..16], &destination_hash);
     assert_eq!(&packet.data()[16..32], &[0x42; 16]);
@@ -10537,7 +10538,7 @@ fn queued_ingress_limited_path_request_remains_suppressed_during_dispatch() {
             packet_type: constants::PACKET_TYPE_DATA,
         },
         0,
-        &driver.path_request_dest,
+        &driver.builtin.path_request,
         None,
         constants::CONTEXT_NONE,
         &request_data,
@@ -10545,7 +10546,7 @@ fn queued_ingress_limited_path_request_remains_suppressed_during_dispatch() {
     .unwrap();
     driver.dispatch_all_with_ingress_class(
         vec![TransportAction::DeliverLocal {
-            destination_hash: driver.path_request_dest,
+            destination_hash: driver.builtin.path_request,
             raw: Arc::from(packet.raw),
             packet_hash: [0xCC; 32],
             receiving_interface: InterfaceId(1),
@@ -10584,7 +10585,7 @@ fn duplicate_path_request_is_not_counted_as_new_ingress() {
             packet_type: constants::PACKET_TYPE_DATA,
         },
         0,
-        &driver.path_request_dest,
+        &driver.builtin.path_request,
         None,
         constants::CONTEXT_NONE,
         &request_data,
@@ -10593,7 +10594,7 @@ fn duplicate_path_request_is_not_counted_as_new_ingress() {
 
     for packet_hash in [[0xcc; 32], [0xdd; 32]] {
         driver.dispatch_all(vec![TransportAction::DeliverLocal {
-            destination_hash: driver.path_request_dest,
+            destination_hash: driver.builtin.path_request,
             raw: Arc::from(packet.raw.clone()),
             packet_hash,
             receiving_interface: InterfaceId(1),
@@ -10717,7 +10718,7 @@ fn path_request_dest_registered() {
     // The path request dest should be registered as a local PLAIN destination
     let expected_dest =
         rns_core::destination::destination_hash("rnstransport", &["path", "request"], None);
-    assert_eq!(driver.path_request_dest, expected_dest);
+    assert_eq!(driver.builtin.path_request, expected_dest);
 
     drop(tx);
 }
@@ -13090,7 +13091,7 @@ fn interface_stats_includes_probe_responder() {
         .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
     // Set probe_responder_hash
-    driver.probe_responder_hash = Some([0xEE; 16]);
+    driver.builtin.probe_responder = Some([0xEE; 16]);
 
     let (resp_tx, resp_rx) = mpsc::channel();
     tx.send(Event::query(QueryRequest::InterfaceStats, resp_tx))
@@ -13950,7 +13951,7 @@ mod hook_modify {
         let tagless = RawPacket::pack(
             flags,
             0,
-            &driver.path_request_dest,
+            &driver.builtin.path_request,
             None,
             constants::CONTEXT_NONE,
             &[0x44; 16],
@@ -14032,7 +14033,7 @@ fn local_path_request_frame(driver: &Driver, dest: &[u8; 16], tag: &[u8; 16]) ->
             packet_type: constants::PACKET_TYPE_DATA,
         },
         0,
-        &driver.path_request_dest,
+        &driver.builtin.path_request,
         None,
         constants::CONTEXT_NONE,
         &data,
@@ -14086,8 +14087,8 @@ fn local_path_response_fixture(via_events: bool) -> LocalPathResponseFixture {
             .local_destinations
             .insert(dest, constants::DESTINATION_SINGLE);
     }
-    driver.probe_responder_hash = Some(probe_dest);
-    driver.management_config.enable_remote_management = true;
+    driver.builtin.probe_responder = Some(probe_dest);
+    driver.management.config.enable_remote_management = true;
 
     // In-process app destination, registered and announced via the node API.
     let app_identity = Identity::new(&mut OsRng);
@@ -14116,7 +14117,7 @@ fn local_path_response_fixture(via_events: bool) -> LocalPathResponseFixture {
         driver
             .local_destinations
             .insert(app_dest, constants::DESTINATION_SINGLE);
-        driver.shared_announces.insert(
+        driver.path_responses.shared_announces.insert(
             app_dest,
             SharedAnnounceRecord {
                 name_hash,
@@ -14260,7 +14261,7 @@ fn path_request_for_a_never_announced_registered_destination_is_answered() {
     assert!(announce.app_data.is_none());
     // The key only answers path requests: it is not a shared-client replay
     // record, so a reconnect does not start announcing the destination.
-    assert!(!driver.shared_announces.contains_key(&dest));
+    assert!(!driver.path_responses.shared_announces.contains_key(&dest));
 }
 
 #[test]
@@ -14297,10 +14298,10 @@ fn local_path_response_replays_identical_bytes_for_repeated_tag() {
     assert!(!sent_2.lock().unwrap().iter().any(|raw| is_announce(raw)));
 
     // Entries expire after the replay window.
-    assert_eq!(driver.local_path_responses.len(), 6);
+    assert_eq!(driver.path_responses.local_cache.len(), 6);
     let later = time::now() + Driver::LOCAL_PATH_RESPONSE_WINDOW + 1.0;
     driver.expire_local_path_responses(later);
-    assert!(driver.local_path_responses.is_empty());
+    assert!(driver.path_responses.local_cache.is_empty());
 
     // The cache is bounded.
     for i in 0..(Driver::LOCAL_PATH_RESPONSE_MAX_ENTRIES + 5) {
@@ -14312,7 +14313,7 @@ fn local_path_response_replays_identical_bytes_for_repeated_tag() {
         }]);
     }
     assert_eq!(
-        driver.local_path_responses.len(),
+        driver.path_responses.local_cache.len(),
         Driver::LOCAL_PATH_RESPONSE_MAX_ENTRIES
     );
 }
@@ -14342,7 +14343,7 @@ fn registered_but_never_announced_destination_is_not_answered() {
     driver.run();
 
     assert!(!sent_1.lock().unwrap().iter().any(|raw| is_announce(raw)));
-    assert!(driver.local_path_responses.is_empty());
+    assert!(driver.path_responses.local_cache.is_empty());
 }
 
 // =========================================================================
@@ -14379,8 +14380,8 @@ fn create_link_is_not_stamped_when_stamp_lrs_is_off() {
     let (tx, rx) = event::channel();
     let dest = [0x69; 16];
     let (mut driver, sent) = stamped_link_driver(tx, rx, dest, Some(4));
-    assert!(driver.stamp_settings.stamp_lrs);
-    driver.stamp_settings.stamp_lrs = false;
+    assert!(driver.stamps.settings.stamp_lrs);
+    driver.stamps.settings.stamp_lrs = false;
 
     let (resp_tx, resp_rx) = mpsc::channel();
     driver.handle_create_link(dest, [0xAA; 32], resp_tx);
@@ -14400,7 +14401,7 @@ fn create_link_is_not_stamped_when_zero_is_announced_even_with_always_stamp_lrs(
     let (tx, rx) = event::channel();
     let dest = [0x6C; 16];
     let (mut driver, sent) = stamped_link_driver(tx, rx, dest, Some(0));
-    driver.stamp_settings.always_stamp_lrs = true;
+    driver.stamps.settings.always_stamp_lrs = true;
 
     let (resp_tx, resp_rx) = mpsc::channel();
     driver.handle_create_link(dest, [0xAA; 32], resp_tx);
@@ -14432,7 +14433,7 @@ fn outbound_link_stamp_cost_prefers_the_announced_cost() {
     for (announced, always, expected) in cases {
         let (tx, rx) = event::channel();
         let (mut driver, _sent) = stamped_link_driver(tx, rx, dest, announced);
-        driver.stamp_settings.always_stamp_lrs = always;
+        driver.stamps.settings.always_stamp_lrs = always;
         assert_eq!(
             driver.outbound_link_stamp_cost(&dest),
             expected,
@@ -14443,7 +14444,7 @@ fn outbound_link_stamp_cost_prefers_the_announced_cost() {
     // The fallback is the local, configurable LR_COST, fraction included.
     let (tx, rx) = event::channel();
     let (mut driver, _sent) = stamped_link_driver(tx, rx, dest, None);
-    driver.stamp_settings.always_stamp_lrs = true;
+    driver.stamps.settings.always_stamp_lrs = true;
     driver
         .link_manager
         .link_request_costs()
@@ -14459,7 +14460,7 @@ fn create_link_is_stamped_without_an_announced_cost_when_always_stamp_lrs_is_set
     let (tx, rx) = event::channel();
     let dest = [0x6B; 16];
     let (mut driver, sent) = stamped_link_driver(tx.clone(), rx, dest, None);
-    driver.stamp_settings.always_stamp_lrs = true;
+    driver.stamps.settings.always_stamp_lrs = true;
     driver
         .link_manager
         .link_request_costs()
@@ -14491,7 +14492,7 @@ fn create_link_uses_the_configured_link_stamp_timeout() {
     let dest = [0x68; 16];
     let (mut driver, _sent) =
         stamped_link_driver(tx, rx, dest, Some(rns_core::constants::LINK_COST_CAP));
-    driver.stamp_settings.lr_stamp_timeout = rns_core::constants::STAMP_TIMEOUT_MIN;
+    driver.stamps.settings.lr_stamp_timeout = rns_core::constants::STAMP_TIMEOUT_MIN;
 
     let (resp_tx, resp_rx) = mpsc::channel();
     let started = Instant::now();
@@ -14824,7 +14825,7 @@ fn own_path_request_with_stamp_prs_is_stamped_off_thread_then_broadcast() {
     assert_eq!(requests.len(), 1, "exactly one stamped request goes out");
     let tag = requests[0][32..48].to_vec();
     assert_valid_path_request_stamp(&requests[0], &dest, &tag);
-    assert_eq!(driver.stamper.cached_path_request_stamps(), 1);
+    assert_eq!(driver.stamps.stamper.cached_path_request_stamps(), 1);
 }
 
 #[test]
@@ -14872,7 +14873,7 @@ fn path_request_without_stamp_prs_is_sent_synchronously_with_the_transport_ident
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].len(), constants::PATH_REQUEST_LENGTH);
     assert_eq!(&requests[0][16..32], &[0x42; 16]);
-    assert_eq!(driver.stamper.queued(), 0);
+    assert_eq!(driver.stamps.stamper.queued(), 0);
 }
 
 #[test]
@@ -15066,16 +15067,16 @@ fn apply_stamp_config_sets_engine_stamper_runtime_defaults_and_hop_limiter() {
     );
     assert!(driver.engine.stamp_prs());
     assert!(shared.load(Ordering::Relaxed));
-    assert!(driver.stamp_settings.stamp_lrs);
-    assert!(driver.stamp_settings.always_stamp_lrs);
-    assert!(driver.stamp_settings.lr_stamps_enforced);
-    assert_eq!(driver.stamp_settings.lr_cost, StampCost::from_whole(9));
+    assert!(driver.stamps.settings.stamp_lrs);
+    assert!(driver.stamps.settings.always_stamp_lrs);
+    assert!(driver.stamps.settings.lr_stamps_enforced);
+    assert_eq!(driver.stamps.settings.lr_cost, StampCost::from_whole(9));
     assert_eq!(
-        driver.stamp_settings.link_stamp_timeout(),
+        driver.stamps.settings.link_stamp_timeout(),
         Duration::from_secs(4)
     );
     assert_eq!(
-        driver.stamper.targets(),
+        driver.stamps.stamper.targets(),
         crate::stamper::StampTargets {
             destination_value: StampCost::from_whole(27),
             path_request_value: StampCost::from_whole(13),
@@ -15087,7 +15088,7 @@ fn apply_stamp_config_sets_engine_stamper_runtime_defaults_and_hop_limiter() {
     );
     assert!(driver.link_manager.link_request_costs().enforced());
     assert_eq!(
-        driver.stamper.path_request_timeout(),
+        driver.stamps.stamper.path_request_timeout(),
         Duration::from_secs(3)
     );
 
@@ -15117,7 +15118,7 @@ fn apply_stamp_config_sets_engine_stamper_runtime_defaults_and_hop_limiter() {
     }
     assert!(driver.engine.stamp_prs());
     assert!(shared.load(Ordering::Relaxed));
-    assert!(driver.stamp_settings.stamp_lrs);
+    assert!(driver.stamps.settings.stamp_lrs);
 }
 
 #[test]
@@ -15277,7 +15278,7 @@ fn folded_work_verifies_queued_announces() {
     let (cbs, announces, _, _, _, _) = MockCallbacks::new();
     let mut driver = Driver::new(make_transport_config(false), rx, tx.clone(), Box::new(cbs));
     driver.set_tick_interval_handle(Arc::new(AtomicU64::new(1000)));
-    driver.async_announce_verification = true;
+    driver.announce_verify.async_enabled = true;
     driver.engine.register_interface(make_interface_info(1));
     let (writer, _sent) = MockWriter::new();
     driver
@@ -15326,7 +15327,10 @@ type SentFrames = Arc<Mutex<Vec<Vec<u8>>>>;
 /// since upstream 51fa8413, for tests of behavior other than stamping.
 fn unstamped(driver: &mut Driver) {
     driver.engine.set_stamp_prs(false);
-    driver.stamp_destinations.store(false, Ordering::Relaxed);
+    driver
+        .stamps
+        .stamp_destinations
+        .store(false, Ordering::Relaxed);
 }
 
 /// A driver with three online interfaces, each with its own writer.
@@ -15409,7 +15413,7 @@ fn stamped_rediscovery_grinds_one_stamp_for_every_interface() {
     assert_eq!(second, third);
     let tag = second[0][32..48].to_vec();
     assert_valid_path_request_stamp(&second[0], &dest, &tag);
-    assert_eq!(driver.stamper.cached_path_request_stamps(), 1);
+    assert_eq!(driver.stamps.stamper.cached_path_request_stamps(), 1);
 }
 
 #[test]
@@ -15525,11 +15529,15 @@ fn stamped_management_announces_wait_for_their_stamp_and_announce_their_link_cos
     let identity = Identity::new(&mut OsRng);
     let identity_hash = *identity.hash();
     driver.transport_identity = Some(identity);
-    driver.management_config.enable_remote_management = true;
-    driver.management_config.publish_blackhole = true;
-    driver.stamp_destinations.store(true, Ordering::Relaxed);
+    driver.management.config.enable_remote_management = true;
+    driver.management.config.publish_blackhole = true;
+    driver
+        .stamps
+        .stamp_destinations
+        .store(true, Ordering::Relaxed);
     let dir = tempfile::tempdir().unwrap();
     driver
+        .stamps
         .stamper
         .set_stamp_store(Some(crate::stamps::DestinationStampStore::new(dir.path())));
     let blackhole = crate::management::blackhole_dest_hash(&identity_hash);
@@ -15581,9 +15589,13 @@ fn shared_client_announces_a_registered_path_responder_stamped() {
         let (tx, rx) = event::channel();
         let (mut driver, sent) = rediscovery_driver(tx.clone(), rx, false);
         driver.connected_to_shared_instance = shared_client;
-        driver.stamp_destinations.store(true, Ordering::Relaxed);
+        driver
+            .stamps
+            .stamp_destinations
+            .store(true, Ordering::Relaxed);
         let dir = tempfile::tempdir().unwrap();
         driver
+            .stamps
             .stamper
             .set_stamp_store(Some(crate::stamps::DestinationStampStore::new(dir.path())));
         let identity = Identity::new(&mut OsRng);
@@ -15629,9 +15641,13 @@ fn shared_client_announces_a_registered_path_responder_stamped() {
 fn path_request_for_a_registered_path_responder_is_answered_stamped() {
     let (tx, rx) = event::channel();
     let (mut driver, sent) = rediscovery_driver(tx.clone(), rx, false);
-    driver.stamp_destinations.store(true, Ordering::Relaxed);
+    driver
+        .stamps
+        .stamp_destinations
+        .store(true, Ordering::Relaxed);
     let dir = tempfile::tempdir().unwrap();
     driver
+        .stamps
         .stamper
         .set_stamp_store(Some(crate::stamps::DestinationStampStore::new(dir.path())));
     let identity = Identity::new(&mut OsRng);
@@ -15679,7 +15695,7 @@ fn management_announces_stay_unstamped_without_stamp_destinations() {
     let identity = Identity::new(&mut OsRng);
     let blackhole = crate::management::blackhole_dest_hash(identity.hash());
     driver.transport_identity = Some(identity);
-    driver.management_config.publish_blackhole = true;
+    driver.management.config.publish_blackhole = true;
 
     driver.emit_management_announces(time::now());
     driver.flush_writers();
@@ -15719,9 +15735,13 @@ fn the_network_identity_announces_its_management_destinations() {
     let network_identity = Identity::new(&mut OsRng);
     driver.network_identity = Some(copy_identity(&network_identity));
     driver.register_network_destinations();
-    driver.stamp_destinations.store(true, Ordering::Relaxed);
+    driver
+        .stamps
+        .stamp_destinations
+        .store(true, Ordering::Relaxed);
     let dir = tempfile::tempdir().unwrap();
     driver
+        .stamps
         .stamper
         .set_stamp_store(Some(crate::stamps::DestinationStampStore::new(dir.path())));
     let dests = network_destination_hashes(&network_identity);
@@ -17643,7 +17663,7 @@ fn links_to_built_in_destinations_are_not_reported_to_the_application() {
     let mut driver = Driver::new(make_transport_config(true), rx, tx, Box::new(cbs));
     let builtin = [0xB1; 16];
     let app_dest = [0xA1; 16];
-    driver.builtin_link_destinations.insert(builtin);
+    driver.builtin.link_destinations.insert(builtin);
     let established_link = |link_id: [u8; 16], dest_hash: [u8; 16], is_initiator: bool| {
         LinkManagerAction::LinkEstablished {
             link_id,
@@ -17698,5 +17718,5 @@ fn links_to_built_in_destinations_are_not_reported_to_the_application() {
             .collect::<Vec<_>>(),
         vec![[2; 16], [3; 16]]
     );
-    assert!(driver.builtin_links.is_empty());
+    assert!(driver.builtin.links.is_empty());
 }

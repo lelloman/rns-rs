@@ -127,7 +127,7 @@ impl Driver {
             );
             return false;
         }
-        let is_path_request = parsed_packet.destination_hash == self.path_request_dest;
+        let is_path_request = parsed_packet.destination_hash == self.builtin.path_request;
         // Upstream drops a path request shorter than a destination hash
         // without counting a protocol violation.
         if is_path_request
@@ -451,9 +451,9 @@ impl Driver {
         };
 
         let mut actions = self.transport_actions.take();
-        if self.async_announce_verification {
+        if self.announce_verify.async_enabled {
             let mut announce_queue = crate::sync::lock_or_recover(
-                &self.announce_verify_queue,
+                &self.announce_verify.queue,
                 "inbound announce verify queue",
             );
             let queued = announce_queue.len();
@@ -467,7 +467,7 @@ impl Driver {
                 if crate::engine::FOLD_WORK {
                     self.folded.announces_queued = true;
                 } else {
-                    self.announce_verify_signal.notify();
+                    self.announce_verify.signal.notify();
                 }
             }
         } else {
@@ -549,7 +549,7 @@ impl Driver {
         key: rns_core::transport::announce_verify_queue::AnnounceVerifyKey,
     ) {
         let mut announce_queue = crate::sync::lock_or_recover(
-            &self.announce_verify_queue,
+            &self.announce_verify.queue,
             "inbound announce verify queue",
         );
         let interface = announce_queue.pending_interface(&key);
@@ -580,7 +580,7 @@ impl Driver {
     ) {
         let pending = {
             let mut announce_queue = crate::sync::lock_or_recover(
-                &self.announce_verify_queue,
+                &self.announce_verify.queue,
                 "inbound announce verify queue",
             );
             announce_queue.complete_success(&key)

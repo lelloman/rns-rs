@@ -136,7 +136,7 @@ impl Driver {
             self.engine.held_announces_count(),
             self.engine.packet_hashlist_len(),
             self.engine.announce_sig_cache_len(),
-            self.announce_verify_queue
+            self.announce_verify.queue
                 .lock()
                 .map(|queue| queue.len())
                 .unwrap_or(0),
@@ -153,7 +153,7 @@ impl Driver {
             self.proofs.sent_packets.len(),
             self.proofs.completed.len(),
             self.local_destinations.len(),
-            self.shared_announces.len(),
+            self.path_responses.shared_announces.len(),
             self.link_manager.link_count(),
             self.holepunch_manager.session_count(),
             self.proofs.strategies.len(),

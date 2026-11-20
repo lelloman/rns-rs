@@ -183,7 +183,7 @@ pub(super) fn new_driver(
         queue_config.announce_ttl_secs,
         queue_config.announce_overflow_policy,
     );
-    driver.async_announce_verification = true;
+    driver.announce_verify.async_enabled = true;
     driver.set_tick_interval_handle(Arc::clone(&tick_interval_ms));
     let accepting_work = driver.accepting_work_handle();
     driver.known.ttl = config.known_destinations_ttl.as_secs_f64();
@@ -242,7 +242,7 @@ pub(super) fn configure_driver_services(
     let probe_server = start_probe_server(driver, config, tx);
 
     // Store management config on driver for ACL enforcement
-    driver.management_config = config.management.clone();
+    driver.management.config = config.management.clone();
     // Store transport identity for tunnel synthesis and management announces.
     driver.transport_identity = Some(transport_identity);
     #[cfg(feature = "hooks")]

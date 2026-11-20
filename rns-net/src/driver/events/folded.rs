@@ -40,7 +40,7 @@ impl Driver {
         if self.folded.announces.is_empty() && self.folded.announces_queued {
             self.folded.announces_queued = false;
             let taken = crate::sync::lock_or_recover(
-                &self.announce_verify_queue,
+                &self.announce_verify.queue,
                 "folded announce verify queue",
             )
             .take_pending(time::now());

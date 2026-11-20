@@ -131,9 +131,11 @@ impl Default for AnnounceRateDefaults {
 }
 
 mod announce_check;
+mod announce_verification;
 mod autoconnect;
 mod blackhole;
 mod blackhole_updater;
+mod builtin_destinations;
 pub(crate) use announce_check::{check_pending_announce, AnnounceCheck};
 mod dispatch;
 mod events;
@@ -145,12 +147,14 @@ mod interface_registry;
 mod known_destinations;
 mod lifecycle;
 mod link_stamps;
+mod management_state;
 mod packet_proofs;
 mod queries;
 mod resource_preparation;
 mod rpc_service;
 pub(crate) use rpc_service::{RpcListener, RpcService};
 mod runtime_config;
+mod stamps;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod tick_source;
 
@@ -303,18 +307,14 @@ pub struct Driver {
     /// Ingress burst state last published to the event queue, per interface.
     pub(crate) published_ingress_bursts: crate::interface::InterfaceMap<(Option<f64>, Option<f64>)>,
     pub(crate) announce_cache: Option<crate::announce_cache::AnnounceCache>,
-    /// Destination hash for rnstransport.tunnel.synthesize (PLAIN).
-    pub(crate) tunnel_synth_dest: [u8; 16],
+    /// The destinations transport itself serves, and links to them.
+    pub(crate) builtin: builtin_destinations::BuiltinDestinations,
     /// Transport identity (optional, needed for tunnel synthesis).
     pub(crate) transport_identity: Option<rns_crypto::identity::Identity>,
     /// Link manager: handles link lifecycle, request/response.
     pub(crate) link_manager: LinkManager,
-    /// Management configuration for ACL checks.
-    pub(crate) management_config: crate::management::ManagementConfig,
-    /// Last time management announces were emitted.
-    pub(crate) last_management_announce: f64,
-    /// Whether initial management announce has been sent (delayed 5s after start).
-    pub(crate) initial_announce_sent: bool,
+    /// Remote management: its access configuration and announce schedule.
+    pub(crate) management: management_state::ManagementState,
     /// Known destinations: announced identities and their retention policy.
     pub(crate) known: known_destinations::KnownDestinations,
     /// RSSI, SNR and link quality of the latest packets received on
@@ -341,8 +341,6 @@ pub struct Driver {
     pub(crate) ratchet_expiry_secs: f64,
     /// TTL for announce rate-limiter entries without an active path, in seconds.
     pub(crate) rate_limiter_ttl_secs: f64,
-    /// Destination hash for rnstransport.path.request (PLAIN).
-    pub(crate) path_request_dest: [u8; 16],
     /// Packet proofs: tracked sent packets, the proofs they await and how
     /// local destinations prove the packets they receive.
     pub(crate) proofs: packet_proofs::PacketProofs,
@@ -355,45 +353,15 @@ pub struct Driver {
     pub(crate) link_actions: crate::action_pool::ActionPool<LinkManagerAction>,
     /// Locally registered destinations: hash → dest_type.
     pub(crate) local_destinations: HashMap<[u8; 16], u8>,
-    /// The built-in destinations links are accepted to (remote management,
-    /// the blackhole list, the network identity's): upstream keeps them
-    /// inside Transport, so the application never hears of those links.
-    pub(crate) builtin_link_destinations: HashSet<[u8; 16]>,
-    /// Links established to `builtin_link_destinations`, whose events are
-    /// not reported to the callbacks.
-    pub(crate) builtin_links: HashSet<[u8; 16]>,
-    /// Latest explicit SINGLE announces to replay after shared-client reconnect.
-    shared_announces: HashMap<[u8; 16], SharedAnnounceRecord>,
-    /// Keys of SINGLE IN destinations registered with their identity, to
-    /// answer path requests for them before they announce. A shared client
-    /// announces one as a path response when it is registered and again on
-    /// reconnect, unless `shared_announces` holds a newer record for it.
-    path_responders: HashMap<[u8; 16], PathResponder>,
-    /// Path responses of `path_responders` waiting for the stamper to grind
-    /// their destination's stamp, sent on `Event::DestinationStampReady`.
-    stamp_waiting_path_responses: HashMap<[u8; 16], Vec<WaitingPathResponse>>,
-    /// Shared local interfaces that went down and should replay announces on reconnect.
-    shared_reconnect_pending: HashMap<InterfaceId, bool>,
-    /// Path-response announces recently sent for local destinations, keyed by
-    /// (destination, path-request tag), replayed byte-for-byte for a repeated
-    /// tag within `LOCAL_PATH_RESPONSE_WINDOW`: (created, raw announce).
-    pub(crate) local_path_responses: LocalPathResponseCache,
+    /// Path responses for local destinations, and the announces a shared
+    /// client replays to its instance.
+    path_responses: PathResponses,
     /// Hole-punch manager for direct P2P connections.
     pub(crate) holepunch_manager: HolePunchManager,
     /// Event sender for worker threads to send results back to the driver loop.
     pub(crate) event_tx: crate::event::EventSender,
-    /// Grinds own path request and announce stamps off the driver thread.
-    /// Replaced by the node's shared instance at startup.
-    pub(crate) stamper: Arc<crate::stamper::Stamper>,
-    /// `Transport.STAMP_DESTINATIONS`, shared with the node handle whose
-    /// announce API reads it; settable as `global.stamp_destinations`.
-    pub(crate) stamp_destinations: Arc<AtomicBool>,
-    /// The `[stamps]` config section this node started with. Link request
-    /// stamping reads `stamp_lrs`, `always_stamp_lrs` and `lr_stamp_timeout`
-    /// from it; the other
-    /// options are applied to the engine, the stamper and the node handle at
-    /// startup.
-    pub(crate) stamp_settings: crate::config::StampsSection,
+    /// Stamping of this node's announces, path requests and link requests.
+    pub(crate) stamps: stamps::Stamps,
     /// Inbound packets whose hop count reaches this limit are dropped and
     /// counted as `hop_limiter_hits` (`Transport.HOP_LIMITER`, set from
     /// `[filter] hop_limiter`).
@@ -413,14 +381,8 @@ pub struct Driver {
     /// Ordered outbound Backbone peer pool, if enabled.
     #[cfg(feature = "iface-backbone")]
     backbone_peer_pool: Option<BackbonePeerPool>,
-    /// Destination hash for the probe responder (if respond_to_probes is enabled).
-    pub(crate) probe_responder_hash: Option<[u8; 16]>,
-    /// Shared async announce verification queue.
-    pub(crate) announce_verify_queue: Arc<Mutex<AnnounceVerifyQueue>>,
-    /// Wakes the verification thread when announces are queued.
-    pub(crate) announce_verify_signal: Arc<WorkSignal>,
-    /// Whether inbound announces should be verified off the driver thread.
-    pub(crate) async_announce_verification: bool,
+    /// Verification of inbound announce signatures off the driver thread.
+    pub(crate) announce_verify: announce_verification::AnnounceVerification,
     /// Schedules and progress of the periodic housekeeping jobs.
     pub(crate) housekeeping: housekeeping::Housekeeping,
     /// Timers and housekeeping the driver runs itself when they are folded
@@ -432,8 +394,6 @@ pub struct Driver {
     /// The probe server, when it runs on the driver loop (with services
     /// folded); otherwise the node runs it on a thread of its own.
     pub(crate) probe_server: Option<crate::holepunch::probe::FoldedProbeServer>,
-    /// Runtime-configurable management announce interval.
-    pub(crate) management_announce_interval_secs: f64,
     /// The programmable hook system: hook slots, their manager and the
     /// provider bridge.
     #[cfg(feature = "hooks")]

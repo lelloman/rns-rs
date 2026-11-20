@@ -392,7 +392,7 @@ impl Driver {
 
         self.engine.void_queues();
         crate::sync::lock_or_recover(
-            &self.announce_verify_queue,
+            &self.announce_verify.queue,
             "lifecycle announce verify queue",
         )
         .clear();
@@ -671,14 +671,21 @@ impl Driver {
     /// without any.
     pub(crate) fn replay_shared_announces(&mut self) {
         let records: Vec<([u8; 16], SharedAnnounceRecord)> = self
+            .path_responses
             .shared_announces
             .iter()
             .map(|(dest_hash, record)| (*dest_hash, record.clone()))
             .collect();
         let responders: Vec<[u8; 16]> = self
-            .path_responders
+            .path_responses
+            .responders
             .keys()
-            .filter(|dest_hash| !self.shared_announces.contains_key(*dest_hash))
+            .filter(|dest_hash| {
+                !self
+                    .path_responses
+                    .shared_announces
+                    .contains_key(*dest_hash)
+            })
             .copied()
             .collect();
         for (dest_hash, record) in records {
@@ -721,7 +728,9 @@ impl Driver {
         self.engine.drop_announce_queues();
         let link_actions = self.link_manager.teardown_all_links();
         self.dispatch_link_actions(link_actions);
-        self.shared_reconnect_pending.insert(id, true);
+        self.path_responses
+            .shared_reconnect_pending
+            .insert(id, true);
         log::info!(
             "[{}] cleared shared state: {} paths, {} reverse entries, {} transport links",
             id.0,

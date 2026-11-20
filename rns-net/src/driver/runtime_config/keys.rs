@@ -387,14 +387,14 @@ impl Driver {
             )),
             "global.management_announce_interval_secs" => Some(make_entry(
                 key,
-                RuntimeConfigValue::Float(self.management_announce_interval_secs),
+                RuntimeConfigValue::Float(self.management.announce_interval_secs),
                 RuntimeConfigValue::Float(defaults.management_announce_interval_secs),
                 RuntimeConfigApplyMode::Immediate,
                 "Interval between management announces in seconds.",
             )),
             "global.stamp_destinations" => Some(make_entry(
                 key,
-                RuntimeConfigValue::Bool(self.stamp_destinations.load(Ordering::Relaxed)),
+                RuntimeConfigValue::Bool(self.stamps.stamp_destinations.load(Ordering::Relaxed)),
                 RuntimeConfigValue::Bool(defaults.stamp_destinations),
                 RuntimeConfigApplyMode::Immediate,
                 "Stamp announces emitted by this node (Transport.STAMP_DESTINATIONS); stamps are ground on the stamper worker.",
@@ -422,14 +422,14 @@ impl Driver {
             )),
             "global.stamp_link_requests" => Some(make_entry(
                 key,
-                RuntimeConfigValue::Bool(self.stamp_settings.stamp_lrs),
+                RuntimeConfigValue::Bool(self.stamps.settings.stamp_lrs),
                 RuntimeConfigValue::Bool(defaults.stamp_link_requests),
                 RuntimeConfigApplyMode::Immediate,
                 "Stamp link requests to destinations that announce a link request cost (Transport.STAMP_LRS); keys are ground off the driver thread.",
             )),
             "global.always_stamp_link_requests" => Some(make_entry(
                 key,
-                RuntimeConfigValue::Bool(self.stamp_settings.always_stamp_lrs),
+                RuntimeConfigValue::Bool(self.stamps.settings.always_stamp_lrs),
                 RuntimeConfigValue::Bool(defaults.always_stamp_link_requests),
                 RuntimeConfigApplyMode::Immediate,
                 "Also stamp link requests to destinations that announce no link request cost, at the local lr_cost (Transport.ALWAYS_STAMP_LRS).",
