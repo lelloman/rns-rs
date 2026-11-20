@@ -1,4 +1,28 @@
+//! The node's lifecycle (draining, shutdown) and the driver-side
+//! bookkeeping of known destinations and shared-instance announces.
+
 use super::*;
+
+/// Where the node is in its lifecycle, and the progress of a drain.
+pub(crate) struct Lifecycle {
+    pub(crate) state: LifecycleState,
+    /// Whether `state` is still `Active`, shared with the node handle so
+    /// that each API call can check it without a driver query.
+    pub(crate) accepting_work: Arc<AtomicBool>,
+    pub(crate) drain_started_at: Option<Instant>,
+    pub(crate) drain_deadline: Option<Instant>,
+}
+
+impl Lifecycle {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: LifecycleState::Active,
+            accepting_work: Arc::new(AtomicBool::new(true)),
+            drain_started_at: None,
+            drain_deadline: None,
+        }
+    }
+}
 
 impl Driver {
     pub(crate) fn upsert_known_destination(
@@ -205,12 +229,14 @@ impl Driver {
         self.wake_writers();
         let now = Instant::now();
         let deadline = now + timeout;
-        match self.lifecycle_state {
+        match self.lifecycle.state {
             LifecycleState::Active => {
-                self.lifecycle_state = LifecycleState::Draining;
-                self.accepting_work.store(false, Ordering::Release);
-                self.drain_started_at = Some(now);
-                self.drain_deadline = Some(deadline);
+                self.lifecycle.state = LifecycleState::Draining;
+                self.lifecycle
+                    .accepting_work
+                    .store(false, Ordering::Release);
+                self.lifecycle.drain_started_at = Some(now);
+                self.lifecycle.drain_deadline = Some(deadline);
                 log::info!(
                     "driver entering drain mode with {:.3}s timeout",
                     timeout.as_secs_f64()
@@ -218,7 +244,7 @@ impl Driver {
                 self.stop_listener_accepts();
             }
             LifecycleState::Draining => {
-                self.drain_deadline = Some(deadline);
+                self.lifecycle.drain_deadline = Some(deadline);
                 log::info!(
                     "driver drain deadline updated to {:.3}s from now",
                     timeout.as_secs_f64()
@@ -228,14 +254,14 @@ impl Driver {
             LifecycleState::Stopping | LifecycleState::Stopped => {
                 log::debug!(
                     "ignoring BeginDrain while lifecycle state is {:?}",
-                    self.lifecycle_state
+                    self.lifecycle.state
                 );
             }
         }
     }
 
     pub(crate) fn is_draining(&self) -> bool {
-        matches!(self.lifecycle_state, LifecycleState::Draining)
+        matches!(self.lifecycle.state, LifecycleState::Draining)
     }
 
     /// Keep `control` so the driver stops the listener when it shuts down.
@@ -305,11 +331,11 @@ impl Driver {
     }
 
     pub(crate) fn graceful_shutdown(&mut self) {
-        if matches!(self.lifecycle_state, LifecycleState::Stopped) {
+        if matches!(self.lifecycle.state, LifecycleState::Stopped) {
             return;
         }
 
-        self.lifecycle_state = LifecycleState::Stopping;
+        self.lifecycle.state = LifecycleState::Stopping;
 
         // Upstream detaches its interfaces on exit, and each TCP connection
         // logs its teardown.
@@ -329,7 +355,9 @@ impl Driver {
             }
         }
 
-        self.accepting_work.store(false, Ordering::Release);
+        self.lifecycle
+            .accepting_work
+            .store(false, Ordering::Release);
         self.stop_resource_preparations();
         self.stop_listener_accepts();
 
@@ -373,7 +401,7 @@ impl Driver {
             control.finish();
         }
         self.pending_probes.clear();
-        if let Some(handle) = self.ratchet_cleanup_handle.take() {
+        if let Some(handle) = self.housekeeping.ratchet_cleanup_handle.take() {
             let _ = handle.join();
         }
         // Folded housekeeping still queued completes, as a helper thread's
@@ -383,8 +411,10 @@ impl Driver {
         }
 
         self.link_manager.stop_receive_worker();
-        self.lifecycle_state = LifecycleState::Stopped;
-        self.accepting_work.store(false, Ordering::Release);
+        self.lifecycle.state = LifecycleState::Stopped;
+        self.lifecycle
+            .accepting_work
+            .store(false, Ordering::Release);
     }
 
     pub(crate) fn drain_status(&self) -> DrainStatus {
@@ -417,15 +447,16 @@ impl Driver {
         #[cfg(not(feature = "hooks"))]
         let (provider_backlog_events, provider_consumer_queued_events) = (0, 0);
         let drain_age_seconds = self
+            .lifecycle
             .drain_started_at
             .map(|started| started.elapsed().as_secs_f64());
-        let deadline_remaining_seconds = self.drain_deadline.map(|deadline| {
+        let deadline_remaining_seconds = self.lifecycle.drain_deadline.map(|deadline| {
             deadline
                 .checked_duration_since(now)
                 .map(|remaining| remaining.as_secs_f64())
                 .unwrap_or(0.0)
         });
-        let detail = match self.lifecycle_state {
+        let detail = match self.lifecycle.state {
             LifecycleState::Active => Some("node is accepting normal work".into()),
             LifecycleState::Draining => {
                 let mut remaining = Vec::new();
@@ -470,10 +501,10 @@ impl Driver {
         };
 
         DrainStatus {
-            state: self.lifecycle_state,
+            state: self.lifecycle.state,
             drain_age_seconds,
             deadline_remaining_seconds,
-            drain_complete: !matches!(self.lifecycle_state, LifecycleState::Draining)
+            drain_complete: !matches!(self.lifecycle.state, LifecycleState::Draining)
                 || (active_links == 0
                     && active_resource_transfers == 0
                     && active_holepunch_sessions == 0
@@ -489,10 +520,10 @@ impl Driver {
     }
 
     pub(crate) fn enforce_drain_deadline(&mut self) {
-        if !matches!(self.lifecycle_state, LifecycleState::Draining) {
+        if !matches!(self.lifecycle.state, LifecycleState::Draining) {
             return;
         }
-        let Some(deadline) = self.drain_deadline else {
+        let Some(deadline) = self.lifecycle.drain_deadline else {
             return;
         };
         if Instant::now() < deadline {
@@ -502,8 +533,10 @@ impl Driver {
         log::info!("driver drain deadline reached; tearing down remaining links");
         self.event_tx.link_send_pool().close();
         self.pending_link_frames.clear();
-        self.lifecycle_state = LifecycleState::Stopping;
-        self.accepting_work.store(false, Ordering::Release);
+        self.lifecycle.state = LifecycleState::Stopping;
+        self.lifecycle
+            .accepting_work
+            .store(false, Ordering::Release);
         self.stop_resource_preparations();
         let resource_actions = self.link_manager.cancel_all_resources(&mut self.rng);
         self.dispatch_link_actions(resource_actions);

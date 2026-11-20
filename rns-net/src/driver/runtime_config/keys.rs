@@ -366,14 +366,14 @@ impl Driver {
             )),
             "global.announce_cache_cleanup_interval_ticks" => Some(make_entry(
                 key,
-                RuntimeConfigValue::Int(self.announce_cache_cleanup_interval_ticks as i64),
+                RuntimeConfigValue::Int(self.housekeeping.announce_cache_cleanup_interval_ticks as i64),
                 RuntimeConfigValue::Int(defaults.announce_cache_cleanup_interval_ticks as i64),
                 RuntimeConfigApplyMode::Immediate,
                 "Tick interval between announce-cache cleanup cycles.",
             )),
             "global.announce_cache_cleanup_batch_size" => Some(make_entry(
                 key,
-                RuntimeConfigValue::Int(self.announce_cache_cleanup_batch_size as i64),
+                RuntimeConfigValue::Int(self.housekeeping.announce_cache_cleanup_batch_size as i64),
                 RuntimeConfigValue::Int(defaults.announce_cache_cleanup_batch_size as i64),
                 RuntimeConfigApplyMode::Immediate,
                 "Number of announce-cache entries processed per cleanup tick.",

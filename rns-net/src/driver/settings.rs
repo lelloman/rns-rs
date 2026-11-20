@@ -218,7 +218,7 @@ impl Driver {
 
     /// The flag the node handle reads to refuse new work once draining starts.
     pub(crate) fn accepting_work_handle(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.accepting_work)
+        Arc::clone(&self.lifecycle.accepting_work)
     }
 
     #[allow(dead_code)]

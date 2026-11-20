@@ -126,9 +126,9 @@ impl Driver {
         #[cfg(feature = "iface-backbone")]
         self.maintain_backbone_peer_pool();
 
-        self.memory_stats_counter += 1;
-        if self.memory_stats_counter >= 300 {
-            self.memory_stats_counter = 0;
+        self.housekeeping.memory_stats_counter += 1;
+        if self.housekeeping.memory_stats_counter >= 300 {
+            self.housekeeping.memory_stats_counter = 0;
             self.log_memory_stats();
         }
 
@@ -152,9 +152,9 @@ impl Driver {
 
         self.finish_ratchet_cleanup_if_ready();
         if self.known.cleanup.is_none() {
-            self.cache_cleanup_counter += 1;
-            if self.cache_cleanup_counter >= self.known.cleanup_interval_ticks {
-                self.cache_cleanup_counter = 0;
+            self.housekeeping.cache_cleanup_counter += 1;
+            if self.housekeeping.cache_cleanup_counter >= self.known.cleanup_interval_ticks {
+                self.housekeeping.cache_cleanup_counter = 0;
                 self.known.cleanup = Some(KnownDestinationCleanup {
                     candidates: self.known.entries.keys().copied().collect(),
                     cursor: 0,
@@ -166,9 +166,11 @@ impl Driver {
         }
         self.continue_known_destination_cleanup(now);
 
-        self.announce_cache_cleanup_counter += 1;
-        if self.announce_cache_cleanup_counter >= self.announce_cache_cleanup_interval_ticks {
-            self.announce_cache_cleanup_counter = 0;
+        self.housekeeping.announce_cache_cleanup_counter += 1;
+        if self.housekeeping.announce_cache_cleanup_counter
+            >= self.housekeeping.announce_cache_cleanup_interval_ticks
+        {
+            self.housekeeping.announce_cache_cleanup_counter = 0;
             if let Some(cache) = self.announce_cache.as_ref() {
                 let active_hashes = self.engine.active_packet_hashes();
                 match cache.clean(&active_hashes) {
