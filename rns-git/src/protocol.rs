@@ -263,7 +263,7 @@ pub fn response_bin(data: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn update_to_value(update: RefUpdate) -> Value {
     let mut items = vec![
         (Value::Str("ref".to_string()), Value::Str(update.refname)),

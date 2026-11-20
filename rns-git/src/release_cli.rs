@@ -574,6 +574,10 @@ struct SignReleaseOptions<'a> {
 }
 
 fn sign_release_artifacts(options: SignReleaseOptions<'_>) -> Result<()> {
+    sign_release_artifacts_in_repo(options, Path::new("."))
+}
+
+fn sign_release_artifacts_in_repo(options: SignReleaseOptions<'_>, repo_path: &Path) -> Result<()> {
     let SignReleaseOptions {
         artifacts_dir,
         artifacts,
@@ -584,31 +588,6 @@ fn sign_release_artifacts(options: SignReleaseOptions<'_>) -> Result<()> {
         origin_hash,
         origin_path,
     } = options;
-    sign_release_artifacts_in_repo(
-        artifacts_dir,
-        artifacts,
-        tag,
-        notes,
-        signer_path,
-        package_name,
-        origin_hash,
-        origin_path,
-        Path::new("."),
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn sign_release_artifacts_in_repo(
-    artifacts_dir: &Path,
-    artifacts: &[ArtifactFile],
-    tag: &str,
-    notes: &str,
-    signer_path: &Path,
-    package_name: Option<&str>,
-    origin_hash: Option<&[u8; 16]>,
-    origin_path: Option<&str>,
-    repo_path: &Path,
-) -> Result<()> {
     let signer = rns_net::storage::load_identity(signer_path).map_err(|e| {
         Error::msg(format!(
             "could not load signer identity {}: {e}",
@@ -1734,17 +1713,19 @@ mod tests {
         let signer_path = signer_dir.path().join("signer.rid");
         rns_net::storage::save_identity(&signer, &signer_path).unwrap();
         sign_release_artifacts_in_repo(
-            tmp.path(),
-            &[ArtifactFile {
-                name: "app.bin".into(),
-                path: tmp.path().join("app.bin"),
-            }],
-            "v1",
-            "# Notes\n",
-            &signer_path,
-            Some("pkg"),
-            Some(&[0x11; 16]),
-            Some("group/repo"),
+            SignReleaseOptions {
+                artifacts_dir: tmp.path(),
+                artifacts: &[ArtifactFile {
+                    name: "app.bin".into(),
+                    path: tmp.path().join("app.bin"),
+                }],
+                tag: "v1",
+                notes: "# Notes\n",
+                signer_path: &signer_path,
+                package_name: Some("pkg"),
+                origin_hash: Some(&[0x11; 16]),
+                origin_path: Some("group/repo"),
+            },
             repo.path(),
         )
         .unwrap();
