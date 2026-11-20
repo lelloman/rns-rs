@@ -4,24 +4,14 @@
 //! (on stdout, as upstream prints them, `RNS.log` lines included), exit
 //! codes, file formats and order of operations.
 
-// The library builds this file too, as rnid_command, for its options;
-// #[path] finds these modules beside it in both builds.
-#[path = "args.rs"]
 mod args;
-#[path = "encryption.rs"]
 mod encryption;
-#[path = "identities.rs"]
 mod identities;
-#[path = "py_repr.rs"]
 mod py_repr;
-#[path = "rsg.rs"]
 mod rsg;
-#[path = "run.rs"]
 mod run;
-#[path = "signing.rs"]
 mod signing;
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
 
 pub use args::*;
@@ -34,10 +24,10 @@ use std::path::Path;
 use std::process;
 use std::time::{Duration, Instant};
 
-use rns_cli::args::{Args, Opt, OptionSpec, Seen};
-use rns_cli::configobj::{self, Entry};
-use rns_cli::pyfmt::{hexrep, prettyhexrep, prettysize};
-use rns_cli::pylog::{
+use crate::args::{Args, Opt, OptionSpec, Seen};
+use crate::configobj::{self, Entry};
+use crate::pyfmt::{hexrep, prettyhexrep, prettysize};
+use crate::pylog::{
     self, b32decode, b32encode, expanduser, fromhex, identity_from_file, key_to_file, oserror,
     urlsafe_b64decode, urlsafe_b64encode,
 };
@@ -83,9 +73,9 @@ const RSG_ASCII_HEADER: &str = "#### Start of rsg data ";
 const RSG_ASCII_FOOTER: &str = " End of rsg data ####";
 const RSG_ASCII_ROW_WIDTH: usize = 64;
 
-#[allow(dead_code)]
-fn main() {
-    rns_cli::stdout::exit_quietly_on_closed_stdout();
+/// The `rnid` binary: options from the command line.
+pub fn main() {
+    crate::stdout::exit_quietly_on_closed_stdout();
     run_with_args(Args::parse_spec(&OPTIONS), "rnid", "rnid");
 }
 
@@ -96,18 +86,18 @@ fn main() {
 /// Blocks until the command is done, and exits the process itself on an
 /// argument error or a failure, with upstream's exit status.
 pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
-    rns_cli::argparse::enforce(&args, "rnid", usage_name);
+    crate::argparse::enforce(&args, "rnid", usage_name);
     if args.has("version") {
         println!("{} {}", version_name, VERSION);
         return;
     }
     if args.has("help") || args.has("h") {
-        rns_cli::argparse::print_help("rnid", usage_name);
+        crate::argparse::print_help("rnid", usage_name);
         return;
     }
     // `except KeyboardInterrupt: print(""); exit(R_INTERRUPTED)`, until a
     // Reticulum instance installs its own handler.
-    rns_cli::stdout::exit_on_interrupt_after_newline(R_INTERRUPTED);
+    crate::stdout::exit_on_interrupt_after_newline(R_INTERRUPTED);
     let mut rnid = Rnid {
         args: Namespace::from_args(&args),
         node: None,

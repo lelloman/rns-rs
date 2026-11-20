@@ -131,7 +131,7 @@ impl Rnid {
             op = true;
         }
         if !op {
-            rns_cli::argparse::print_help("rnid", usage_name);
+            crate::argparse::print_help("rnid", usage_name);
         }
         self.exit(R_OK)
     }
@@ -163,7 +163,7 @@ impl Rnid {
             pylog::set_loglevel(pylog::LOG_NONE);
         }
         // Reticulum's own handler: exit quietly with 0.
-        rns_cli::stdout::exit_on_interrupt(0);
+        crate::stdout::exit_on_interrupt(0);
         Ok(())
     }
 }

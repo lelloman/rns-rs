@@ -49,19 +49,10 @@ fn main() {
         "backbone" => cmd::backbone::run(cli::parse(&cli::BACKBONE, "backbone", tail)),
         "http" => cmd::http::run(cli::parse(&cli::HTTP, "http", tail)),
         "hook" => cmd::hook::run(cli::parse(&cli::HOOK, "hook", tail)),
-        "status" => cmd::status::run(Args::parse_spec_from(
-            tail,
-            &rns_cli::rnstatus_command::OPTIONS,
-        )),
-        "probe" => cmd::probe::run(Args::parse_spec_from(
-            tail,
-            &rns_cli::rnprobe_command::OPTIONS,
-        )),
-        "path" => cmd::path::run(Args::parse_spec_from(
-            tail,
-            &rns_cli::rnpath_command::OPTIONS,
-        )),
-        "id" => cmd::id::run(Args::parse_spec_from(tail, &rns_cli::rnid_command::OPTIONS)),
+        "status" => cmd::status::run(Args::parse_spec_from(tail, &rns_cli::rnstatus::OPTIONS)),
+        "probe" => cmd::probe::run(Args::parse_spec_from(tail, &rns_cli::rnprobe::OPTIONS)),
+        "path" => cmd::path::run(Args::parse_spec_from(tail, &rns_cli::rnpath::OPTIONS)),
+        "id" => cmd::id::run(Args::parse_spec_from(tail, &rns_cli::rnid::OPTIONS)),
         "daemon" => cmd::daemon::run(Args::parse_spec_from(tail, &rns_cli::rnsd::OPTIONS)),
         other => {
             let choices: Vec<String> = cli::COMMAND_NAMES

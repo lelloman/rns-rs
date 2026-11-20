@@ -195,7 +195,7 @@ impl Namespace {
             "request" => self.request = true,
             "no-cache" => self.no_cache = true,
             "t" => {
-                if let Some(t) = value.as_deref().and_then(rns_cli::argparse::python_float) {
+                if let Some(t) = value.as_deref().and_then(crate::argparse::python_float) {
                     self.t = t;
                 }
             }

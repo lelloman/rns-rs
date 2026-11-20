@@ -83,7 +83,7 @@ path = "src/bin/rnpath.rs"
 
 [[bin]]
 name = "rnid"
-path = "src/bin/rnid/main.rs"
+path = "src/bin/rnid.rs"
 
 [[bin]]
 name = "rnprobe"
