@@ -2061,6 +2061,23 @@ fn begin_drain_rpc_emits_event() {
 }
 
 #[test]
+fn begin_drain_rpc_with_an_unrepresentable_timeout_drains_without_a_deadline() {
+    for value in [f64::INFINITY, 1e30] {
+        let (event_tx, event_rx) = crate::event::channel();
+        let request = PickleValue::Dict(vec![(
+            PickleValue::String("begin_drain".into()),
+            PickleValue::Float(value),
+        )]);
+        let response = handle_rpc_request(&request, &mut event_tx.clone()).unwrap();
+        assert_eq!(response, PickleValue::Bool(true));
+        match event_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Event::BeginDrain { timeout }) => assert_eq!(timeout, Duration::MAX),
+            other => panic!("Expected BeginDrain event, got {:?}", other),
+        }
+    }
+}
+
+#[test]
 fn drain_status_rpc_roundtrips_fields() {
     let (event_tx, event_rx) = crate::event::channel();
 

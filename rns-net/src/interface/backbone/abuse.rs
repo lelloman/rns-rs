@@ -393,7 +393,15 @@ impl BackbonePeerMonitor {
         state.reject_count = entry.reject_count;
         state.blacklist_reason = entry.blacklist_reason;
         if let Some(remaining) = entry.blacklisted_remaining_secs {
-            state.blacklisted_until = Some(Instant::now() + Duration::from_secs_f64(remaining));
+            // A saved value that is not a usable duration leaves the peer
+            // blacklisted for as long as an instant can represent.
+            let now = Instant::now();
+            let remaining =
+                Duration::try_from_secs_f64(remaining.max(0.0)).unwrap_or(Duration::MAX);
+            state.blacklisted_until = Some(
+                now.checked_add(remaining)
+                    .unwrap_or(now + Duration::from_secs(u32::MAX as u64)),
+            );
         }
         self.peers.insert(entry.peer_ip, state);
     }
