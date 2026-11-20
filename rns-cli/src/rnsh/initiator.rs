@@ -50,6 +50,9 @@ pub(super) fn initiate(opts: CliOptions) -> Result<i32, RnshError> {
     let mut sig_pub = [0u8; 32];
     sig_pub.copy_from_slice(&recalled.public_key[32..64]);
 
+    // As upstream's initiator (since cc5d6dd0): the INFO "Establishing link
+    // with" line comes before the link is created, and there is no DEBUG
+    // "No link" line.
     log::info!(target: crate::pylog::INFO_TARGET, "Establishing link with {}", prettyhexrep(&dest_hash));
     let link_id = node.create_link(dest_hash, sig_pub)?;
     wait_for_link(&event_rx, link_id, timeout)?;
