@@ -3,11 +3,13 @@
 
 mod builtin_destinations;
 mod config_steps;
+mod node_config;
 mod services;
 mod threads;
 
 use builtin_destinations::*;
 use config_steps::*;
+use node_config::*;
 use services::*;
 use threads::*;
 
@@ -81,40 +83,17 @@ impl RnsNode {
     ) -> io::Result<Self> {
         let paths = storage::ensure_storage_dirs(state_dir)?;
         let known_destinations_path = paths.storage.join("known_destinations");
-
-        // Parse config file, upstream's default one when there is none
-        // (private nodes run on what they were given).
-        if !private {
-            storage::ensure_config_file(config_dir)?;
-        }
-        let config_file = config_dir.join("config");
-        let config_content = if config_file.exists() {
-            std::fs::read_to_string(&config_file)?
-        } else {
-            String::new()
-        };
-        let rns_config = config::parse(&config_content)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?;
-        let link_mtu_discovery = config::parse_link_mtu_discovery(&config_content)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?;
+        let ReadConfig {
+            config_file,
+            rns_config,
+            link_mtu_discovery,
+        } = read_config(config_dir, private)?;
         // Upstream `Reticulum.__start_local_interface`: when another process
         // already serves this shared instance, attach to it as a client
         // instead of starting a second instance on the same interfaces.
         #[cfg(feature = "iface-local")]
-        if !private && rns_config.reticulum.share_instance {
-            let shared =
-                crate::shared_client::SharedClientConfig::from_reticulum(&rns_config.reticulum);
-            if crate::interface::local::shared_instance_running(
-                &shared.instance_name,
-                shared.port,
-                shared.use_af_unix,
-            ) {
-                log::info!(
-                    "Shared instance {} is already running, connecting to it as a client",
-                    shared.instance_name
-                );
-                return Self::connect_shared_from_config(Some(config_dir), callbacks);
-            }
+        if !private && shared_instance_already_running(&rns_config) {
+            return Self::connect_shared_from_config(Some(config_dir), callbacks);
         }
         // Addresses Backbone listeners refuse, from <config dir>/blocked_ips
         // (upstream 5f2dbc16).
@@ -145,18 +124,7 @@ impl RnsNode {
             rns_config.reticulum.ratchet_expiry,
         );
         let identity = load_transport_identity(&paths)?;
-        // Python clients derive their RPC key from the persisted transport
-        // identity, even when their non-transport instance uses an
-        // ephemeral one.
-        let rpc_auth_key = if !private && rns_config.reticulum.share_instance {
-            Some(crate::rpc::derive_auth_key(
-                &identity
-                    .get_private_key()
-                    .expect("transport identity has private key"),
-            ))
-        } else {
-            None
-        };
+        let rpc_auth_key = shared_rpc_auth_key(&rns_config, &identity, private);
 
         let (interface_configs, initial_ids) =
             build_interface_configs(&rns_config, &paths, private)?;
@@ -171,215 +139,46 @@ impl RnsNode {
             rns_config.reticulum.ratchet_expiry,
         );
 
-        let interface_management = if private || !rns_config.reticulum.enable_interface_management {
-            None
-        } else {
-            Some(InterfaceManagementConfig {
-                config_file: config_file.clone(),
-                storage_dir: paths.storage.clone(),
-                initial_ids,
-                queue_capacity: rns_config.reticulum.interface_writer_queue_capacity,
-                transport_enabled: rns_config.reticulum.enable_transport,
-                underlay_mark: underlay_mark.or(rns_config.reticulum.underlay_mark),
-            })
-        };
+        let interface_management = interface_management_config(
+            &rns_config,
+            &config_file,
+            &paths,
+            initial_ids,
+            private,
+            underlay_mark,
+        );
         let (upstream_policy, bootstrap_interfaces) = autoconnect_policy(&rns_config);
-        let node_config = NodeConfig {
-            transport_enabled: rns_config.reticulum.enable_transport,
-            static_transport_identity: rns_config.reticulum.static_transport_identity,
-            local_hops_delta: rns_config.reticulum.local_hops_delta,
-            identity: Some(identity),
-            network_identity,
-            share_instance: !private && rns_config.reticulum.share_instance,
-            instance_name: rns_config.reticulum.instance_name.clone(),
-            shared_instance_port: rns_config.reticulum.shared_instance_port,
-            rpc_port: rns_config.reticulum.instance_control_port,
-            cache_dir: Some(paths.cache),
-            ratchet_store: Some(Arc::clone(&ratchet_store)),
-            ratchet_expiry: Duration::from_secs(rns_config.reticulum.ratchet_expiry),
-            management: if private {
-                crate::management::ManagementConfig::default()
-            } else {
-                crate::management::ManagementConfig {
-                    enable_remote_management: rns_config.reticulum.enable_remote_management,
-                    remote_management_allowed: mgmt_allowed,
-                    publish_blackhole: rns_config.reticulum.publish_blackhole,
-                    blackhole_sources: rns_config.reticulum.blackhole_sources.clone(),
-                    blackhole_update_interval: rns_config.reticulum.blackhole_update_interval,
-                }
+        let node_config = node_config_from(
+            &rns_config,
+            NodeConfigParts {
+                config_dir,
+                private,
+                underlay_mark,
+                identity,
+                network_identity,
+                cache_dir: paths.cache,
+                ratchet_store: Arc::clone(&ratchet_store),
+                interfaces: interface_configs,
+                mgmt_allowed,
+                probe_addrs,
+                probe_protocol,
+                upstream_policy,
+                bootstrap_interfaces,
             },
-            probe_port: rns_config.reticulum.probe_port,
-            probe_addrs,
-            probe_protocol,
-            direct_connect_policy: rns_config.reticulum.direct_connect_policy,
-            direct_connect_allow_private_endpoints: rns_config
-                .reticulum
-                .direct_connect_allow_private_endpoints,
-            direct_connect_allowed_identities: rns_config
-                .reticulum
-                .direct_connect_allowed_identities
-                .clone(),
-            direct_connect_reupgrade: rns_config.reticulum.direct_connect_reupgrade,
-            probe_rate_limit: rns_config.reticulum.probe_rate_limit,
-            device: rns_config.reticulum.device.clone(),
-            underlay_mark: underlay_mark.or(rns_config.reticulum.underlay_mark),
-            hooks: if private {
-                Vec::new()
-            } else {
-                rns_config.hooks.clone()
-            },
-            discover_interfaces: rns_config.reticulum.discover_interfaces,
-            discovery: DiscoverySettings {
-                interface_discovery_sources: rns_config
-                    .reticulum
-                    .interface_discovery_sources
-                    .clone(),
-                autoconnect_discovered_interfaces: if upstream_policy {
-                    rns_config.reticulum.autoconnect_discovered_interfaces
-                } else {
-                    0
-                },
-                bootstrap_interfaces: if upstream_policy {
-                    bootstrap_interfaces
-                } else {
-                    Vec::new()
-                },
-            },
-            shared_instance: SharedInstanceSettings {
-                use_af_unix: !rns_config.reticulum.shared_instance_tcp,
-                rpc_key: rns_config.reticulum.rpc_key,
-                force_bitrate: rns_config.reticulum.force_shared_instance_bitrate,
-            },
-            autoconnect_interface_mode: rns_config
-                .reticulum
-                .autoconnect_interface_mode
-                .as_deref()
-                .and_then(parse_optional_interface_mode),
-            autoconnect_interface_gravity: rns_config.reticulum.autoconnect_interface_gravity,
-            autoconnect_announces_to_internal: rns_config
-                .reticulum
-                .autoconnect_announces_to_internal,
-            autoconnect_unverified_implementations: rns_config
-                .reticulum
-                .autoconnect_unverified_implementations,
-            discovery_required_value: rns_config.reticulum.required_discovery_value,
-            respond_to_probes: rns_config.reticulum.respond_to_probes,
-            prefer_shorter_path: rns_config.reticulum.prefer_shorter_path,
-            max_paths_per_destination: rns_config.reticulum.max_paths_per_destination,
-            packet_hashlist_max_entries: rns_config.reticulum.packet_hashlist_max_entries,
-            packet_hashlist_allocation: rns_config.reticulum.packet_hashlist_allocation,
-            max_discovery_pr_tags: rns_config.reticulum.max_discovery_pr_tags,
-            max_path_destinations: rns_config.reticulum.max_path_destinations,
-            max_tunnel_destinations_total: rns_config.reticulum.max_tunnel_destinations_total,
-            known_destinations_ttl: Duration::from_secs(
-                rns_config.reticulum.known_destinations_ttl,
-            ),
-            known_destinations_max_entries: rns_config.reticulum.known_destinations_max_entries,
-            announce_table_ttl: Duration::from_secs(rns_config.reticulum.announce_table_ttl),
-            announce_table_max_bytes: rns_config.reticulum.announce_table_max_bytes,
-            driver_event_queue_capacity: rns_config.reticulum.driver_event_queue_capacity,
-            interface_writer_queue_capacity: rns_config.reticulum.interface_writer_queue_capacity,
-            announce_rate_defaults: AnnounceRateDefaults {
-                target: rns_config.reticulum.default_ar_target,
-                penalty: rns_config.reticulum.default_ar_penalty,
-                grace: rns_config.reticulum.default_ar_grace,
-            },
-            ingress_control_defaults: rns_core::transport::types::IngressControlConfig {
-                enabled: true,
-                egress_enabled: rns_config.reticulum.default_egress_control,
-                max_held_announces: rns_config.reticulum.default_ic_max_held_announces,
-                burst_freq_new: rns_config.reticulum.default_ic_burst_freq_new,
-                burst_freq: rns_config.reticulum.default_ic_burst_freq,
-                pr_burst_freq_new: rns_config.reticulum.default_ic_pr_burst_freq_new,
-                pr_burst_freq: rns_config.reticulum.default_ic_pr_burst_freq,
-                egress_pr_freq: rns_config.reticulum.default_ec_pr_freq,
-                new_time: rns_config.reticulum.default_ic_new_time,
-                burst_hold: rns_config.reticulum.default_ic_burst_hold,
-                burst_penalty: rns_config.reticulum.default_ic_burst_penalty,
-                held_release_interval: rns_config.reticulum.default_ic_held_release_interval,
-            },
-            #[cfg(feature = "iface-backbone")]
-            backbone_peer_pool: if !upstream_policy
-                && rns_config.reticulum.backbone_peer_pool_max_connected > 0
-            {
-                Some(BackbonePeerPoolSettings {
-                    max_connected: rns_config.reticulum.backbone_peer_pool_max_connected,
-                    failure_threshold: rns_config.reticulum.backbone_peer_pool_failure_threshold,
-                    failure_window: Duration::from_secs(
-                        rns_config.reticulum.backbone_peer_pool_failure_window,
-                    ),
-                    cooldown: Duration::from_secs(rns_config.reticulum.backbone_peer_pool_cooldown),
-                })
-            } else {
-                None
-            },
-            announce_sig_cache_enabled: rns_config.reticulum.announce_sig_cache_enabled,
-            announce_sig_cache_max_entries: rns_config.reticulum.announce_sig_cache_max_entries,
-            announce_sig_cache_ttl: Duration::from_secs(
-                rns_config.reticulum.announce_sig_cache_ttl,
-            ),
-            interfaces: interface_configs,
-            registry: None,
-            panic_on_interface_error: private || rns_config.reticulum.panic_on_interface_error,
-            link_proof_verify_threads: Default::default(),
-            stamps: rns_config.stamps.clone(),
-            #[cfg(feature = "hooks")]
-            provider_bridge: if !private && rns_config.reticulum.provider_bridge {
-                Some(crate::provider_bridge::ProviderBridgeConfig {
-                    enabled: true,
-                    socket_path: rns_config
-                        .reticulum
-                        .provider_socket_path
-                        .as_ref()
-                        .map(std::path::PathBuf::from)
-                        .unwrap_or_else(|| config_dir.join("provider.sock")),
-                    queue_max_events: rns_config.reticulum.provider_queue_max_events,
-                    queue_max_bytes: rns_config.reticulum.provider_queue_max_bytes,
-                    overflow_policy: match rns_config.reticulum.provider_overflow_policy.as_str() {
-                        "drop_oldest" => crate::provider_bridge::OverflowPolicy::DropOldest,
-                        _ => crate::provider_bridge::OverflowPolicy::DropNewest,
-                    },
-                    node_instance: rns_config.reticulum.instance_name.clone(),
-                })
-            } else {
-                None
-            },
-        };
+        );
 
         let mut node = Self::start_with_queue_config(
             node_config,
             callbacks,
-            NodeQueueConfig {
-                rpc_auth_key,
-                announce_max_entries: rns_config.reticulum.announce_queue_max_entries,
-                announce_max_interfaces: rns_config.reticulum.announce_queue_max_interfaces,
-                announce_max_bytes: rns_config.reticulum.announce_queue_max_bytes,
-                announce_ttl_secs: rns_config.reticulum.announce_queue_ttl as f64,
-                announce_overflow_policy: match rns_config
-                    .reticulum
-                    .announce_queue_overflow_policy
-                    .as_str()
-                {
-                    "drop_newest" => AnnounceQueueOverflowPolicy::DropNewest,
-                    "drop_oldest" => AnnounceQueueOverflowPolicy::DropOldest,
-                    _ => AnnounceQueueOverflowPolicy::DropWorst,
-                },
-                inbound_capacities: rns_config.reticulum.inbound_queue_capacities,
-                link_mtu_discovery,
-                filter: rns_config.filter.clone(),
-                hop_limiter: rns_config.reticulum.hop_limiter,
-            },
+            queue_config_from(&rns_config, rpc_auth_key, link_mtu_discovery),
             interface_management,
         )?;
-
-        node.known_destinations_path = Some(known_destinations_path.clone());
-        node.known_destinations_store = known_destinations_store;
-        let flushed: std::collections::HashMap<[u8; 16], storage::KnownDestination> =
-            known_destinations.clone().into_iter().collect();
-        node.set_stamp_store(crate::stamps::DestinationStampStore::new(&paths.storage));
-        node.restore_known_destinations(known_destinations);
-        node.start_known_destinations_flush(flushed);
-
+        node.adopt_known_destinations(
+            &known_destinations_path,
+            known_destinations_store,
+            known_destinations,
+            &paths.storage,
+        );
         Ok(node)
     }
 
