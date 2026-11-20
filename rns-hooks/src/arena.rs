@@ -276,10 +276,6 @@ pub(crate) fn read_result(
         verdict,
         modified_data_offset: word(4)?,
         modified_data_len: word(8)?,
-        inject_actions_offset: word(12)?,
-        inject_actions_count: word(16)?,
-        log_offset: word(20)?,
-        log_len: word(24)?,
     })
 }
 

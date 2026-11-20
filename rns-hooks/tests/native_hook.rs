@@ -16,17 +16,13 @@ typedef struct HookResult {
     uint32_t verdict;
     uint32_t modified_data_offset;
     uint32_t modified_data_len;
-    uint32_t inject_actions_offset;
-    uint32_t inject_actions_count;
-    uint32_t log_offset;
-    uint32_t log_len;
 } HookResult;
 
 typedef struct RnsNativeHostApi RnsNativeHostApi;
 "#;
 
 const VALID_HOOK: &str = r#"
-int rns_hook_abi_version(void) { return 1; }
+int rns_hook_abi_version(void) { return 2; }
 
 int rns_hook_on_call(
     const uint8_t *ctx,
@@ -100,11 +96,11 @@ int rns_hook_on_call(const uint8_t *ctx, size_t len, const RnsNativeHostApi *api
 }
 
 #[test]
-fn native_hook_rejects_wrong_abi_version() {
+fn native_hook_rejects_abi_v1() {
     let path = build_native_fixture(
-        "wrong-abi",
+        "abi-v1",
         r#"
-int rns_hook_abi_version(void) { return 2; }
+int rns_hook_abi_version(void) { return 1; }
 int rns_hook_on_call(const uint8_t *ctx, size_t len, const RnsNativeHostApi *api, HookResult *result) {
     (void)ctx; (void)len; (void)api; (void)result; return 0;
 }
@@ -114,8 +110,8 @@ int rns_hook_on_call(const uint8_t *ctx, size_t len, const RnsNativeHostApi *api
     assert!(matches!(
         error,
         HookError::AbiVersionMismatch {
-            expected: 1,
-            found: Some(2),
+            expected: 2,
+            found: Some(1),
             ..
         }
     ));
@@ -125,7 +121,7 @@ int rns_hook_on_call(const uint8_t *ctx, size_t len, const RnsNativeHostApi *api
 fn native_hook_requires_call_symbol() {
     let path = build_native_fixture(
         "missing-call",
-        "int rns_hook_abi_version(void) { return 1; }",
+        "int rns_hook_abi_version(void) { return 2; }",
     );
     let error = NativeProgram::load(&path).err().expect("load must fail");
     assert!(matches!(error, HookError::CompileError(_)));
@@ -137,7 +133,7 @@ fn native_hook_propagates_nonzero_return_code() {
     let error = execute_fixture(
         "return-error",
         r#"
-int rns_hook_abi_version(void) { return 1; }
+int rns_hook_abi_version(void) { return 2; }
 int rns_hook_on_call(const uint8_t *ctx, size_t len, const RnsNativeHostApi *api, HookResult *result) {
     (void)ctx; (void)len; (void)api; (void)result; return 37;
 }
@@ -153,7 +149,7 @@ fn native_hook_rejects_invalid_verdict() {
     let error = execute_fixture(
         "invalid-verdict",
         r#"
-int rns_hook_abi_version(void) { return 1; }
+int rns_hook_abi_version(void) { return 2; }
 int rns_hook_on_call(const uint8_t *ctx, size_t len, const RnsNativeHostApi *api, HookResult *result) {
     (void)ctx; (void)len; (void)api; result->verdict = 99; return 0;
 }

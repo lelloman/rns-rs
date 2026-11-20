@@ -296,7 +296,5 @@ mod tests {
         assert!(!cont_r.is_drop());
         assert_eq!(cont_r.verdict, Verdict::Continue as u32);
         assert_eq!(cont_r.modified_data_len, 0);
-        assert_eq!(cont_r.inject_actions_count, 0);
-        assert_eq!(cont_r.log_len, 0);
     }
 }
