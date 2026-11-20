@@ -422,6 +422,11 @@ fn wait_for_proof(rx: &mpsc::Receiver<TestEvent>, timeout: Duration) -> Option<(
     })
 }
 
+/// Waits up to `timeout` for a link to come up, returning as soon as it does.
+///
+/// Link tests wait for establishment against a deadline rather than sleeping
+/// a fixed time and then asserting the link is active; upstream's
+/// `tests/link.py` moved to the same pattern (`await_link`) in 12b2b8c0.
 fn wait_for_link_established(
     rx: &mpsc::Receiver<TestEvent>,
     timeout: Duration,
