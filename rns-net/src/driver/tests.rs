@@ -5467,6 +5467,40 @@ fn tunnel_synthesis_is_answered_and_both_ends_learn_the_other() {
 }
 
 #[test]
+fn tunnel_synthesis_carries_the_interface_access_code() {
+    // Upstream 2b1a984c: the early synthesis of a TCP, Backbone or I2P
+    // client went out without the IFAC mask, so a peer with the same
+    // access code dropped it. Here the IFAC is attached when the interface
+    // is registered, before it can connect, and the synthesis goes out
+    // through the masked send path like any other frame.
+    let ifac = crate::ifac::derive_ifac(Some("network"), Some("key"), 16).unwrap();
+    let (mut client, client_sent) = dialing_client_driver();
+    let entry = client.interfaces.get_mut(&InterfaceId(1)).unwrap();
+    entry.interface_type = "TCPClientInterface".into();
+    entry.ifac = Some(ifac.clone());
+    let client_transport = *client.transport_identity.as_ref().unwrap().hash();
+    client.handle_interface_up_event(InterfaceId(1), None, None);
+    let synthesis = client_sent.lock().unwrap()[0].clone();
+    assert_eq!(synthesis[0] & 0x80, 0x80, "the IFAC flag is set");
+    let unmasked = crate::ifac::unmask_inbound(&synthesis, &ifac).expect("a valid IFAC");
+
+    // Unmasked, as upstream sent it before, the peer drops it.
+    let (mut server, _server_sent, _) = tunnel_server();
+    server.interfaces.get_mut(&InterfaceId(5)).unwrap().ifac = Some(ifac.clone());
+    server.handle_frame_event(InterfaceId(5), unmasked, None, None);
+    assert_eq!(server.engine.remote_transport(&InterfaceId(5)), None);
+
+    let (mut server, _server_sent, _) = tunnel_server();
+    server.interfaces.get_mut(&InterfaceId(5)).unwrap().ifac = Some(ifac);
+    server.handle_frame_event(InterfaceId(5), synthesis, None, None);
+    assert_eq!(server.interfaces[&InterfaceId(5)].stats.ifac_violations, 0);
+    assert_eq!(
+        server.engine.remote_transport(&InterfaceId(5)),
+        Some(client_transport)
+    );
+}
+
+#[test]
 fn a_synthesis_without_an_extension_is_not_answered() {
     // A 1.6.0 synthesis: the tunnel is attached, nothing is reported and no
     // reverse synthesis is sent.
