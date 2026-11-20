@@ -11,7 +11,7 @@ use crate::util::{hex, validate_repo_name};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone)]
-pub struct ReleaseSummary {
+pub(crate) struct ReleaseSummary {
     pub tag: String,
     pub hash: String,
     pub created: u64,
@@ -23,7 +23,7 @@ pub struct ReleaseSummary {
 }
 
 #[derive(Debug, Clone)]
-pub struct ReleaseData {
+pub(crate) struct ReleaseData {
     pub tag: String,
     pub hash: String,
     pub created: u64,
@@ -36,13 +36,13 @@ pub struct ReleaseData {
 }
 
 #[derive(Debug, Clone)]
-pub struct Artifact {
+pub(crate) struct Artifact {
     pub name: String,
     pub size: u64,
 }
 
 #[derive(Debug, Clone)]
-pub struct ReleaseRequest {
+pub(crate) struct ReleaseRequest {
     pub repository: String,
     pub operation: String,
     pub tag: Option<String>,
@@ -55,7 +55,7 @@ pub struct ReleaseRequest {
     pub artifact: Option<String>,
 }
 
-pub fn parse_request(data: &[u8]) -> Result<ReleaseRequest> {
+pub(crate) fn parse_request(data: &[u8]) -> Result<ReleaseRequest> {
     let value =
         msgpack::unpack_exact(data).map_err(|e| Error::msg(format!("invalid msgpack: {e}")))?;
     let map = value
@@ -82,11 +82,12 @@ pub fn parse_request(data: &[u8]) -> Result<ReleaseRequest> {
     })
 }
 
+/// The releases directory of the repository at `repo`: the same path with `.releases` appended.
 pub fn release_sidecar_path(repo: &Path) -> PathBuf {
     sidecar_path(repo, "releases")
 }
 
-pub fn list_releases(releases_path: &Path) -> Result<Vec<ReleaseSummary>> {
+pub(crate) fn list_releases(releases_path: &Path) -> Result<Vec<ReleaseSummary>> {
     let mut releases = Vec::new();
     if !releases_path.is_dir() {
         return Ok(releases);
@@ -122,7 +123,7 @@ pub fn list_releases(releases_path: &Path) -> Result<Vec<ReleaseSummary>> {
     Ok(releases)
 }
 
-pub fn release_data(releases_path: &Path, tag: &str) -> Result<Option<ReleaseData>> {
+pub(crate) fn release_data(releases_path: &Path, tag: &str) -> Result<Option<ReleaseData>> {
     let tag = clean_tag(tag).ok_or_else(|| Error::msg("invalid tag name"))?;
     let release_dir = releases_path.join(&tag);
     if !release_dir.is_dir() {
@@ -149,7 +150,7 @@ pub fn release_data(releases_path: &Path, tag: &str) -> Result<Option<ReleaseDat
     }))
 }
 
-pub fn latest_published_tag(releases_path: &Path) -> Result<Option<String>> {
+pub(crate) fn latest_published_tag(releases_path: &Path) -> Result<Option<String>> {
     if let Some(tag) = configured_latest_tag(releases_path)? {
         return Ok(Some(tag));
     }
@@ -159,7 +160,7 @@ pub fn latest_published_tag(releases_path: &Path) -> Result<Option<String>> {
         .map(|release| release.tag))
 }
 
-pub fn configured_latest_tag(releases_path: &Path) -> Result<Option<String>> {
+pub(crate) fn configured_latest_tag(releases_path: &Path) -> Result<Option<String>> {
     let latest_path = releases_path.join("latest");
     if !latest_path.is_file() {
         return Ok(None);
@@ -177,7 +178,7 @@ pub fn configured_latest_tag(releases_path: &Path) -> Result<Option<String>> {
     Ok((release.status == "published").then_some(release.tag))
 }
 
-pub fn create_init(
+pub(crate) fn create_init(
     releases_path: &Path,
     repo_path: &Path,
     request: &ReleaseRequest,
@@ -227,7 +228,7 @@ pub fn create_init(
     Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
 }
 
-pub fn create_artifact(releases_path: &Path, request: &ReleaseRequest) -> Result<Vec<u8>> {
+pub(crate) fn create_artifact(releases_path: &Path, request: &ReleaseRequest) -> Result<Vec<u8>> {
     let Some(tag) = request.tag.as_deref().and_then(clean_tag) else {
         return Ok(protocol::status_bytes(
             protocol::RES_INVALID_REQ,
@@ -264,7 +265,7 @@ pub fn create_artifact(releases_path: &Path, request: &ReleaseRequest) -> Result
     Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
 }
 
-pub fn create_finalize(releases_path: &Path, request: &ReleaseRequest) -> Result<Vec<u8>> {
+pub(crate) fn create_finalize(releases_path: &Path, request: &ReleaseRequest) -> Result<Vec<u8>> {
     let Some(tag) = request.tag.as_deref().and_then(clean_tag) else {
         return Ok(protocol::status_bytes(
             protocol::RES_INVALID_REQ,
@@ -299,7 +300,7 @@ pub fn create_finalize(releases_path: &Path, request: &ReleaseRequest) -> Result
     Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
 }
 
-pub fn delete_release(releases_path: &Path, request: &ReleaseRequest) -> Result<Vec<u8>> {
+pub(crate) fn delete_release(releases_path: &Path, request: &ReleaseRequest) -> Result<Vec<u8>> {
     let Some(tag) = request.tag.as_deref().and_then(clean_tag) else {
         return Ok(protocol::status_bytes(
             protocol::RES_INVALID_REQ,
@@ -317,7 +318,10 @@ pub fn delete_release(releases_path: &Path, request: &ReleaseRequest) -> Result<
     Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
 }
 
-pub fn set_latest_release(releases_path: &Path, request: &ReleaseRequest) -> Result<Vec<u8>> {
+pub(crate) fn set_latest_release(
+    releases_path: &Path,
+    request: &ReleaseRequest,
+) -> Result<Vec<u8>> {
     let Some(tag) = request.tag.as_deref().and_then(clean_tag) else {
         return Ok(protocol::status_bytes(
             protocol::RES_INVALID_REQ,
@@ -336,6 +340,12 @@ pub fn set_latest_release(releases_path: &Path, request: &ReleaseRequest) -> Res
     Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
 }
 
+/// A [`protocol::RES_OK`] status response carrying a msgpack map with
+/// `releases`, the summaries of all releases, and `latest`, the tag marked as
+/// latest (nil when none is).
+///
+/// # Errors
+/// The releases directory cannot be read.
 pub fn list_response(releases_path: &Path) -> Result<Vec<u8>> {
     let releases = Value::Array(
         list_releases(releases_path)?
@@ -355,7 +365,7 @@ pub fn list_response(releases_path: &Path) -> Result<Vec<u8>> {
     ))
 }
 
-pub fn view_response(releases_path: &Path, tag: &str) -> Result<Vec<u8>> {
+pub(crate) fn view_response(releases_path: &Path, tag: &str) -> Result<Vec<u8>> {
     let resolved_tag;
     let tag = if tag == "latest" {
         let Some(tag) = latest_published_tag(releases_path)? else {
@@ -391,7 +401,10 @@ pub fn view_response(releases_path: &Path, tag: &str) -> Result<Vec<u8>> {
     }
 }
 
-pub fn fetch_response(releases_path: &Path, request: &ReleaseRequest) -> Result<RequestResponse> {
+pub(crate) fn fetch_response(
+    releases_path: &Path,
+    request: &ReleaseRequest,
+) -> Result<RequestResponse> {
     let Some(tag) = request.tag.as_deref() else {
         return Ok(RequestResponse::Bytes(protocol::status_bytes(
             protocol::RES_INVALID_REQ,
@@ -469,7 +482,7 @@ fn release_fetch_metadata(name: &str) -> Vec<u8> {
     ]))
 }
 
-pub fn release_thanks(release_dir: &Path, add: bool) -> Result<u64> {
+pub(crate) fn release_thanks(release_dir: &Path, add: bool) -> Result<u64> {
     let mut count = thanks_count(release_dir)?;
     if add {
         count = count.saturating_add(1);
@@ -478,7 +491,11 @@ pub fn release_thanks(release_dir: &Path, add: bool) -> Result<u64> {
     Ok(count)
 }
 
-pub fn artifact_path(releases_path: &Path, tag: &str, artifact: &str) -> Result<Option<PathBuf>> {
+pub(crate) fn artifact_path(
+    releases_path: &Path,
+    tag: &str,
+    artifact: &str,
+) -> Result<Option<PathBuf>> {
     let tag = if tag == "latest" {
         let Some(tag) = latest_published_tag(releases_path)? else {
             return Ok(None);

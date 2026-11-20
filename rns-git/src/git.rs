@@ -7,16 +7,16 @@ use crate::protocol::RefUpdate;
 use crate::util::{validate_repo_name, validate_upstream_source};
 use crate::{Error, Result};
 
-pub fn check_git_available() -> Result<()> {
+pub(crate) fn check_git_available() -> Result<()> {
     run(Command::new("git").arg("--version")).map(|_| ())
 }
 
-pub fn repository_path(root: &Path, repository: &str) -> Result<PathBuf> {
+pub(crate) fn repository_path(root: &Path, repository: &str) -> Result<PathBuf> {
     validate_repo_name(repository)?;
     Ok(root.join(repository))
 }
 
-pub fn validate_refname(refname: &str) -> Result<()> {
+pub(crate) fn validate_refname(refname: &str) -> Result<()> {
     if is_valid_refname(refname) {
         Ok(())
     } else {
@@ -24,7 +24,7 @@ pub fn validate_refname(refname: &str) -> Result<()> {
     }
 }
 
-pub fn validate_namespaced_ref(refname: &str) -> Result<()> {
+pub(crate) fn validate_namespaced_ref(refname: &str) -> Result<()> {
     validate_refname(refname)?;
     if refname.starts_with("refs/") {
         Ok(())
@@ -33,7 +33,7 @@ pub fn validate_namespaced_ref(refname: &str) -> Result<()> {
     }
 }
 
-pub fn validate_sha(sha: &str) -> Result<()> {
+pub(crate) fn validate_sha(sha: &str) -> Result<()> {
     if is_valid_sha(sha) {
         Ok(())
     } else {
@@ -41,14 +41,14 @@ pub fn validate_sha(sha: &str) -> Result<()> {
     }
 }
 
-pub fn validate_shas<'a>(shas: impl IntoIterator<Item = &'a String>) -> Result<()> {
+pub(crate) fn validate_shas<'a>(shas: impl IntoIterator<Item = &'a String>) -> Result<()> {
     for sha in shas {
         validate_sha(sha)?;
     }
     Ok(())
 }
 
-pub fn validate_ref_updates(updates: &[RefUpdate]) -> Result<()> {
+pub(crate) fn validate_ref_updates(updates: &[RefUpdate]) -> Result<()> {
     for update in updates {
         validate_namespaced_ref(&update.refname)?;
         if let Some(old) = update.old.as_deref() {
@@ -61,6 +61,8 @@ pub fn validate_ref_updates(updates: &[RefUpdate]) -> Result<()> {
     Ok(())
 }
 
+/// Creates a bare repository at `path`, with its parent directories, unless one
+/// is already there. Runs `git init --bare`.
 pub fn ensure_bare_repository(path: &Path) -> Result<()> {
     if is_bare_repository(path) {
         return Ok(());
@@ -71,7 +73,7 @@ pub fn ensure_bare_repository(path: &Path) -> Result<()> {
     run(Command::new("git").arg("init").arg("--bare").arg(path)).map(|_| ())
 }
 
-pub fn clone_remote_bare(source: &str, path: &Path, repository_type: &str) -> Result<()> {
+pub(crate) fn clone_remote_bare(source: &str, path: &Path, repository_type: &str) -> Result<()> {
     // Validate the remote before passing it to git.
     validate_upstream_source(source)?;
     if path.exists() {
@@ -134,7 +136,7 @@ pub fn clone_remote_bare(source: &str, path: &Path, repository_type: &str) -> Re
     result
 }
 
-pub fn update_head_to_source_default(repo_path: &Path, source: &str) -> Result<()> {
+pub(crate) fn update_head_to_source_default(repo_path: &Path, source: &str) -> Result<()> {
     require_repository(repo_path)?;
     let mut target_branch = source_default_head(source)?;
     if let Some(branch) = target_branch.as_deref() {
@@ -208,7 +210,7 @@ fn first_local_branch(repo_path: &Path) -> Result<Option<String>> {
         .map(ToOwned::to_owned))
 }
 
-pub fn repository_config(path: &Path, key: &str) -> Result<Option<String>> {
+pub(crate) fn repository_config(path: &Path, key: &str) -> Result<Option<String>> {
     require_repository(path)?;
     let output = Command::new("git")
         .arg("--git-dir")
@@ -225,7 +227,7 @@ pub fn repository_config(path: &Path, key: &str) -> Result<Option<String>> {
     ))
 }
 
-pub fn sync_upstream(path: &Path) -> Result<String> {
+pub(crate) fn sync_upstream(path: &Path) -> Result<String> {
     require_repository(path)?;
     let repository_type = repository_config(path, "repository.rngit.type")?
         .ok_or_else(|| Error::msg("repository is neither fork nor mirror"))?;
@@ -258,11 +260,13 @@ pub fn sync_upstream(path: &Path) -> Result<String> {
     Ok(repository_type)
 }
 
+/// Whether `path` looks like a bare repository: it has a `HEAD` file and an
+/// `objects` directory.
 pub fn is_bare_repository(path: &Path) -> bool {
     path.join("HEAD").exists() && path.join("objects").is_dir()
 }
 
-pub fn list_refs(path: &Path) -> Result<Vec<(String, String)>> {
+pub(crate) fn list_refs(path: &Path) -> Result<Vec<(String, String)>> {
     require_repository(path)?;
     let output = run(Command::new("git")
         .arg("--git-dir")
@@ -278,7 +282,7 @@ pub fn list_refs(path: &Path) -> Result<Vec<(String, String)>> {
         .collect())
 }
 
-pub fn list_refs_text(path: &Path) -> Result<Vec<u8>> {
+pub(crate) fn list_refs_text(path: &Path) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     for (sha, name) in list_refs(path)? {
         out.extend_from_slice(sha.as_bytes());
@@ -289,11 +293,22 @@ pub fn list_refs_text(path: &Path) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Bundles every ref of the bare repository at `path`, leaving out objects
+/// reachable from the `have` SHAs the repository has. Returns an empty vector
+/// when there is nothing to send.
+///
+/// # Errors
+/// `path` is not a bare repository, a SHA in `have` is malformed, or
+/// `git bundle` fails.
 pub fn create_bundle(path: &Path, have: &[String]) -> Result<Vec<u8>> {
     create_bundle_for_refs(path, have, &[])
 }
 
-pub fn create_bundle_for_refs(path: &Path, have: &[String], refs: &[String]) -> Result<Vec<u8>> {
+pub(crate) fn create_bundle_for_refs(
+    path: &Path,
+    have: &[String],
+    refs: &[String],
+) -> Result<Vec<u8>> {
     require_repository(path)?;
     validate_shas(have)?;
     for refname in refs {
@@ -329,6 +344,14 @@ pub fn create_bundle_for_refs(path: &Path, have: &[String], refs: &[String]) -> 
     Ok(bytes)
 }
 
+/// Applies a push to the bare repository at `path`, creating it if needed:
+/// fetches `bundle` (when not empty) and then applies each ref update in order.
+/// An update without `force` fails if the ref no longer points at its `old` SHA;
+/// updates before the failing one stay applied.
+///
+/// # Errors
+/// An invalid ref name or SHA (checked before anything changes), or a failing
+/// git command.
 pub fn apply_push(path: &Path, bundle: &[u8], updates: &[RefUpdate]) -> Result<()> {
     validate_ref_updates(updates)?;
     ensure_bare_repository(path)?;
@@ -363,7 +386,7 @@ pub fn apply_push(path: &Path, bundle: &[u8], updates: &[RefUpdate]) -> Result<(
     Ok(())
 }
 
-pub fn local_ref_sha(refname: &str) -> Result<Option<String>> {
+pub(crate) fn local_ref_sha(refname: &str) -> Result<Option<String>> {
     // Remote-advertised ref names reach this call; a leading `-` is never a ref.
     if refname.is_empty() || refname.starts_with('-') {
         return Ok(None);
@@ -381,7 +404,7 @@ pub fn local_ref_sha(refname: &str) -> Result<Option<String>> {
     ))
 }
 
-pub fn create_local_bundle(refs: &[String], exclusions: &[String]) -> Result<Vec<u8>> {
+pub(crate) fn create_local_bundle(refs: &[String], exclusions: &[String]) -> Result<Vec<u8>> {
     create_local_bundle_in(Path::new("."), refs, exclusions)
 }
 
@@ -416,7 +439,7 @@ fn create_local_bundle_in(repo: &Path, refs: &[String], exclusions: &[String]) -
     Ok(bytes)
 }
 
-pub fn object_exists_local(sha: &str) -> bool {
+pub(crate) fn object_exists_local(sha: &str) -> bool {
     object_exists_local_in(Path::new("."), sha)
 }
 
@@ -435,7 +458,7 @@ fn object_exists_local_in(repo: &Path, sha: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub fn fetch_bundle_into_local(bundle: &[u8], wanted: &[String]) -> Result<()> {
+pub(crate) fn fetch_bundle_into_local(bundle: &[u8], wanted: &[String]) -> Result<()> {
     if bundle.is_empty() {
         return Ok(());
     }

@@ -117,6 +117,14 @@ pub(super) fn media_response_data(
     (original, name.to_string())
 }
 
+/// Serves a [`PATH_DOWNLOAD`] request: a release artifact when the `artifact`
+/// variable is set, otherwise the file at `path` in the repository at `ref`
+/// (default `HEAD`), optionally converted from Markdown to micron with
+/// `fmt=mu`. Files come back as resources; a repository or file the requester
+/// cannot see gets a `RES_NOT_FOUND` status.
+///
+/// # Errors
+/// Malformed page variables, an invalid path, or a failing git command.
 pub fn download_file(
     config: &ServerConfig,
     access: &Access,

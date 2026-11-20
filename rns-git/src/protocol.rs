@@ -3,52 +3,78 @@ use rns_core::msgpack::{self, Value};
 use crate::util::validate_upstream_source;
 use crate::{Error, Result};
 
-pub const APP_NAME: &str = "git";
-pub const ASPECT_REPOSITORIES: &str = "repositories";
+pub(crate) const APP_NAME: &str = "git";
+pub(crate) const ASPECT_REPOSITORIES: &str = "repositories";
 
+/// Request path that lists a repository's refs.
 pub const PATH_LIST: &str = "/git/list";
+/// Request path that fetches a bundle of the objects the client lacks.
 pub const PATH_FETCH: &str = "/git/fetch";
+/// Request path that applies a pushed bundle and ref updates.
 pub const PATH_PUSH: &str = "/git/push";
+/// Request path that creates an empty repository.
 pub const PATH_CREATE: &str = "/git/create";
+/// Request path that creates a repository as a fork of an upstream source.
 pub const PATH_FORK: &str = "/git/fork";
+/// Request path that updates a fork or mirror from its upstream source.
 pub const PATH_SYNC: &str = "/git/sync";
+/// Request path that creates a repository mirroring an upstream source.
 pub const PATH_MIRROR: &str = "/git/mirror";
+/// Request path that deletes a repository.
 pub const PATH_DELETE: &str = "/git/delete";
+/// Request path for release management.
 pub const PATH_RELEASE: &str = "/mgmt/release";
+/// Request path for work documents.
 pub const PATH_WORK: &str = "/mgmt/work";
+/// Request path that reads or replaces group and repository permission files.
 pub const PATH_PERMS: &str = "/mgmt/perms";
 
+/// Result code: the request succeeded.
 pub const RES_OK: u8 = 0x00;
+/// Result code: the requester lacks the permission for the operation.
 pub const RES_DISALLOWED: u8 = 0x01;
+/// Result code: the request was malformed or carried invalid values.
 pub const RES_INVALID_REQ: u8 = 0x02;
+/// Result code: the repository or item does not exist, or is hidden from the requester.
 pub const RES_NOT_FOUND: u8 = 0x03;
+/// Result code: the server failed while carrying out the request.
 pub const RES_REMOTE_FAIL: u8 = 0xff;
 
 /// Repository, local object tips, and requested remote refs from a fetch request.
 pub type FetchRequest = (String, Vec<String>, Vec<(String, String)>);
 
+/// Request map key holding the repository name.
 pub const IDX_REPOSITORY: u64 = 0x00;
+/// Response metadata key holding the result code.
 pub const IDX_RESULT_CODE: u64 = 0x01;
+/// Request map key holding a group name (group permission requests).
 pub const IDX_GROUP: u64 = 0x02;
 
 const ACTION_UPDATE_REF: &str = "update_ref";
 const ACTION_DELETE_REF: &str = "delete_ref";
 
+/// One ref change in a push.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefUpdate {
+    /// Full ref name; it must start with `refs/`.
     pub refname: String,
+    /// The SHA the ref is expected to point at. When set and `force` is false, the
+    /// update fails if the ref has moved.
     pub old: Option<String>,
+    /// The SHA to point the ref at; `None` deletes the ref.
     pub new: Option<String>,
+    /// Skip the `old` check.
     pub force: bool,
 }
 
-pub fn status_bytes(code: u8, body: impl AsRef<[u8]>) -> Vec<u8> {
+pub(crate) fn status_bytes(code: u8, body: impl AsRef<[u8]>) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + body.as_ref().len());
     out.push(code);
     out.extend_from_slice(body.as_ref());
     out
 }
 
+/// Response metadata carrying only the result `code`, attached to resource responses.
 pub fn metadata_status(code: u8) -> Vec<u8> {
     msgpack::pack(&Value::Map(vec![(
         Value::UInt(IDX_RESULT_CODE),
@@ -56,6 +82,7 @@ pub fn metadata_status(code: u8) -> Vec<u8> {
     )]))
 }
 
+/// Encodes a request that names only a repository (list, create, sync, delete).
 pub fn repository_request(repository: &str) -> Vec<u8> {
     msgpack::pack(&Value::Map(vec![(
         Value::UInt(IDX_REPOSITORY),
@@ -63,7 +90,7 @@ pub fn repository_request(repository: &str) -> Vec<u8> {
     )]))
 }
 
-pub fn repository_from_request(data: &[u8]) -> Result<String> {
+pub(crate) fn repository_from_request(data: &[u8]) -> Result<String> {
     let value =
         msgpack::unpack_exact(data).map_err(|e| Error::msg(format!("invalid msgpack: {e}")))?;
     let map = value
@@ -75,7 +102,7 @@ pub fn repository_from_request(data: &[u8]) -> Result<String> {
         .ok_or_else(|| Error::msg("request missing repository"))
 }
 
-pub fn remote_clone_request(repository: &str, source: &str) -> Vec<u8> {
+pub(crate) fn remote_clone_request(repository: &str, source: &str) -> Vec<u8> {
     msgpack::pack(&Value::Map(vec![
         (
             Value::UInt(IDX_REPOSITORY),
@@ -88,7 +115,7 @@ pub fn remote_clone_request(repository: &str, source: &str) -> Vec<u8> {
     ]))
 }
 
-pub fn parse_remote_clone_request(data: &[u8]) -> Result<(String, String)> {
+pub(crate) fn parse_remote_clone_request(data: &[u8]) -> Result<(String, String)> {
     let value =
         msgpack::unpack_exact(data).map_err(|e| Error::msg(format!("invalid msgpack: {e}")))?;
     let map = value
@@ -108,11 +135,13 @@ pub fn parse_remote_clone_request(data: &[u8]) -> Result<(String, String)> {
     Ok((repo, source))
 }
 
+/// Encodes a fetch request for all refs of `repository`. `have` lists object
+/// SHAs the client already has, so the server can leave them out of the bundle.
 pub fn fetch_request(repository: &str, have: &[String]) -> Vec<u8> {
     fetch_request_for_refs(repository, have, &[])
 }
 
-pub fn fetch_request_for_refs(
+pub(crate) fn fetch_request_for_refs(
     repository: &str,
     have: &[String],
     refs: &[(String, String)],
@@ -142,7 +171,7 @@ pub fn fetch_request_for_refs(
     ]))
 }
 
-pub fn parse_fetch_request(data: &[u8]) -> Result<FetchRequest> {
+pub(crate) fn parse_fetch_request(data: &[u8]) -> Result<FetchRequest> {
     let value =
         msgpack::unpack_exact(data).map_err(|e| Error::msg(format!("invalid msgpack: {e}")))?;
     let map = value
@@ -177,6 +206,8 @@ pub fn parse_fetch_request(data: &[u8]) -> Result<FetchRequest> {
     Ok((repo, have, refs))
 }
 
+/// Encodes a push request: a git bundle with the new objects (may be empty) and
+/// the ref updates to apply.
 pub fn push_request(repository: &str, bundle: Vec<u8>, updates: Vec<RefUpdate>) -> Vec<u8> {
     msgpack::pack(&Value::Map(vec![
         (
@@ -191,7 +222,7 @@ pub fn push_request(repository: &str, bundle: Vec<u8>, updates: Vec<RefUpdate>) 
     ]))
 }
 
-pub fn parse_push_request(data: &[u8]) -> Result<(String, Vec<u8>, Vec<RefUpdate>)> {
+pub(crate) fn parse_push_request(data: &[u8]) -> Result<(String, Vec<u8>, Vec<RefUpdate>)> {
     let value =
         msgpack::unpack_exact(data).map_err(|e| Error::msg(format!("invalid msgpack: {e}")))?;
     let map = value
@@ -219,6 +250,10 @@ pub fn parse_push_request(data: &[u8]) -> Result<(String, Vec<u8>, Vec<RefUpdate
     Ok((repo, bundle, updates))
 }
 
+/// Unpacks a response that the server sent as a msgpack binary value.
+///
+/// # Errors
+/// The data is not msgpack, or holds something other than a binary value.
 pub fn response_bin(data: &[u8]) -> Result<Vec<u8>> {
     match msgpack::unpack_exact(data).map_err(|e| Error::msg(format!("invalid response: {e}")))? {
         Value::Bin(bytes) => Ok(bytes),

@@ -3,9 +3,11 @@ use std::path::Path;
 
 use crate::{Error, Result};
 
+/// Log level used when the configuration sets none: 4 (informational), on
+/// the 0-8 scale of the `loglevel` setting.
 pub const DEFAULT_LOG_LEVEL: u8 = 4;
 
-pub fn init_file_logger(path: &Path, log_level: u8) -> Result<()> {
+pub(crate) fn init_file_logger(path: &Path, log_level: u8) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -22,10 +24,14 @@ pub fn init_file_logger(path: &Path, log_level: u8) -> Result<()> {
         .map_err(|err| Error::msg(format!("failed to initialize logging: {err}")))
 }
 
+/// The default log filter for a numeric `loglevel` (0 = errors only, 8 or more = everything).
 pub fn level_filter(log_level: u8) -> log::LevelFilter {
     rns_net::logging::numeric_log_filter(log_level).default
 }
 
+/// The log filter for path-discovery messages at a numeric `loglevel`. It
+/// matches [`level_filter`] except at level 7, where path discovery is traced
+/// while everything else stays at debug.
 pub fn pathing_level_filter(log_level: u8) -> log::LevelFilter {
     rns_net::logging::numeric_log_filter(log_level).pathing
 }

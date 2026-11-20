@@ -15,7 +15,7 @@ const HASH_ALGORITHM: &[u8] = b"sha256";
 const SIG_LEN: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SignatureStatus {
+pub(crate) struct SignatureStatus {
     pub signed: bool,
     pub valid: bool,
     pub signer_hash: Option<[u8; 16]>,
@@ -33,6 +33,15 @@ struct Options {
     file: Option<PathBuf>,
 }
 
+/// Runs `rngcs` with `args` (without the program name). It implements the
+/// subset of `ssh-keygen -Y` that git uses for SSH signing: `sign` signs stdin
+/// or a file with a Reticulum identity file, `find-principals` prints the
+/// signer's identity hash, `check-novalidate` checks a signature's format, and
+/// `verify` checks a signature over stdin.
+///
+/// # Errors
+/// Bad arguments (`--help` returns the usage text as the error), an unreadable
+/// file, or a signature that does not verify.
 pub fn main<I>(args: I) -> Result<()>
 where
     I: IntoIterator<Item = String>,
@@ -155,14 +164,14 @@ fn usage() -> &'static str {
     "usage: rngcs -Y <sign|find-principals|check-novalidate|verify> [-f KEY] [-s SIG] [-I PRINCIPAL] [FILE]"
 }
 
-pub fn sign_message(identity: &Identity, message: &[u8]) -> Result<String> {
+pub(crate) fn sign_message(identity: &Identity, message: &[u8]) -> Result<String> {
     let rsg = create_rsg(identity, message)?;
     let ssh_pubkey = git_ssh_public_key(identity)?;
     let blob = create_ssh_signature(&ssh_pubkey, NAMESPACE_GIT, b"", HASH_ALGORITHM, &rsg);
     Ok(armor_ssh_signature(&blob))
 }
 
-pub fn find_principal(armored: &str) -> Result<[u8; 16]> {
+pub(crate) fn find_principal(armored: &str) -> Result<[u8; 16]> {
     let sig = parse_armored_ssh_signature(armored)?;
     if sig.namespace != NAMESPACE_GIT {
         return Err(Error::msg("invalid signature namespace"));
@@ -180,7 +189,7 @@ pub fn find_principal(armored: &str) -> Result<[u8; 16]> {
         .map_err(|_| Error::msg("invalid signer hash length"))
 }
 
-pub fn check_novalidate(armored: &str) -> bool {
+pub(crate) fn check_novalidate(armored: &str) -> bool {
     parse_armored_ssh_signature(armored)
         .and_then(|sig| {
             if sig.namespace != NAMESPACE_GIT {
@@ -192,7 +201,7 @@ pub fn check_novalidate(armored: &str) -> bool {
         .is_ok()
 }
 
-pub fn verify_message_signature(
+pub(crate) fn verify_message_signature(
     armored: &str,
     message: &[u8],
     principal: Option<&str>,
@@ -266,7 +275,7 @@ fn signature_required_signer(message: &[u8]) -> Option<(String, &'static str)> {
     }
 }
 
-pub fn extract_commit_author(message: &[u8]) -> Option<String> {
+pub(crate) fn extract_commit_author(message: &[u8]) -> Option<String> {
     for line in message.split(|b| *b == b'\n') {
         if line.is_empty() {
             break;
@@ -286,7 +295,7 @@ pub fn extract_commit_author(message: &[u8]) -> Option<String> {
     None
 }
 
-pub fn extract_tag_tagger(message: &[u8]) -> (Option<String>, bool) {
+pub(crate) fn extract_tag_tagger(message: &[u8]) -> (Option<String>, bool) {
     let mut is_tag = false;
     for line in message.split(|b| *b == b'\n') {
         if line.is_empty() {
@@ -411,12 +420,12 @@ fn git_ssh_public_key(identity: &Identity) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-pub struct ParsedSshSignature {
+pub(crate) struct ParsedSshSignature {
     pub namespace: Vec<u8>,
     pub signature_data: Vec<u8>,
 }
 
-pub fn parse_armored_ssh_signature(armored: &str) -> Result<ParsedSshSignature> {
+pub(crate) fn parse_armored_ssh_signature(armored: &str) -> Result<ParsedSshSignature> {
     let blob = unarmor_ssh_signature(armored)?;
     parse_ssh_signature(&blob)
 }
@@ -603,7 +612,7 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-pub fn split_commit_signature(commit: &[u8]) -> (Option<String>, Vec<u8>) {
+pub(crate) fn split_commit_signature(commit: &[u8]) -> (Option<String>, Vec<u8>) {
     let Ok(text) = std::str::from_utf8(commit) else {
         return (None, commit.to_vec());
     };
@@ -637,6 +646,7 @@ pub fn split_commit_signature(commit: &[u8]) -> (Option<String>, Vec<u8>) {
     )
 }
 
+/// The armored signature from a raw commit object's `gpgsig` header, if it has one.
 pub fn extract_signature_from_commit_object(commit: &[u8]) -> Option<String> {
     let (signature, _) = split_commit_signature(commit);
     signature

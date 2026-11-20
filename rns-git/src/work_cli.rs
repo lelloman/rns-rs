@@ -18,6 +18,13 @@ use crate::{Error, Result};
 const WORK_TIMEOUT_SHORT: Duration = Duration::from_secs(120);
 const WORK_TIMEOUT_MEDIUM: Duration = Duration::from_secs(600);
 
+/// Runs `rngit work` with `args`: lists, views, creates, proposes, edits,
+/// deletes, comments on, completes or reactivates work documents, or manages
+/// their permissions. `delete` refuses to run without `--yes`.
+///
+/// # Errors
+/// Bad arguments (`--help` returns the usage text as the error), a connection
+/// failure, or a refusal from the server.
 pub fn main<I>(args: I) -> Result<()>
 where
     I: IntoIterator<Item = String>,

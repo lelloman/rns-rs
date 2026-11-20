@@ -19,6 +19,13 @@ use crate::protocol;
 use crate::util::{default_reticulum_dir, default_rngit_dir, hex, load_or_create_identity};
 use crate::{git, Error, Result};
 
+/// Runs the `rngit` server with command-line `args` (without the program
+/// name). Blocks for as long as the server runs; returns only on an error, or
+/// after printing the identities when `--print-identity` is given.
+///
+/// # Errors
+/// Bad arguments (`--help` returns the usage text as the error), no `git`
+/// executable, or a failure loading the configuration, identity or Reticulum node.
 pub fn main<I>(args: I) -> Result<()>
 where
     I: IntoIterator<Item = String>,
@@ -41,7 +48,7 @@ where
     run_server(config, identity)
 }
 
-pub fn run_server(config: ServerConfig, identity: Identity) -> Result<()> {
+pub(crate) fn run_server(config: ServerConfig, identity: Identity) -> Result<()> {
     let node = RnsNode::from_config(
         config.reticulum_dir.as_deref(),
         Box::<ServerCallbacks>::default(),
@@ -63,12 +70,22 @@ pub fn run_server(config: ServerConfig, identity: Identity) -> Result<()> {
     }
 }
 
+/// The destinations a server registers on its node.
 #[derive(Debug)]
 pub struct ServerDestinations {
+    /// The repository protocol destination (`git.repositories`).
     pub repositories: Destination,
+    /// The Nomad Network page destination (`nomadnetwork.node`), when pages are enabled.
     pub nomadnet: Option<Destination>,
 }
 
+/// Registers the repository destination and its request handlers on `node`,
+/// plus the page destination when [`ServerConfig::serve_nomadnet`] is set, and
+/// queues an announce for each. Creates the repositories directory if missing.
+///
+/// # Errors
+/// `identity` has no private key, an access list in `config` is malformed, or
+/// the node refuses a registration.
 pub fn register_server_destinations(
     node: &RnsNode,
     config: ServerConfig,
@@ -88,7 +105,7 @@ pub fn register_server_destinations(
     })
 }
 
-pub fn register_repository_destination(
+pub(crate) fn register_repository_destination(
     node: &RnsNode,
     config: ServerConfig,
     identity: &Identity,
@@ -287,7 +304,7 @@ fn register_handlers(node: &RnsNode, config: ServerConfig, access: Access) -> Re
     Ok(())
 }
 
-pub fn handle_list(
+pub(crate) fn handle_list(
     config: &ServerConfig,
     access: &Access,
     data: &[u8],
@@ -312,6 +329,13 @@ pub fn handle_list(
     }
 }
 
+/// Handles a [`protocol::PATH_FETCH`] request from `remote` (identity hash and
+/// public key, `None` if unidentified). On success the response is a resource
+/// carrying a git bundle, or an empty `RES_OK` status when there is nothing to
+/// send; refusals and invalid requests are status responses.
+///
+/// # Errors
+/// The request is not a valid fetch request, or the access rules cannot be read.
 pub fn handle_fetch(
     config: &ServerConfig,
     access: &Access,
@@ -380,6 +404,13 @@ pub fn handle_fetch(
     }
 }
 
+/// Handles a [`protocol::PATH_PUSH`] request and returns the status response.
+/// Pushing to a repository that does not exist creates it, which needs create
+/// access; otherwise write access is needed.
+///
+/// # Errors
+/// The request is not a valid push request, the repository name is invalid, or
+/// the access rules cannot be read.
 pub fn handle_push(
     config: &ServerConfig,
     access: &Access,
@@ -422,7 +453,7 @@ pub fn handle_push(
     }
 }
 
-pub fn handle_create(
+pub(crate) fn handle_create(
     config: &ServerConfig,
     access: &Access,
     data: &[u8],
@@ -495,7 +526,7 @@ pub fn handle_create(
     Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
 }
 
-pub fn handle_fork(
+pub(crate) fn handle_fork(
     config: &ServerConfig,
     access: &Access,
     data: &[u8],
@@ -504,7 +535,7 @@ pub fn handle_fork(
     handle_remote_clone(config, access, data, remote, "fork")
 }
 
-pub fn handle_mirror(
+pub(crate) fn handle_mirror(
     config: &ServerConfig,
     access: &Access,
     data: &[u8],
@@ -595,7 +626,7 @@ fn handle_remote_clone(
     Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
 }
 
-pub fn handle_sync(
+pub(crate) fn handle_sync(
     config: &ServerConfig,
     access: &Access,
     data: &[u8],
@@ -654,7 +685,7 @@ pub fn handle_sync(
     Ok(protocol::status_bytes(protocol::RES_OK, b"ok"))
 }
 
-pub fn handle_delete(
+pub(crate) fn handle_delete(
     config: &ServerConfig,
     access: &Access,
     data: &[u8],
@@ -681,6 +712,9 @@ pub fn handle_delete(
     Ok(protocol::status_bytes(protocol::RES_OK, b"deleted"))
 }
 
+/// Handles a [`protocol::PATH_RELEASE`] request like
+/// [`handle_release_response`], but always returns status bytes: a resource
+/// response is returned as its data behind a `RES_OK` code.
 pub fn handle_release(
     config: &ServerConfig,
     access: &Access,
@@ -695,6 +729,12 @@ pub fn handle_release(
     }
 }
 
+/// Handles a [`protocol::PATH_RELEASE`] request. Unidentified peers are refused.
+/// `list`, `view` and `fetch` need read access; `create`, `delete` and `latest`
+/// also need release access. A `fetch` of an artifact may be answered with a resource.
+///
+/// # Errors
+/// The request does not parse, or the access rules cannot be read.
 pub fn handle_release_response(
     config: &ServerConfig,
     access: &Access,
@@ -781,7 +821,7 @@ pub fn handle_release_response(
     Ok(response)
 }
 
-pub fn handle_perms(
+pub(crate) fn handle_perms(
     config: &ServerConfig,
     access: &Access,
     data: &[u8],
@@ -970,7 +1010,7 @@ fn map_get_index_str(map: &[(Value, Value)], key: u64) -> Option<&str> {
     })
 }
 
-pub fn handle_work(
+pub(crate) fn handle_work(
     config: &ServerConfig,
     access: &Access,
     data: &[u8],

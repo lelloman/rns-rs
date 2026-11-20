@@ -22,6 +22,13 @@ const RELEASE_TIMEOUT_SHORT: Duration = Duration::from_secs(120);
 const RELEASE_TIMEOUT_MEDIUM: Duration = Duration::from_secs(300);
 const RELEASE_TIMEOUT_LONG: Duration = Duration::from_secs(7200);
 
+/// Runs `rngit release` with `args`: lists, views, fetches, verifies, creates,
+/// deletes or promotes releases. `fetch --offline` verifies a local manifest
+/// without connecting. `delete` and `latest` refuse to run without `--yes`.
+///
+/// # Errors
+/// Bad arguments (`--help` returns the usage text as the error), a connection
+/// failure, a refusal from the server, or a failed verification.
 pub fn main<I>(args: I) -> Result<()>
 where
     I: IntoIterator<Item = String>,

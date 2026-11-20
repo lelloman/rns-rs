@@ -7,7 +7,7 @@ use rns_net::storage;
 
 use crate::{Error, Result};
 
-pub fn default_rngit_dir() -> PathBuf {
+pub(crate) fn default_rngit_dir() -> PathBuf {
     if let Some(path) = std::env::var_os("RNGIT_CONFIG") {
         return PathBuf::from(path);
     }
@@ -26,22 +26,22 @@ pub fn default_rngit_dir() -> PathBuf {
     PathBuf::from(".rngit")
 }
 
-pub fn default_reticulum_dir() -> Option<PathBuf> {
+pub(crate) fn default_reticulum_dir() -> Option<PathBuf> {
     std::env::var_os("RNS_CONFIG").map(PathBuf::from)
 }
 
-pub fn ensure_dir(path: &Path) -> Result<()> {
+pub(crate) fn ensure_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path)?;
     Ok(())
 }
 
-pub fn load_or_create_identity(path: &Path) -> Result<Identity> {
+pub(crate) fn load_or_create_identity(path: &Path) -> Result<Identity> {
     storage::load_or_create_identity_file(path).map_err(Error::from)
 }
 
 pub use rns_core::display::hex;
 
-pub fn parse_hex_16(s: &str) -> Result<[u8; 16]> {
+pub(crate) fn parse_hex_16(s: &str) -> Result<[u8; 16]> {
     let clean = s.trim();
     if clean.len() != 32 {
         return Err(Error::msg("expected 32 hex characters"));
@@ -57,11 +57,11 @@ fn parse_hex_byte(s: &str) -> Result<u8> {
     u8::from_str_radix(s, 16).map_err(|_| Error::msg("invalid hex"))
 }
 
-pub fn parse_rns_url(url: &str) -> Result<([u8; 16], String)> {
+pub(crate) fn parse_rns_url(url: &str) -> Result<([u8; 16], String)> {
     parse_rns_url_with_aliases(url, &BTreeMap::new())
 }
 
-pub fn parse_rns_url_with_aliases(
+pub(crate) fn parse_rns_url_with_aliases(
     url: &str,
     destination_aliases: &BTreeMap<String, [u8; 16]>,
 ) -> Result<([u8; 16], String)> {
@@ -80,7 +80,7 @@ pub fn parse_rns_url_with_aliases(
     Ok((dest_hash, repo.trim_matches('/').to_string()))
 }
 
-pub fn resolve_rns_url_aliases(
+pub(crate) fn resolve_rns_url_aliases(
     url: &str,
     destination_aliases: &BTreeMap<String, [u8; 16]>,
 ) -> Result<String> {
@@ -91,7 +91,7 @@ pub fn resolve_rns_url_aliases(
     Ok(format!("rns://{}/{}", hex(&dest_hash), repo))
 }
 
-pub fn validate_repo_name(name: &str) -> Result<()> {
+pub(crate) fn validate_repo_name(name: &str) -> Result<()> {
     let trimmed = name.trim_matches('/');
     if trimmed.is_empty() || trimmed.len() > 256 {
         return Err(Error::msg("invalid repository name"));
