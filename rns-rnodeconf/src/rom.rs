@@ -1,10 +1,7 @@
-#![allow(
-    dead_code,
-    reason = "the full ROM table as the firmware defines it; not every product, board or model is matched yet"
-)]
 //! Device identification constants and tables, as upstream `rnodeconf.py`'s
 //! `ROM` class and its `products`, `platforms`, `mcus` and `models` define
-//! them.
+//! them. Of the board codes and configuration addresses the `ROM` class
+//! lists, only those upstream reads are kept.
 
 pub(crate) const PLATFORM_AVR: u8 = 0x90;
 pub(crate) const PLATFORM_ESP32: u8 = 0x80;
@@ -34,9 +31,9 @@ pub(crate) const MODEL_B8: u8 = 0xB8;
 pub(crate) const PRODUCT_T32_21: u8 = 0xB1;
 pub(crate) const MODEL_B4: u8 = 0xB4;
 pub(crate) const MODEL_B9: u8 = 0xB9;
-/// The TCXO model codes are only used here to select the correct firmware,
+/// The TCXO model codes only select the firmware; the model code stored in
+/// the EEPROM is still 0xB4 or 0xB9.
 pub(crate) const MODEL_B4_TCXO: u8 = 0x04;
-/// actual model codes in firmware is still 0xB4 and 0xB9.
 pub(crate) const MODEL_B9_TCXO: u8 = 0x09;
 pub(crate) const PRODUCT_H32_V2: u8 = 0xC0;
 pub(crate) const MODEL_C4: u8 = 0xC4;
@@ -69,13 +66,11 @@ pub(crate) const PRODUCT_TECHO: u8 = 0x15;
 pub(crate) const MODEL_16: u8 = 0x16;
 pub(crate) const MODEL_17: u8 = 0x17;
 pub(crate) const PRODUCT_HELTEC_T114: u8 = 0xC2;
-pub(crate) const BOARD_HELTEC_T114: u8 = 0x3C;
 /// Heltec Mesh Node T114, 470-510 MHz (HT-n5262-LF)
 pub(crate) const MODEL_C6: u8 = 0xC6;
 /// Heltec Mesh Node T114, 863-928 MHz (HT-n5262-HF)
 pub(crate) const MODEL_C7: u8 = 0xC7;
 pub(crate) const PRODUCT_XIAO_S3: u8 = 0xEB;
-pub(crate) const BOARD_XIAO_S3: u8 = 0x3E;
 /// Xiao ESP32S3 with Wio-SX1262 module, 433 MHz
 pub(crate) const MODEL_DE: u8 = 0xDE;
 /// Xiao ESP32S3 with Wio-SX1262 module, 868 MHz
@@ -98,7 +93,6 @@ pub(crate) const ADDR_CONF_BW: u8 = 0x9F;
 pub(crate) const ADDR_CONF_FREQ: u8 = 0xA3;
 pub(crate) const ADDR_CONF_OK: u8 = 0xA7;
 pub(crate) const ADDR_CONF_BT: u8 = 0xB0;
-pub(crate) const ADDR_CONF_DSET: u8 = 0xB1;
 pub(crate) const ADDR_CONF_DINT: u8 = 0xB2;
 pub(crate) const ADDR_CONF_DADR: u8 = 0xB3;
 pub(crate) const ADDR_CONF_DBLK: u8 = 0xB4;
@@ -115,15 +109,8 @@ pub(crate) const ADDR_CONF_IP: u8 = 0x42;
 pub(crate) const ADDR_CONF_NM: u8 = 0x46;
 pub(crate) const INFO_LOCK_BYTE: u8 = 0x73;
 pub(crate) const CONF_OK_BYTE: u8 = 0x73;
-pub(crate) const BOARD_RNODE: u8 = 0x31;
-pub(crate) const BOARD_HMBRW: u8 = 0x32;
-pub(crate) const BOARD_TBEAM: u8 = 0x33;
-pub(crate) const BOARD_TDECK: u8 = 0x3B;
 pub(crate) const BOARD_HUZZAH32: u8 = 0x34;
 pub(crate) const BOARD_GENERIC_ESP32: u8 = 0x35;
-pub(crate) const BOARD_LORA32_V2_0: u8 = 0x36;
-pub(crate) const BOARD_LORA32_V2_1: u8 = 0x37;
-pub(crate) const BOARD_TECHO: u8 = 0x43;
 pub(crate) const BOARD_RAK4631: u8 = 0x51;
 
 /// A model's band and output power (upstream `models`).
@@ -179,7 +166,7 @@ pub(crate) fn mcu_name(mcu: u8) -> Option<&'static str> {
 
 pub(crate) fn model(model: u8) -> Option<Model> {
     let (min_freq, max_freq, max_output, band, firmware, modem) = match model {
-        0xA4 => (
+        MODEL_A4 => (
             410000000,
             525000000,
             14,
@@ -187,7 +174,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware.hex"),
             "SX1278",
         ),
-        0xA9 => (
+        MODEL_A9 => (
             820000000,
             1020000000,
             17,
@@ -195,7 +182,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware.hex"),
             "SX1276",
         ),
-        0xA1 => (
+        MODEL_A1 => (
             410000000,
             525000000,
             22,
@@ -203,7 +190,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_t3s3.zip"),
             "SX1268",
         ),
-        0xA6 => (
+        MODEL_A6 => (
             820000000,
             1020000000,
             22,
@@ -211,7 +198,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_t3s3.zip"),
             "SX1262",
         ),
-        0xA5 => (
+        MODEL_A5 => (
             410000000,
             525000000,
             17,
@@ -219,7 +206,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_t3s3_sx127x.zip"),
             "SX1278",
         ),
-        0xAA => (
+        MODEL_AA => (
             820000000,
             1020000000,
             17,
@@ -227,7 +214,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_t3s3_sx127x.zip"),
             "SX1276",
         ),
-        0xAC => (
+        MODEL_AC => (
             2400000000,
             2500000000,
             20,
@@ -235,7 +222,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_t3s3_sx1280_pa.zip"),
             "SX1280",
         ),
-        0xA2 => (
+        MODEL_A2 => (
             410000000,
             525000000,
             17,
@@ -243,7 +230,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_ng21.zip"),
             "SX1278",
         ),
-        0xA7 => (
+        MODEL_A7 => (
             820000000,
             1020000000,
             17,
@@ -251,7 +238,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_ng21.zip"),
             "SX1276",
         ),
-        0xA3 => (
+        MODEL_A3 => (
             410000000,
             525000000,
             17,
@@ -259,7 +246,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_ng20.zip"),
             "SX1278",
         ),
-        0xA8 => (
+        MODEL_A8 => (
             820000000,
             1020000000,
             17,
@@ -267,7 +254,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_ng20.zip"),
             "SX1276",
         ),
-        0xB3 => (
+        MODEL_B3 => (
             420000000,
             520000000,
             17,
@@ -275,7 +262,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_lora32v20.zip"),
             "SX1278",
         ),
-        0xB8 => (
+        MODEL_B8 => (
             850000000,
             950000000,
             17,
@@ -283,7 +270,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_lora32v20.zip"),
             "SX1276",
         ),
-        0xB4 => (
+        MODEL_B4 => (
             420000000,
             520000000,
             17,
@@ -291,7 +278,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_lora32v21.zip"),
             "SX1278",
         ),
-        0xB9 => (
+        MODEL_B9 => (
             850000000,
             950000000,
             17,
@@ -299,7 +286,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_lora32v21.zip"),
             "SX1276",
         ),
-        0x04 => (
+        MODEL_B4_TCXO => (
             420000000,
             520000000,
             17,
@@ -307,7 +294,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_lora32v21_tcxo.zip"),
             "SX1278",
         ),
-        0x09 => (
+        MODEL_B9_TCXO => (
             850000000,
             950000000,
             17,
@@ -315,7 +302,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_lora32v21_tcxo.zip"),
             "SX1276",
         ),
-        0xBA => (
+        MODEL_BA => (
             420000000,
             520000000,
             17,
@@ -323,7 +310,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_lora32v10.zip"),
             "SX1278",
         ),
-        0xBB => (
+        MODEL_BB => (
             850000000,
             950000000,
             17,
@@ -331,7 +318,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_lora32v10.zip"),
             "SX1276",
         ),
-        0xC4 => (
+        MODEL_C4 => (
             420000000,
             520000000,
             17,
@@ -339,7 +326,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_heltec32v2.zip"),
             "SX1278",
         ),
-        0xC9 => (
+        MODEL_C9 => (
             850000000,
             950000000,
             17,
@@ -347,7 +334,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_heltec32v2.zip"),
             "SX1276",
         ),
-        0xC5 => (
+        MODEL_C5 => (
             420000000,
             520000000,
             22,
@@ -355,7 +342,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_heltec32v3.zip"),
             "SX1268",
         ),
-        0xCA => (
+        MODEL_CA => (
             850000000,
             950000000,
             22,
@@ -363,7 +350,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_heltec32v3.zip"),
             "SX1262",
         ),
-        0xC8 => (
+        MODEL_C8 => (
             860000000,
             930000000,
             28,
@@ -371,7 +358,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_heltec32v4pa.zip"),
             "SX1262",
         ),
-        0xC6 => (
+        MODEL_C6 => (
             420000000,
             520000000,
             22,
@@ -379,7 +366,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_heltec_t114.zip"),
             "SX1268",
         ),
-        0xC7 => (
+        MODEL_C7 => (
             850000000,
             950000000,
             22,
@@ -387,7 +374,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_heltec_t114.zip"),
             "SX1262",
         ),
-        0xE4 => (
+        MODEL_E4 => (
             420000000,
             520000000,
             17,
@@ -395,7 +382,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_tbeam.zip"),
             "SX1278",
         ),
-        0xE9 => (
+        MODEL_E9 => (
             850000000,
             950000000,
             17,
@@ -403,7 +390,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_tbeam.zip"),
             "SX1276",
         ),
-        0xD4 => (
+        MODEL_D4 => (
             420000000,
             520000000,
             22,
@@ -411,7 +398,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_tdeck.zip"),
             "SX1268",
         ),
-        0xD9 => (
+        MODEL_D9 => (
             850000000,
             950000000,
             22,
@@ -419,7 +406,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_tdeck.zip"),
             "SX1262",
         ),
-        0xDB => (
+        MODEL_DB => (
             420000000,
             520000000,
             22,
@@ -427,7 +414,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_tbeam_supreme.zip"),
             "SX1268",
         ),
-        0xDC => (
+        MODEL_DC => (
             850000000,
             950000000,
             22,
@@ -435,7 +422,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_tbeam_supreme.zip"),
             "SX1262",
         ),
-        0xE3 => (
+        MODEL_E3 => (
             420000000,
             520000000,
             22,
@@ -443,7 +430,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_tbeam_sx1262.zip"),
             "SX1268",
         ),
-        0xE8 => (
+        MODEL_E8 => (
             850000000,
             950000000,
             22,
@@ -451,7 +438,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_tbeam_sx1262.zip"),
             "SX1262",
         ),
-        0x11 => (
+        MODEL_11 => (
             430000000,
             510000000,
             22,
@@ -459,7 +446,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_rak4631.zip"),
             "SX1262",
         ),
-        0x12 => (
+        MODEL_12 => (
             779000000,
             928000000,
             22,
@@ -467,7 +454,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_rak4631.zip"),
             "SX1262",
         ),
-        0x13 => (
+        MODEL_13 => (
             430000000,
             510000000,
             22,
@@ -475,7 +462,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_rak4631_sx1280.zip"),
             "SX1262 + SX1280",
         ),
-        0x14 => (
+        MODEL_14 => (
             779000000,
             928000000,
             22,
@@ -483,7 +470,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_rak4631_sx1280.zip"),
             "SX1262 + SX1280",
         ),
-        0x16 => (
+        MODEL_16 => (
             779000000,
             928000000,
             22,
@@ -491,7 +478,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_techo.zip"),
             "SX1262",
         ),
-        0x17 => (
+        MODEL_17 => (
             779000000,
             928000000,
             22,
@@ -499,7 +486,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_techo.zip"),
             "SX1262",
         ),
-        0x21 => (
+        MODEL_21 => (
             820000000,
             960000000,
             22,
@@ -507,7 +494,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_opencom_xl.zip"),
             "SX1262 + SX1280",
         ),
-        0xDE => (
+        MODEL_DE => (
             420000000,
             520000000,
             22,
@@ -515,7 +502,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_xiao_esp32s3.zip"),
             "SX1262",
         ),
-        0xDD => (
+        MODEL_DD => (
             850000000,
             950000000,
             22,
@@ -523,7 +510,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             Some("rnode_firmware_xiao_esp32s3.zip"),
             "SX1262",
         ),
-        0xFE => (
+        MODEL_FE => (
             100000000,
             1100000000,
             17,
@@ -531,7 +518,7 @@ pub(crate) fn model(model: u8) -> Option<Model> {
             None,
             "Unknown",
         ),
-        0xFF => (
+        MODEL_FF => (
             100000000,
             1100000000,
             14,
@@ -549,4 +536,49 @@ pub(crate) fn model(model: u8) -> Option<Model> {
         firmware,
         modem,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every code 0x00..=0xFF names the same product, platform, MCU and
+    /// model as upstream's tables, as `tools/rom_tables.py` records them in
+    /// `tests/vectors/rom_tables.json`.
+    #[test]
+    fn tables_match_upstream() {
+        let tables: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/vectors/rom_tables.json")).unwrap();
+        for code in 0..=u8::MAX {
+            let key = format!("{code:02x}");
+            let name = |table: &str| tables[table][&key].as_str().map(str::to_string);
+            assert_eq!(
+                product_name(code).map(str::to_string),
+                name("products"),
+                "product {key}"
+            );
+            assert_eq!(
+                platform_name(code).map(str::to_string),
+                name("platforms"),
+                "platform {key}"
+            );
+            assert_eq!(
+                mcu_name(code).map(str::to_string),
+                name("mcus"),
+                "mcu {key}"
+            );
+            let ours = model(code).map(|m| {
+                serde_json::json!([
+                    m.min_freq,
+                    m.max_freq,
+                    m.max_output,
+                    m.band,
+                    m.firmware,
+                    m.modem
+                ])
+            });
+            let upstream = tables["models"].get(&key).cloned();
+            assert_eq!(ours, upstream, "model {key}");
+        }
+    }
 }

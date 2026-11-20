@@ -1,0 +1,393 @@
+{
+ "products": {
+  "03": "RNode",
+  "10": "RAK4631",
+  "15": "LilyGO T-Echo",
+  "20": "openCom XL",
+  "b0": "LilyGO LoRa32 v2.0",
+  "b1": "LilyGO LoRa32 v2.1",
+  "b2": "LilyGO LoRa32 v1.0",
+  "c0": "Heltec LoRa32 v2",
+  "c1": "Heltec LoRa32 v3",
+  "c2": "Heltec Mesh Node T114",
+  "c3": "Heltec LoRa32 v4",
+  "d0": "LilyGO T-Deck",
+  "e0": "LilyGO T-Beam",
+  "ea": "LilyGO T-Beam Supreme",
+  "eb": "Seeed XIAO ESP32S3 Wio-SX1262",
+  "f0": "Hombrew RNode"
+ },
+ "platforms": {
+  "70": "NRF52",
+  "80": "ESP32",
+  "90": "AVR"
+ },
+ "mcus": {
+  "71": "Nordic Semiconductor nRF52840",
+  "81": "Espressif Systems ESP32",
+  "91": "ATmega1284P",
+  "92": "ATmega2560"
+ },
+ "models": {
+  "04": [
+   420000000,
+   520000000,
+   17,
+   "420 - 520 MHz",
+   "rnode_firmware_lora32v21_tcxo.zip",
+   "SX1278"
+  ],
+  "09": [
+   850000000,
+   950000000,
+   17,
+   "850 - 950 MHz",
+   "rnode_firmware_lora32v21_tcxo.zip",
+   "SX1276"
+  ],
+  "11": [
+   430000000,
+   510000000,
+   22,
+   "430 - 510 MHz",
+   "rnode_firmware_rak4631.zip",
+   "SX1262"
+  ],
+  "12": [
+   779000000,
+   928000000,
+   22,
+   "779 - 928 MHz",
+   "rnode_firmware_rak4631.zip",
+   "SX1262"
+  ],
+  "13": [
+   430000000,
+   510000000,
+   22,
+   "430 - 510 MHz",
+   "rnode_firmware_rak4631_sx1280.zip",
+   "SX1262 + SX1280"
+  ],
+  "14": [
+   779000000,
+   928000000,
+   22,
+   "779 - 928 MHz",
+   "rnode_firmware_rak4631_sx1280.zip",
+   "SX1262 + SX1280"
+  ],
+  "16": [
+   779000000,
+   928000000,
+   22,
+   "430 - 510 Mhz",
+   "rnode_firmware_techo.zip",
+   "SX1262"
+  ],
+  "17": [
+   779000000,
+   928000000,
+   22,
+   "779 - 928 Mhz",
+   "rnode_firmware_techo.zip",
+   "SX1262"
+  ],
+  "21": [
+   820000000,
+   960000000,
+   22,
+   "820 - 960 MHz",
+   "rnode_firmware_opencom_xl.zip",
+   "SX1262 + SX1280"
+  ],
+  "a1": [
+   410000000,
+   525000000,
+   22,
+   "410 - 525 MHz",
+   "rnode_firmware_t3s3.zip",
+   "SX1268"
+  ],
+  "a2": [
+   410000000,
+   525000000,
+   17,
+   "410 - 525 MHz",
+   "rnode_firmware_ng21.zip",
+   "SX1278"
+  ],
+  "a3": [
+   410000000,
+   525000000,
+   17,
+   "410 - 525 MHz",
+   "rnode_firmware_ng20.zip",
+   "SX1278"
+  ],
+  "a4": [
+   410000000,
+   525000000,
+   14,
+   "410 - 525 MHz",
+   "rnode_firmware.hex",
+   "SX1278"
+  ],
+  "a5": [
+   410000000,
+   525000000,
+   17,
+   "410 - 525 MHz",
+   "rnode_firmware_t3s3_sx127x.zip",
+   "SX1278"
+  ],
+  "a6": [
+   820000000,
+   1020000000,
+   22,
+   "820 - 960 MHz",
+   "rnode_firmware_t3s3.zip",
+   "SX1262"
+  ],
+  "a7": [
+   820000000,
+   1020000000,
+   17,
+   "820 - 1020 MHz",
+   "rnode_firmware_ng21.zip",
+   "SX1276"
+  ],
+  "a8": [
+   820000000,
+   1020000000,
+   17,
+   "820 - 1020 MHz",
+   "rnode_firmware_ng20.zip",
+   "SX1276"
+  ],
+  "a9": [
+   820000000,
+   1020000000,
+   17,
+   "820 - 1020 MHz",
+   "rnode_firmware.hex",
+   "SX1276"
+  ],
+  "aa": [
+   820000000,
+   1020000000,
+   17,
+   "820 - 960 MHz",
+   "rnode_firmware_t3s3_sx127x.zip",
+   "SX1276"
+  ],
+  "ac": [
+   2400000000,
+   2500000000,
+   20,
+   "2.4 - 2.5 GHz",
+   "rnode_firmware_t3s3_sx1280_pa.zip",
+   "SX1280"
+  ],
+  "b3": [
+   420000000,
+   520000000,
+   17,
+   "420 - 520 MHz",
+   "rnode_firmware_lora32v20.zip",
+   "SX1278"
+  ],
+  "b4": [
+   420000000,
+   520000000,
+   17,
+   "420 - 520 MHz",
+   "rnode_firmware_lora32v21.zip",
+   "SX1278"
+  ],
+  "b8": [
+   850000000,
+   950000000,
+   17,
+   "850 - 950 MHz",
+   "rnode_firmware_lora32v20.zip",
+   "SX1276"
+  ],
+  "b9": [
+   850000000,
+   950000000,
+   17,
+   "850 - 950 MHz",
+   "rnode_firmware_lora32v21.zip",
+   "SX1276"
+  ],
+  "ba": [
+   420000000,
+   520000000,
+   17,
+   "420 - 520 MHz",
+   "rnode_firmware_lora32v10.zip",
+   "SX1278"
+  ],
+  "bb": [
+   850000000,
+   950000000,
+   17,
+   "850 - 950 MHz",
+   "rnode_firmware_lora32v10.zip",
+   "SX1276"
+  ],
+  "c4": [
+   420000000,
+   520000000,
+   17,
+   "420 - 520 MHz",
+   "rnode_firmware_heltec32v2.zip",
+   "SX1278"
+  ],
+  "c5": [
+   420000000,
+   520000000,
+   22,
+   "420 - 520 MHz",
+   "rnode_firmware_heltec32v3.zip",
+   "SX1268"
+  ],
+  "c6": [
+   420000000,
+   520000000,
+   22,
+   "420 - 520 MHz",
+   "rnode_firmware_heltec_t114.zip",
+   "SX1268"
+  ],
+  "c7": [
+   850000000,
+   950000000,
+   22,
+   "850 - 950 MHz",
+   "rnode_firmware_heltec_t114.zip",
+   "SX1262"
+  ],
+  "c8": [
+   860000000,
+   930000000,
+   28,
+   "850 - 950 MHz",
+   "rnode_firmware_heltec32v4pa.zip",
+   "SX1262"
+  ],
+  "c9": [
+   850000000,
+   950000000,
+   17,
+   "850 - 950 MHz",
+   "rnode_firmware_heltec32v2.zip",
+   "SX1276"
+  ],
+  "ca": [
+   850000000,
+   950000000,
+   22,
+   "850 - 950 MHz",
+   "rnode_firmware_heltec32v3.zip",
+   "SX1262"
+  ],
+  "d4": [
+   420000000,
+   520000000,
+   22,
+   "420 - 520 MHz",
+   "rnode_firmware_tdeck.zip",
+   "SX1268"
+  ],
+  "d9": [
+   850000000,
+   950000000,
+   22,
+   "850 - 950 MHz",
+   "rnode_firmware_tdeck.zip",
+   "SX1262"
+  ],
+  "db": [
+   420000000,
+   520000000,
+   22,
+   "420 - 520 MHz",
+   "rnode_firmware_tbeam_supreme.zip",
+   "SX1268"
+  ],
+  "dc": [
+   850000000,
+   950000000,
+   22,
+   "850 - 950 MHz",
+   "rnode_firmware_tbeam_supreme.zip",
+   "SX1262"
+  ],
+  "dd": [
+   850000000,
+   950000000,
+   22,
+   "850 - 950 MHz",
+   "rnode_firmware_xiao_esp32s3.zip",
+   "SX1262"
+  ],
+  "de": [
+   420000000,
+   520000000,
+   22,
+   "420 - 520 MHz",
+   "rnode_firmware_xiao_esp32s3.zip",
+   "SX1262"
+  ],
+  "e3": [
+   420000000,
+   520000000,
+   22,
+   "420 - 520 MHz",
+   "rnode_firmware_tbeam_sx1262.zip",
+   "SX1268"
+  ],
+  "e4": [
+   420000000,
+   520000000,
+   17,
+   "420 - 520 MHz",
+   "rnode_firmware_tbeam.zip",
+   "SX1278"
+  ],
+  "e8": [
+   850000000,
+   950000000,
+   22,
+   "850 - 950 MHz",
+   "rnode_firmware_tbeam_sx1262.zip",
+   "SX1262"
+  ],
+  "e9": [
+   850000000,
+   950000000,
+   17,
+   "850 - 950 MHz",
+   "rnode_firmware_tbeam.zip",
+   "SX1276"
+  ],
+  "fe": [
+   100000000,
+   1100000000,
+   17,
+   "(Band capabilities unknown)",
+   null,
+   "Unknown"
+  ],
+  "ff": [
+   100000000,
+   1100000000,
+   14,
+   "(Band capabilities unknown)",
+   null,
+   "Unknown"
+  ]
+ }
+}
