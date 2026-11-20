@@ -63,14 +63,13 @@ impl TransportEngine {
             return;
         }
         let unused_path_linger = self.unused_path_linger();
-        jobs::cull_path_table_on_instance(
+        jobs::cull_path_table(
             &mut self.path_table,
             &self.interfaces,
             now,
             unused_path_linger,
             jobs::UnusedPoolLimits::UPSTREAM,
             self.hop_limiter,
-            self.config.identity_hash.is_some(),
         );
         while self.path_table.len() >= self.config.max_path_destinations {
             let Some(dest_hash) = self.oldest_path_destination() else {
