@@ -54,6 +54,9 @@ pub struct ServerConfig {
     pub http: HttpConfig,
     /// Where rnsd serves RPC: as its shared instance clients reach it.
     pub rnsd_rpc_addr: RpcAddr,
+    /// rnsd's configured `rpc_key`; without one the key comes from its
+    /// transport identity.
+    pub rnsd_rpc_key: Option<[u8; 32]>,
 }
 
 /// Effective settings of the embedded HTTP control plane.
@@ -703,11 +706,11 @@ impl ServerConfig {
 
     fn rnsd_drain_config(&self) -> Option<RnsdDrainConfig> {
         let paths = rns_net::storage::ensure_storage_dirs(&self.resolved_config_dir).ok()?;
-        // The key derived from the transport identity; a configured
-        // `rpc_key` is not read here.
-        let rpc = rns_net::SharedInstanceRpc::with_key(self.rnsd_rpc_addr.clone(), None, || {
-            rns_net::storage::load_rpc_identity(&paths)
-        })
+        let rpc = rns_net::SharedInstanceRpc::with_key(
+            self.rnsd_rpc_addr.clone(),
+            self.rnsd_rpc_key,
+            || rns_net::storage::load_rpc_identity(&paths),
+        )
         .ok()?;
         Some(RnsdDrainConfig {
             rpc_addr: rpc.addr,
@@ -798,7 +801,7 @@ impl ServerConfig {
         rns_ctl::args::Args::parse_from(argv)
     }
 
-    fn resolve_rpc_addr(config_dir: &Path) -> RpcAddr {
+    fn resolve_rpc(config_dir: &Path) -> (RpcAddr, Option<[u8; 32]>) {
         let config_file = config_dir.join("config");
         let parsed = if config_file.exists() {
             rns_net::config::parse_file(&config_file).ok()
@@ -808,8 +811,13 @@ impl ServerConfig {
 
         parsed
             .as_ref()
-            .map(|cfg| RpcAddr::for_shared_instance(&cfg.reticulum))
-            .unwrap_or_else(|| RpcAddr::local("default", 37429))
+            .map(|cfg| {
+                (
+                    RpcAddr::for_shared_instance(&cfg.reticulum),
+                    cfg.reticulum.rpc_key,
+                )
+            })
+            .unwrap_or_else(|| (RpcAddr::local("default", 37429), None))
     }
 
     fn build(
@@ -896,7 +904,7 @@ impl ServerConfig {
             file_cfg.http.disable_auth.unwrap_or(false)
         };
 
-        let rnsd_rpc_addr = Self::resolve_rpc_addr(&resolved_config_dir);
+        let (rnsd_rpc_addr, rnsd_rpc_key) = Self::resolve_rpc(&resolved_config_dir);
 
         Self {
             config_path,
@@ -919,6 +927,7 @@ impl ServerConfig {
                 daemon_mode: true,
             },
             rnsd_rpc_addr,
+            rnsd_rpc_key,
         }
     }
 
@@ -1269,6 +1278,7 @@ mod tests {
                 daemon_mode: true,
             },
             rnsd_rpc_addr: rns_net::RpcAddr::local("default", 37429),
+            rnsd_rpc_key: None,
         }
     }
 
@@ -1808,6 +1818,7 @@ mod tests {
                 daemon_mode: true,
             },
             rnsd_rpc_addr: rns_net::RpcAddr::local("default", 37429),
+            rnsd_rpc_key: None,
         };
 
         config.ensure_runtime_bootstrap().unwrap();

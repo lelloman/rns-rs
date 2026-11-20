@@ -252,6 +252,7 @@ mod tests {
                 daemon_mode: true,
             },
             rnsd_rpc_addr: rns_net::RpcAddr::local("default", 37429),
+            rnsd_rpc_key: None,
         }
     }
 
