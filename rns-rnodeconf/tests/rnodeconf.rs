@@ -2119,13 +2119,14 @@ fn autoinstall_choices_can_be_refused() {
 }
 
 /// The wizard through both tools, each in a fresh home, answering
-/// `answers`; the EEPROM writes go to the same addresses.
+/// `answers`; the EEPROM writes go to the same addresses. Returns our
+/// output and the EEPROM it left on the device.
 fn compare_autoinstall(
     server: &ReleaseServer,
     device: Device,
     answers: &str,
     flasher: Option<&str>,
-) {
+) -> (Vec<String>, Vec<u8>) {
     let python_home = tempfile::tempdir().unwrap();
     let rust_home = tempfile::tempdir().unwrap();
     if let Some(flasher) = flasher {
@@ -2163,6 +2164,8 @@ fn compare_autoinstall(
         ported(rust_home.path(), &rust_fake.path),
         ported(python_home.path(), &python_fake.path)
     );
+    let eeprom = rust_fake.device.lock().unwrap().eeprom.clone();
+    (rust, eeprom)
 }
 
 #[test]
@@ -2261,4 +2264,251 @@ fn python_comparison_short_eeprom_and_unknown_model() {
     let rust = normalize(&rust.stdout, &rust_fake.path);
     assert!(python.len() > 4);
     assert_eq!(rust[..python.len()], python[..]);
+}
+
+// Every device upstream knows: identification, the wizard's menus, and a
+// full autoinstall on each platform.
+
+/// Every product with the models it comes in, and the platform, MCU and
+/// board code such a device reports.
+const DEVICES: &[(u8, u8, u8, u8, &[u8])] = &[
+    (0x03, PLATFORM_AVR, MCU_1284P, 0x31, &[0xA4, 0xA9]),
+    (
+        0x03,
+        PLATFORM_ESP32,
+        MCU_ESP32,
+        0x31,
+        &[0xA1, 0xA6, 0xA2, 0xA7, 0xA3, 0xA8, 0xA5, 0xAA, 0xAC],
+    ),
+    (0xF0, PLATFORM_AVR, MCU_1284P, 0x32, &[0xFE, 0xFF]),
+    (
+        0xE0,
+        PLATFORM_ESP32,
+        MCU_ESP32,
+        0x33,
+        &[0xE4, 0xE9, 0xE3, 0xE8],
+    ),
+    (0xEA, PLATFORM_ESP32, MCU_ESP32, 0x35, &[0xDB, 0xDC]),
+    (0xD0, PLATFORM_ESP32, MCU_ESP32, 0x3B, &[0xD4, 0xD9]),
+    (0xB2, PLATFORM_ESP32, MCU_ESP32, 0x35, &[0xBA, 0xBB]),
+    (0xB0, PLATFORM_ESP32, MCU_ESP32, 0x36, &[0xB3, 0xB8]),
+    (0xB1, PLATFORM_ESP32, MCU_ESP32, 0x37, &[0xB4, 0xB9]),
+    (0xC0, PLATFORM_ESP32, MCU_ESP32, 0x35, &[0xC4, 0xC9]),
+    (0xC1, PLATFORM_ESP32, MCU_ESP32, 0x35, &[0xC5, 0xCA]),
+    (0xC3, PLATFORM_ESP32, MCU_ESP32, 0x35, &[0xC8]),
+    (0xEB, PLATFORM_ESP32, MCU_ESP32, 0x3E, &[0xDE, 0xDD]),
+    (
+        0x10,
+        PLATFORM_NRF52,
+        MCU_NRF52,
+        BOARD_RAK4631,
+        &[0x11, 0x12, 0x13, 0x14],
+    ),
+    (0x15, PLATFORM_NRF52, MCU_NRF52, 0x43, &[0x16, 0x17]),
+    (0xC2, PLATFORM_NRF52, MCU_NRF52, 0x3C, &[0xC6, 0xC7]),
+    (0x20, PLATFORM_NRF52, MCU_NRF52, 0x35, &[0x21]),
+];
+
+/// Each device of [`DEVICES`], provisioned.
+fn every_device() -> Vec<(u8, u8, u8, Device)> {
+    let mut devices = Vec::new();
+    for &(product, platform, mcu, board, models) in DEVICES {
+        for &model in models {
+            let device = Device {
+                platform,
+                mcu,
+                board,
+                ..device(eeprom(product, model, 1, [0, 0, 1, model], MADE, None))
+            };
+            devices.push((product, model, board, device));
+        }
+    }
+    devices
+}
+
+/// Run `check` on each item from a few threads, each run being mostly
+/// waiting on a device.
+fn in_parallel<T: Send>(items: Vec<T>, check: impl Fn(T) + Sync) {
+    let queue = std::sync::Mutex::new(items);
+    std::thread::scope(|scope| {
+        for _ in 0..12 {
+            scope.spawn(|| loop {
+                let Some(item) = queue.lock().unwrap().pop() else {
+                    return;
+                };
+                check(item);
+            });
+        }
+    });
+}
+
+#[test]
+fn every_model_is_identified() {
+    let tables: serde_json::Value =
+        serde_json::from_str(include_str!("vectors/rom_tables.json")).unwrap();
+    in_parallel(every_device(), |(product, model, board, device)| {
+        let home = tempfile::tempdir().unwrap();
+        let fake = FakeRNode::start(device);
+        let out = rust_rnodeconf(home.path(), &["-i", &fake.path]);
+        let lines = lines(&out.stdout);
+        let entry = &tables["models"][format!("{model:02x}")];
+        let mhz = |hz: &serde_json::Value| format!("{:?}", hz.as_u64().unwrap() as f64 / 1e6);
+        for expected in [
+            format!(
+                "\tProduct            : {} {} ({product:02x}:{model:02x}:{board:02x})",
+                tables["products"][format!("{product:02x}")]
+                    .as_str()
+                    .unwrap(),
+                entry[3].as_str().unwrap()
+            ),
+            format!("\tModem chip         : {}", entry[5].as_str().unwrap()),
+            format!(
+                "\tFrequency range    : {} MHz - {} MHz",
+                mhz(&entry[0]),
+                mhz(&entry[1])
+            ),
+            format!("\tMax TX power       : {} dBm", entry[2]),
+        ] {
+            assert!(
+                has_line(&lines, &expected),
+                "missing {expected:?} in {lines:#?}"
+            );
+        }
+    });
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_info_every_model() {
+    in_parallel(every_device(), |(_, _, _, device)| {
+        let home = tempfile::tempdir().unwrap();
+        compare_device_with_python(device, home.path(), &["-i"]);
+    });
+}
+
+/// The wizard's answers down every branch of its device and model menus,
+/// and one past the end of each, declining the summary where one is shown.
+fn wizard_menu_answers() -> Vec<String> {
+    let mut answers = Vec::new();
+    // A specific kind of RNode: no notice to acknowledge first.
+    for model in 1..=7 {
+        answers.push(format!("1\n{model}\nn\n"));
+    }
+    // Homebrew: the MCU, the transceiver, and for an ESP32 the board.
+    for (mcu, transceiver) in [(1, 1), (1, 2), (1, 3), (1, 4), (2, 1), (4, 1)] {
+        answers.push(format!("2\n\n{mcu}\n{transceiver}\nn\n"));
+    }
+    for board in 1..=3 {
+        answers.push(format!("2\n\n3\n2\n{board}\nn\n"));
+    }
+    // The development boards: the menu entry and how many models it lists.
+    for (entry, models) in [
+        (3, 4),
+        (4, 4),
+        (5, 4),
+        (6, 4),
+        (7, 4),
+        (8, 4),
+        (9, 3),
+        (10, 5),
+        (11, 4),
+        (12, 4),
+        (13, 2),
+        (14, 2),
+        (15, 4),
+        (16, 2),
+    ] {
+        for model in 1..=models + 1 {
+            answers.push(format!("{entry}\n\n{model}\nn\n"));
+        }
+        answers.push(format!("{entry}\n\nx\n"));
+    }
+    answers
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_wizard_menus() {
+    in_parallel(wizard_menu_answers(), |answers| {
+        let server = release_site("1.83", Vec::new());
+        compare_autoinstall(&server, device(blank_eeprom()), &answers, None);
+    });
+}
+
+/// A firmware package for an ESP32 board, `<name>.zip` holding the images
+/// esptool writes and esptool itself.
+fn esp32_package(name: &str) -> Vec<u8> {
+    use std::io::Write;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let (image, _) = esp32_image();
+    for (file, data) in [
+        (format!("{name}.bin"), image.as_slice()),
+        (format!("{name}.bootloader"), b"bootloader".as_slice()),
+        (format!("{name}.boot_app0"), b"boot_app0".as_slice()),
+        (format!("{name}.partitions"), b"partitions".as_slice()),
+        ("console_image.bin".to_string(), b"console".as_slice()),
+        ("esptool.py".to_string(), FAKE_ESPTOOL.as_bytes()),
+    ] {
+        zip.start_file(file, options).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+/// A firmware package for an NRF52 board, as adafruit-nrfutil takes it.
+fn nrf52_package(name: &str) -> Vec<u8> {
+    use std::io::Write;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (file, data) in [
+        (format!("{name}.bin"), b"nrf52 application".as_slice()),
+        (format!("{name}.dat"), b"init packet".as_slice()),
+        ("manifest.json".to_string(), b"{}".as_slice()),
+    ] {
+        zip.start_file(file, options).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_autoinstall_rak4631() {
+    let server = release_site(
+        "1.83",
+        vec![(
+            "rnode_firmware_rak4631.zip",
+            nrf52_package("rnode_firmware_rak4631"),
+        )],
+    );
+    // A RAK4631, 779 - 928 MHz.
+    let (out, eeprom) = compare_autoinstall(
+        &server,
+        rak4631_device(blank_eeprom()),
+        "11\n\n2\ny\n",
+        Some("adafruit-nrfutil"),
+    );
+    assert!(has_line(&out, "Setting firmware checksum..."), "{out:#?}");
+    assert!(has_line(&out, "EEPROM Bootstrapping successful!"));
+    assert_eq!(&eeprom[0..3], &[0x10, 0x12, 1]);
+}
+
+#[test]
+#[ignore = "requires Python Reticulum with pyserial and cryptography"]
+fn python_comparison_autoinstall_t3s3() {
+    let server = release_site(
+        "1.83",
+        vec![(
+            "rnode_firmware_t3s3.zip",
+            esp32_package("rnode_firmware_t3s3"),
+        )],
+    );
+    // A LilyGO LoRa T3S3 with an SX1262, 868/915/923 MHz.
+    let (out, eeprom) = compare_autoinstall(&server, device(blank_eeprom()), "10\n\n4\ny\n", None);
+    assert!(has_line(&out, "Setting firmware checksum..."), "{out:#?}");
+    assert!(has_line(&out, "EEPROM Bootstrapping successful!"));
+    assert_eq!(&eeprom[0..3], &[0x03, 0xA6, 1]);
 }
