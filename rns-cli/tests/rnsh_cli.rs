@@ -13,6 +13,17 @@ fn rnsh(args: &[&str]) -> std::process::Output {
         .expect("run rnsh")
 }
 
+/// A Reticulum config with no interfaces and no shared instance, so the
+/// instance `--print-identity` starts stays off the network.
+fn write_quiet_rns_config(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(
+        dir.join("config"),
+        "[reticulum]\n  share_instance = No\n\n[interfaces]\n",
+    )
+    .unwrap();
+}
+
 #[test]
 fn help_documents_separate_application_and_reticulum_config_paths() {
     let output = rnsh(&["--help"]);
@@ -51,6 +62,7 @@ fn print_identity_creates_upstream_paths_in_selected_rnsh_directory() {
     let rns = temp.path().join("rns");
     let app_string = app.to_string_lossy();
     let rns_string = rns.to_string_lossy();
+    write_quiet_rns_config(&rns);
 
     let initiator = rnsh(&[
         "--config",
@@ -87,6 +99,49 @@ fn print_identity_creates_upstream_paths_in_selected_rnsh_directory() {
 }
 
 #[test]
+fn print_identity_starts_reticulum_which_writes_the_default_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let app = temp.path().join("app");
+    let rns = temp.path().join("rns");
+
+    let output = rnsh(&[
+        "--config",
+        &app.to_string_lossy(),
+        "--rnsconfig",
+        &rns.to_string_lossy(),
+        "-p",
+    ]);
+
+    assert!(swallowed_exit(&output));
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert_eq!(
+        std::fs::read(rns.join("config")).unwrap(),
+        rns_net::storage::DEFAULT_CONFIG
+    );
+    assert!(rns.join("storage").is_dir());
+    // Upstream's log lines, then the identity, on stdout.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let messages: Vec<&str> = stdout
+        .lines()
+        .map(|line| line.split_once("] [Notice]   ").map_or(line, |(_, m)| m))
+        .collect();
+    let identity_line = messages.last().unwrap();
+    assert!(identity_line.starts_with("Identity     : <"), "{stdout}");
+    assert_eq!(
+        messages[..messages.len() - 1],
+        [
+            format!("Creating configuration directory: {}", app.display()),
+            "Could not load config file, creating default configuration file...".to_string(),
+            format!(
+                "Default config file created. Make any necessary changes in {}/config and restart Reticulum if needed.",
+                rns.display()
+            ),
+            format!("Creating identity {}", app.join("identity").display()),
+        ]
+    );
+}
+
+#[test]
 fn legacy_identity_warns_but_is_not_silently_copied() {
     let temp = tempfile::tempdir().unwrap();
     let app = temp.path().join("app");
@@ -95,6 +150,7 @@ fn legacy_identity_warns_but_is_not_silently_copied() {
     std::fs::create_dir_all(old.parent().unwrap()).unwrap();
     let old_key = [0x44; 64];
     std::fs::write(&old, old_key).unwrap();
+    write_quiet_rns_config(&rns);
 
     let output = rnsh(&[
         "--config",

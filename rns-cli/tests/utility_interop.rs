@@ -1444,6 +1444,70 @@ fn python_rns_is_available_for_utility_interop() {
     assert_success(&run(command), "import Python RNS utilities");
 }
 
+/// `rnsh -p` run in `root`, with its output's timestamps and `root` masked.
+fn rnsh_print_identity(implementation: Implementation, root: &Path) -> (Option<i32>, String) {
+    let mut command = match implementation {
+        Implementation::Rust => Command::new(env!("CARGO_BIN_EXE_rnsh")),
+        Implementation::Python => {
+            let mut command = Command::new("python3");
+            command.args(["-m", "RNS.Utilities.rnsh.rnsh"]);
+            command.env("PYTHONUNBUFFERED", "1");
+            command
+        }
+    };
+    command.arg("--config").arg(root.join("rnsh"));
+    command.arg("--rnsconfig").arg(root.join("rns"));
+    command.args(["-p", "-l"]);
+    let output = run(command);
+    assert!(output.stderr.is_empty(), "{implementation:?}: {output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| match line.split_once("] [") {
+            Some((stamp, rest)) if stamp.starts_with("[20") => format!("[<time>] [{rest}"),
+            _ => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace(&root.to_string_lossy().into_owned(), "<root>");
+    (output.status.code(), stdout)
+}
+
+#[test]
+#[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
+fn rnsh_print_identity_starts_reticulum_as_upstream_does() {
+    let rust = tempfile::tempdir().unwrap();
+    let python = tempfile::tempdir().unwrap();
+
+    // Fresh directories: both start Reticulum, which writes the default
+    // config, before creating the identity.
+    let (rust_code, rust_out) = rnsh_print_identity(Implementation::Rust, rust.path());
+    let (python_code, python_out) = rnsh_print_identity(Implementation::Python, python.path());
+    assert_eq!(rust_code, python_code);
+    let mask_hashes = |out: &str| {
+        out.lines()
+            .map(|line| match line.split_once(" : <") {
+                Some((label, _)) => format!("{label} : <hash>"),
+                None => line.to_string(),
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(mask_hashes(&rust_out), mask_hashes(&python_out));
+    assert_eq!(
+        fs::read(rust.path().join("rns/config")).unwrap(),
+        fs::read(python.path().join("rns/config")).unwrap()
+    );
+
+    // Existing directories and the same identity: identical output.
+    fs::copy(
+        python.path().join("rnsh/identity.default"),
+        rust.path().join("rnsh/identity.default"),
+    )
+    .unwrap();
+    let rust_again = rnsh_print_identity(Implementation::Rust, rust.path());
+    let python_again = rnsh_print_identity(Implementation::Python, python.path());
+    assert_eq!(rust_again, python_again);
+}
+
 #[test]
 #[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
 fn python_rnpath_lists_rust_path_table() {

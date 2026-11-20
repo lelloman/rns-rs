@@ -90,15 +90,33 @@ pub(super) fn print_identity(opts: &CliOptions) -> Result<(), RnshError> {
         0,
         false,
     );
+    // Upstream starts Reticulum in full: attached to a running shared
+    // instance, or as one of its own, which writes the default config when
+    // there is none. It persists its state when it exits.
+    let (tx, _) = mpsc::channel();
+    let callbacks = || Box::new(RnshCallbacks { tx: tx.clone() });
+    let node = RnsNode::connect_shared_from_config(Some(&rns_config), callbacks())
+        .or_else(|_| RnsNode::from_config(Some(&rns_config), callbacks()))?;
+    let printed = print_identity_info(opts, &rnsh_config, &rns_config, &home);
+    node.shutdown();
+    printed
+}
+
+fn print_identity_info(
+    opts: &CliOptions,
+    rnsh_config: &Path,
+    rns_config: &Path,
+    home: &Path,
+) -> Result<(), RnshError> {
     if let Some(service) = opts.service.as_deref().filter(|s| !s.is_empty()) {
         println!("Using service name \"{service}\"");
     }
     let identity = prepare_identity(
-        &rnsh_config,
-        &rns_config,
+        rnsh_config,
+        rns_config,
         opts.identity.as_deref(),
         opts.service.as_deref(),
-        &home,
+        home,
     )?;
     println!("Identity     : {}", prettyhexrep(identity.hash()));
     if opts.listen {
