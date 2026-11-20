@@ -99,11 +99,7 @@ impl InterfaceFactory for AutoFactory {
             max_peers,
             interface_id: id,
             ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
-            runtime: Arc::new(Mutex::new(AutoRuntime {
-                announce_interval_secs: ANNOUNCE_INTERVAL,
-                peer_timeout_secs: PEERING_TIMEOUT,
-                peer_job_interval_secs: PEER_JOB_INTERVAL,
-            })),
+            runtime: Arc::new(Mutex::new(AutoRuntime::default())),
         }))
     }
 

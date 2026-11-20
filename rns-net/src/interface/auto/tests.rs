@@ -702,7 +702,7 @@ fn peer_refusal_warnings_are_spaced_out() {
 #[test]
 fn peers_advertise_no_more_than_the_receive_buffer_takes() {
     let shared = Arc::new(Mutex::new(SharedState::new(Arc::new(AtomicU64::new(900)))));
-    let runtime = Arc::new(Mutex::new(AutoRuntime::from_config(&AutoConfig::default())));
+    let runtime = Arc::new(Mutex::new(AutoRuntime::default()));
     let event = add_peer(AddPeerContext {
         shared: &shared,
         peer_key: &PeerKey {

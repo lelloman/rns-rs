@@ -13,9 +13,10 @@ pub struct AutoRuntime {
     pub peer_job_interval_secs: f64,
 }
 
-impl AutoRuntime {
-    /// Startup settings for an AutoInterface: the built-in defaults, whatever the config.
-    pub fn from_config(_config: &AutoConfig) -> Self {
+impl Default for AutoRuntime {
+    /// Startup settings for an AutoInterface. As upstream, these timings
+    /// are fixed, not configurable.
+    fn default() -> Self {
         Self {
             announce_interval_secs: ANNOUNCE_INTERVAL,
             peer_timeout_secs: PEERING_TIMEOUT,
@@ -39,6 +40,6 @@ pub(crate) fn auto_runtime_handle_from_config(config: &AutoConfig) -> AutoRuntim
     AutoRuntimeConfigHandle {
         interface_name: config.name.clone(),
         runtime: Arc::clone(&config.runtime),
-        startup: AutoRuntime::from_config(config),
+        startup: AutoRuntime::default(),
     }
 }
