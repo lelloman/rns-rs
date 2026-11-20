@@ -10,7 +10,6 @@ const WS_MAGIC: &str = "258EAFA5-E914-47DA-95CA-5AB5DC11D045";
 pub(crate) const OPCODE_TEXT: u8 = 0x1;
 pub(crate) const OPCODE_CLOSE: u8 = 0x8;
 pub(crate) const OPCODE_PING: u8 = 0x9;
-#[allow(dead_code)]
 pub(crate) const OPCODE_PONG: u8 = 0xA;
 
 /// A decoded WebSocket frame.

@@ -3,7 +3,6 @@
 
 #![allow(unsafe_code, reason = "OS calls through libc")]
 
-use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -703,11 +702,6 @@ fn write_journal(path: &Path, journal: &OwnershipJournal) -> io::Result<()> {
         File::open(parent)?.sync_all()?;
     }
     Ok(())
-}
-
-#[allow(dead_code)]
-fn _cstring(value: &str) -> io::Result<CString> {
-    CString::new(value).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL byte"))
 }
 
 #[cfg(test)]
