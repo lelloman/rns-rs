@@ -46,12 +46,8 @@ impl Driver {
             lr_stamps_enforced: rns_core::constants::LR_STAMPS_ENFORCED,
             stamp_link_requests: rns_core::constants::STAMP_LRS,
             always_stamp_link_requests: rns_core::constants::ALWAYS_STAMP_LRS,
-            #[cfg(feature = "hooks")]
-            provider_queue_max_events: crate::provider_bridge::ProviderBridgeConfig::default()
-                .queue_max_events,
-            #[cfg(feature = "hooks")]
-            provider_queue_max_bytes: crate::provider_bridge::ProviderBridgeConfig::default()
-                .queue_max_bytes,
+            provider_queue_max_events: HookHost::default_provider_queue_limits().0,
+            provider_queue_max_bytes: HookHost::default_provider_queue_limits().1,
         };
         Driver {
             tracked_link_send: None,

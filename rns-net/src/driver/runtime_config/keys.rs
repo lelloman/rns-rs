@@ -445,12 +445,10 @@ impl Driver {
                 RuntimeConfigApplyMode::Immediate,
                 "Policy for incoming direct-connect proposals.",
             )),
-            #[cfg(feature = "hooks")]
-            "provider.queue_max_events" => {
+            "provider.queue_max_events" if HookHost::PROVIDER_BRIDGE => {
                 let value = self
-                    .hooks.provider_bridge
-                    .as_ref()
-                    .map(|b| b.queue_max_events())
+                    .hooks
+                    .provider_queue_max_events()
                     .unwrap_or(defaults.provider_queue_max_events);
                 Some(make_entry(
                     key,
@@ -460,12 +458,10 @@ impl Driver {
                     "Max queued events in the provider bridge.",
                 ))
             }
-            #[cfg(feature = "hooks")]
-            "provider.queue_max_bytes" => {
+            "provider.queue_max_bytes" if HookHost::PROVIDER_BRIDGE => {
                 let value = self
-                    .hooks.provider_bridge
-                    .as_ref()
-                    .map(|b| b.queue_max_bytes())
+                    .hooks
+                    .provider_queue_max_bytes()
                     .unwrap_or(defaults.provider_queue_max_bytes);
                 Some(make_entry(
                     key,
@@ -502,8 +498,7 @@ impl Driver {
         .filter_map(|key| self.runtime_config_entry(key))
         .collect();
 
-        #[cfg(feature = "hooks")]
-        {
+        if HookHost::PROVIDER_BRIDGE {
             entries.extend(
                 ["provider.queue_max_events", "provider.queue_max_bytes"]
                     .into_iter()

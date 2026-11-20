@@ -518,6 +518,43 @@ impl HookHost {
         }
     }
 
+    /// The provider bridge and its runtime-config keys exist.
+    pub(crate) const PROVIDER_BRIDGE: bool = true;
+
+    /// The provider bridge's default queue limits: events, then bytes.
+    pub(crate) fn default_provider_queue_limits() -> (usize, usize) {
+        let config = crate::provider_bridge::ProviderBridgeConfig::default();
+        (config.queue_max_events, config.queue_max_bytes)
+    }
+
+    /// The running provider bridge's limit on queued events.
+    pub(crate) fn provider_queue_max_events(&self) -> Option<usize> {
+        self.provider_bridge
+            .as_ref()
+            .map(|bridge| bridge.queue_max_events())
+    }
+
+    /// The running provider bridge's limit on queued bytes.
+    pub(crate) fn provider_queue_max_bytes(&self) -> Option<usize> {
+        self.provider_bridge
+            .as_ref()
+            .map(|bridge| bridge.queue_max_bytes())
+    }
+
+    /// Limit the running provider bridge's queued events.
+    pub(crate) fn set_provider_queue_max_events(&self, max: usize) {
+        if let Some(ref bridge) = self.provider_bridge {
+            bridge.set_queue_max_events(max);
+        }
+    }
+
+    /// Limit the running provider bridge's queued bytes.
+    pub(crate) fn set_provider_queue_max_bytes(&self, max: usize) {
+        if let Some(ref bridge) = self.provider_bridge {
+            bridge.set_queue_max_bytes(max);
+        }
+    }
+
     /// Serve the provider bridge's sockets the driver poller reported ready.
     pub(crate) fn serve_provider_bridge(&self, ready: &crate::poll::Events) {
         if let Some(bridge) = &self.provider_bridge {
