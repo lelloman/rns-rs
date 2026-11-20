@@ -101,25 +101,32 @@ pub fn forward_transport_packet<B: AsRef<[u8]>>(
 /// the signalling, disabling the upgrade. The three mode bits are preserved.
 /// Link IDs exclude the signalling bytes, so rewriting them does not change
 /// the link table key.
+///
+/// Upstream rebuilds lowered signalling with `Link.signalling_bytes`, which
+/// raises for a mode outside `Link.ENABLED_MODES`, and then drops the
+/// request as undecodable. So when the MTU must be lowered and the request
+/// signals such a mode, this returns `Err` with the signalled mode value and
+/// the request must be dropped. Stripped or fitting signalling is kept
+/// whatever its mode.
 pub fn clamp_forwarded_link_request_mtu(
     new_raw: &mut Vec<u8>,
     signalled: bool,
     receiving_mtu: Option<u32>,
     next_hop_mtu: Option<u32>,
-) {
+) -> Result<(), u8> {
     if !signalled || new_raw.len() < constants::LINK_MTU_SIZE {
-        return;
+        return Ok(());
     }
     let start = new_raw.len() - constants::LINK_MTU_SIZE;
     let Some(next_hop_mtu) = next_hop_mtu.filter(|mtu| *mtu > 0) else {
         new_raw.truncate(start);
-        return;
+        return Ok(());
     };
     let mut limit = next_hop_mtu;
     if let Some(receiving_mtu) = receiving_mtu.filter(|mtu| *mtu > 0) {
         limit = limit.min(receiving_mtu);
     }
-    lower_signalled_mtu(&mut new_raw[start..], limit);
+    lower_signalled_mtu(&mut new_raw[start..], limit)
 }
 
 /// Clamp the link MTU signalled by a LINKREQUEST for a local destination to
@@ -131,17 +138,21 @@ pub fn clamp_forwarded_link_request_mtu(
 /// when the receiving interface has no hardware MTU at all; that would change
 /// the bytes the link ID is derived from, so here an unknown MTU leaves the
 /// request untouched instead.
+///
+/// As for a forwarded request, lowering the MTU of a request that signals a
+/// mode outside `Link.ENABLED_MODES` fails with that mode value, and the
+/// request must be dropped.
 pub fn clamp_local_link_request_mtu(
     raw: &mut [u8],
     signalled: bool,
     receiving_mtu: Option<u32>,
     receiving_mtu_upgradable: bool,
-) {
+) -> Result<(), u8> {
     if !signalled || raw.len() < constants::LINK_MTU_SIZE {
-        return;
+        return Ok(());
     }
     let Some(receiving_mtu) = receiving_mtu.filter(|mtu| *mtu > 0) else {
-        return;
+        return Ok(());
     };
     let limit = if receiving_mtu_upgradable {
         receiving_mtu
@@ -149,21 +160,28 @@ pub fn clamp_local_link_request_mtu(
         constants::MTU as u32
     };
     let start = raw.len() - constants::LINK_MTU_SIZE;
-    lower_signalled_mtu(&mut raw[start..], limit);
+    lower_signalled_mtu(&mut raw[start..], limit)
 }
 
 /// Lower the MTU in three signalling bytes to `limit` if it is higher,
-/// keeping the mode bits.
-fn lower_signalled_mtu(signalling: &mut [u8], limit: u32) {
+/// keeping the mode bits. Lowering it for a mode that is not enabled fails
+/// with the mode value and leaves the bytes as they were, as upstream's
+/// `Link.signalling_bytes` raises for such a mode.
+fn lower_signalled_mtu(signalling: &mut [u8], limit: u32) -> Result<(), u8> {
     let value =
         ((signalling[0] as u32) << 16) | ((signalling[1] as u32) << 8) | (signalling[2] as u32);
     if limit < value & constants::LINK_MTU_BYTEMASK {
+        let mode = (signalling[0] & constants::LINK_MODE_BYTEMASK) >> 5;
+        if !crate::link::types::mode_value_enabled(mode) {
+            return Err(mode);
+        }
         let clamped =
             (value & !constants::LINK_MTU_BYTEMASK) | (limit & constants::LINK_MTU_BYTEMASK);
         signalling[0] = (clamped >> 16) as u8;
         signalling[1] = (clamped >> 8) as u8;
         signalling[2] = clamped as u8;
     }
+    Ok(())
 }
 
 /// Create a link table entry for a forwarded LINKREQUEST.
@@ -782,42 +800,42 @@ mod link_request_mtu_tests {
     #[test]
     fn clamps_to_smaller_next_hop_and_preserves_mode() {
         let mut raw = request(524_288, LinkMode::Aes256Cbc);
-        clamp_forwarded_link_request_mtu(&mut raw, true, Some(262_144), Some(16_384));
+        clamp_forwarded_link_request_mtu(&mut raw, true, Some(262_144), Some(16_384)).unwrap();
         assert_eq!(raw, request(16_384, LinkMode::Aes256Cbc));
     }
 
     #[test]
     fn clamps_to_smaller_receiving_interface() {
-        let mut raw = request(524_288, LinkMode::Aes128Cbc);
-        clamp_forwarded_link_request_mtu(&mut raw, true, Some(8_192), Some(65_535));
-        assert_eq!(raw, request(8_192, LinkMode::Aes128Cbc));
+        let mut raw = request(524_288, LinkMode::Aes256Cbc);
+        clamp_forwarded_link_request_mtu(&mut raw, true, Some(8_192), Some(65_535)).unwrap();
+        assert_eq!(raw, request(8_192, LinkMode::Aes256Cbc));
     }
 
     #[test]
     fn leaves_fitting_signalling_untouched() {
         let mut raw = request(16_384, LinkMode::Aes256Cbc);
-        clamp_forwarded_link_request_mtu(&mut raw, true, Some(65_535), Some(65_535));
+        clamp_forwarded_link_request_mtu(&mut raw, true, Some(65_535), Some(65_535)).unwrap();
         assert_eq!(raw, request(16_384, LinkMode::Aes256Cbc));
     }
 
     #[test]
     fn strips_signalling_without_next_hop_mtu() {
         let mut raw = request(16_384, LinkMode::Aes256Cbc);
-        clamp_forwarded_link_request_mtu(&mut raw, true, Some(65_535), Some(0));
+        clamp_forwarded_link_request_mtu(&mut raw, true, Some(65_535), Some(0)).unwrap();
         assert_eq!(raw.len(), 19 + 64);
     }
 
     #[test]
     fn ignores_requests_without_signalling() {
         let mut raw = vec![0xAA; 19 + 64];
-        clamp_forwarded_link_request_mtu(&mut raw, false, Some(500), Some(500));
+        clamp_forwarded_link_request_mtu(&mut raw, false, Some(500), Some(500)).unwrap();
         assert_eq!(raw, vec![0xAA; 19 + 64]);
     }
     /// The middle signalling byte carries MTU bits too: 600 is 0x000258.
     #[test]
     fn clamps_mtu_spanning_two_signalling_bytes() {
         let mut raw = request(600, LinkMode::Aes256Cbc);
-        clamp_forwarded_link_request_mtu(&mut raw, true, None, Some(590));
+        clamp_forwarded_link_request_mtu(&mut raw, true, None, Some(590)).unwrap();
         assert_eq!(raw, request(590, LinkMode::Aes256Cbc));
     }
 
@@ -826,14 +844,14 @@ mod link_request_mtu_tests {
     #[test]
     fn forwarded_request_ignores_zero_receiving_mtu() {
         let mut raw = request(524_288, LinkMode::Aes256Cbc);
-        clamp_forwarded_link_request_mtu(&mut raw, true, Some(0), Some(16_384));
+        clamp_forwarded_link_request_mtu(&mut raw, true, Some(0), Some(16_384)).unwrap();
         assert_eq!(raw, request(16_384, LinkMode::Aes256Cbc));
     }
 
     #[test]
     fn local_request_without_signalling_is_untouched() {
         let mut raw = request(262_144, LinkMode::Aes256Cbc);
-        clamp_local_link_request_mtu(&mut raw, false, Some(500), false);
+        clamp_local_link_request_mtu(&mut raw, false, Some(500), false).unwrap();
         assert_eq!(raw, request(262_144, LinkMode::Aes256Cbc));
     }
 
@@ -841,37 +859,82 @@ mod link_request_mtu_tests {
     fn local_request_on_interface_with_zero_mtu_is_untouched() {
         for upgradable in [false, true] {
             let mut raw = request(262_144, LinkMode::Aes256Cbc);
-            clamp_local_link_request_mtu(&mut raw, true, Some(0), upgradable);
+            clamp_local_link_request_mtu(&mut raw, true, Some(0), upgradable).unwrap();
             assert_eq!(raw, request(262_144, LinkMode::Aes256Cbc));
         }
     }
 
     #[test]
     fn local_request_clamps_to_upgradable_receiving_interface() {
-        let mut raw = request(262_144, LinkMode::Aes128Cbc);
-        clamp_local_link_request_mtu(&mut raw, true, Some(16_384), true);
-        assert_eq!(raw, request(16_384, LinkMode::Aes128Cbc));
+        let mut raw = request(262_144, LinkMode::Aes256Cbc);
+        clamp_local_link_request_mtu(&mut raw, true, Some(16_384), true).unwrap();
+        assert_eq!(raw, request(16_384, LinkMode::Aes256Cbc));
     }
 
     #[test]
     fn local_request_over_fixed_interface_gets_default_mtu() {
         // A radio's 508-byte frames never raise a link above the default.
         let mut raw = request(262_144, LinkMode::Aes256Cbc);
-        clamp_local_link_request_mtu(&mut raw, true, Some(508), false);
+        clamp_local_link_request_mtu(&mut raw, true, Some(508), false).unwrap();
         assert_eq!(raw, request(500, LinkMode::Aes256Cbc));
     }
 
     #[test]
     fn local_request_that_fits_is_untouched() {
         let mut raw = request(500, LinkMode::Aes256Cbc);
-        clamp_local_link_request_mtu(&mut raw, true, Some(508), false);
+        clamp_local_link_request_mtu(&mut raw, true, Some(508), false).unwrap();
         assert_eq!(raw, request(500, LinkMode::Aes256Cbc));
     }
 
     #[test]
     fn local_request_on_interface_without_mtu_is_untouched() {
         let mut raw = request(262_144, LinkMode::Aes256Cbc);
-        clamp_local_link_request_mtu(&mut raw, true, None, false);
+        clamp_local_link_request_mtu(&mut raw, true, None, false).unwrap();
         assert_eq!(raw, request(262_144, LinkMode::Aes256Cbc));
+    }
+
+    /// Signalling with any mode value in its top three bits.
+    fn request_with_mode_value(mtu: u32, mode: u8) -> Vec<u8> {
+        let mut raw = request(mtu, LinkMode::Aes256Cbc);
+        let start = raw.len() - 3;
+        raw[start] = (raw[start] & 0x1F) | (mode << 5);
+        raw
+    }
+
+    /// Upstream's `Link.signalling_bytes` raises for a mode outside
+    /// `ENABLED_MODES` (AES-128-CBC and the reserved ones), so a request
+    /// whose MTU must be lowered is refused, forwarded or local, and left
+    /// as it was. One that fits, or loses its signalling, passes.
+    #[test]
+    fn lowering_the_mtu_of_a_mode_that_is_not_enabled_is_refused() {
+        for mode in [0u8, 2, 3, 4, 5, 6, 7] {
+            let mut raw = request_with_mode_value(524_288, mode);
+            assert_eq!(
+                clamp_forwarded_link_request_mtu(&mut raw, true, Some(8_192), Some(65_535)),
+                Err(mode)
+            );
+            assert_eq!(raw, request_with_mode_value(524_288, mode));
+            assert_eq!(
+                clamp_forwarded_link_request_mtu(&mut raw, true, Some(65_535), Some(8_192)),
+                Err(mode)
+            );
+            let mut raw = request_with_mode_value(262_144, mode);
+            assert_eq!(
+                clamp_local_link_request_mtu(&mut raw, true, Some(16_384), true),
+                Err(mode)
+            );
+            assert_eq!(
+                clamp_local_link_request_mtu(&mut raw, true, Some(508), false),
+                Err(mode)
+            );
+            assert_eq!(raw, request_with_mode_value(262_144, mode));
+
+            let mut raw = request_with_mode_value(500, mode);
+            clamp_forwarded_link_request_mtu(&mut raw, true, Some(500), Some(500)).unwrap();
+            clamp_local_link_request_mtu(&mut raw, true, Some(508), false).unwrap();
+            assert_eq!(raw, request_with_mode_value(500, mode));
+            clamp_forwarded_link_request_mtu(&mut raw, true, Some(500), None).unwrap();
+            assert_eq!(raw.len(), 19 + 64);
+        }
     }
 }

@@ -198,6 +198,62 @@ fn an_aes_128_link_request_is_dropped_without_a_proof() {
     assert_eq!(manager.link_count(), 1);
 }
 
+/// A request signalling a reserved mode (2 to 7) is refused as upstream's
+/// `validate_request` refuses it, in `Link.handshake()`: no proof, no link,
+/// and, as for any request it refuses, no protocol violation.
+#[test]
+fn a_reserved_link_mode_request_is_dropped_without_a_proof() {
+    let mut manager = LinkManager::new();
+    let mut rng = make_rng(0x1B);
+    let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
+    let destination = [0x1B; 16];
+    manager.register_link_destination(
+        destination,
+        sig_prv,
+        sig_pub_bytes,
+        ResourceStrategy::AcceptNone,
+    );
+    let interface = rns_core::transport::types::InterfaceId(7);
+    for mode in 2u8..=7 {
+        let mut data = rns_core::link::handshake::build_linkrequest_data(
+            &X25519PrivateKey::generate(&mut OsRng)
+                .public_key()
+                .public_bytes(),
+            &Ed25519PrivateKey::generate(&mut OsRng)
+                .public_key()
+                .public_bytes(),
+            Some(constants::MTU as u32),
+            LinkMode::Aes256Cbc,
+        );
+        data[constants::LINK_ECPUBSIZE] =
+            (data[constants::LINK_ECPUBSIZE] & !constants::LINK_MODE_BYTEMASK) | (mode << 5);
+        let packet = RawPacket::pack(
+            rns_core::packet::PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_SINGLE,
+                packet_type: constants::PACKET_TYPE_LINKREQUEST,
+            },
+            0,
+            &destination,
+            None,
+            constants::CONTEXT_NONE,
+            &data,
+        )
+        .unwrap();
+        let actions = manager.handle_local_delivery(
+            destination,
+            &packet.raw,
+            packet.packet_hash,
+            interface,
+            &mut rng,
+        );
+        assert!(actions.is_empty(), "mode {mode}: {actions:?}");
+        assert_eq!(manager.link_count(), 0);
+    }
+}
+
 #[test]
 fn malformed_linkrequest_reports_protocol_violation() {
     let mut manager = LinkManager::new();

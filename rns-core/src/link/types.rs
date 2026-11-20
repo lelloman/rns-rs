@@ -55,10 +55,7 @@ impl LinkMode {
 
     /// The mode's name in upstream's `Link.MODE_DESCRIPTIONS`.
     pub fn description(self) -> &'static str {
-        match self {
-            LinkMode::Aes128Cbc => "AES_128_CBC",
-            LinkMode::Aes256Cbc => "AES_256_CBC",
-        }
+        mode_description(self.mode_byte())
     }
 
     /// Mode value as carried in link request and proof signalling.
@@ -85,6 +82,28 @@ impl LinkMode {
             LinkMode::Aes256Cbc => 64,
         }
     }
+}
+
+/// The name upstream's `Link.MODE_DESCRIPTIONS` gives a signalled mode
+/// value: the two CBC modes and the six reserved ones (`0x02` to `0x07`).
+/// Only the low three bits are a mode.
+pub fn mode_description(mode: u8) -> &'static str {
+    match mode & 0x07 {
+        0x00 => "AES_128_CBC",
+        0x01 => "AES_256_CBC",
+        0x02 => "MODE_AES256_GCM",
+        0x03 => "MODE_OTP_RESERVED",
+        0x04 => "MODE_PQ_RESERVED_1",
+        0x05 => "MODE_PQ_RESERVED_2",
+        0x06 => "MODE_PQ_RESERVED_3",
+        _ => "MODE_PQ_RESERVED_4",
+    }
+}
+
+/// Whether a signalled mode value is an enabled mode
+/// ([`LinkMode::ENABLED`]); the reserved values never are.
+pub fn mode_value_enabled(mode: u8) -> bool {
+    LinkMode::from_byte(mode).is_ok_and(LinkMode::is_enabled)
 }
 
 /// Actions produced by LinkEngine for the caller to dispatch.
@@ -149,6 +168,15 @@ pub enum LinkError {
     /// The link mode is defined but not enabled; only
     /// [`LinkMode::ENABLED`] modes may be used.
     ModeNotEnabled(LinkMode),
+    /// A link request signals a reserved mode (`0x02` to `0x07`), which no
+    /// key exchange is defined for. Upstream's `Link.handshake()` raises
+    /// this for the link it was creating, identified by `link_id`.
+    InvalidMode {
+        /// The signalled mode value.
+        mode: u8,
+        /// The link the request would have created.
+        link_id: LinkId,
+    },
     /// Key derivation, signing, encryption or decryption failed.
     CryptoError,
     /// No session key has been derived yet.
@@ -165,6 +193,15 @@ impl fmt::Display for LinkError {
             // Upstream's text, which it logs when it drops such a request.
             LinkError::ModeNotEnabled(mode) => {
                 write!(f, "Requested link mode {} not enabled", mode.description())
+            }
+            // Upstream's text: the mode as a number, then the link as
+            // `RNS.prettyhexrep` writes it.
+            LinkError::InvalidMode { mode, link_id } => {
+                write!(f, "Invalid link mode {} on <", mode)?;
+                for byte in link_id {
+                    write!(f, "{:02x}", byte)?;
+                }
+                write!(f, ">")
             }
             LinkError::CryptoError => write!(f, "Cryptographic error"),
             LinkError::NoSessionKey => write!(f, "No session key established"),
@@ -195,6 +232,32 @@ mod tests {
         assert_eq!(
             LinkError::ModeNotEnabled(LinkMode::Aes128Cbc).to_string(),
             "Requested link mode AES_128_CBC not enabled"
+        );
+    }
+
+    #[test]
+    fn reserved_modes_have_upstream_descriptions_and_are_not_enabled() {
+        let names = [
+            "AES_128_CBC",
+            "AES_256_CBC",
+            "MODE_AES256_GCM",
+            "MODE_OTP_RESERVED",
+            "MODE_PQ_RESERVED_1",
+            "MODE_PQ_RESERVED_2",
+            "MODE_PQ_RESERVED_3",
+            "MODE_PQ_RESERVED_4",
+        ];
+        for (mode, name) in names.iter().enumerate() {
+            assert_eq!(mode_description(mode as u8), *name);
+            assert_eq!(mode_value_enabled(mode as u8), mode == 0x01);
+        }
+        assert_eq!(
+            LinkError::InvalidMode {
+                mode: 2,
+                link_id: [0xAB; 16]
+            }
+            .to_string(),
+            "Invalid link mode 2 on <abababababababababababababababab>"
         );
     }
 

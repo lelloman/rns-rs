@@ -95,10 +95,7 @@ pub fn link_request_stamp_value(
     dest_hash: &[u8; 16],
     data: &[u8],
 ) -> Option<rns_crypto::stamp_value::StampValue> {
-    let (peer_pub, peer_sig_pub, _, _) = parse_linkrequest_data(data).ok()?;
-    let mut material = [0u8; 48];
-    material[..16].copy_from_slice(dest_hash);
-    material[16..].copy_from_slice(&peer_sig_pub);
+    let (peer_pub, material) = link_request_stamp_parts(dest_hash, data)?;
     Some(rns_crypto::identity::stamp_value(&material, &peer_pub))
 }
 
@@ -111,11 +108,23 @@ pub fn link_request_stamp_valid(
     data: &[u8],
     cost: crate::stamp::StampCost,
 ) -> Option<bool> {
-    let (peer_pub, peer_sig_pub, _, _) = parse_linkrequest_data(data).ok()?;
+    let (peer_pub, material) = link_request_stamp_parts(dest_hash, data)?;
+    Some(crate::stamp::stamp_valid(&peer_pub, cost, &material))
+}
+
+/// A LINKREQUEST's stamp and stamp material, for any request of a valid
+/// length. As in upstream's `Link.validate_request`, the stamp is checked
+/// before the signalled mode is read, so this does not look at the mode.
+fn link_request_stamp_parts(dest_hash: &[u8; 16], data: &[u8]) -> Option<([u8; 32], [u8; 48])> {
+    if data.len() != LINK_ECPUBSIZE && data.len() != LINK_ECPUBSIZE + LINK_MTU_SIZE {
+        return None;
+    }
+    let mut peer_pub = [0u8; 32];
+    peer_pub.copy_from_slice(&data[..32]);
     let mut material = [0u8; 48];
     material[..16].copy_from_slice(dest_hash);
-    material[16..].copy_from_slice(&peer_sig_pub);
-    Some(crate::stamp::stamp_valid(&peer_pub, cost, &material))
+    material[16..].copy_from_slice(&data[32..64]);
+    Some((peer_pub, material))
 }
 
 /// Build LRPROOF data: `[signature:64][x25519_pub:32][signalling:0-3]`.
