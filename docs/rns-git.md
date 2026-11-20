@@ -110,6 +110,17 @@ Important config paths:
   images to fit while retaining aspect ratio and never upscales them. The
   returned `NamedTempFile` deletes its output when dropped; use `persist` to
   retain it. Failed conversions return `None` and leave the source untouched.
+  Security: upstream's notice
+  [Media Conversion in rngit and nomadnet](https://github.com/markqvist/Reticulum/blob/master/docs/security/2026_11_19_Media_conversion_in_rngit_and_nomadnet.md)
+  (2026-11-19) reports that ImageMagick, used as the conversion backend, can
+  be made to read any file the serving user can read and leak it into the
+  converted image, so a node serving repositories that accept untrusted
+  pushes was exposed. rns-git applies upstream's mitigation (the signature
+  check, explicit input coder and size cap above) since the port of upstream
+  `840eb369`, recorded in the
+  [1.6.1 rgit-2 audit](upstream-parity/reticulum-1.6.1-rgit-2-audit.md).
+  On older rns-git builds, set `media_conversion = no` under `[pages]` (or
+  run without ImageMagick installed) until the node is updated.
   Text blob pages and Markdown fenced code blocks are syntax-highlighted by
   default when the file extension or fence language is supported.
   Markdown fenced code blocks tagged `rawmu` are passed through as raw Micron
