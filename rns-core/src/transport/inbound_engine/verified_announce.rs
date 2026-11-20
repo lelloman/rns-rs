@@ -33,9 +33,79 @@ impl TransportEngine {
         rng: &mut dyn Rng,
         actions: &mut Vec<TransportAction>,
     ) {
+        if !self.admit_verified_announce(&mut ctx) {
+            return;
+        }
+        // Upstream's `received_announce(size)`: a valid announce that was
+        // not held counts as received, with its bytes, whatever the path
+        // table then makes of it.
+        self.accounting
+            .announce_receipts
+            .push((ctx.iface, ctx.original_raw.len()));
+
+        if ctx.packet.hops > constants::PATHFINDER_M {
+            return;
+        }
+
+        let Some(mp_decision) = self.decide_announced_path(&ctx) else {
+            return;
+        };
+        let rate_blocked = self.announce_rate_blocked(&ctx);
+        let (expires, announce_entry) =
+            self.store_announced_path(&ctx, &mp_decision, rate_blocked, rng, actions);
+        self.store_announced_tunnel_path(&ctx, expires);
+
+        // Re-apply the path-state reset after storing the path entry so any transient
+        // stale state is also cleared once the destination exists in the path table.
+        self.paths.states.remove(&ctx.packet.destination_hash);
+        // Upstream 833f6cf2: an announce from a local client this instance
+        // serves proves its destination alive, so its path is marked
+        // responsive (timestamp, expiry and use refreshed) instead of
+        // unknown.
+        if self.serves_local_client(ctx.iface) {
+            self.mark_path_responsive(&ctx.packet.destination_hash, ctx.now);
+        }
+
+        self.store_announce_for_retransmission(&ctx, &mp_decision, announce_entry);
+
+        let VerifiedAnnounceCtx {
+            packet,
+            iface,
+            now,
+            validated,
+            received_from,
+            ..
+        } = ctx;
+        actions.push(received_announce_action(packet, iface, validated));
+        actions.push(TransportAction::PathUpdated {
+            destination_hash: packet.destination_hash,
+            hops: packet.hops,
+            next_hop: received_from,
+            interface: iface,
+        });
+
+        // An announce arriving with PATHFINDER_M - 1 hops now carries
+        // PATHFINDER_M, which no node decodes: it updates the path table but
+        // is not sent on (upstream's `Packet.send` refuses it).
+        let sendable = packet.hops < constants::PATHFINDER_M;
+
+        // Forward announce to local clients if any are connected
+        if sendable && self.has_local_clients() {
+            actions.push(TransportAction::ForwardToLocalClients {
+                raw: self.announce_raw_for_local_clients(packet),
+                exclude: Some(iface),
+            });
+        }
+
+        self.answer_discovery_path_requests(packet, received_from, now, sendable, actions);
+    }
+
+    /// Whether a verified announce passes the blackhole, its stamp and
+    /// ingress control; one that does not is filtered, or held.
+    fn admit_verified_announce(&mut self, ctx: &mut VerifiedAnnounceCtx<'_>) -> bool {
         if self.is_blackholed(&ctx.validated.identity_hash, ctx.now) {
             self.filter_announce();
-            return;
+            return false;
         }
 
         // Identity.validate_announce since 9b464382: the receiving
@@ -55,7 +125,7 @@ impl TransportEngine {
             && stamp_status != crate::announce::AnnounceStampStatus::Valid
         {
             self.filter_announce();
-            return;
+            return false;
         }
 
         // As upstream's `preprocess_inbound`, ingress control judges an
@@ -68,24 +138,21 @@ impl TransportEngine {
             HoldDecision::Pass
         };
         match hold {
-            HoldDecision::Pass => {}
-            HoldDecision::Held => return,
+            HoldDecision::Pass => true,
+            HoldDecision::Held => false,
             HoldDecision::Filtered => {
                 self.filter_announce();
-                return;
+                false
             }
         }
-        // Upstream's `received_announce(size)`: a valid announce that was
-        // not held counts as received, with its bytes, whatever the path
-        // table then makes of it.
-        self.accounting
-            .announce_receipts
-            .push((ctx.iface, ctx.original_raw.len()));
+    }
 
-        if ctx.packet.hops > constants::PATHFINDER_M {
-            return;
-        }
-
+    /// How the announce changes its destination's paths, or `None` when it
+    /// is rejected.
+    fn decide_announced_path(
+        &mut self,
+        ctx: &VerifiedAnnounceCtx<'_>,
+    ) -> Option<MultiPathDecision> {
         let existing_set = self.paths.table.get(&ctx.packet.destination_hash);
         let was_unknown_destination = existing_set.is_none_or(|ps| ps.is_empty());
 
@@ -140,7 +207,7 @@ impl TransportEngine {
                 ctx.packet.destination_hash[3],
             );
             self.record_announce_heard_while_waiting(ctx.packet, ctx.iface);
-            return;
+            return None;
         }
         if higher_gravity_replacement {
             log::log!(
@@ -155,24 +222,38 @@ impl TransportEngine {
                 announce_gravity,
             );
         }
+        Some(mp_decision)
+    }
 
-        // Rate limiting
-        let rate_blocked = if ctx.packet.context != constants::CONTEXT_PATH_RESPONSE {
-            if let Some(iface_info) = self.interfaces.get(&ctx.iface) {
-                self.announces.rate_limiter.check_and_update(
-                    &ctx.packet.destination_hash,
-                    ctx.now,
-                    iface_info.announce_rate_target,
-                    iface_info.announce_rate_grace,
-                    iface_info.announce_rate_penalty,
-                )
-            } else {
-                false
-            }
-        } else {
-            false
+    /// Whether the announce rate limit of the receiving interface blocks
+    /// the announce's rebroadcast. Path responses are not rate limited.
+    fn announce_rate_blocked(&mut self, ctx: &VerifiedAnnounceCtx<'_>) -> bool {
+        if ctx.packet.context == constants::CONTEXT_PATH_RESPONSE {
+            return false;
+        }
+        let Some(iface_info) = self.interfaces.get(&ctx.iface) else {
+            return false;
         };
+        self.announces.rate_limiter.check_and_update(
+            &ctx.packet.destination_hash,
+            ctx.now,
+            iface_info.announce_rate_target,
+            iface_info.announce_rate_grace,
+            iface_info.announce_rate_penalty,
+        )
+    }
 
+    /// Install the announced path as `mp_decision` says and ask for the
+    /// announce to be cached. Returns the path's expiry and the announce
+    /// table entry to retransmit it with, if any.
+    fn store_announced_path(
+        &mut self,
+        ctx: &VerifiedAnnounceCtx<'_>,
+        mp_decision: &MultiPathDecision,
+        rate_blocked: bool,
+        rng: &mut dyn Rng,
+        actions: &mut Vec<TransportAction>,
+    ) -> (f64, Option<AnnounceEntry>) {
         // Get interface mode for expiry calculation
         let interface_mode = self
             .interfaces
@@ -244,14 +325,6 @@ impl TransportEngine {
             .and_then(|ps| ps.primary())
             .map_or(0.0, |path| path.used);
 
-        // Upstream 8c73e203: an announce accepted only because the path
-        // is unresponsive updates the path table but is not rebroadcast.
-        let table_insertion_only = matches!(
-            mp_decision,
-            MultiPathDecision::RecoverUnresponsive
-                | MultiPathDecision::ReplaceAsUpstream { rebroadcast: false }
-        );
-
         // Store path via upsert into PathSet
         match mp_decision {
             MultiPathDecision::ReplacePrimary | MultiPathDecision::RecoverUnresponsive => self
@@ -266,48 +339,60 @@ impl TransportEngine {
             }
             MultiPathDecision::Reject => unreachable!("rejected decisions returned above"),
         }
+        (expires, announce_entry)
+    }
 
-        // If receiving interface has a tunnel_id, store path in tunnel table too
-        if let Some(tunnel_id) = self.interfaces.get(&ctx.iface).and_then(|i| i.tunnel_id) {
-            // As upstream, the tunnel keeps the path's random blobs and
-            // when it was last used.
-            let (blobs, used) = self
-                .paths
-                .table
-                .get(&ctx.packet.destination_hash)
-                .and_then(|ps| ps.find_by_next_hop(&ctx.received_from))
-                .map(|e| (e.random_blobs.clone(), e.used))
-                .unwrap_or_default();
-            self.tunnels.table.store_tunnel_path(
-                &tunnel_id,
-                ctx.packet.destination_hash,
-                tunnel::TunnelPath {
-                    timestamp: ctx.now,
-                    received_from: ctx.received_from,
-                    hops: ctx.packet.hops,
-                    expires,
-                    random_blobs: blobs,
-                    packet_hash: ctx.packet.packet_hash,
-                    used,
-                },
-                ctx.now,
-                self.config.destination_timeout_secs,
-                self.config.max_tunnel_destinations_total,
-            );
-        }
+    /// If the receiving interface has a tunnel, store the announced path in
+    /// the tunnel table too.
+    fn store_announced_tunnel_path(&mut self, ctx: &VerifiedAnnounceCtx<'_>, expires: f64) {
+        let Some(tunnel_id) = self.interfaces.get(&ctx.iface).and_then(|i| i.tunnel_id) else {
+            return;
+        };
+        // As upstream, the tunnel keeps the path's random blobs and
+        // when it was last used.
+        let (blobs, used) = self
+            .paths
+            .table
+            .get(&ctx.packet.destination_hash)
+            .and_then(|ps| ps.find_by_next_hop(&ctx.received_from))
+            .map(|e| (e.random_blobs.clone(), e.used))
+            .unwrap_or_default();
+        self.tunnels.table.store_tunnel_path(
+            &tunnel_id,
+            ctx.packet.destination_hash,
+            tunnel::TunnelPath {
+                timestamp: ctx.now,
+                received_from: ctx.received_from,
+                hops: ctx.packet.hops,
+                expires,
+                random_blobs: blobs,
+                packet_hash: ctx.packet.packet_hash,
+                used,
+            },
+            ctx.now,
+            self.config.destination_timeout_secs,
+            self.config.max_tunnel_destinations_total,
+        );
+    }
 
-        // Re-apply the path-state reset after storing the path entry so any transient
-        // stale state is also cleared once the destination exists in the path table.
-        self.paths.states.remove(&ctx.packet.destination_hash);
-        // Upstream 833f6cf2: an announce from a local client this instance
-        // serves proves its destination alive, so its path is marked
-        // responsive (timestamp, expiry and use refreshed) instead of
-        // unknown.
-        if self.serves_local_client(ctx.iface) {
-            self.mark_path_responsive(&ctx.packet.destination_hash, ctx.now);
-        }
+    /// Put the announce in the announce table for retransmission: its own
+    /// entry, or for a local client's path response, one that answers the
+    /// pending request.
+    fn store_announce_for_retransmission(
+        &mut self,
+        ctx: &VerifiedAnnounceCtx<'_>,
+        mp_decision: &MultiPathDecision,
+        announce_entry: Option<AnnounceEntry>,
+    ) {
+        // Upstream 8c73e203: an announce accepted only because the path
+        // is unresponsive updates the path table but is not rebroadcast.
+        let table_insertion_only = matches!(
+            mp_decision,
+            MultiPathDecision::RecoverUnresponsive
+                | MultiPathDecision::ReplaceAsUpstream { rebroadcast: false }
+        );
+        let is_path_response = ctx.packet.context == constants::CONTEXT_PATH_RESPONSE;
 
-        // Store announce for retransmission
         if let Some(ann) = announce_entry {
             if !table_insertion_only {
                 self.insert_announce_entry(ctx.packet.destination_hash, ann, ctx.now);
@@ -322,100 +407,101 @@ impl TransportEngine {
                 .pending_local
                 .remove(&ctx.packet.destination_hash)
             {
-                let entry = AnnounceEntry {
-                    timestamp: ctx.now,
-                    retransmit_timeout: ctx.now,
-                    retries: constants::PATHFINDER_R,
-                    received_from: ctx.received_from,
-                    hops: ctx.packet.hops,
-                    packet_raw: ctx.packet.raw.to_vec(),
-                    packet_data: ctx.packet.data().to_vec(),
-                    destination_hash: ctx.packet.destination_hash,
-                    context_flag: ctx.packet.flags.context_flag,
-                    local_rebroadcasts: 0,
-                    block_rebroadcasts: true,
-                    attached_interface: Some(requesting_interface),
-                    packet_hash: ctx.packet.packet_hash,
-                    blocked_interfaces: Default::default(),
-                };
+                let entry = path_response_entry(
+                    ctx.packet,
+                    ctx.received_from,
+                    ctx.now,
+                    Some(requesting_interface),
+                );
                 self.insert_announce_entry(ctx.packet.destination_hash, entry, ctx.now);
             }
         }
-
-        // Emit actions
-        actions.push(TransportAction::AnnounceReceived(alloc::boxed::Box::new(
-            types::ReceivedAnnounce {
-                destination_hash: ctx.packet.destination_hash,
-                packet_hash: ctx.packet.packet_hash,
-                identity_hash: ctx.validated.identity_hash,
-                public_key: ctx.validated.public_key,
-                name_hash: ctx.validated.name_hash,
-                random_hash: ctx.validated.random_hash,
-                ratchet: ctx.validated.ratchet,
-                app_data: ctx.validated.app_data,
-                stamp: ctx.validated.stamp,
-                stamp_value: ctx.validated.stamp_value,
-                lr_cost: ctx.validated.lr_cost,
-                hops: ctx.packet.hops,
-                receiving_interface: ctx.iface,
-                rx: RxMetadata {
-                    rssi: ctx.packet.rssi,
-                    snr: ctx.packet.snr,
-                },
-            },
-        )));
-
-        actions.push(TransportAction::PathUpdated {
-            destination_hash: ctx.packet.destination_hash,
-            hops: ctx.packet.hops,
-            next_hop: ctx.received_from,
-            interface: ctx.iface,
-        });
-
-        // An announce arriving with PATHFINDER_M - 1 hops now carries
-        // PATHFINDER_M, which no node decodes: it updates the path table but
-        // is not sent on (upstream's `Packet.send` refuses it).
-        let sendable = ctx.packet.hops < constants::PATHFINDER_M;
-
-        // Forward announce to local clients if any are connected
-        if sendable && self.has_local_clients() {
-            actions.push(TransportAction::ForwardToLocalClients {
-                raw: self.announce_raw_for_local_clients(ctx.packet),
-                exclude: Some(ctx.iface),
-            });
-        }
-
-        // Check for discovery path requests waiting for this announce
-        if let Some(requesting_interfaces) =
-            self.discovery_path_requests_waiting(&ctx.packet.destination_hash)
-        {
-            // Build a path response announce and queue it
-            let entry = AnnounceEntry {
-                timestamp: ctx.now,
-                retransmit_timeout: ctx.now,
-                retries: constants::PATHFINDER_R,
-                received_from: ctx.received_from,
-                hops: ctx.packet.hops,
-                packet_raw: ctx.packet.raw.to_vec(),
-                packet_data: ctx.packet.data().to_vec(),
-                destination_hash: ctx.packet.destination_hash,
-                context_flag: ctx.packet.flags.context_flag,
-                local_rebroadcasts: 0,
-                block_rebroadcasts: true,
-                attached_interface: requesting_interfaces.first().copied(),
-                packet_hash: ctx.packet.packet_hash,
-                blocked_interfaces: Default::default(),
-            };
-            if let Some(identity_hash) = self.config.identity_hash.filter(|_| sendable) {
-                let raw = announce_proc::build_retransmit_announce(&entry, &identity_hash);
-                for interface in requesting_interfaces.iter().skip(1) {
-                    actions.push(TransportAction::SendOnInterface {
-                        interface: *interface,
-                        raw: raw.clone().into(),
-                    });
-                }
-            }
-            self.insert_announce_entry(ctx.packet.destination_hash, entry, ctx.now);
-        }
     }
+
+    /// Answer the discovery path requests waiting for this announce's
+    /// destination with a path response.
+    fn answer_discovery_path_requests(
+        &mut self,
+        packet: &RawPacket<PacketBytes>,
+        received_from: [u8; 16],
+        now: f64,
+        sendable: bool,
+        actions: &mut Vec<TransportAction>,
+    ) {
+        let Some(requesting_interfaces) =
+            self.discovery_path_requests_waiting(&packet.destination_hash)
+        else {
+            return;
+        };
+        // Build a path response announce and queue it
+        let entry = path_response_entry(
+            packet,
+            received_from,
+            now,
+            requesting_interfaces.first().copied(),
+        );
+        if let Some(identity_hash) = self.config.identity_hash.filter(|_| sendable) {
+            let raw = announce_proc::build_retransmit_announce(&entry, &identity_hash);
+            for interface in requesting_interfaces.iter().skip(1) {
+                actions.push(TransportAction::SendOnInterface {
+                    interface: *interface,
+                    raw: raw.clone().into(),
+                });
+            }
+        }
+        self.insert_announce_entry(packet.destination_hash, entry, now);
+    }
+}
+
+/// An announce table entry that sends `packet` once, at once, as a path
+/// response on `attached_interface`, with rebroadcasts blocked.
+fn path_response_entry(
+    packet: &RawPacket<PacketBytes>,
+    received_from: [u8; 16],
+    now: f64,
+    attached_interface: Option<InterfaceId>,
+) -> AnnounceEntry {
+    AnnounceEntry {
+        timestamp: now,
+        retransmit_timeout: now,
+        retries: constants::PATHFINDER_R,
+        received_from,
+        hops: packet.hops,
+        packet_raw: packet.raw.to_vec(),
+        packet_data: packet.data().to_vec(),
+        destination_hash: packet.destination_hash,
+        context_flag: packet.flags.context_flag,
+        local_rebroadcasts: 0,
+        block_rebroadcasts: true,
+        attached_interface,
+        packet_hash: packet.packet_hash,
+        blocked_interfaces: Default::default(),
+    }
+}
+
+/// The action reporting a received announce to the caller.
+fn received_announce_action(
+    packet: &RawPacket<PacketBytes>,
+    iface: InterfaceId,
+    validated: crate::announce::ValidatedAnnounce,
+) -> TransportAction {
+    TransportAction::AnnounceReceived(alloc::boxed::Box::new(types::ReceivedAnnounce {
+        destination_hash: packet.destination_hash,
+        packet_hash: packet.packet_hash,
+        identity_hash: validated.identity_hash,
+        public_key: validated.public_key,
+        name_hash: validated.name_hash,
+        random_hash: validated.random_hash,
+        ratchet: validated.ratchet,
+        app_data: validated.app_data,
+        stamp: validated.stamp,
+        stamp_value: validated.stamp_value,
+        lr_cost: validated.lr_cost,
+        hops: packet.hops,
+        receiving_interface: iface,
+        rx: RxMetadata {
+            rssi: packet.rssi,
+            snr: packet.snr,
+        },
+    }))
 }
