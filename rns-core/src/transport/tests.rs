@@ -6297,8 +6297,9 @@ fn test_shared_instance_without_transport_relays_path_request_to_local_client() 
     }
     assert!(issue183_path_requests_on(&actions, InterfaceId(3), &dest_hash).is_empty());
 
-    // Client A answers with a path response. As upstream, the instance
-    // retransmits it once as a plain announce on its network interfaces.
+    // Client A answers with a path response. As upstream (since 70eb417d),
+    // the instance retransmits it once, as a path response, to the
+    // requesting interface only.
     let response = build_issue183_client_announce(
         constants::CONTEXT_PATH_RESPONSE,
         ISSUE183_REEMITTED_RANDOM_HASH,
@@ -6310,7 +6311,7 @@ fn test_shared_instance_without_transport_relays_path_request_to_local_client() 
     let relayed = engine.tick(1004.5, &mut rng);
     let sends = issue183_announces_on(&relayed, InterfaceId(3), &dest_hash);
     assert_eq!(sends.len(), 1, "path response must reach the requester");
-    assert_issue183_rebroadcast_announce(sends[0], &dest_hash, constants::CONTEXT_NONE);
+    assert_issue183_rebroadcast_announce(sends[0], &dest_hash, constants::CONTEXT_PATH_RESPONSE);
     assert!(issue183_announces_on(&relayed, InterfaceId(1), &dest_hash).is_empty());
     assert!(issue183_announces_on(&relayed, InterfaceId(2), &dest_hash).is_empty());
 

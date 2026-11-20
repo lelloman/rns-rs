@@ -283,10 +283,10 @@ impl TransportEngine {
             self.insert_announce_entry(ctx.packet.destination_hash, ann, ctx.now);
         } else if is_path_response && self.serves_local_client(ctx.iface) {
             // As upstream, a local client's path response that answers a
-            // pending request is retransmitted at once and once only, as a
-            // plain announce on every interface (no attached interface, no
-            // blocked rebroadcast).
-            if let Some((_requesting_interface, _)) = self
+            // pending request is retransmitted at once and once only. Since
+            // upstream 70eb417d it goes only to the requesting interface, as
+            // a path response (attached interface, blocked rebroadcast).
+            if let Some((requesting_interface, _)) = self
                 .pending_local_path_requests
                 .remove(&ctx.packet.destination_hash)
             {
@@ -301,8 +301,8 @@ impl TransportEngine {
                     destination_hash: ctx.packet.destination_hash,
                     context_flag: ctx.packet.flags.context_flag,
                     local_rebroadcasts: 0,
-                    block_rebroadcasts: false,
-                    attached_interface: None,
+                    block_rebroadcasts: true,
+                    attached_interface: Some(requesting_interface),
                     packet_hash: ctx.packet.packet_hash,
                     blocked_interfaces: Default::default(),
                 };
