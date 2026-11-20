@@ -78,9 +78,9 @@ evidence exist; until then nothing here is claimed as passed.
 | 19 | `8e7dc8b7` | 2026-11-18 | Added medium reliability flag to interfaces | Integrated | `cc15c501`; `lossless_medium_matches_upstreams_interface_classes` (decision 6) |
 | 20 | `9568b704` | 2026-11-18 | Improved rnpath display and filtering options | Integrated | `d0fb8d79`; `path_table_display_options_and_filters_as_upstream`, `path_table_prints_as_upstream` (updated), `parses_upstream_invocations_as_argparse_does` (extended), argparse fixture and golden help regenerated at `9568b704`, live `python_rnpath_reads_rust_remote_path_table` and `python_rnpath_lists_rust_path_table` at `9568b704` |
 | 21 | `c90a5d58` | 2026-11-18 | Added destination type loading | Integrated | `f72cbf56`; `known_destination_types_are_read_as_upstream`, `missing_unreadable_and_flagged_type_files_add_nothing`, `the_config_filter_names_come_first_and_the_file_overrides_them`, `splitlines_and_strip_follow_python`, `wanted_destination_types_are_named_in_the_type_map`, `unwant_all_reports_types_in_the_order_they_were_first_wanted`, `configured_destination_types_name_as_upstreams_type_map`, `path_and_rate_tables_follow_upstreams_keys_and_types` (extended), `path_table_prints_as_upstream` (JSON), live `python_rnpath_reads_rust_remote_path_table` at `c90a5d58` |
-| 22 | `3f55e9eb` | 2026-11-18 | Added flagged destination type map, added per-link traffic counter, added link distribution stats getter | Proposed: Needs coordinated port | Reviewed 2026-11-20; no mapping commit yet |
-| 23 | `f7b54ccc` | 2026-11-18 | Added prettynamehash convenience function | Proposed: Non-runtime | Reviewed 2026-11-20; no mapping commit yet |
-| 24 | `1a71073c` | 2026-11-18 | Initial rnpath analysis stub | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
+| 22 | `3f55e9eb` | 2026-11-18 | Added flagged destination type map, added per-link traffic counter, added link distribution stats getter | Integrated | `73ff693b`; `forwarded_link_traffic_counts_raw_bytes`, `link_distribution_counts_per_destination`, `link_distribution_names_receiving_interfaces_by_hash`, `link_distribution_rpc_fails_as_upstreams_set_does`, `type_names_come_from_the_map_then_the_flagged_map_then_the_hash` (decision 2) |
+| 23 | `f7b54ccc` | 2026-11-18 | Added prettynamehash convenience function | Non-runtime | `ea62398b`; note in `rns-cli/src/pyfmt.rs` |
+| 24 | `1a71073c` | 2026-11-18 | Initial rnpath analysis stub | Integrated | `959bb94f`; `analysis_counts_destination_types_as_upstream`, `parses_upstream_invocations_as_argparse_does` (extended), argparse fixture and golden help regenerated at `1a71073c` (decision 3) |
 | 25 | `b9903c53` | 2026-11-18 | Analysis mode capture argument | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
 | 26 | `1f7cd145` | 2026-11-18 | Cleanup and fixes | Proposed: Needs coordinated port | Reviewed 2026-11-20; no mapping commit yet |
 | 27 | `41260ea1` | 2026-11-18 | Added path state info to path table getters | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
@@ -947,11 +947,37 @@ on a disposable worktree at `c90a5d58`: `python_rns_is_available_for_utility_int
 `python_rnpath_reads_rust_remote_path_table` and
 `python_rnpath_lists_rust_path_table` passed (3 passed).
 
-Not ported (pre-existing, outside this commit): upstream's `Blocked …` and
-`Allowing …` debug lines when the `[filter]` section is applied, and the
-`Could not … destination type …` error lines. `Allowing` depends on whether
-`required_only` comes before `allowed_types` in the config, which the
-parser does not record.
+Not ported in this commit (pre-existing, already at `884f109b`): upstream's
+`Blocked …` and `Allowing …` debug lines when the `[filter]` section is
+applied, and the `Could not … destination type …` error lines.
+
+Follow-up `4e2459a9` (`filter: log destination type filtering as upstream
+does`, no `Upstream-Commit` trailer) adds the first two as at `884f109b`.
+The parser records the `[filter]` key order (`FilterSection::key_order`, as
+`2d8dd594` does for `[reticulum]`), and
+`DestinationTypeNames::from_filter` applies the section in that order:
+`Blocked <name> <hash> destinations` at debug for each ignored type, and
+`Allowing <<name>> <hash> destinations` at debug for each allowed type only
+once `required_only = yes` has been read, so only when it comes before
+`allowed_types`; of a type listed under both keys the later key's name
+stays in the map. `from_config` logs the lines, for a shared instance and a
+client alike. The `Could not add … to blocked list` and `… to allowed list`
+errors are not logged: their `try` blocks cannot fail for a config value,
+which ConfigObj always decodes to a `str` (`_handle_bom` decodes the file as
+UTF-8). The other `Could not …` lines (`… to clients required list`, `…
+from clients required list`, `Could not deregister all destination types
+…`) are left open: upstream reaches them only for an RPC call whose
+`requester` is not bytes (None, a str, a number, a list or dict) or whose
+name is not a str, where Python's exception text decides the message and,
+for several of them, the `except` block raises again, so the line is never
+logged and `rpc_loop` logs its own error instead. rns-rs's typed RPC
+handler ignores such calls. Reproducing Python's dynamic type failures was
+not attempted; it needs a decision. Test:
+`filter_types_are_logged_as_upstream_applies_them` (its `Allowing` texts
+follow `destination_type_name` as `3f55e9eb` changes it). Tests run:
+`cargo test -p rns-net` passed (lib 1600, `e2e.rs` 74 with 1 ignored,
+`e2e_direct_connect.rs` 19, `python_interop.rs` 6 with 1 ignored), `cargo
+fmt --check` and `bash scripts/lint-host.sh` passed.
 
 **Final disposition:** Integrated.
 
@@ -967,21 +993,84 @@ change affects logs only.
 `link_distribution` returns a locally invented `{total, active}` shape
 (`transport/queries.rs:388`, `rpc/responses.rs:6`) with no other consumer.
 
-**Local handling:** Add per-link traffic, return upstream's shape, encode
-`from_ifs` as a list of interface hashes (the form commit 26 settles on).
-Coordinated with 26, 29, 30 and 32; each still gets its own commit.
+**Local handling and evidence:** `73ff693b`, per decision 2. The review's
+plan to encode `from_ifs` as a list at this commit was replaced by the
+decision: the commit reproduces the set's failure.
 
-**Proposed disposition:** Needs coordinated port.
+Type names: `DestinationTypeNames` keeps `Transport.flagged_type_map`. The
+`flagged_destination_types` file now loads into it (the `c90a5d58` error is
+gone) and a type the `[filter]` section blocks is flagged too.
+`type_name()` (`destination_type_name`) gives the name, else the flagged
+name, else the bare hex of the hash, without angle brackets, so the
+`Allowing`, `Registered`, `Deregistered` and `No remaining requesters`
+lines read `lxmf.delivery <hash> …` and an unnamed type shows its hex where
+it showed `<unknown>`. The review did not mention the bracket change.
+
+Traffic: rns-core `LinkEntry::traffic` (`IDX_LT_TRXB`) adds the raw length
+of every link packet `handle_link_table_routing` forwards along the link,
+as upstream adds `len(new_raw)` after `transmit`; link request proofs and
+packets not forwarded add nothing.
+
+Distribution: `TransportEngine::link_distribution` returns
+`LinkDistribution { destination_hash, active, pending, traffic,
+from_interfaces }` per destination, the receiving interfaces each once; the
+driver turns them into `get_hash()` values (the full hash of the
+interface's display name, as the path table's `interface_hash`), so two
+interfaces of one name count once, as in upstream's set
+(`LinkDistributionEntry::from_interface_hashes`). The native `total` key
+is gone. Destinations come in link table order, which in rns-rs is by link
+id where upstream's dict keeps insertion order; at this commit no answer
+shows the order (see below), from commit 26 on it decides the order of the
+answer's keys and of `from_ifs`.
+
+RPC: for any destination with links, upstream's `rpc_return` raises
+`unsupported type: <class 'set'>` (umsgpack, checked against
+`RNS/vendor/umsgpack.py`), `rpc_loop` logs `An error ocurred while handling
+RPC call from local client: unsupported type: <class 'set'>` at error level
+and closes the connection unanswered; the client sees EOF (Python's client
+logs `Shared instance RPC failed while getting link distribution: ` and
+returns None). rns-rs now does the same: `link_distribution_to_pickle`
+fails with an `UpstreamRpcException`, `answer_request` logs upstream's line
+and the connection closes without an answer. An empty table answers `{}`.
+The legacy pickle codec, which upstream no longer speaks, fails the same
+way. `docs/configuration.md` describes the flagged names and the `[filter]`
+lines.
+
+Tests (new): `forwarded_link_traffic_counts_raw_bytes` (fails with the
+counter removed), `link_distribution_names_receiving_interfaces_by_hash`,
+`link_distribution_rpc_fails_as_upstreams_set_does` (one link: error with
+upstream's line and EOF at the client; none: `{}`),
+`type_names_come_from_the_map_then_the_flagged_map_then_the_hash`;
+rewritten: `link_distribution_counts_per_destination`; updated for the new
+names: `known_destination_types_are_read_as_upstream`,
+`missing_and_unreadable_type_files_add_nothing` (was
+`missing_unreadable_and_flagged_type_files_add_nothing`),
+`filter_types_are_logged_as_upstream_applies_them`,
+`wanted_destination_types_are_named_in_the_type_map`. Tests run: `cargo
+test -p rns-core` passed (lib 1171 and its other targets), `cargo test -p
+rns-net` passed (lib 1603, `e2e.rs` 74 with 1 ignored,
+`e2e_direct_connect.rs` 19, `python_interop.rs` 6 with 1 ignored), `cargo
+fmt --check` and `bash scripts/lint-host.sh` passed. Not run live: a
+Python client against an rns-rs instance with a relayed link.
+
+**Final disposition:** Integrated.
 
 ### 23. `f7b54ccc` — Added prettynamehash convenience function
 
 **Upstream change:** A Python helper `RNS.prettynamehash()` with no caller.
 
-**Rust applicability:** No caller, no wire/RPC/CLI output.
+**Rust applicability:** No caller, no wire/RPC/CLI output. Verified:
+`git grep prettynamehash cff4d03f` finds only its definition.
 
-**Local handling:** Analysis only, plus a note in `rns-cli/src/pyfmt.rs`.
+**Local handling and evidence:** `ea62398b`: a note in
+`rns-cli/src/pyfmt.rs`, beside `prettyhexrep`, that the helper is
+`f"<{Transport.destination_type_name(name_hash)}>"`, has no caller up to
+`cff4d03f`, and that the lookup it wraps is
+`DestinationTypeNames::type_name`. Tests run: `cargo test -p rns-cli`
+passed (lib 134, `utility_interop.rs` 5 with 33 ignored), `cargo fmt
+--check` and `bash scripts/lint-host.sh` passed.
 
-**Proposed disposition:** Non-runtime.
+**Final disposition:** Non-runtime.
 
 ### 24. `1a71073c` — Initial rnpath analysis stub
 
@@ -991,12 +1080,81 @@ Commit 31 replaces the body with "Not yet implemented".
 
 **Rust applicability:** No `-A` in `rnpath.rs`.
 
-**Local handling:** Recommended: port the option, its dispatch position and the
-three RPC fetches, and print the final `Not yet implemented`; record the
-withdrawn statistics as deferred. Needs agreement because the commit then
-shows the tip's output rather than this commit's.
+**Local handling and evidence:** `959bb94f`, per decision 3 (the
+statistics as at this commit, not the review's recommendation of the tip's
+`Not yet implemented`).
 
-**Proposed disposition:** Needs port (decision 3).
+`-A/--analyze` counts as work on its own and comes after `-b`/`-p`, `-B`
+and `-U` and before `-t`; with `-R` upstream analyzes the local tables once
+the management link is up, and so does rns-rs (`RemoteAction::Analyze`).
+The three RPC calls go in upstream's order, each on its own connection; a
+failure is logged at error level as `Shared instance RPC failed while
+getting <path table|rate table|link distribution>: <e>` (an unanswered
+connection, which the link distribution of commit 22 gives, has Python's
+empty `EOFError` text) and gives `[]` or None. An empty path table prints
+`No path table to analyze`; otherwise `Analyzing tables...` and the six
+counts, exit 0.
+
+State: upstream reads the client's `Identity.known_destinations`, its
+announce cache (`init_announce_cache` when connected to a shared instance)
+and `Transport.destination_type_map`. rns-rs's rnpath reads its shared
+instance client's known destinations (loaded as in commit 9's mapping), the
+announce cache in `<configdir>/cache/announces.db` (where an rns-rs
+instance keeps it; upstream's is `storage/cache/announces.db`) and the
+client's destination type names (commit 21's mapping, the names map only,
+through the new `RnsNode::destination_type_names`). The name hash is
+`data[64:74]` of the cached announce after `Packet.unpack()`, cut short as
+Python slices are. Upstream's rnpath also asks for
+`rnstransport.remote.management` and `rnstransport.info.blackhole`
+announces right after it starts, which names both types in its map;
+rns-rs's local rnpath did not and now does, in every local mode
+(`LocalInstance::open`). A cached announce that `unpack` cannot read up to
+its data (shorter than its header, or 128 hops or more) makes upstream's
+analysis die with `AttributeError: 'Packet' object has no attribute
+'data'`; rns-rs prints that line to stderr and exits 1 (Python prints the
+whole traceback).
+
+Fixtures: the parser table, `tests/fixtures/argparse/rnpath.pickle` and
+`tests/fixtures/cli_golden/rnpath.txt` were regenerated with
+`tests/generate_argparse_fixtures.py` and `RNS_GOLDEN_BLESS=1` from a
+disposable worktree at `1a71073c`; only rnpath's entries changed.
+`docs/cli-tools.md` lists `-A`.
+
+Comparison with Python: not added to the interop harness. Run by hand on
+the same config (an rns-rs instance with an `rncp -l` destination), Python
+rnpath at `1a71073c` printed all zeros where rns-rs's printed one unknown
+type, because a Python client opens `storage/cache/announces.db`, which an
+rns-rs instance does not write: the analysis is unit-tested instead.
+`analysis_counts_destination_types_as_upstream` feeds the same path table,
+known destinations, cached announces and type map to
+`analyze_path_table` that upstream's `analyze_tables` at `1a71073c`
+(Python 3.12, disposable worktree) was run on, and expects its printed
+lines (2, 3, 5, 3, 3, 6), and its `AttributeError` for five unreadable
+announces.
+
+Tests: `analysis_counts_destination_types_as_upstream` (new),
+`parses_upstream_invocations_as_argparse_does` (`-A` cases),
+`utilities_offline_output_matches_snapshot` (regenerated golden). Tests
+run: `cargo test -p rns-cli` passed (lib 135, `utility_interop.rs` 5 with
+33 ignored, `cli_golden` 1), `cargo test -p rns-net` passed (lib 1603,
+`e2e.rs` 74 with 1 ignored, `e2e_direct_connect.rs` 19,
+`python_interop.rs` 6 with 1 ignored), `cargo test -p rns-ctl` passed (131),
+`cargo fmt --check` and `bash scripts/lint-host.sh` passed. Live, with
+`PYTHONPATH` and `RETICULUM_UPSTREAM_DIR` on a disposable worktree at
+`1a71073c`: `cargo test -p rns-cli --test utility_interop -- --ignored
+--exact python_rns_is_available_for_utility_interop
+python_rnpath_manages_rust_blackhole
+rnpath_looks_up_a_destination_as_python_does
+rust_utilities_run_cleanly_against_python_instance
+python_utilities_run_cleanly_against_rust_instance
+rust_instance_fetches_python_blackhole_source
+python_instance_fetches_rust_blackhole_source` passed (7 passed), for the
+new startup registrations. By hand against an rns-rs instance: `rnpath -A`
+printed `No path table to analyze` (exit 0) with no paths, and with an
+`rncp -l` destination one unknown type, or one known type once
+`rncp.receive` was in `known_destination_types`.
+
+**Final disposition:** Integrated.
 
 ### 25. `b9903c53` — Analysis mode capture argument
 
@@ -1139,10 +1297,13 @@ utilities included.
    the native list is `known_destination_entries`.
 2. **Commits 22 and 26:** `link_distribution` follows upstream's shape at each
    commit (a set at 22, the de-duplicated list at 26); the native `total` key
-   goes.
+   goes. Commit 22 implemented in `73ff693b`: the shape, and for a
+   non-empty link table upstream's unencodable set (error logged, no
+   answer), see commit 22.
 3. **Commit 24:** the analysis statistics are ported as they are at that
    commit, then 28's guard, then 31's `Not yet implemented`. This brings in
-   commit 21's destination-type files as well.
+   commit 21's destination-type files as well. Commit 24 implemented in
+   `959bb94f`, see commit 24.
 4. **Commit 2:** upstream's order dependence is reproduced: the disable key
    only takes effect when it appears before the count. The parser records key
    order for this.
