@@ -248,6 +248,11 @@ impl TransportEngine {
         if !link_entry.validated {
             return;
         }
+        // Upstream ef3e8086: every link packet past the validation check,
+        // relayed or not, unless a local client sent it.
+        if !self.serves_local_client(ctx.iface) {
+            self.link_rxb += ctx.packet.raw.len() as u64;
+        }
         let instance_local_link = self.interface_is_local_client(link_entry.next_hop_interface)
             && self.interface_is_local_client(link_entry.received_interface);
         let Some((outbound_iface, new_raw)) =
@@ -277,6 +282,10 @@ impl TransportEngine {
             interface: outbound_iface,
             raw: new_raw,
         });
+        // Upstream ef3e8086: after `transmit`, unless sent to a local client.
+        if !self.serves_local_client(outbound_iface) {
+            self.link_txb += forwarded_bytes;
+        }
 
         if let Some(entry) = self.link_table.get_mut(&ctx.packet.destination_hash) {
             entry.timestamp = ctx.now;

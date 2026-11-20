@@ -94,6 +94,7 @@ impl Driver {
 
         let now = time::now();
         self.sample_interface_traffic(now);
+        self.sample_link_traffic(now);
         self.sample_interface_frequencies(now);
         let actions = self.engine.tick(now, &mut self.rng);
         // Released held announces (upstream c850cdac, 29dc449a).
@@ -190,6 +191,21 @@ impl Driver {
             }
         }
         self.publish_state_snapshot();
+    }
+
+    /// Upstream's traffic loop's link speeds (ef3e8086): a pass about once
+    /// a second, the first a second after start.
+    pub(in crate::driver) fn sample_link_traffic(&mut self, now: f64) {
+        let monotonic = time::monotonic();
+        let due = match self.registry.link_traffic.sampled_at() {
+            None => now - self.started >= 1.0,
+            Some(at) => monotonic - at >= 1.0,
+        };
+        if due {
+            self.registry
+                .link_traffic
+                .sample(monotonic, self.started, self.engine.link_traffic());
+        }
     }
 
     pub(in crate::driver) fn sample_interface_traffic(&mut self, now: f64) {

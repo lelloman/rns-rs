@@ -158,5 +158,21 @@ releases it: as received if it is then accepted, as filtered if not
 filtered bytes and rates. As upstream, nothing is counted as filtered on
 transmit, so the outbound figures stay zero.
 
+With `-l` and `-t`, a `Links` section follows (upstream `ef3e8086`): the
+bytes of link packets this transport node relayed through its link table,
+received (every link packet of a validated relayed link, relayed or not)
+and transmitted (each one relayed), current rates, and each rate's share
+of the data flow, the totals less announces and path requests. Packets
+from and to local clients of a shared instance are not counted. The
+instance reports them as `lrxb`, `ltxb`, `lrxs` and `ltxs`; the rates are
+the integer 0 until they are first measured, a second after start, and
+floats from then on. As upstream at `ef3e8086`, where announces and path
+requests make up all of a nonzero received or transmitted rate while link
+traffic is flowing in that direction, the share divides by zero:
+`rnstatus` prints what it has so far, then
+`ZeroDivisionError: float division by zero` to stderr (Python prints the
+whole traceback), and exits with status 1; in monitor mode the frame is
+not shown.
+
 For remote status, `-R HASH` requires the management identity selected with
 `-i PATH`, and the remote transport must authorize that identity.

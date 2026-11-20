@@ -47,6 +47,8 @@ pub struct InterfaceStatsResponse {
     pub tx_pps: f64,
     /// Aggregate byte counters and rates for total, announce and path-request traffic.
     pub traffic: TrafficDetail,
+    /// Traffic relayed through the link table (upstream ef3e8086).
+    pub link_traffic: LinkTraffic,
     /// Probe responder destination hash (if enabled).
     pub probe_responder: Option<[u8; 16]>,
     /// Outbound Backbone peer-pool state, if enabled.
@@ -102,6 +104,21 @@ pub struct TrafficDetail {
     pub prxf: f64,
     /// Outgoing path request frequency, per second.
     pub ptxf: f64,
+}
+
+/// Upstream's link traffic totals and speeds (ef3e8086): the bytes of link
+/// packets received for and relayed through the link table, local
+/// clients' not counted.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct LinkTraffic {
+    /// `Transport.link_rxb`.
+    pub rxb: u64,
+    /// `Transport.link_txb`.
+    pub txb: u64,
+    /// `Transport.link_speed_rx` and `link_speed_tx`, in bits per second:
+    /// `None` until upstream's traffic loop first measures them (they
+    /// start as the integer 0), floats from then on.
+    pub speeds: Option<(f64, f64)>,
 }
 
 /// Runtime status for the outbound Backbone peer pool.

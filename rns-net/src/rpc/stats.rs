@@ -1,7 +1,9 @@
 //! Interface statistics as upstream's `interface_stats` response.
 
 use super::*;
-use crate::event::{BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus, TrafficDetail};
+use crate::event::{
+    BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus, LinkTraffic, TrafficDetail,
+};
 
 /// The `interface_stats` dict as msgpack, as remote management's `/status`
 /// carries it.
@@ -35,7 +37,7 @@ pub(super) fn interface_stats_to_pickle(stats: &InterfaceStatsResponse) -> Pickl
     }
 
     let totals = node_total_entries(stats);
-    let traffic = node_traffic_entries(&stats.traffic, counted);
+    let traffic = node_traffic_entries(&stats.traffic, &stats.link_traffic, counted);
     let mut dict = Vec::with_capacity(2 + totals.len() + traffic.len());
     dict.push((
         PickleValue::String("interfaces".into()),
@@ -147,9 +149,13 @@ fn node_total_entries(stats: &InterfaceStatsResponse) -> [PickleEntry; 16] {
 }
 
 /// The node's traffic totals: speeds (the integer 0 unless `counted`),
-/// filtered, announce and path request bytes, counts, speeds and
-/// frequencies.
-fn node_traffic_entries(traffic: &TrafficDetail, counted: bool) -> [PickleEntry; 22] {
+/// link table traffic, filtered, announce and path request bytes, counts,
+/// speeds and frequencies.
+fn node_traffic_entries(
+    traffic: &TrafficDetail,
+    link: &LinkTraffic,
+    counted: bool,
+) -> [PickleEntry; 26] {
     let speed = |value: f64| {
         if counted {
             PickleValue::Float(value)
@@ -157,9 +163,28 @@ fn node_traffic_entries(traffic: &TrafficDetail, counted: bool) -> [PickleEntry;
             PickleValue::Int(0)
         }
     };
+    // Upstream ef3e8086: the integer 0 until its traffic loop measures
+    // them, floats from then on.
+    let link_speed = |speed: Option<f64>| speed.map_or(PickleValue::Int(0), PickleValue::Float);
     [
         (PickleValue::String("rxs".into()), speed(traffic.rxs)),
         (PickleValue::String("txs".into()), speed(traffic.txs)),
+        (
+            PickleValue::String("lrxb".into()),
+            PickleValue::Int(link.rxb as i64),
+        ),
+        (
+            PickleValue::String("ltxb".into()),
+            PickleValue::Int(link.txb as i64),
+        ),
+        (
+            PickleValue::String("lrxs".into()),
+            link_speed(link.speeds.map(|(rx, _)| rx)),
+        ),
+        (
+            PickleValue::String("ltxs".into()),
+            link_speed(link.speeds.map(|(_, tx)| tx)),
+        ),
         // Filtered traffic (upstream 134dc677). Always present: upstream's
         // `rnstatus -F` reads these keys unguarded.
         (

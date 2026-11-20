@@ -382,6 +382,95 @@ fn forwarded_link_traffic_counts_raw_bytes() {
     assert_eq!(engine.link_distribution()[0].traffic, before);
 }
 
+/// Upstream ef3e8086's `Transport.link_rxb`/`link_txb`: every link packet
+/// past the validation check counts as received, relayed or not, and each
+/// relayed one as transmitted after it is sent; a local client's side of
+/// either is not counted.
+#[test]
+fn link_table_traffic_counts_relayed_bytes_but_local_clients() {
+    let to_remote = [0x4C; 16];
+    let from_client = [0x4D; 16];
+    let unvalidated = [0x4E; 16];
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+    engine.register_interface(make_local_client_interface(3));
+    engine.register_interface(make_interface(4, constants::MODE_FULL));
+    engine.register_link(
+        to_remote,
+        LinkEntry {
+            taken_hops: 1,
+            remaining_hops: 2,
+            ..relayed_link(2, 1)
+        },
+    );
+    // A local client's link toward interface 2.
+    engine.register_link(
+        from_client,
+        LinkEntry {
+            taken_hops: 0,
+            remaining_hops: 2,
+            ..relayed_link(2, 3)
+        },
+    );
+    engine.register_link(
+        unvalidated,
+        LinkEntry {
+            validated: false,
+            ..relayed_link(2, 1)
+        },
+    );
+    let link_data = |link_id: &[u8; 16], hops: u8, context: u8| {
+        packet(
+            flags(
+                constants::HEADER_1,
+                constants::DESTINATION_LINK,
+                constants::PACKET_TYPE_DATA,
+            ),
+            hops,
+            link_id,
+            None,
+            context,
+        )
+    };
+    assert_eq!(engine.link_traffic(), (0, 0));
+
+    // Relayed between two network interfaces: both directions count.
+    let outbound = link_data(&to_remote, 0, constants::CONTEXT_NONE);
+    assert!(sent_on(&receive(&mut engine, &outbound, 1), 2).is_some());
+    let len = outbound.raw.len() as u64;
+    assert_eq!(engine.link_traffic(), (len, len));
+
+    // Not relayed from an interface the link does not use: received only.
+    let stray = link_data(&to_remote, 0, constants::CONTEXT_CHANNEL);
+    let actions = receive(&mut engine, &stray, 4);
+    assert!(actions
+        .iter()
+        .all(|action| !matches!(action, TransportAction::SendOnInterface { .. })));
+    let (rxb, txb) = (len + stray.raw.len() as u64, len);
+    assert_eq!(engine.link_traffic(), (rxb, txb));
+
+    // From a local client: only the transmission counts.
+    let from_local = link_data(&from_client, 0, constants::CONTEXT_NONE);
+    assert!(sent_on(&receive(&mut engine, &from_local, 3), 2).is_some());
+    let txb = txb + from_local.raw.len() as u64;
+    assert_eq!(engine.link_traffic(), (rxb, txb));
+
+    // To a local client: only the reception counts.
+    let to_local = link_data(&from_client, 1, constants::CONTEXT_KEEPALIVE);
+    assert!(sent_on(&receive(&mut engine, &to_local, 2), 3).is_some());
+    let rxb = rxb + to_local.raw.len() as u64;
+    assert_eq!(engine.link_traffic(), (rxb, txb));
+
+    // Before validation nothing counts.
+    receive(
+        &mut engine,
+        &link_data(&unvalidated, 0, constants::CONTEXT_RESOURCE),
+        1,
+    );
+    assert_eq!(engine.link_traffic(), (rxb, txb));
+}
+
 /// As upstream, announces, link requests and link request proofs are
 /// never relayed through the link table, even when addressed to a link
 /// it holds.

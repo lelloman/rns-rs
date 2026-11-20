@@ -28,6 +28,32 @@ pub fn now() -> f64 {
     })
 }
 
+/// Python's `time.monotonic()`: seconds of the system's monotonic clock,
+/// which on Linux counts from boot.
+#[cfg(unix)]
+#[allow(unsafe_code, reason = "clock_gettime through libc")]
+pub fn monotonic() -> f64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `ts` is a valid, writable timespec for the call to fill.
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) } != 0 {
+        return 0.0;
+    }
+    ts.tv_sec as f64 + ts.tv_nsec as f64 / 1e9
+}
+
+/// Python's `time.monotonic()`, counted here from the first call.
+#[cfg(not(unix))]
+pub fn monotonic() -> f64 {
+    static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    ORIGIN
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f64()
+}
+
 fn read() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

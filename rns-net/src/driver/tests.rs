@@ -6211,6 +6211,28 @@ fn query_interface_stats() {
     }
 }
 
+/// Upstream ef3e8086: the link table's speeds are the integer 0 until the
+/// traffic loop's first pass, a second after start, and measured from
+/// then on, a pass about once a second.
+#[test]
+fn link_traffic_speeds_are_reported_once_measured() {
+    let mut driver = new_test_driver();
+    driver.started = 1_000.0;
+    assert_eq!(
+        driver.interface_stats().link_traffic,
+        crate::event::LinkTraffic::default()
+    );
+    driver.sample_link_traffic(1_000.5);
+    assert_eq!(driver.interface_stats().link_traffic.speeds, None);
+    driver.sample_link_traffic(1_001.0);
+    let first = driver.registry.link_traffic.sampled_at();
+    assert!(first.is_some());
+    assert!(driver.interface_stats().link_traffic.speeds.is_some());
+    // Not a second since that pass.
+    driver.sample_link_traffic(1_001.5);
+    assert_eq!(driver.registry.link_traffic.sampled_at(), first);
+}
+
 #[test]
 fn traffic_sampler_reports_current_window_and_resets_idle_rates() {
     let mut driver = new_test_driver();

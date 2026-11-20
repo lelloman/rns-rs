@@ -40,6 +40,13 @@ impl TransportEngine {
         self.link_table.len()
     }
 
+    /// Upstream's `Transport.link_rxb` and `link_txb` (ef3e8086): the bytes
+    /// of link packets this node received for and relayed through its link
+    /// table, local clients' not counted.
+    pub fn link_traffic(&self) -> (u64, u64) {
+        (self.link_rxb, self.link_txb)
+    }
+
     /// Number of validated link table entries.
     pub fn active_link_count(&self) -> usize {
         self.link_table
