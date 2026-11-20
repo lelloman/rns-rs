@@ -83,6 +83,62 @@ impl Write for ClientStream {
     }
 }
 
+/// Where the local shared instance serves RPC, and the key a client
+/// authenticates with: the configured `rpc_key`, else as upstream's
+/// `Reticulum.rpc_key`, the full hash of the transport identity's private
+/// key.
+#[derive(Debug, Clone)]
+pub struct SharedInstanceRpc {
+    /// The shared instance's RPC server.
+    pub addr: RpcAddr,
+    /// The key both ends authenticate with.
+    pub auth_key: [u8; 32],
+}
+
+impl SharedInstanceRpc {
+    /// The shared instance RPC a config describes. `identity` gives the
+    /// transport identity, and is only called without a configured
+    /// `rpc_key`.
+    pub fn new(
+        reticulum: &crate::config::ReticulumSection,
+        identity: impl FnOnce() -> io::Result<rns_crypto::identity::Identity>,
+    ) -> io::Result<Self> {
+        Self::with_key(
+            RpcAddr::for_shared_instance(reticulum),
+            reticulum.rpc_key,
+            identity,
+        )
+    }
+
+    /// The RPC server at `addr`, with `rpc_key` or else the key derived from
+    /// the transport identity `identity` gives. An identity without a
+    /// private key is an error.
+    pub fn with_key(
+        addr: RpcAddr,
+        rpc_key: Option<[u8; 32]>,
+        identity: impl FnOnce() -> io::Result<rns_crypto::identity::Identity>,
+    ) -> io::Result<Self> {
+        let auth_key = match rpc_key {
+            Some(key) => key,
+            None => {
+                let private_key = identity()?.get_private_key().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "transport identity has no private key",
+                    )
+                })?;
+                derive_auth_key(&private_key)
+            }
+        };
+        Ok(Self { addr, auth_key })
+    }
+
+    /// Connect to the shared instance and authenticate.
+    pub fn connect(&self) -> io::Result<RpcClient> {
+        RpcClient::connect(&self.addr, &self.auth_key)
+    }
+}
+
 impl RpcClient {
     /// Connect to an RPC server and authenticate.
     pub fn connect(addr: &RpcAddr, auth_key: &[u8; 32]) -> io::Result<Self> {

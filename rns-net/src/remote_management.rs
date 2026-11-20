@@ -208,12 +208,11 @@ impl RemoteManagementClient {
         };
 
         let shared_config = SharedClientConfig::from_reticulum(&rns_config.reticulum);
-        let rpc_addr = crate::rpc::RpcAddr::for_shared_instance(&rns_config.reticulum);
         let mut node = RnsNode::connect_shared(shared_config, Box::new(callbacks))
             .map_err(|_| RemoteManagementError::ConnectShared)?;
         // Upstream rnstatus and rnpath register both types, so a shared
         // instance filtering announces still answers their path requests.
-        node.use_shared_instance_rpc(&config_dir, rpc_addr, rns_config.reticulum.rpc_key);
+        node.use_shared_instance_rpc(&config_dir, &rns_config.reticulum);
         node.wants_destination_type("rnstransport.remote.management");
         node.wants_destination_type("rnstransport.info.blackhole");
 
