@@ -75,6 +75,8 @@ The decrypted payload is
 | `0x03` | `UPGRADE_REJECT` | `{"s": session id, "r": reason}` |
 | `0x04` | `UPGRADE_READY` | `{"s": session id, "a": responder public, "m": largest link packet accepted on the direct path, "h": responder host candidates (omitted when none)}` |
 | `0x05` | `FALLBACK` | `{"s": session id of the direct path, "r": reply wanted}` (see [Fallback](#fallback)) |
+| `0x06` | `CHANNEL_PART` | `{"q": channel sequence, "i": part index, "n": part count, "d": part bytes}` (see [Packet size](#packet-size)) |
+| `0x07` | `CHANNEL_PART_ACK` | `{"q": channel sequence}` (see [Packet size](#packet-size)) |
 
 Endpoints are `[address bytes (4 or 16), port]`, and `"h"` is a list of at
 most 2 of them (see [Host candidates](#host-candidates)); a receiver keeps
@@ -522,20 +524,26 @@ What was sized for the direct path is never sent on the original route,
 which may not carry it:
 
 - **Channel messages.** An unacknowledged channel message too large for the
-  original path is held: it stays in the channel's window, keeps its place
-  in the sequence and is not resent on the original route. A late proof of
-  it delivers it; a direct path that comes back (by
-  [re-upgrade](#re-upgrade)) before its retries run out carries its next
-  resend. Otherwise its retries run out and, as for any message a channel
-  cannot deliver, the link is closed. Messages after it are resent and
-  reach the peer, which delivers them in order once the held one arrives,
-  so the channel never stalls for good. When the channel's retries run out
-  on the direct path, the link falls back before the resends are packed,
-  so they are sized for the original route.
+  original path keeps its place in the channel's sequence and is resent in
+  parts that fit it: its envelope is cut into at most 16 slices, each sent
+  in a `CHANNEL_PART` signalling message no larger than the link's MDU on
+  that path. The peer collects the slices of up to 4 messages at a time,
+  of at most 2048 bytes each; once it has every slice of one, it hands the
+  envelope to its channel as if it had arrived in one packet (a message it
+  already has is not delivered again) and answers `CHANNEL_PART_ACK`,
+  which the sender takes as the message's proof. Every retry of the
+  message sends all its parts again, and if its retries run out the link
+  is closed, as for any message a channel cannot deliver. Only a side
+  whose link has run over a direct path sends or takes parts: on a link
+  that never upgraded, `CHANNEL_PART` is signalling like any other.
+  When the channel's retries run out on the direct path, the link falls
+  back before the resends are packed, so they are sized for the original
+  route.
 - **Packets in flight.** A link packet packed for the direct path that has
   not left yet when the link falls back is dropped instead of being routed
   over the original path. Single packets are best effort, as on any path;
-  a dropped channel message is resent (or held, as above).
+  a dropped channel message is resent (in parts, as above, if it no
+  longer fits).
 - **Resources** are sized for the MTU the direct path started with (1200
   bytes), never above the link's original MTU, on both sides alike: a
   resource's part count depends on its part size, which both sides must
@@ -553,11 +561,15 @@ path failed:
 - the link goes stale (no inbound traffic for its stale time) while on the
   direct path, which on a fast link happens before the keepalive timeout;
 - the link's channel runs out of retries on the direct path: instead of
-  tearing the link down, as it would on any other path, the channel resends
-  every outstanding message, with its tries reset, over the original route
-  (once per upgrade; one too large for that route is held, see
-  [Packet size](#packet-size));
+  tearing the link down, as it would on any other path, the link falls
+  back (once per upgrade);
 - the peer says it fell back (`FALLBACK` for the path's session).
+
+Whatever made it fall back, the channel then resends every outstanding
+message at once over the original route, with its tries reset: it may have
+been lost with the direct path, and the retries spent there say nothing
+about the original route. One too large for that route goes in parts (see
+[Packet size](#packet-size)).
 
 The side that falls back removes its direct interface, reports the loss to
 the application (`on_direct_connect_lost`; `direct_lost` in rns-ctl's link

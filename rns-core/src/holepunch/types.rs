@@ -37,6 +37,12 @@ pub const UPGRADE_READY: u8 = 0x04;
 /// "I stopped using the direct path of this session; use the link's
 /// original path." Sent over the original path.
 pub const FALLBACK: u8 = 0x05;
+/// A piece of a channel message too large for the link's packets since it
+/// fell back from a direct path (see [`super::channel_parts`]).
+pub const CHANNEL_PART: u8 = 0x06;
+/// "Every part of channel message `q` is in": the receipt for a channel
+/// message sent in parts.
+pub const CHANNEL_PART_ACK: u8 = 0x07;
 
 /// Largest link packet, in bytes, this implementation accepts from its peer
 /// on a direct path. It is advertised as `m` in `UPGRADE_REQUEST` and

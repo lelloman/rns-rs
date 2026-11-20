@@ -6698,13 +6698,18 @@ fn direct_route_is_attached_and_restored() {
     assert!(init_mgr.link_route_accepts(&link_id, InterfaceId(3)));
     init_mgr.set_link_route_hint(&link_id, transport, Some([0x77; 16]));
 
-    assert_eq!(init_mgr.detach_direct_route(&link_id), Some(direct));
+    assert_eq!(
+        init_mgr
+            .detach_direct_route(&link_id, &mut OsRng)
+            .map(|(i, _)| i),
+        Some(direct)
+    );
     let route = init_mgr.get_link_route_hint(&link_id).unwrap();
     assert_eq!(route.interface, transport);
     assert_eq!(route.transport_id, Some([0x77; 16]));
     assert_eq!(init_mgr.links[&link_id].engine.mtu(), mtu_before);
     assert!(!init_mgr.link_route_accepts(&link_id, direct));
-    assert_eq!(init_mgr.detach_direct_route(&link_id), None);
+    assert!(init_mgr.detach_direct_route(&link_id, &mut OsRng).is_none());
     assert_eq!(init_mgr.direct_route_interface(&link_id), None);
 }
 
@@ -6719,7 +6724,9 @@ fn direct_route_never_raises_the_mtu() {
     init_mgr.set_link_route_hint(&link_id, InterfaceId(1), None);
     assert!(init_mgr.attach_direct_route(&link_id, InterfaceId(50_001), 300, None));
     assert_eq!(
-        init_mgr.detach_direct_route(&link_id),
+        init_mgr
+            .detach_direct_route(&link_id, &mut OsRng)
+            .map(|(i, _)| i),
         Some(InterfaceId(50_001))
     );
     assert_eq!(init_mgr.links[&link_id].engine.mtu(), mtu_before);
@@ -6891,7 +6898,7 @@ fn discovered_direct_mtu_applies_up_to_the_original_mtu() {
         Some(mtu_before)
     );
     assert_eq!(init_mgr.links[&link_id].engine.mtu(), mtu_before);
-    init_mgr.detach_direct_route(&link_id);
+    init_mgr.detach_direct_route(&link_id, &mut OsRng);
     assert_eq!(init_mgr.links[&link_id].engine.mtu(), mtu_before);
 }
 
@@ -7089,7 +7096,7 @@ fn direct_path_carries_packets_up_to_its_mtu_when_the_peer_accepts_them() {
     }
 
     // Back on the original path, the link has its standard sizes again.
-    init_mgr.detach_direct_route(&link_id);
+    init_mgr.detach_direct_route(&link_id, &mut OsRng);
     assert_eq!(mtu_mdu(&init_mgr, &link_id), standard);
     let over = vec![0; constants::LINK_MDU + 1];
     assert!(matches!(
@@ -7135,62 +7142,131 @@ fn direct_path_mtu_stops_at_what_the_peer_accepts() {
         LinkManager::resource_mtu_for_link(&init_mgr.links[&link_id]),
         1200
     );
-    init_mgr.detach_direct_route(&link_id);
+    init_mgr.detach_direct_route(&link_id, &mut OsRng);
     assert_eq!(init_mgr.links[&link_id].engine.mtu(), 16384);
 }
 
-#[test]
-fn channel_message_too_large_after_a_fallback_waits_for_the_direct_path() {
+/// Link packets in `actions`, each with the plaintext's packet context
+/// and, for Direct Link signalling, its kind.
+fn signal_kinds(mgr: &LinkManager, link_id: &LinkId, actions: &[LinkManagerAction]) -> Vec<u8> {
+    let engine = &mgr.links[link_id].engine;
+    actions
+        .iter()
+        .filter_map(|a| match a {
+            LinkManagerAction::SendPacket { raw, .. } => {
+                let packet = RawPacket::unpack(raw).unwrap();
+                (packet.context == rns_core::holepunch::CONTEXT_DIRECT_LINK)
+                    .then(|| engine.decrypt(packet.data()).unwrap()[1])
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn outstanding(mgr: &LinkManager, link_id: &LinkId) -> usize {
+    mgr.links[link_id].channel.as_ref().unwrap().outstanding()
+}
+
+/// Both ends on a direct path; the initiator sends a channel message too
+/// large for the original route and a small one, and then both fall back.
+/// Returns the resends that follow the initiator's fallback.
+fn large_message_in_flight_at_fallback(
+    init_mgr: &mut LinkManager,
+    resp_mgr: &mut LinkManager,
+    link_id: &LinkId,
+    large: &[u8],
+) -> (Vec<LinkManagerAction>, Vec<LinkManagerAction>) {
     use rns_core::holepunch::DIRECT_MAX_PACKET;
-    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
-    go_direct(
-        &mut init_mgr,
-        &mut resp_mgr,
-        &link_id,
-        Some(DIRECT_MAX_PACKET),
-        1472,
-    );
+    go_direct(init_mgr, resp_mgr, link_id, Some(DIRECT_MAX_PACKET), 1472);
     let mut rng = OsRng;
-    // A large message and a small one go out on the direct path, and are
-    // lost with it.
-    let large = vec![0x55; 1000];
-    let small = b"small".to_vec();
-    init_mgr
-        .send_channel_message(&link_id, 7, &large, &mut rng)
+    let mut sent = init_mgr
+        .send_channel_message(link_id, 7, large, &mut rng)
         .unwrap();
-    init_mgr
-        .send_channel_message(&link_id, 7, &small, &mut rng)
-        .unwrap();
-    init_mgr.detach_direct_route(&link_id);
-
-    // On the original path the large one is not resent, nor dropped from
-    // the channel; the small one is resent.
-    assert!(sent_sizes(&time_out(&mut init_mgr, &link_id, 0)).is_empty());
-    let resent = time_out(&mut init_mgr, &link_id, 1);
-    assert_eq!(sent_sizes(&resent).len(), 1);
-    assert!(sent_sizes(&resent)[0] <= constants::MTU);
-    let (received, _) = delivered_to(&mut resp_mgr, &resent);
-    // The receiver holds it back until the large one arrives.
-    assert!(channel_payloads(&received).is_empty());
-    let channel = init_mgr.links[&link_id].channel.as_ref().unwrap();
-    assert_eq!(channel.outstanding(), 2);
-
-    // The direct path is back: the large one goes out on it.
-    go_direct(
-        &mut init_mgr,
-        &mut resp_mgr,
-        &link_id,
-        Some(DIRECT_MAX_PACKET),
-        1472,
+    sent.extend(
+        init_mgr
+            .send_channel_message(link_id, 7, b"small", &mut rng)
+            .unwrap(),
     );
-    let resent = time_out(&mut init_mgr, &link_id, 0);
-    assert!(sent_sizes(&resent)[0] > constants::MTU);
-    let (received, _) = delivered_to(&mut resp_mgr, &resent);
-    assert_eq!(channel_payloads(&received), vec![large, small]);
+    assert!(resp_mgr.detach_direct_route(link_id, &mut rng).is_some());
+    let (_, resends) = init_mgr.detach_direct_route(link_id, &mut rng).unwrap();
+    (sent, resends)
 }
 
 #[test]
-fn channel_message_too_large_after_a_fallback_closes_the_link_when_retries_run_out() {
+fn channel_message_too_large_after_a_fallback_goes_in_parts_that_fit() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let large = vec![0x55; 1000];
+    // Both messages were lost with the direct path.
+    let (_lost, resends) =
+        large_message_in_flight_at_fallback(&mut init_mgr, &mut resp_mgr, &link_id, &large);
+
+    // The fallback resends both at once, every packet sized for the
+    // original route: the large one in parts, the small one as it was.
+    let sizes = sent_sizes(&resends);
+    assert!(sizes.len() > 2);
+    assert!(sizes.iter().all(|size| *size <= constants::MTU));
+    let parts = signal_kinds(&init_mgr, &link_id, &resends);
+    assert_eq!(parts.len(), sizes.len() - 1);
+    assert!(parts
+        .iter()
+        .all(|k| *k == rns_core::holepunch::CHANNEL_PART));
+
+    // The peer gets both, in order, and acknowledges the large one.
+    let (received, _) = delivered_to(&mut resp_mgr, &resends);
+    assert_eq!(channel_payloads(&received), vec![large, b"small".to_vec()]);
+    assert_eq!(
+        signal_kinds(&resp_mgr, &link_id, &received),
+        vec![rns_core::holepunch::CHANNEL_PART_ACK]
+    );
+    assert!(received
+        .iter()
+        .all(|a| !matches!(a, LinkManagerAction::DirectLinkSignal { .. })));
+    assert_eq!(outstanding(&init_mgr, &link_id), 2);
+    // The receipt delivers the large one, the proof the small one.
+    delivered_to(&mut init_mgr, &received);
+    assert_eq!(outstanding(&init_mgr, &link_id), 0);
+}
+
+#[test]
+fn channel_message_in_parts_the_peer_already_has_is_acknowledged_not_repeated() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let large = vec![0x66; 1200];
+    // The messages arrived on the direct path; only their proofs were lost.
+    let (sent, resends) =
+        large_message_in_flight_at_fallback(&mut init_mgr, &mut resp_mgr, &link_id, &large);
+    let (received, _) = delivered_to(&mut resp_mgr, &sent);
+    assert_eq!(channel_payloads(&received), vec![large, b"small".to_vec()]);
+
+    let (received, _) = delivered_to(&mut resp_mgr, &resends);
+    assert!(channel_payloads(&received).is_empty());
+    assert_eq!(
+        signal_kinds(&resp_mgr, &link_id, &received),
+        vec![rns_core::holepunch::CHANNEL_PART_ACK]
+    );
+    delivered_to(&mut init_mgr, &received);
+    assert_eq!(outstanding(&init_mgr, &link_id), 0);
+}
+
+#[test]
+fn channel_message_in_parts_closes_the_link_when_its_retries_run_out() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    large_message_in_flight_at_fallback(&mut init_mgr, &mut resp_mgr, &link_id, &[0x55; 1000]);
+    // Every retry sends the parts again on the original route; if none of
+    // them gets through, the channel gives up on the message as on any it
+    // cannot deliver.
+    for _ in 1..constants::CHANNEL_MAX_TRIES {
+        let actions = time_out(&mut init_mgr, &link_id, 0);
+        let sizes = sent_sizes(&actions);
+        assert!(sizes.len() > 1);
+        assert!(sizes.iter().all(|size| *size <= constants::MTU));
+    }
+    assert!(time_out(&mut init_mgr, &link_id, 0)
+        .iter()
+        .any(|a| matches!(a, LinkManagerAction::LinkClosed { .. })));
+}
+
+#[test]
+fn fallback_gives_messages_lost_on_the_direct_path_their_retries_again() {
     use rns_core::holepunch::DIRECT_MAX_PACKET;
     let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
     go_direct(
@@ -7202,22 +7278,55 @@ fn channel_message_too_large_after_a_fallback_closes_the_link_when_retries_run_o
     );
     let mut rng = OsRng;
     init_mgr
-        .send_channel_message(&link_id, 7, &[0x55; 1000], &mut rng)
+        .send_channel_message(&link_id, 7, b"lost", &mut rng)
         .unwrap();
-    init_mgr.detach_direct_route(&link_id);
-    // Held, it uses up its tries without being sent, then the channel
-    // gives up on it as on any message it cannot deliver: no stall.
-    let mut closed = false;
-    for _ in 0..constants::CHANNEL_MAX_TRIES {
-        let actions = time_out(&mut init_mgr, &link_id, 0);
-        assert!(sent_sizes(&actions)
-            .iter()
-            .all(|size| *size <= constants::MTU));
-        closed |= actions
-            .iter()
-            .any(|a| matches!(a, LinkManagerAction::LinkClosed { .. }));
+    // Its tries run low on the dead direct path before the peer's FALLBACK
+    // arrives.
+    for _ in 2..constants::CHANNEL_MAX_TRIES {
+        time_out(&mut init_mgr, &link_id, 0);
     }
-    assert!(closed, "the link stayed open with an undeliverable message");
+    let (_, resends) = init_mgr.detach_direct_route(&link_id, &mut rng).unwrap();
+    assert_eq!(sent_sizes(&resends).len(), 1);
+    let channel = init_mgr.links[&link_id].channel.as_ref().unwrap();
+    assert_eq!(channel.get_tries(0), Some(1));
+    // A full set of retries on the original route.
+    for _ in 1..constants::CHANNEL_MAX_TRIES {
+        assert_eq!(sent_sizes(&time_out(&mut init_mgr, &link_id, 0)).len(), 1);
+    }
+}
+
+#[test]
+fn channel_parts_reach_the_channel_only_on_a_link_that_ran_a_direct_path() {
+    let (init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let raw = rns_core::channel::envelope::pack_envelope(7, 0, b"part");
+    let part = rns_core::holepunch::encode_signal(
+        rns_core::holepunch::CHANNEL_PART,
+        &rns_core::holepunch::channel_parts::encode_channel_part(
+            &rns_core::holepunch::channel_parts::ChannelPart {
+                sequence: 0,
+                index: 0,
+                count: 1,
+                data: &raw,
+            },
+        ),
+    );
+    let mut rng = OsRng;
+    let packet = init_mgr.send_direct_link_signal(&link_id, &part, &mut rng);
+    // Never upgraded: it is signalling like any other, left to Direct Link.
+    let (received, _) = delivered_to(&mut resp_mgr, &packet);
+    assert!(channel_payloads(&received).is_empty());
+    assert!(received
+        .iter()
+        .any(|a| matches!(a, LinkManagerAction::DirectLinkSignal { .. })));
+
+    resp_mgr.attach_direct_route(
+        &link_id,
+        rns_core::transport::types::InterfaceId(50_000),
+        1200,
+        None,
+    );
+    let (received, _) = delivered_to(&mut resp_mgr, &packet);
+    assert_eq!(channel_payloads(&received), vec![b"part".to_vec()]);
 }
 
 #[test]
@@ -7247,15 +7356,20 @@ fn channel_retries_running_out_on_the_direct_path_fall_back_before_resending() {
         .iter()
         .any(|a| matches!(a, LinkManagerAction::DirectPathFailed { .. })));
     // The link is back on its original route and MTU before the resends
-    // are packed: only the small one goes out, sized for that route.
+    // are packed: both go out sized for that route, the large one in
+    // parts.
     assert_eq!(init_mgr.direct_route_interface(&link_id), None);
     assert_eq!(
         mtu_mdu(&init_mgr, &link_id),
         (constants::MTU as u32, constants::LINK_MDU)
     );
     let sizes = sent_sizes(&actions);
-    assert_eq!(sizes.len(), 1);
-    assert!(sizes[0] <= constants::MTU);
+    assert!(sizes.len() > 2);
+    assert!(sizes.iter().all(|size| *size <= constants::MTU));
+    assert_eq!(
+        signal_kinds(&init_mgr, &link_id, &actions).len(),
+        sizes.len() - 1
+    );
     assert_eq!(
         init_mgr.links[&link_id]
             .channel

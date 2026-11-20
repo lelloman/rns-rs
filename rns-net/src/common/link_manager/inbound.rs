@@ -518,10 +518,23 @@ impl LinkManager {
                 out.extend(self.process_link_actions(&link_id, &teardown_actions));
             }
             LinkDataResult::DirectLink { link_id, plaintext } => {
-                out.push(LinkManagerAction::DirectLinkSignal {
-                    link_id,
-                    data: plaintext,
-                });
+                // Channel messages in parts are the link's business, and
+                // only a peer the link ran a direct path with sends them.
+                let direct_peer = self.links.get(&link_id).is_some_and(|l| l.direct_peer);
+                match rns_core::holepunch::decode_signal(&plaintext) {
+                    Some((rns_core::holepunch::CHANNEL_PART, body)) if direct_peer => {
+                        out.extend(self.receive_channel_part(&link_id, body, rng));
+                        self.recycle_plaintext(plaintext);
+                    }
+                    Some((rns_core::holepunch::CHANNEL_PART_ACK, body)) if direct_peer => {
+                        out.extend(self.receive_channel_part_ack(&link_id, body, rng));
+                        self.recycle_plaintext(plaintext);
+                    }
+                    _ => out.push(LinkManagerAction::DirectLinkSignal {
+                        link_id,
+                        data: plaintext,
+                    }),
+                }
             }
             LinkDataResult::Channel {
                 link_id,

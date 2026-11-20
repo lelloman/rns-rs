@@ -108,6 +108,8 @@ impl LinkManager {
             route_interface: None,
             route_transport_id: None,
             direct_route: None,
+            direct_peer: false,
+            channel_parts: Default::default(),
         };
         self.links.insert(link_id, managed);
 
@@ -237,6 +239,8 @@ impl LinkManager {
                 None
             },
             direct_route: None,
+            direct_peer: false,
+            channel_parts: Default::default(),
         };
         self.links.insert(link_id, managed);
 

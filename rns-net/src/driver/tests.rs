@@ -17549,7 +17549,7 @@ fn link_packet_packed_for_a_lost_direct_path_does_not_take_the_original_route() 
         .send_channel_message(&link_id, 0x0101, &[0x33; 1000], &mut rng)
         .unwrap();
     // The link falls back before the packet goes out.
-    driver.link_manager.detach_direct_route(&link_id);
+    driver.link_manager.detach_direct_route(&link_id, &mut rng);
     driver.dispatch_link_actions(large);
     assert!(sent.lock().unwrap().is_empty());
     // Packets sized for the original route still take it.
@@ -17559,6 +17559,46 @@ fn link_packet_packed_for_a_lost_direct_path_does_not_take_the_original_route() 
         .unwrap();
     driver.dispatch_link_actions(small);
     assert_eq!(sent.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn falling_back_resends_the_channel_messages_in_flight_on_the_original_route() {
+    let mut driver = new_test_driver();
+    let (link_manager, link_id) = active_link_manager_with_route(InterfaceId(1));
+    driver.link_manager = link_manager;
+    let (writer, sent) = MockWriter::new();
+    let entry = make_entry(1, Box::new(writer), true);
+    driver.engine.register_interface(entry.info.clone());
+    driver.interfaces.insert(InterfaceId(1), entry);
+    let (direct_writer, _) = MockWriter::new();
+    driver.dispatch_holepunch_actions(vec![
+        crate::holepunch::orchestrator::HolePunchManagerAction::DirectConnectEstablished {
+            link_id,
+            session_id: [0x5E; 16],
+            interface_id: InterfaceId(50_000),
+            writer: Box::new(direct_writer),
+            info: Box::new(make_interface_info(50_000)),
+            rtt: 0.001,
+            mtu: 1200,
+            peer_max_packet: Some(rns_core::holepunch::DIRECT_MAX_PACKET),
+        },
+    ]);
+    let mut rng = OsRng;
+    // Sent on the direct path, which then fails: it is lost there.
+    driver
+        .link_manager
+        .send_channel_message(&link_id, 0x0101, &[0x33; 1000], &mut rng)
+        .unwrap();
+    driver
+        .link_manager
+        .send_channel_message(&link_id, 0x0101, b"small", &mut rng)
+        .unwrap();
+    driver.fall_back_from_direct(link_id, crate::event::DirectLossCause::PeerFallback, false);
+    // Both are resent at once on the original route, in packets it
+    // carries: the large one in parts, the small one whole.
+    let sent = sent.lock().unwrap();
+    assert!(sent.len() > 2, "{} packets resent", sent.len());
+    assert!(sent.iter().all(|frame| frame.len() <= constants::MTU));
 }
 
 /// A driver holding one end of an active link, proposing a direct
