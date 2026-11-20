@@ -557,7 +557,7 @@ fn stamp_path_request(inner: &Inner, job: PathRequestStampJob) {
             }
         }
     };
-    let payload = crate::stamps::path_request_ext_payload(&stamp, 0);
+    let payload = rns_core::stamp::path_request_ext_payload(&stamp, 0);
     let mut ext_payload = [0u8; constants::PR_EXT_PAYLOAD_LENGTH];
     ext_payload.copy_from_slice(&payload);
     let event = Event::SendStampedPathRequest(Box::new(StampedPathRequest {
@@ -981,7 +981,7 @@ mod tests {
         // The stamp is persisted at the value the next synchronous announce
         // reloads it with.
         let name_hash = rns_core::destination::name_hash("stamper", &["test"]);
-        let material = crate::stamps::destination_stamp_material(
+        let material = rns_core::stamp::destination_stamp_material(
             &dest.hash.0,
             &identity.get_public_key().unwrap(),
             &name_hash,

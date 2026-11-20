@@ -25,7 +25,8 @@ pub(crate) fn ensure_destination_stamp(
         &dest.app_name,
         &dest.aspects.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
     );
-    let material = crate::stamps::destination_stamp_material(&dest.hash.0, &public_key, &name_hash);
+    let material =
+        rns_core::stamp::destination_stamp_material(&dest.hash.0, &public_key, &name_hash);
     let target = targets.destination_target(dest);
     if store.load(&dest.hash.0, &material, target).is_some() {
         return Ok(());
@@ -117,7 +118,7 @@ pub(crate) fn build_announce_packet(
     let wire_app_data: Option<Vec<u8>> = if let Some(store) = stamp_store {
         let public_key = identity.get_public_key().ok_or(SendError)?;
         let material =
-            crate::stamps::destination_stamp_material(&dest.hash.0, &public_key, &name_hash);
+            rns_core::stamp::destination_stamp_material(&dest.hash.0, &public_key, &name_hash);
         let target = targets.destination_target(dest);
         let (stamp, _value) = match store.load(&dest.hash.0, &material, target) {
             Some(entry) => entry,
@@ -138,7 +139,7 @@ pub(crate) fn build_announce_packet(
         let mut wire = app_data.map(|data| data.to_vec()).unwrap_or_default();
         // `cost_to_bytes(self.get_link_cost())`: the destination's own cost,
         // or the default `LR_COST` when none was set, fraction included.
-        wire.extend_from_slice(&crate::stamps::announce_ext_payload(
+        wire.extend_from_slice(&rns_core::stamp::announce_ext_payload(
             &stamp,
             0,
             tx.link_request_costs().get(&dest.hash.0),
@@ -350,7 +351,7 @@ impl RnsNode {
             &dest.aspects.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         );
         let material =
-            crate::stamps::destination_stamp_material(&dest.hash.0, &public_key, &name_hash);
+            rns_core::stamp::destination_stamp_material(&dest.hash.0, &public_key, &name_hash);
         store
             .load(
                 &dest.hash.0,

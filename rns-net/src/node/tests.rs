@@ -2392,7 +2392,7 @@ fn announce_without_persisted_stamp_is_deferred_to_the_stamper() {
     assert!(started.elapsed() < Duration::from_secs(1));
 
     let name_hash = rns_core::destination::name_hash("stamper", &["node"]);
-    let material = crate::stamps::destination_stamp_material(
+    let material = rns_core::stamp::destination_stamp_material(
         &dest.hash.0,
         &identity.get_public_key().unwrap(),
         &name_hash,
@@ -3252,7 +3252,7 @@ fn destination_stamp_below_target_value_is_regenerated() {
         rns_core::types::IdentityHash(*identity.hash()),
     );
     let name_hash = rns_core::destination::name_hash("stamper", &["target"]);
-    let material = crate::stamps::destination_stamp_material(
+    let material = rns_core::stamp::destination_stamp_material(
         &dest.hash.0,
         &identity.get_public_key().unwrap(),
         &name_hash,

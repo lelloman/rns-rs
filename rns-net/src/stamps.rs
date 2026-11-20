@@ -8,7 +8,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use rns_core::constants;
-use rns_core::stamp::{stamp_valid, stamp_value, stamp_workblock, StampCost, StampValue};
+use rns_core::stamp::{
+    link_request_stamp_material, stamp_valid, stamp_value, stamp_workblock, StampCost, StampValue,
+};
 
 /// Per-destination stamp files.
 #[derive(Debug, Clone)]
@@ -183,70 +185,6 @@ impl LinkRequestCosts {
             .enforced
             .store(enforced, std::sync::atomic::Ordering::Relaxed);
     }
-}
-
-/// Material covered by a destination announce stamp.
-pub fn destination_stamp_material(
-    destination_hash: &[u8; 16],
-    public_key: &[u8; 64],
-    name_hash: &[u8; 10],
-) -> Vec<u8> {
-    let mut material = Vec::with_capacity(16 + 64 + 10);
-    material.extend_from_slice(destination_hash);
-    material.extend_from_slice(public_key);
-    material.extend_from_slice(name_hash);
-    material
-}
-
-/// Build the announce extension payload: marker, flags, stamp, and the link
-/// cost as its fraction and whole part.
-pub fn announce_ext_payload(stamp: &[u8], flags: u8, lr_cost: StampCost) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(constants::EXT_PAYLOAD_LENGTH);
-    payload.push(constants::EXT_PAYLOAD_MARKER);
-    payload.push(flags);
-    payload.extend_from_slice(stamp);
-    payload.extend_from_slice(&rns_core::stamp::link_cost_ext_bytes(lr_cost));
-    payload
-}
-
-/// Build the path request extension payload: marker, flags, stamp.
-pub fn path_request_ext_payload(stamp: &[u8], flags: u8) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(constants::PR_EXT_PAYLOAD_LENGTH);
-    payload.push(constants::EXT_PAYLOAD_MARKER);
-    payload.push(flags);
-    payload.extend_from_slice(stamp);
-    payload
-}
-
-/// Generate an internally stamped X25519 keypair.
-///
-/// Returns `(private_key, public_key, value)`. The public key itself is the
-/// stamp, validated as `stamp_valid(public_key, cost, material)`.
-pub fn generate_stamped_key(
-    material: &[u8],
-    stamp_cost: StampCost,
-) -> Option<(Vec<u8>, Vec<u8>, StampValue)> {
-    use rns_crypto::OsRng;
-
-    let mut rng = OsRng;
-    let (private, public, value) =
-        rns_crypto::identity::generate_stamped_key(&mut rng, material, stamp_cost);
-    Some((
-        private.private_bytes().to_vec(),
-        public.public_bytes().to_vec(),
-        value,
-    ))
-}
-
-/// Material covered by a link request stamp: `destination_hash || ed25519_pub`.
-pub fn link_request_stamp_material(
-    destination_hash: &[u8; 16],
-    sig_pub_bytes: &[u8; 32],
-) -> [u8; 48] {
-    let mut material = [0u8; 48];
-    material[..16].copy_from_slice(destination_hash);
-    material[16..].copy_from_slice(sig_pub_bytes);
-    material
 }
 
 /// Default scheduling niceness of stamp search threads (`Stamps.NICENESS`).
@@ -611,15 +549,6 @@ mod tests {
     }
 
     #[test]
-    fn destination_stamp_material_matches_upstream_layout() {
-        let material = destination_stamp_material(&[0x11; 16], &[0x22; 64], &[0x33; 10]);
-        assert_eq!(material.len(), 90);
-        assert_eq!(&material[..16], &[0x11; 16]);
-        assert_eq!(&material[16..80], &[0x22; 64]);
-        assert_eq!(&material[80..], &[0x33; 10]);
-    }
-
-    #[test]
     fn generated_destination_stamp_validates_and_roundtrips() {
         let material = b"destination stamp test material";
         let (stamp, value) = generate_stamp(
@@ -650,17 +579,6 @@ mod tests {
             .load(&[0x44; 16], material, StampCost::from_whole(200))
             .is_none());
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn stamped_key_public_half_validates_against_material() {
-        let material = b"identity stamp material";
-        let (private, public, value) =
-            generate_stamped_key(material, StampCost::from_whole(4)).unwrap();
-        assert_eq!(private.len(), 32);
-        assert_eq!(public.len(), 32);
-        assert!(value.meets(StampCost::from_whole(4)));
-        assert!(stamp_valid(&public, StampCost::from_whole(4), material));
     }
 
     #[test]
@@ -750,28 +668,5 @@ mod tests {
         assert_eq!(other.get(&dest), lr_cost);
         other.set_enforced(true);
         assert!(costs.enforced());
-    }
-
-    #[test]
-    fn announce_ext_payload_has_marker_flags_stamp_and_link_cost() {
-        let cost = StampCost::from_f64(12.5);
-        let payload = announce_ext_payload(&[0x55; constants::STAMP_LENGTH], 0, cost);
-        assert_eq!(payload.len(), constants::EXT_PAYLOAD_LENGTH);
-        assert_eq!(payload[0], constants::EXT_PAYLOAD_MARKER);
-        assert_eq!(payload[1], 0);
-        assert_eq!(
-            &payload[2..2 + constants::STAMP_LENGTH],
-            &[0x55; constants::STAMP_LENGTH]
-        );
-        assert_eq!(&payload[constants::EXT_PAYLOAD_LENGTH - 2..], &[0x80, 12]);
-    }
-
-    #[test]
-    fn path_request_ext_payload_has_marker_flags_and_stamp() {
-        let payload = path_request_ext_payload(&[0x55; constants::STAMP_LENGTH], 0);
-        assert_eq!(payload.len(), constants::PR_EXT_PAYLOAD_LENGTH);
-        assert_eq!(payload[0], constants::EXT_PAYLOAD_MARKER);
-        assert_eq!(payload[1], 0);
-        assert_eq!(&payload[2..], &[0x55; constants::STAMP_LENGTH]);
     }
 }

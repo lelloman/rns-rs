@@ -20,7 +20,7 @@ impl Driver {
         if self.engine.stamp_prs() {
             match self.stamper.cached_path_request_stamp(&dest_hash, &tag) {
                 Some(stamp) => {
-                    let payload = crate::stamps::path_request_ext_payload(&stamp, 0);
+                    let payload = rns_core::stamp::path_request_ext_payload(&stamp, 0);
                     let mut ext_payload = [0u8; rns_core::constants::PR_EXT_PAYLOAD_LENGTH];
                     ext_payload.copy_from_slice(&payload);
                     self.send_path_request(
@@ -98,7 +98,7 @@ impl Driver {
             );
             match self.stamper.cached_path_request_stamp(&dest_hash, &tag) {
                 Some(stamp) => {
-                    let payload = crate::stamps::path_request_ext_payload(&stamp, 0);
+                    let payload = rns_core::stamp::path_request_ext_payload(&stamp, 0);
                     let mut ext_payload = [0u8; rns_core::constants::PR_EXT_PAYLOAD_LENGTH];
                     ext_payload.copy_from_slice(&payload);
                     self.send_path_request(dest_hash, &tag, Some(&ext_payload), target);
@@ -284,7 +284,7 @@ impl Driver {
             let identity =
                 rns_crypto::identity::Identity::from_private_key(&record.identity_prv_key);
             let public_key = identity.get_public_key()?;
-            let material = crate::stamps::destination_stamp_material(
+            let material = rns_core::stamp::destination_stamp_material(
                 dest_hash,
                 &public_key,
                 &record.name_hash,
@@ -297,7 +297,7 @@ impl Driver {
                 Some((stamp, _value)) => {
                     let link_cost = self.link_manager.link_request_costs().get(dest_hash);
                     record.app_data =
-                        Some(crate::stamps::announce_ext_payload(&stamp, 0, link_cost));
+                        Some(rns_core::stamp::announce_ext_payload(&stamp, 0, link_cost));
                 }
                 None => {
                     let waiting = waiting?;
