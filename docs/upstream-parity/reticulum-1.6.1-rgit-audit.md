@@ -21,7 +21,9 @@
 - repositories checked: rgit (normative) and GitHub mirror, both fetched
   fresh by `scripts/check_upstream_drift.py` on 2026-11-20 05:56 UTC; the
   two tips agree
-- local branch and revision inspected: branch `upstream/1.6.1-rgit` from `dev@b1f26c80`
+- local branch and revision inspected: branch `upstream/1.6.1-rgit` from `dev@b1f26c80`;
+  rebased onto `dev@51ccbcc5` for the promotion gates (local hashes below are
+  the rebased ones)
 
 The accepted 1.6.1 baseline was an untagged rgit tip. Upstream has since
 tagged `1.6.1` at the end of this range without changing
@@ -57,40 +59,40 @@ evidence that ran.
 
 | # | Upstream commit | Date | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|---|
-| 1 | `da368e05` | 2026-11-16 | Deduplicate in-flight announce rebroadcasts | Integrated | `41b2817b`; `an_announce_heard_again_while_waiting_is_not_rebroadcast_to_that_interface`, `an_announce_heard_again_on_a_shared_medium_is_still_rebroadcast_there`, `a_newer_announce_replacing_the_waiting_one_starts_without_blocked_interfaces` |
-| 2 | `aecc1547` | 2026-11-16 | Set sane autoconnect caps | Integrated | `2d8dd594`; `autoconnect_count_is_capped_unless_caps_are_disabled`, `autoconnect_caps_are_disabled_only_by_a_key_before_the_count` |
-| 3 | `338df096` | 2026-11-16 | Updated docs | Non-runtime | `35cd3471`; `docs/interface-discovery.md` sizing guidance |
-| 4 | `2b1a984c` | 2026-11-17 | Fixed IFAC identity not being available at early tunnel synthesis | Structurally covered | `d8761e59`; `tunnel_synthesis_carries_the_interface_access_code` |
-| 5 | `25cce0a8` | 2026-11-17 | Ensure transport identity availability before early tunnel synthesis | Structurally covered | `a097a14e`; `a_dialing_tcp_client_first_sends_a_synthesis_signed_by_the_transport_identity` |
-| 6 | `cc5d6dd0` | 2026-11-17 | Logging | Structurally covered | `fa13858a`; invariant comment in `rns-cli/src/rnsh/initiator.rs` |
-| 7 | `12b2b8c0` | 2026-11-17 | Updated link tests | Non-runtime | `39b2b2dd`; doc comment on `wait_for_link_established` (`rns-net/tests/e2e.rs`) |
-| 8 | `4916017a` | 2026-11-17 | Abort early on non-enabled link mode | Structurally covered | `2309725b`; `every_outbound_link_request_signals_aes_256_cbc`; follow-ups `59af6496` and `26b4e735` (decision 7) |
-| 9 | `48c77061` | 2026-11-17 | Load known destinations over RPC in split mode | Integrated | `55dc3aa5`; `known_destinations_rpc_answers_upstreams_dict`, `known_destination_entries_rpc_keeps_the_native_list`, `a_split_mode_client_loads_known_destinations_over_rpc`, `python_split_mode_client_loads_rust_known_destinations_over_rpc` |
-| 10 | `f876ed8d` | 2026-11-17 | Show remote transport status on tunnels | Integrated | `23b51e35`; `rnstatus_view_matches_upstream` (fixtures regenerated at `f876ed8d`, new case `tunnels_remote_transport`) |
-| 11 | `0123133e` | 2026-11-17 | Fixed CPython process fork stdin close deadlock | Structurally covered | `3312039e`; module comment in `rns-net/src/stamps.rs` |
-| 12 | `05ac4bba` | 2026-11-17 | Added ability to configure destination value and link cost to rngit | Integrated | `3bbe4252`; `destination_costs_default_to_upstreams`, `parses_and_quantizes_destination_costs`, `invalid_destination_costs_are_errors`, `rngit_destinations_carry_their_link_cost_and_stamp_value`, `rngit_invalid_page_cost_fails_the_page_destination` |
-| 13 | `833f6cf2` | 2026-11-17 | Fixed path table culling being able to remove an instance's own local destination paths. Doh. | Integrated | `8a7ced49`; `a_local_clients_announce_marks_its_path_responsive`, `never_used_local_client_paths_stay_on_an_instance_serving_them` (replaced by 15's cull test) |
-| 14 | `d72cfdd7` | 2026-11-17 | Mark local client paths responsive on PR responses | Structurally covered | `f84da699`; `a_local_clients_path_response_marks_its_path_responsive` |
-| 15 | `5bd93ad9` | 2026-11-17 | Ensure link-based rediscovery does not occur for instance-local paths | Integrated | `00431be5`; `failed_own_link_to_an_instance_local_destination_is_not_rediscovered`, `local_client_link_to_an_instance_local_destination_is_not_rediscovered`, `instance_local_paths_go_only_with_their_interface_or_the_pool_cap` |
-| 16 | `70eb417d` | 2026-11-17 | Fixed non path table resident shared local instance destination path response announces broadcasting on all interfaces instead of requestor only | Integrated | `edb988ac`; `only_a_local_clients_path_response_answers_a_pending_request` (updated), `a_local_clients_path_response_answers_only_the_requesting_interface`, `test_shared_instance_without_transport_relays_path_request_to_local_client` (updated) |
-| 17 | `8c73e203` | 2026-11-18 | Don't rebroadcast on unresponsive path lenient table insertions | Integrated | `b789aa30`; `unresponsive_path_replacement_is_not_rebroadcast`; follow-up `dac604d7` (decision 8) |
-| 18 | `4a058544` | 2026-11-18 | Well, yeah | Structurally covered | `f2e7fdcf`; doc comment on `persist_known_destinations` (`rns-net/src/node/known_destinations.rs`) |
-| 19 | `8e7dc8b7` | 2026-11-18 | Added medium reliability flag to interfaces | Integrated | `cc15c501`; `lossless_medium_matches_upstreams_interface_classes` (decision 6) |
-| 20 | `9568b704` | 2026-11-18 | Improved rnpath display and filtering options | Integrated | `d0fb8d79`; `path_table_display_options_and_filters_as_upstream`, `path_table_prints_as_upstream` (updated), `parses_upstream_invocations_as_argparse_does` (extended), argparse fixture and golden help regenerated at `9568b704`, live `python_rnpath_reads_rust_remote_path_table` and `python_rnpath_lists_rust_path_table` at `9568b704` |
-| 21 | `c90a5d58` | 2026-11-18 | Added destination type loading | Integrated | `f72cbf56`; `known_destination_types_are_read_as_upstream`, `missing_unreadable_and_flagged_type_files_add_nothing`, `the_config_filter_names_come_first_and_the_file_overrides_them`, `splitlines_and_strip_follow_python`, `wanted_destination_types_are_named_in_the_type_map`, `unwant_all_reports_types_in_the_order_they_were_first_wanted`, `configured_destination_types_name_as_upstreams_type_map`, `path_and_rate_tables_follow_upstreams_keys_and_types` (extended), `path_table_prints_as_upstream` (JSON), live `python_rnpath_reads_rust_remote_path_table` at `c90a5d58` |
-| 22 | `3f55e9eb` | 2026-11-18 | Added flagged destination type map, added per-link traffic counter, added link distribution stats getter | Integrated | `73ff693b`; `forwarded_link_traffic_counts_raw_bytes`, `link_distribution_counts_per_destination`, `link_distribution_names_receiving_interfaces_by_hash`, `link_distribution_rpc_fails_as_upstreams_set_does`, `type_names_come_from_the_map_then_the_flagged_map_then_the_hash` (decision 2) |
-| 23 | `f7b54ccc` | 2026-11-18 | Added prettynamehash convenience function | Non-runtime | `ea62398b`; note in `rns-cli/src/pyfmt.rs` |
-| 24 | `1a71073c` | 2026-11-18 | Initial rnpath analysis stub | Integrated | `959bb94f`; `analysis_counts_destination_types_as_upstream`, `parses_upstream_invocations_as_argparse_does` (extended), argparse fixture and golden help regenerated at `1a71073c` (decision 3) |
-| 25 | `b9903c53` | 2026-11-18 | Analysis mode capture argument | Integrated | `aa5b6c13`; `parses_upstream_invocations_as_argparse_does` (`--capture`, ambiguous `--c`), argparse fixture and golden help regenerated at `b9903c53` |
-| 26 | `1f7cd145` | 2026-11-18 | Cleanup and fixes | Integrated | `baa60b0a`; `link_distribution_follows_link_table_insertion_order`, `link_distribution_rpc_answer_keeps_upstreams_order`, `link_distribution_rpc_answers_with_from_ifs_lists`, argparse fixture and golden help regenerated at `1f7cd145` (decision 2) |
-| 27 | `41260ea1` | 2026-11-18 | Added path state info to path table getters | Integrated | `3b7651b4`; `test_path_state`, `query_path_table`, `path_and_rate_tables_follow_upstreams_keys_and_types`, `path_table_prints_as_upstream`, `path_state_marker_as_upstream`, `python_rnpath_lists_rust_path_table`, `python_rnpath_reads_rust_remote_path_table` |
-| 28 | `48ba76df` | 2026-11-18 | Catch announce unpack failure | Structurally covered | `dc8c5bf0`; `analysis_counts_destination_types_as_upstream` (extended; the guard never fires, checked against upstream at `48ba76df`) (decision 3) |
-| 29 | `ef3e8086` | 2026-11-18 | Added link traffic stats | Integrated | `c3661fa2`; `link_table_traffic_counts_relayed_bytes_but_local_clients`, `link_speeds_are_measured_as_upstreams_traffic_loop`, `link_traffic_speeds_are_reported_once_measured`, `link_traffic_keys_follow_upstreams_position_and_types`, `rnstatus_view_matches_upstream` (fixtures regenerated at `ef3e8086`, four new `totals_links*` cases), live idle-node comparison with Python at `ef3e8086` |
-| 30 | `e8b3b14b` | 2026-11-18 | Classic | Integrated | `22021dc1`; `rnstatus_view_matches_upstream` (fixtures regenerated at `e8b3b14b`; `totals_links_control_only` now prints, `totals_links_control_only_tx` new; both raise at `ef3e8086`) |
-| 31 | `eb00622f` | 2026-11-18 | Cleanup | Integrated | `0e4160ab`; `analysis_is_not_yet_implemented` (decision 3) |
-| 32 | `01ffb98e` | 2026-11-18 | Local link traffic counting | Integrated | `fdbbb06c`; `local_link_traffic_counts_raw_bytes_as_upstream`, `own_link_traffic_joins_the_link_totals`, `requested_parts_say_whether_they_were_sent_before`, `test_tick_retransmits_timed_out_packets` (extended) |
-| 33 | `52898683` | 2026-11-18 | Raised listener backlogs | Structurally covered | `71961537`; `abstract_rpc_listener_queues_upstreams_backlog`, invariant comments at the listener binds |
-| 34 | `cff4d03f` | 2026-11-18 | Updated changelog | Non-runtime | `a03de907`; changelog cross-check in section 34, `UPSTREAM.md` tag note |
+| 1 | `da368e05` | 2026-11-16 | Deduplicate in-flight announce rebroadcasts | Integrated | `f779ae93`; `an_announce_heard_again_while_waiting_is_not_rebroadcast_to_that_interface`, `an_announce_heard_again_on_a_shared_medium_is_still_rebroadcast_there`, `a_newer_announce_replacing_the_waiting_one_starts_without_blocked_interfaces` |
+| 2 | `aecc1547` | 2026-11-16 | Set sane autoconnect caps | Integrated | `0b755fcf`; `autoconnect_count_is_capped_unless_caps_are_disabled`, `autoconnect_caps_are_disabled_only_by_a_key_before_the_count` |
+| 3 | `338df096` | 2026-11-16 | Updated docs | Non-runtime | `aba894d4`; `docs/interface-discovery.md` sizing guidance |
+| 4 | `2b1a984c` | 2026-11-17 | Fixed IFAC identity not being available at early tunnel synthesis | Structurally covered | `472cd118`; `tunnel_synthesis_carries_the_interface_access_code` |
+| 5 | `25cce0a8` | 2026-11-17 | Ensure transport identity availability before early tunnel synthesis | Structurally covered | `0d284df2`; `a_dialing_tcp_client_first_sends_a_synthesis_signed_by_the_transport_identity` |
+| 6 | `cc5d6dd0` | 2026-11-17 | Logging | Structurally covered | `dcdae141`; invariant comment in `rns-cli/src/rnsh/initiator.rs` |
+| 7 | `12b2b8c0` | 2026-11-17 | Updated link tests | Non-runtime | `e2fcde2f`; doc comment on `wait_for_link_established` (`rns-net/tests/e2e.rs`) |
+| 8 | `4916017a` | 2026-11-17 | Abort early on non-enabled link mode | Structurally covered | `5ef23a30`; `every_outbound_link_request_signals_aes_256_cbc`; follow-ups `ba44bc2c` and `c0086c86` (decision 7) |
+| 9 | `48c77061` | 2026-11-17 | Load known destinations over RPC in split mode | Integrated | `28b241ae`; `known_destinations_rpc_answers_upstreams_dict`, `known_destination_entries_rpc_keeps_the_native_list`, `a_split_mode_client_loads_known_destinations_over_rpc`, `python_split_mode_client_loads_rust_known_destinations_over_rpc` |
+| 10 | `f876ed8d` | 2026-11-17 | Show remote transport status on tunnels | Integrated | `07c86976`; `rnstatus_view_matches_upstream` (fixtures regenerated at `f876ed8d`, new case `tunnels_remote_transport`) |
+| 11 | `0123133e` | 2026-11-17 | Fixed CPython process fork stdin close deadlock | Structurally covered | `547b79ed`; module comment in `rns-net/src/stamps.rs` |
+| 12 | `05ac4bba` | 2026-11-17 | Added ability to configure destination value and link cost to rngit | Integrated | `bbd0e4c6`; `destination_costs_default_to_upstreams`, `parses_and_quantizes_destination_costs`, `invalid_destination_costs_are_errors`, `rngit_destinations_carry_their_link_cost_and_stamp_value`, `rngit_invalid_page_cost_fails_the_page_destination` |
+| 13 | `833f6cf2` | 2026-11-17 | Fixed path table culling being able to remove an instance's own local destination paths. Doh. | Integrated | `7428468e`; `a_local_clients_announce_marks_its_path_responsive`, `never_used_local_client_paths_stay_on_an_instance_serving_them` (replaced by 15's cull test) |
+| 14 | `d72cfdd7` | 2026-11-17 | Mark local client paths responsive on PR responses | Structurally covered | `1338ab58`; `a_local_clients_path_response_marks_its_path_responsive` |
+| 15 | `5bd93ad9` | 2026-11-17 | Ensure link-based rediscovery does not occur for instance-local paths | Integrated | `35028c47`; `failed_own_link_to_an_instance_local_destination_is_not_rediscovered`, `local_client_link_to_an_instance_local_destination_is_not_rediscovered`, `instance_local_paths_go_only_with_their_interface_or_the_pool_cap` |
+| 16 | `70eb417d` | 2026-11-17 | Fixed non path table resident shared local instance destination path response announces broadcasting on all interfaces instead of requestor only | Integrated | `3d500abc`; `only_a_local_clients_path_response_answers_a_pending_request` (updated), `a_local_clients_path_response_answers_only_the_requesting_interface`, `test_shared_instance_without_transport_relays_path_request_to_local_client` (updated) |
+| 17 | `8c73e203` | 2026-11-18 | Don't rebroadcast on unresponsive path lenient table insertions | Integrated | `0d994265`; `unresponsive_path_replacement_is_not_rebroadcast`; follow-up `53f34b11` (decision 8) |
+| 18 | `4a058544` | 2026-11-18 | Well, yeah | Structurally covered | `bd431f23`; doc comment on `persist_known_destinations` (`rns-net/src/node/known_destinations.rs`) |
+| 19 | `8e7dc8b7` | 2026-11-18 | Added medium reliability flag to interfaces | Integrated | `9f503ac2`; `lossless_medium_matches_upstreams_interface_classes` (decision 6) |
+| 20 | `9568b704` | 2026-11-18 | Improved rnpath display and filtering options | Integrated | `b216a018`; `path_table_display_options_and_filters_as_upstream`, `path_table_prints_as_upstream` (updated), `parses_upstream_invocations_as_argparse_does` (extended), argparse fixture and golden help regenerated at `9568b704`, live `python_rnpath_reads_rust_remote_path_table` and `python_rnpath_lists_rust_path_table` at `9568b704` |
+| 21 | `c90a5d58` | 2026-11-18 | Added destination type loading | Integrated | `6528b48c`; `known_destination_types_are_read_as_upstream`, `missing_unreadable_and_flagged_type_files_add_nothing`, `the_config_filter_names_come_first_and_the_file_overrides_them`, `splitlines_and_strip_follow_python`, `wanted_destination_types_are_named_in_the_type_map`, `unwant_all_reports_types_in_the_order_they_were_first_wanted`, `configured_destination_types_name_as_upstreams_type_map`, `path_and_rate_tables_follow_upstreams_keys_and_types` (extended), `path_table_prints_as_upstream` (JSON), live `python_rnpath_reads_rust_remote_path_table` at `c90a5d58` |
+| 22 | `3f55e9eb` | 2026-11-18 | Added flagged destination type map, added per-link traffic counter, added link distribution stats getter | Integrated | `7f26a06d`; `forwarded_link_traffic_counts_raw_bytes`, `link_distribution_counts_per_destination`, `link_distribution_names_receiving_interfaces_by_hash`, `link_distribution_rpc_fails_as_upstreams_set_does`, `type_names_come_from_the_map_then_the_flagged_map_then_the_hash` (decision 2) |
+| 23 | `f7b54ccc` | 2026-11-18 | Added prettynamehash convenience function | Non-runtime | `4815c264`; note in `rns-cli/src/pyfmt.rs` |
+| 24 | `1a71073c` | 2026-11-18 | Initial rnpath analysis stub | Integrated | `8b9b4fbf`; `analysis_counts_destination_types_as_upstream`, `parses_upstream_invocations_as_argparse_does` (extended), argparse fixture and golden help regenerated at `1a71073c` (decision 3) |
+| 25 | `b9903c53` | 2026-11-18 | Analysis mode capture argument | Integrated | `d78d7c76`; `parses_upstream_invocations_as_argparse_does` (`--capture`, ambiguous `--c`), argparse fixture and golden help regenerated at `b9903c53` |
+| 26 | `1f7cd145` | 2026-11-18 | Cleanup and fixes | Integrated | `af10606b`; `link_distribution_follows_link_table_insertion_order`, `link_distribution_rpc_answer_keeps_upstreams_order`, `link_distribution_rpc_answers_with_from_ifs_lists`, argparse fixture and golden help regenerated at `1f7cd145` (decision 2) |
+| 27 | `41260ea1` | 2026-11-18 | Added path state info to path table getters | Integrated | `54d13f99`; `test_path_state`, `query_path_table`, `path_and_rate_tables_follow_upstreams_keys_and_types`, `path_table_prints_as_upstream`, `path_state_marker_as_upstream`, `python_rnpath_lists_rust_path_table`, `python_rnpath_reads_rust_remote_path_table` |
+| 28 | `48ba76df` | 2026-11-18 | Catch announce unpack failure | Structurally covered | `3ff7bfdb`; `analysis_counts_destination_types_as_upstream` (extended; the guard never fires, checked against upstream at `48ba76df`) (decision 3) |
+| 29 | `ef3e8086` | 2026-11-18 | Added link traffic stats | Integrated | `ce679652`; `link_table_traffic_counts_relayed_bytes_but_local_clients`, `link_speeds_are_measured_as_upstreams_traffic_loop`, `link_traffic_speeds_are_reported_once_measured`, `link_traffic_keys_follow_upstreams_position_and_types`, `rnstatus_view_matches_upstream` (fixtures regenerated at `ef3e8086`, four new `totals_links*` cases), live idle-node comparison with Python at `ef3e8086` |
+| 30 | `e8b3b14b` | 2026-11-18 | Classic | Integrated | `234f68d1`; `rnstatus_view_matches_upstream` (fixtures regenerated at `e8b3b14b`; `totals_links_control_only` now prints, `totals_links_control_only_tx` new; both raise at `ef3e8086`) |
+| 31 | `eb00622f` | 2026-11-18 | Cleanup | Integrated | `755d9784`; `analysis_is_not_yet_implemented` (decision 3) |
+| 32 | `01ffb98e` | 2026-11-18 | Local link traffic counting | Integrated | `f63b3dac`; `local_link_traffic_counts_raw_bytes_as_upstream`, `own_link_traffic_joins_the_link_totals`, `requested_parts_say_whether_they_were_sent_before`, `test_tick_retransmits_timed_out_packets` (extended) |
+| 33 | `52898683` | 2026-11-18 | Raised listener backlogs | Structurally covered | `63f7689d`; `abstract_rpc_listener_queues_upstreams_backlog`, invariant comments at the listener binds |
+| 34 | `cff4d03f` | 2026-11-18 | Updated changelog | Non-runtime | `4e5b04ce`; changelog cross-check in section 34, `UPSTREAM.md` tag note |
 
 ## Per-Commit Analysis
 
@@ -120,7 +122,7 @@ already matches upstream's shared-medium classes but is only used for stats.
 Same-sender copies still in the verify queue are collapsed by
 `AnnounceVerifyQueue::enqueue`, a small existing deviation.
 
-**Local handling and evidence:** `41b2817b`. As planned: `InterfaceInfo`
+**Local handling and evidence:** `f779ae93`. As planned: `InterfaceInfo`
 gains `shared_medium`, `AnnounceEntry` gains `packet_hash` and
 `blocked_interfaces`, and the `MultiPathDecision::Reject` branch of
 `process_verified_announce` adds the receiving interface to the waiting
@@ -163,7 +165,7 @@ appears before the count.
 the count uncapped and does not know the disable key. Keys are held in a
 `HashMap`, so file order is not available.
 
-**Local handling and evidence:** `2d8dd594`. Per decision 4 the planned
+**Local handling and evidence:** `0b755fcf`. Per decision 4 the planned
 "honour it wherever it appears" deviation was dropped: the parser records
 the `[reticulum]` key order (a repeated key takes its last position), and
 `autoconnect_discovered_interfaces_caps_disabled` is true only when the
@@ -198,7 +200,7 @@ getting-started warning, and a reference entry for `get_instance_pid()`.
 documents the options without sizing guidance. There is no native
 `get_instance_pid`.
 
-**Local handling and evidence:** `35cd3471`. `docs/interface-discovery.md`
+**Local handling and evidence:** `aba894d4`. `docs/interface-discovery.md`
 gains a "How many to auto-connect" section with upstream's sizing guidance,
 pointing at the cap from commit 2. The `get_instance_pid()` reference entry
 has no native counterpart.
@@ -223,7 +225,7 @@ when the entry is registered, before any connect event
 (`interface_management.rs:247-264`, `backbone_pool.rs:722-760`,
 `driver/events/interfaces.rs:209-210`). There is no unmasked early-write path.
 
-**Local handling and evidence:** `d8761e59`. Verified as reviewed: the
+**Local handling and evidence:** `472cd118`. Verified as reviewed: the
 synthesis is a `SendOnInterface` masked with the entry's IFAC, and static,
 managed and pool interfaces get their IFAC at registration. A dialing I2P
 peer is registered offline (`reconnecting`) with its inherited IFAC and
@@ -234,7 +236,7 @@ no current interface type takes that path with `wants_tunnel`, so this is
 latent, not a live difference, and was left unchanged.
 
 Related hardening (not part of this mapping, disposition unchanged):
-`46cdb689` (`driver: a dynamic interface has its IFAC before it comes up`,
+`f5748851` (`driver: a dynamic interface has its IFAC before it comes up`,
 no `Upstream-Commit` trailer) closes that caveat.
 `handle_dynamic_interface_up_event` now registers the interface, completes
 its entry (IFAC, type, names, parent) and only then runs the up handling
@@ -267,7 +269,7 @@ that connects during startup can sign its tunnel synthesis.
 assigned to the driver at `:655-656`, before the interface start loop and
 before the driver thread handles any interface event.
 
-**Local handling and evidence:** `a097a14e`. The invariant comment sits
+**Local handling and evidence:** `0d284df2`. The invariant comment sits
 before `configure_driver_services` in `node/startup.rs`, which hands the
 driver the transport identity before `start_interfaces`; the driver thread
 only starts afterwards. Upstream's removal of the `hasattr` guards has no
@@ -293,7 +295,7 @@ log moves before link creation and a DEBUG "No link" line is removed.
 **Rust applicability:** `rns-cli/src/rnsh/initiator.rs:52` already logs before
 `create_link`; the debug line was never ported.
 
-**Local handling and evidence:** `fa13858a`. Verified as reviewed: the rnsh
+**Local handling and evidence:** `dcdae141`. Verified as reviewed: the rnsh
 initiator logs "Establishing link with <hash>" at INFO (`pylog::INFO_TARGET`)
 before `create_link`, and has no "No link" line. A comment there records
 the match with upstream's order.
@@ -313,7 +315,7 @@ deadline instead of fixed sleeps. Test-only.
 **Rust applicability:** No port of `tests/link.py`. Native link tests already
 wait with deadlines (`rns-net/tests/e2e.rs:425`, `wait_for_link_established`).
 
-**Local handling and evidence:** `39b2b2dd`. The doc comment on
+**Local handling and evidence:** `e2fcde2f`. The doc comment on
 `wait_for_link_established` (`rns-net/tests/e2e.rs`) records that link tests
 wait for establishment against a deadline, upstream's `await_link`. Test-only.
 
@@ -334,7 +336,7 @@ later.
 `LinkManager::create_link_with_keys` (`link_manager/establishment.rs:36`),
 hard-codes `Aes256Cbc`; no public API takes a mode.
 
-**Local handling and evidence:** `2309725b`. A comment at the mode in
+**Local handling and evidence:** `5ef23a30`. A comment at the mode in
 `LinkManager::create_link_with_keys` records upstream's `ENABLED_MODES`, and
 `every_outbound_link_request_signals_aes_256_cbc` pins that every outbound
 request (generated keys, pre-stamped keys, and without MTU signalling, where
@@ -342,7 +344,7 @@ no mode is carried and AES-256-CBC is the default) signals AES-256-CBC and
 the engine's mode matches. A pinning test of covered behaviour.
 
 The pre-existing AES-128 divergence was resolved per decision 7 in the
-separate commit `59af6496` (`link: only AES-256-CBC is enabled, as
+separate commit `ba44bc2c` (`link: only AES-256-CBC is enabled, as
 upstream`, no `Upstream-Commit` trailer). Upstream at `cff4d03f` reads the
 signalled mode in `validate_request`, and for AES-128-CBC `handshake()`
 succeeds but `prove()` raises in `signalling_bytes`, so the request is
@@ -356,7 +358,7 @@ stamp work, and `new_responder` refuses an AES-128-CBC request. rns-net drops
 such a request with upstream's debug line, sends no proof and does not count
 a protocol violation (it is well formed). Modes 2-7 were already refused, as
 malformed requests (`ProtocolViolation`, log "LINKREQUEST rejected:
-Unsupported link mode"); that is resolved by `26b4e735`, below.
+Unsupported link mode"); that is resolved by `c0086c86`, below.
 `docs/protocol-spec.md` 11.1 and 16 now say
 only AES-256-CBC is enabled. `test_aes128_mode_handshake` became
 `an_aes_128_link_is_refused_by_initiator_and_responder`, and rns-net gained
@@ -364,17 +366,17 @@ only AES-256-CBC is enabled. `test_aes128_mode_handshake` became
 responder check removed and passes with it. The AES-128 wire codec, key
 derivation and crypto vectors stay, as upstream keeps the mode defined.
 
-Tests run, `2309725b`: `cargo test -p rns-net --lib --
+Tests run, `5ef23a30`: `cargo test -p rns-net --lib --
 every_outbound_link_request_signals_aes_256_cbc`, 1 passed; `cargo test -p
 rns-net` passed (lib 1585, `e2e.rs` 74 with 1 ignored,
 `e2e_direct_connect.rs` 19, no failures); `cargo fmt --check` and
-`bash scripts/lint-host.sh` passed. `59af6496`: `cargo test -p rns-core -p
+`bash scripts/lint-host.sh` passed. `ba44bc2c`: `cargo test -p rns-core -p
 rns-net` passed (rns-core lib 1155 and its integration suites, rns-net lib
 1586, `e2e.rs` 74 with 1 ignored, `e2e_direct_connect.rs` 19,
 `python_interop.rs` 6 with 1 ignored, no failures); `cargo fmt --check` and
 `bash scripts/lint-host.sh` passed.
 
-Decision 7 was completed by a second separate commit, `26b4e735` (`link:
+Decision 7 was completed by a second separate commit, `c0086c86` (`link:
 refuse a reserved link mode as upstream does`, no `Upstream-Commit`
 trailer). Upstream at `cff4d03f`, for a request signalling a reserved mode
 (2-7): `validate_request` checks the stamp first (without reading the
@@ -392,7 +394,7 @@ stamp is read without the mode, and rns-net logs the "Incoming link request
 with mode" line; `mode_description()` names all eight values.
 
 Reading Transport for the same request found a second refusal that
-`59af6496` missed, for any mode outside `ENABLED_MODES` (AES-128-CBC
+`ba44bc2c` missed, for any mode outside `ENABLED_MODES` (AES-128-CBC
 included): when Transport lowers the MTU a link request signals, forwarding
 it or delivering it locally, it rebuilds the signalling with
 `Link.signalling_bytes`, which raises, so the request is dropped with
@@ -446,7 +448,7 @@ its table and then fail when it tries to remember a new destination (inferred
 from the code, not yet run). On the client side, `load_instance_known_destinations`
 (`shared_client.rs:939-964`) has no RPC fallback.
 
-**Local handling and evidence:** `55dc3aa5`, per decision 1. The inferred
+**Local handling and evidence:** `28b241ae`, per decision 1. The inferred
 hazard was confirmed by running it: with the old list answer, a Python
 client at `48c77061` loaded a `list` table, recalled nothing, and failed to
 remember the next announce ("list indices must be integers or slices, not
@@ -523,7 +525,7 @@ clients, and appends `, transport enabled` / `, no transport` to
 **Rust applicability:** `rns-cli/src/rnstatus_view.rs:340-368` prints the
 old format. The daemon already sends `rem_is_tn`.
 
-**Local handling and evidence:** `23b51e35`. `render_tunnel` prints the
+**Local handling and evidence:** `07c86976`. `render_tunnel` prints the
 Tunnel ID line only when the interface's `clients` is not truthy (none or
 0, as Python's `not clients`) and appends ", transport enabled" / ", no
 transport" from `rem_is_tn` to a known remote version. The fixtures were
@@ -553,7 +555,7 @@ CPython-specific.
 `stamper.rs`). The one `fork` (`rns-cli/src/rnsh/process.rs:151`) only makes
 async-signal-safe calls before `execve` and never touches the stdin lock.
 
-**Local handling and evidence:** `3312039e`. Verified: stamp searches run on
+**Local handling and evidence:** `547b79ed`. Verified: stamp searches run on
 threads (`SearchPool`: a rayon scope or scoped threads in `stamps.rs`; the
 stamper's queue worker is a `std::thread`), and nothing forks to search. The
 forks rns-rs does make, rnsh's `libc::fork` (`rns-cli/src/rnsh/process.rs`)
@@ -577,7 +579,7 @@ of 18.0 by default instead of 12.5, which initiators see on the wire.
 `server.rs` / `pages.rs` announce the default 12.5. `RnsNode::set_link_cost`
 and `Destination::set_value` already exist.
 
-**Local handling and evidence:** `3bbe4252`, per decision 5.
+**Local handling and evidence:** `bbd0e4c6`, per decision 5.
 `ServerConfig` gains `costs` (`[rngit]`) and `pages_costs` (`[pages]`), each a
 `DestinationCosts { link_cost, stamp_value }`. Each key is
 `quantize_cost(as_float(v))`: Python float syntax (underscores between
@@ -628,7 +630,7 @@ has no exemption, and `process_verified_announce` always clears the path state
 (`verified_announce.rs:248`). A shared instance culls a local client's
 destination after the unused-path linger.
 
-**Local handling and evidence:** `8a7ced49`. `process_verified_announce`
+**Local handling and evidence:** `7428468e`. `process_verified_announce`
 calls `mark_path_responsive` (timestamp and `used` set to now, expiry from
 the receiving interface's mode, state responsive) right after the path is
 stored, when the announce came from an interface the engine serves as a
@@ -663,7 +665,7 @@ already covers it, so this adds no observable change.
 **Rust applicability:** Covered by commit 13's port, which marks every
 verified announce from a local client, path responses included.
 
-**Local handling and evidence:** `f84da699`. Traced in upstream at
+**Local handling and evidence:** `1338ab58`. Traced in upstream at
 `d72cfdd7`: the new call sits in the `elif is_from_local_client and
 packet.context == PATH_RESPONSE` branch, before the path table entry is
 written. It refreshes the old entry (or does nothing for an unknown
@@ -697,7 +699,7 @@ unused-pool cap). Replaces commit 13's cull condition.
 cull closure. Rust's `drop_path` removes paths directly, so upstream's
 side effect on `rnpath -d` does not arise.
 
-**Local handling and evidence:** `00431be5`.
+**Local handling and evidence:** `35028c47`.
 `Driver::rediscover_path_after_failed_link` returns before expiring the
 path or queueing a request when the destination's primary path is hops 0.
 `rediscover_unproven_link_paths` keeps upstream's elif semantics: the
@@ -734,7 +736,7 @@ requesting interface and builds the entry with `attached_interface: None,
 block_rebroadcasts: false`. The sending side already supports attached path
 responses.
 
-**Local handling and evidence:** `edb988ac`. The announce table entry
+**Local handling and evidence:** `3d500abc`. The announce table entry
 for a local client's path response that answers a pending request now
 carries the recorded requesting interface as `attached_interface` and
 `block_rebroadcasts: true`; the announce job sends it there only, and
@@ -767,7 +769,7 @@ already-known announce arriving through a **new** next hop even when the path
 is unresponsive (`pathfinder.rs:304-323`), which is upstream's main recovery
 case. That second difference predates this range.
 
-**Local handling and evidence:** `b789aa30`. `should_update_path`
+**Local handling and evidence:** `0d994265`. `should_update_path`
 returns the new `PathDecision::AddForUnresponsive` for every case it
 accepts only because the path is unresponsive, and the multi-path decision
 maps it to `MultiPathDecision::RecoverUnresponsive`: stored as
@@ -777,7 +779,7 @@ answering a pending request. rns-rs's extra acceptances (over the same or
 fewer hops, and for an expired path over more hops, where upstream takes
 only an announce it has not heard) are made insertion-only too, by the
 default behaviour. The new-next-hop difference is decision 8, implemented
-in `dac604d7` (`transport: an option to recover unresponsive paths as
+in `53f34b11` (`transport: an option to recover unresponsive paths as
 upstream does`, no trailer): `[reticulum] unresponsive_path_recovery =
 native|upstream`, see decision 8.
 
@@ -800,7 +802,7 @@ test -p rns-net` passed (1697 passed, 4 ignored); `cargo fmt --check` and
 shared clients are built without a store, which plays the role of upstream's
 shared-instance check.
 
-**Local handling and evidence:** `f2e7fdcf`. Verified: the known
+**Local handling and evidence:** `bd431f23`. Verified: the known
 destinations and transport state are persisted only by methods of a
 constructed `RnsNode`, from its shutdown, and a shared instance client is
 built with `RnsNode::from_parts`, which leaves the known destinations store
@@ -819,8 +821,9 @@ and I2P interfaces. Nothing reads it yet.
 **Rust applicability:** No equivalent. With no reader there is no observable
 behaviour.
 
-**Local handling and evidence:** `cc15c501`. `interface::lossless_medium()`
-in `rns-net/src/interface/mod.rs`, next to `shared_medium_hint` and
+**Local handling and evidence:** `9f503ac2`. `lossless_medium()` in
+`rns-net/src/interface/type_hints.rs` (in `interface/mod.rs` until the
+rebase onto `dev@51ccbcc5`, which split that file), next to `shared_medium_hint` and
 `tunnels_allowed` and keyed by the interface type like them, is true for
 `TCPClientInterface`, `TCPServerInterface`, `TCPServerClientInterface` (a
 TCP server's spawned clients, `TCPClientInterface` upstream),
@@ -828,7 +831,7 @@ TCP server's spawned clients, `TCPClientInterface` upstream),
 Backbone server's spawned peers, `BackboneClientInterface` upstream),
 `I2PInterface` and `I2PInterfacePeer`, and false for every other class. As
 decision 6, nothing reads it; it is `pub(crate)` with `#[allow(dead_code)]`
-and a comment giving the reason (upstream adds it with no reader, kept for
+and the reason in the attribute (upstream adds it with no reader, kept for
 parity). It is not reported over RPC, as upstream. Test:
 `lossless_medium_matches_upstreams_interface_classes` (new; the function did
 not exist before). Tests run: `cargo test -p rns-net` passed (1699 passed,
@@ -849,7 +852,7 @@ flags and always prints via and expiry. The interop test
 `rns-cli/tests/utility_interop.rs:2070` expects ` via ` in Python's output and
 will fail against the new target unless it passes `-V`.
 
-**Local handling and evidence:** `d0fb8d79`. `rnpath` (and `rns-ctl path`,
+**Local handling and evidence:** `b216a018`. `rnpath` (and `rns-ctl path`,
 which shares its option table and code) takes `-a/--active`, `-V/--vias`,
 `-E/--expiry` and `-M/--min-value` (metavar `hops`, a float); a line shows
 ` via …` only with `-V` and ` expires in …` only with `-E`. The filters
@@ -894,7 +897,7 @@ passed (3 passed).
 (`rpc/responses.rs:26-74`); the display name it hashes is already available.
 (a) has no consumer beyond logging.
 
-**Local handling and evidence:** `f72cbf56`. Both parts are ported (a is
+**Local handling and evidence:** `6528b48c`. Both parts are ported (a is
 needed by decision 3). The review's analysis was incomplete on two points:
 upstream already had `destination_type_map` and `destination_type_name()`
 at the `884f109b` baseline, and rns-rs had neither (it logged the requested
@@ -951,10 +954,10 @@ Not ported in this commit (pre-existing, already at `884f109b`): upstream's
 `Blocked …` and `Allowing …` debug lines when the `[filter]` section is
 applied, and the `Could not … destination type …` error lines.
 
-Follow-up `4e2459a9` (`filter: log destination type filtering as upstream
+Follow-up `630f71bb` (`filter: log destination type filtering as upstream
 does`, no `Upstream-Commit` trailer) adds the first two as at `884f109b`.
 The parser records the `[filter]` key order (`FilterSection::key_order`, as
-`2d8dd594` does for `[reticulum]`), and
+`0b755fcf` does for `[reticulum]`), and
 `DestinationTypeNames::from_filter` applies the section in that order:
 `Blocked <name> <hash> destinations` at debug for each ignored type, and
 `Allowing <<name>> <hash> destinations` at debug for each allowed type only
@@ -993,7 +996,7 @@ change affects logs only.
 `link_distribution` returns a locally invented `{total, active}` shape
 (`transport/queries.rs:388`, `rpc/responses.rs:6`) with no other consumer.
 
-**Local handling and evidence:** `73ff693b`, per decision 2. The review's
+**Local handling and evidence:** `7f26a06d`, per decision 2. The review's
 plan to encode `from_ifs` as a list at this commit was replaced by the
 decision: the commit reproduces the set's failure.
 
@@ -1062,7 +1065,7 @@ Python client against an rns-rs instance with a relayed link.
 **Rust applicability:** No caller, no wire/RPC/CLI output. Verified:
 `git grep prettynamehash cff4d03f` finds only its definition.
 
-**Local handling and evidence:** `ea62398b`: a note in
+**Local handling and evidence:** `4815c264`: a note in
 `rns-cli/src/pyfmt.rs`, beside `prettyhexrep`, that the helper is
 `f"<{Transport.destination_type_name(name_hash)}>"`, has no caller up to
 `cff4d03f`, and that the lookup it wraps is
@@ -1080,7 +1083,7 @@ Commit 31 replaces the body with "Not yet implemented".
 
 **Rust applicability:** No `-A` in `rnpath.rs`.
 
-**Local handling and evidence:** `959bb94f`, per decision 3 (the
+**Local handling and evidence:** `8b9b4fbf`, per decision 3 (the
 statistics as at this commit, not the review's recommendation of the tip's
 `Not yet implemented`).
 
@@ -1163,7 +1166,7 @@ and creates a new ambiguous `--c` prefix.
 
 **Rust applicability:** Missing from the parser.
 
-**Local handling and evidence:** `aa5b6c13`. `rnpath` takes `--capture`
+**Local handling and evidence:** `d78d7c76`. `rnpath` takes `--capture`
 (one value; metavar `hops` and help `path to capture file for analyze
 mode`, as at this commit) and passes it to `analyze_tables`, locally and
 with `-R` (`RemoteAction::Analyze(capture)`), where it is unused, as
@@ -1198,7 +1201,7 @@ encode it.
 **Rust applicability:** Parser metavars differ; `from_ifs` follows commit 22's
 port.
 
-**Local handling and evidence:** `baa60b0a`, per decision 2.
+**Local handling and evidence:** `af10606b`, per decision 2.
 
 Metavars: `-M/--min-value value` (was `hops`), `--duration hours` and
 `--reason reason` (were argparse's `DURATION`/`REASON`), `--capture path`
@@ -1211,7 +1214,7 @@ Link distribution: the answer is a map from destination hash to
 interface hashes in first-seen order, so it encodes and the client gets
 it. The failure commit 22's mapping reproduced is gone, and with it the
 `UpstreamRpcException` machinery that only it used (the logging in
-`answer_request` is back to its pre-`73ff693b` form).
+`answer_request` is back to its pre-`7f26a06d` form).
 
 Order: upstream iterates its `link_table` dict, so destinations come in
 the order of their first link and `from_ifs` in the order first seen.
@@ -1267,7 +1270,7 @@ ignored), `cargo fmt --check` and `bash scripts/lint-host.sh` passed.
 without a fallback, so Python rnpath at this commit fails against an rns-rs
 daemon. `path_states` exists in the engine but is not exposed in the table.
 
-**Local handling and evidence:** `3b7651b4`. `TransportEngine::path_state`
+**Local handling and evidence:** `54d13f99`. `TransportEngine::path_state`
 is `get_path_state` (`STATE_UNKNOWN` when unmarked); `PathTableEntry`
 carries it, and `path_table_to_pickle` adds `state` (an int) after
 `interface_hash`, so the shared instance RPC, the remote management
@@ -1329,7 +1332,7 @@ The review's expectation (and the batch brief's) that such an entry is
 now counted as unresolvable and the analysis continues does not match
 upstream.
 
-**Local handling and evidence:** `dc8c5bf0`. No behaviour change: the
+**Local handling and evidence:** `3ff7bfdb`. No behaviour change: the
 doc comment of `analyze_path_table` and a comment at the `data` read say
 why the guard does not apply. Upstream's `analyze_tables` at `48ba76df`
 (Python 3.12, disposable worktree, a harness feeding it the inputs of
@@ -1353,7 +1356,7 @@ interface-stats RPC keys, and a `Links` section in `rnstatus -t -l`.
 
 **Rust applicability:** None of it exists.
 
-**Local handling and evidence:** `c3661fa2`.
+**Local handling and evidence:** `ce679652`.
 
 Counters: `TransportEngine` keeps `link_rxb`/`link_txb`
 (`link_traffic()`). In `handle_link_table_routing`, every link packet of a
@@ -1447,7 +1450,7 @@ percentage; it now prints `0% of data flow`.
 
 **Rust applicability:** Follows commit 29.
 
-**Local handling and evidence:** `22021dc1`. The link shares are guarded
+**Local handling and evidence:** `234f68d1`. The link shares are guarded
 by the data flow (`drxs`/`dtxs`) and the link speed, as upstream;
 nothing in the display raises any more, so the `Crash` plumbing of
 commit 29's mapping is gone and `rnstatus.rs` is back to its earlier
@@ -1481,7 +1484,7 @@ getting ...`, returning `[]` or None) and the output is the same. An
 empty path table no longer prints `No path table to analyze`; Python's
 bare `exit()` is status 0.
 
-**Local handling and evidence:** `0e4160ab`. `analyze_tables` makes the
+**Local handling and evidence:** `755d9784`. `analyze_tables` makes the
 three calls through the unchanged `analysis_rpc`, then writes `Not yet
 implemented` and returns 0, locally and with `-R`. Removed as dead code,
 as upstream's is: `analyze_path_table`, `TypeAnalysis`,
@@ -1537,7 +1540,7 @@ cache requests sent over a link and their answers; not LINKREQUEST
 (`LinkChannelOutlet.resend`) and a resource part requested again
 (`part.resend()`) use. The review did not list the resends.
 
-**Local handling and evidence:** `fdbbb06c`. The link manager counts
+**Local handling and evidence:** `f63b3dac`. The link manager counts
 both sides. Received: `handle_local_delivery_into` adds `raw.len()` when
 `link_receives` holds (link not closed and not a pending initiator link;
 link DATA but CACHE_REQUEST, or a RESOURCE_PRF proof; on the attached
@@ -1548,8 +1551,10 @@ every `SendPacket` the link manager hands it, on the packet as packed,
 before route hints add a transport header or an oversized packet is
 dropped; destination type LINK only, so LINKREQUEST (SINGLE) is
 excluded. Resends are taken off: rns-core's `ChannelAction::SendOnLink`
-gains `resend` (true for a timeout resend and for the rns-rs-only
-held-exhaustion resend of a direct path), and
+gains `resend` (true for a timeout resend, for the rns-rs-only
+held-exhaustion resend of a direct path and, since the rebase onto
+`dev@51ccbcc5`, for `dev`'s resend of what was outstanding when a direct
+path falls back), and
 `ResourceSender::handle_request_parts_into` reports with each part
 whether it was sent before; the link manager records those packets'
 bytes and `local_link_traffic` subtracts them. `Driver::link_traffic`
@@ -1608,7 +1613,7 @@ the driver's folded RPC service (`node/startup/services.rs`), and the
 non-upstream listeners (`rns-ctl` HTTP 128, the provider bridge and
 `rns-tun` Unix sockets). None is below upstream's new values.
 
-**Local handling and evidence:** `71961537`. Comments citing upstream
+**Local handling and evidence:** `63f7689d`. Comments citing upstream
 and the std values at the Backbone, shared-instance and RPC binds, and
 `abstract_rpc_listener_queues_upstreams_backlog` (128 connections to the
 RPC abstract socket queue with nobody accepting). Tests run: `cargo test
@@ -1625,7 +1630,7 @@ RPC abstract socket queue with nobody accepting). Tests run: `cargo test
 **Rust applicability:** Changelogs are not vendored. Every bullet is checked
 against its source commit above, not taken as evidence.
 
-**Local handling and evidence:** `a03de907`: the analysis below, and
+**Local handling and evidence:** `4e5b04ce`: the analysis below, and
 `UPSTREAM.md` no longer says upstream has no `1.6.1` tag. Documentation
 only; no build or test was run for it.
 
@@ -1696,22 +1701,22 @@ Reviewed with the maintainer. The rule is to do what upstream does,
 utilities included.
 
 1. **Commit 9:** `known_destinations` answers with upstream's dict exactly;
-   the native list moves to a separate RPC name. Implemented in `55dc3aa5`;
+   the native list moves to a separate RPC name. Implemented in `28b241ae`;
    the native list is `known_destination_entries`.
 2. **Commits 22 and 26:** `link_distribution` follows upstream's shape at each
    commit (a set at 22, the de-duplicated list at 26); the native `total` key
-   goes. Commit 22 implemented in `73ff693b`: the shape, and for a
+   goes. Commit 22 implemented in `7f26a06d`: the shape, and for a
    non-empty link table upstream's unencodable set (error logged, no
-   answer), see commit 22. Commit 26 implemented in `baa60b0a`: the
+   answer), see commit 22. Commit 26 implemented in `af10606b`: the
    list, in upstream's order (the link table keeps insertion order), see
    commit 26.
 3. **Commit 24:** the analysis statistics are ported as they are at that
    commit, then 28's guard, then 31's `Not yet implemented`. This brings in
    commit 21's destination-type files as well. Commit 24 implemented in
-   `959bb94f`, see commit 24. Commit 28 mapped in `dc8c5bf0`: its guard
+   `8b9b4fbf`, see commit 24. Commit 28 mapped in `3ff7bfdb`: its guard
    never fires upstream (`Packet.unpack` does not raise), so the analysis
    is unchanged, see commit 28.
-   Commit 31 mapped in `0e4160ab`: `-A` prints `Not yet implemented` after
+   Commit 31 mapped in `755d9784`: `-A` prints `Not yet implemented` after
    the three RPC calls, and the analysis and the type names query it
    alone used are removed, see commit 31.
 4. **Commit 2:** upstream's order dependence is reproduced: the disable key
@@ -1719,14 +1724,14 @@ utilities included.
    order for this.
 5. **Commit 12:** default link cost 18.0, and an invalid `link_cost` or
    `stamp_value` is a startup error, as upstream. Implemented in
-   `3bbe4252`, see commit 12.
+   `bbd0e4c6`, see commit 12.
 6. **Commit 19:** the `lossless_medium` flag is added with upstream's
    per-class values, unread, marked `#[allow(dead_code)]` with the reason.
 7. **AES-128 (found via commit 8, pre-existing):** match upstream. Only
    AES-256-CBC is enabled; a responder refuses any other signalled mode.
    Separate commit without an `Upstream-Commit` trailer. Implemented in
-   `59af6496` (`link: only AES-256-CBC is enabled, as upstream`) and
-   completed in `26b4e735` (`link: refuse a reserved link mode as upstream
+   `ba44bc2c` (`link: only AES-256-CBC is enabled, as upstream`) and
+   completed in `c0086c86` (`link: refuse a reserved link mode as upstream
    does`: a reserved mode is refused as upstream's `handshake()` refuses
    it, and Transport drops a request in a mode that is not enabled when it
    must lower its MTU), see commit 8.
@@ -1734,7 +1739,7 @@ utilities included.
    pre-existing):** rns-rs keeps its behaviour by default, the divergence is
    documented, and a runtime `[reticulum]` option selects upstream's
    behaviour. Separate commit without an `Upstream-Commit` trailer.
-   Implemented in `dac604d7` (`transport: an option to recover
+   Implemented in `53f34b11` (`transport: an option to recover
    unresponsive paths as upstream does`): `unresponsive_path_recovery =
    native` (default, unchanged) or `upstream`, any other value a config
    error. Under `upstream`, an announce for an unresponsive path is
@@ -1763,21 +1768,143 @@ utilities included.
 
 All 34 commits are mapped, one mapping commit each in ancestry order, with
 the follow-ups of decisions 7 and 8 and the filter logging commit
-`4e2459a9` beside them. Final dispositions: 21 Integrated, 9 Structurally
-covered, 4 Non-runtime. What remains is the promotion gates below,
-none of which is ticked yet.
+`630f71bb` beside them. Final dispositions: 21 Integrated, 9 Structurally
+covered, 4 Non-runtime. The branch was rebased onto `dev@51ccbcc5` and the
+promotion gates were run on it; see the acceptance record.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
+- [x] Fixture provenance and byte stability are checked where applicable.
+- [x] Exact-target live Python/Rust interop passes.
+- [x] Workspace tests, feature suites, formatting, and lint pass.
+- [x] Required build, Docker, hardware, and manual gates are recorded honestly.
+- [x] Native documentation is updated for user-visible behavior.
 - [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
-No results yet.
+Gates were run on 2026-11-20 on `upstream/1.6.1-rgit` rebased onto
+`dev@51ccbcc5`: the audit opening, the decisions, the 34 mapping commits,
+the five separate commits (decisions 7 and 8, `f5748851`, `630f71bb`) and
+the batch records, at `026de536`, then `c3401435`. x86_64 host, 32 cores.
+
+**Rebase.** `dev` was 46 commits ahead of the branch's base. The branch's
+first two commits (`rns-crypto: document the ESP-IDF RNG unsafe block`,
+`rns-crypto: fold duplicate Token variants into their buffer forms`) were
+already on `dev` with the same patch and were dropped. Four commits
+conflicted, each resolved keeping both sides:
+
+- `f779ae93` (commit 1) and `9f503ac2` (commit 19): `dev` split
+  `rns-net/src/interface/mod.rs` into topic submodules (`4eac9184`).
+  Commit 1's `shared_medium: false` moved to the two test `InterfaceInfo`
+  literals now in `interface/entry.rs` and `interface/factory.rs`; commit
+  19's `lossless_medium()` and its test moved to `interface/type_hints.rs`
+  beside `shared_medium_hint` and `tunnels_allowed`, with the reason inside
+  the `allow(dead_code)` attribute as `dev` now writes lint allows. Its
+  commit message names the new place.
+- `28b241ae` (commit 9): `dev` dropped the unused `hash_width` argument of
+  `KnownDestinationsStore::open_read_only`, where the commit replaced the
+  free `load_instance_known_destinations` with the RPC-capable method; the
+  method keeps the commit's behaviour with the one-argument call.
+- `af10606b` (commit 26): `dev` removed `allow(dead_code)` from
+  `link_table_ref`, the commit changed its return type to `LinkTable`;
+  both kept.
+- `f63b3dac` (commit 32): `dev` factored the held-exhaustion resend into
+  `Channel::push_resends`, shared with its new `resend_outstanding` (a
+  Direct Link falling back resends what is outstanding, `b211d87e`). The
+  commit's `resend: true` went into `push_resends`, so `dev`'s fallback
+  resend is not counted as link traffic again either, and `dev`'s test of
+  it checks the flag. The commit message says so.
+
+Commit messages that named other branch commits by hash were rewritten to
+the rebased hashes (messages only, trees unchanged), as was every local
+hash in this audit. `git log --format='%(trailers:key=Upstream-Commit,valueonly)'
+dev..HEAD` lists the 34 upstream hashes in ancestry order, one trailer per
+mapping commit as its last line, with the mapping commit's subject equal
+to `upstream: ` plus the upstream subject; no other commit on the branch
+or on `dev` carries a trailer for them.
+
+**Fix found by the gates.** `bash scripts/lint-host.sh` failed on
+`026de536`: `dev` now denies `expect` in production code (`7db2ad7f`), and
+`ba44bc2c` (decision 7) expects the initiator constructors to accept
+AES-256-CBC in `LinkManager::create_link_with_keys`. `c3401435` (`link:
+name the invariant behind the initiator's mode expect`, no trailer) adds
+the scoped allow with its reason; their only error is a mode that is not
+enabled. Attribute only: the test suites below compiled `026de536` for the
+workspace run and `c3401435` from the hooks run on, and fmt and lint were
+rerun on `c3401435`.
+
+| Gate | Command | Result |
+|---|---|---|
+| Formatting | `cargo fmt --check` | Clean (on `026de536` and `c3401435`) |
+| Lint | `bash scripts/lint-host.sh` | Failed on `026de536` (above); clean on `c3401435` |
+| Feature checks | `cargo check -p rns-cli -p rns-ctl --bins --no-default-features`, again with `--features iface-tcp,rns-hooks-native`; `cargo check -p rns-crypto -p rns-core --no-default-features` | Clean |
+| Workspace | `cargo test --workspace --no-fail-fast` | 3,846 passed, 0 failed, 76 ignored |
+| Hooks feature suite | `./rns-hooks/build-examples.sh`; `cargo test --workspace --features rns-hooks --no-fail-fast` | 3,913 passed, 0 failed, 76 ignored |
+| Hook backends and built-in hooks | `cargo test -p rns-hooks --features wasm,native`; `cargo test -p rns-net --test e2e_hooks` with `rns-hooks-wasm,rns-hooks-builtin`, plus `compact-threads`, plus `engine-parallel`; `cargo test -p rns-ctl --features rns-hooks-builtin test_hook_api_loads_reloads_lists_and_unloads_builtin_hook` | 85 passed, 1 ignored; `e2e_hooks` and the rns-ctl test 76 passed in all, 0 failed |
+| rns-ctl TLS | `cargo test -p rns-ctl --features tls` | 139 passed, 0 failed |
+| Compact engine | `cargo test -p rns-net`; `cargo test -p rns-net --features compact-threads`; `cargo test -p rns-net --lib --features iface-rnode-ble rnode` | 3,496 passed in all, 0 failed, 8 ignored |
+| rns-esp32 host lane | `cargo metadata --locked`, both host `cargo clippy --locked` commands of CI, `cargo test --locked --manifest-path rns-esp32/Cargo.toml` | Clean; 68 passed. This lane builds the host library only, not `src/driver.rs` and `src/main.rs`, the two files the branch edits (commit 1's `shared_medium`, decision 8's `TransportConfig` field). The firmware build needs the ESP toolchain and was not run. |
+| Python tools | `python3 -m compileall -q scripts tests`; `python3 -m unittest discover -s tests -p 'test_*.py'` | 47 passed |
+| ARMv7 build smoke | CI's five `cargo build --release --target armv7-unknown-linux-gnueabihf` commands (`rnsd` and `rns-ctl` without and with `rns-hooks-native`, `rns-server` with `rns-hooks-builtin`), linker `arm-linux-gnueabihf-gcc` | All built, on `c3401435` |
+
+The known flaky `direct_path_carries_more_than_a_base_mtu_link_and_falls_back_to_it`
+passed in every run above.
+
+**Exact-target interop.** A disposable worktree of
+`/home/lelloman/Reticulum` at `cff4d03fdbd6bfb63b765280cd944756ac5cce8d`
+(`HEAD:RNS` `bcab6ab7ff72c4315aceda97267ea9af4fcccbc4`, the pinned `RNS`
+tree), with `PYTHONPATH` and `RETICULUM_UPSTREAM_DIR` set to it.
+In the same run, `import RNS` loaded `RNS/__init__.py` from that worktree
+and reported `1.6.1`, and `git rev-parse HEAD HEAD:RNS` there gave those
+two hashes. The commands are CI's interop job:
+
+| Command | Result |
+|---|---|
+| `cargo test -p rns-net --test python_interop -- --nocapture` | 6 passed, 1 ignored (`python_rns_idle_links_stay_open`, over a minute idle, ignored as in CI) |
+| the same with `--features compact-threads` and with `--features engine-parallel` | 6 passed, 1 ignored, each |
+| `cargo test -p rns-cli --test utility_interop -- --ignored --nocapture` | 34 passed, 0 failed, among them `python_split_mode_client_loads_rust_known_destinations_over_rpc`, `python_rnpath_lists_rust_path_table` and `python_rnpath_reads_rust_remote_path_table` |
+| `cargo test -p rns-cli --test placeholders -- --ignored --nocapture` | 1 passed |
+| `cargo test -p rns-rnodeconf --test rnodeconf -- --ignored --nocapture` | 32 passed |
+| `cargo test -p rns-git --lib -- --nocapture` | 223 passed, 2 ignored (need a WebP backend); with `RETICULUM_UPSTREAM_DIR` set the Python-peer test cannot skip, and passed |
+
+**Fixtures.** The fixtures this range regenerated are the `rnstatus`
+fixtures (commits 10, 29, 30) and the argparse table, `rnpath.pickle` and
+`cli_golden/rnpath.txt` (commits 20, 24, 25, 26).
+`tests/generate_rnstatus_fixtures.py` names `rgit e8b3b14b`, the commit it
+last ran at (30). `tests/generate_argparse_fixtures.py` pins only
+`RNS.__version__ == "1.6.1"` (it has never named a commit) and last ran at
+`1f7cd145` (26). In a scratch copy of the tree, with `PYTHONPATH` at the
+`cff4d03f` worktree, both were rerun, and so were the default config,
+example config and discovery record generators (all asserting 1.6.1):
+after `rustfmt` on the generated `upstream_parsers.rs`, nothing differs
+from the committed tree. `cli_golden/rnpath.txt` is rns-rs's own output,
+checked by `cli_golden` in the workspace run. The rnid generator asserts
+1.6.0 and the announce rate table generator its own reference commit;
+neither is touched by this range and neither was rerun.
+
+**Native documentation.** The user-visible changes are documented:
+the autoconnect caps and their key order (`docs/configuration.md`,
+`docs/interface-discovery.md`, which also takes commit 3's sizing advice),
+the split-mode `known_destinations` RPC (`docs/getting-started.md`), the
+reserved and AES-128 link modes (`docs/protocol-spec.md`), the remote
+transport lines and link traffic totals (`docs/rnstatus.md`), the rnpath
+options and the ` (R)`/` (u)`/` (?)` path state marker (`docs/cli-tools.md`),
+rngit's `link_cost` and `stamp_value` (`docs/rns-git.md`), the
+destination type files and filter logging (`docs/configuration.md`), and
+`unresponsive_path_recovery` with the emission time filter
+(`docs/configuration.md`, `docs/interoperability.md`).
+
+**Drift.** `python3 scripts/check_upstream_drift.py --no-fetch
+--upstream-dir <the cff4d03f worktree> --baseline cff4d03f…` reports
+`current`: rgit and GitHub tips both `cff4d03f`, 0 commits ahead, from
+refs cached by the 2026-11-20 05:56 UTC fetch (not refetched here). The
+`1.6.1` tag object `bde4cd79` points at `cff4d03f`; its SSH signature was
+not verified (no allowed signers file is configured).
+
+**Not run.** Docker E2E, the dual-VPS Backbone smoke, the ESP32 firmware
+build and physical hardware validation. Docker E2E and the CI interop
+matrix, which this promotion moves to `cff4d03f`, are left to the
+promotion pull request's CI; hardware validation is not claimed.
