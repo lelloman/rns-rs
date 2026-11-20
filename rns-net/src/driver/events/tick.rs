@@ -151,12 +151,12 @@ impl Driver {
         }
 
         self.finish_ratchet_cleanup_if_ready();
-        if self.known_destination_cleanup.is_none() {
+        if self.known.cleanup.is_none() {
             self.cache_cleanup_counter += 1;
-            if self.cache_cleanup_counter >= self.known_destinations_cleanup_interval_ticks {
+            if self.cache_cleanup_counter >= self.known.cleanup_interval_ticks {
                 self.cache_cleanup_counter = 0;
-                self.known_destination_cleanup = Some(KnownDestinationCleanup {
-                    candidates: self.known_destinations.keys().copied().collect(),
+                self.known.cleanup = Some(KnownDestinationCleanup {
+                    candidates: self.known.entries.keys().copied().collect(),
                     cursor: 0,
                     started_at: Instant::now(),
                     removed: 0,

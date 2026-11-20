@@ -140,6 +140,7 @@ mod events;
 mod hook_events;
 mod interface_discovery;
 mod interface_management;
+mod known_destinations;
 mod lifecycle;
 mod link_stamps;
 mod queries;
@@ -340,10 +341,8 @@ pub struct Driver {
     pub(crate) last_management_announce: f64,
     /// Whether initial management announce has been sent (delayed 5s after start).
     pub(crate) initial_announce_sent: bool,
-    /// Cache of known announced identities and lifecycle state, keyed by destination hash.
-    pub(crate) known_destinations: HashMap<[u8; 16], KnownDestinationState>,
-    /// Fingerprints of the known destinations as last flushed to storage.
-    pub(crate) known_destinations_flushed: HashMap<[u8; 16], u64>,
+    /// Known destinations: announced identities and their retention policy.
+    pub(crate) known: known_destinations::KnownDestinations,
     /// RSSI, SNR and link quality of the latest packets received on
     /// interfaces that report them (`Transport.local_client_rssi_cache` and
     /// its SNR and Q siblings), oldest first.
@@ -371,10 +370,6 @@ pub struct Driver {
     pub(crate) ratchet_store: Option<Arc<dyn crate::storage::RatchetStore>>,
     /// TTL for received ratchets, in seconds.
     pub(crate) ratchet_expiry_secs: f64,
-    /// TTL for known destinations without an active path, in seconds.
-    pub(crate) known_destinations_ttl: f64,
-    /// Maximum number of retained known destinations.
-    pub(crate) known_destinations_max_entries: usize,
     /// TTL for announce rate-limiter entries without an active path, in seconds.
     pub(crate) rate_limiter_ttl_secs: f64,
     /// Destination hash for rnstransport.path.request (PLAIN).
@@ -495,10 +490,6 @@ pub struct Driver {
     pub(crate) cache_cleanup_counter: u32,
     /// Tick counter for incremental announce-cache cleanup scheduling.
     pub(crate) announce_cache_cleanup_counter: u32,
-    /// Runtime-configurable cleanup interval for known destinations.
-    pub(crate) known_destinations_cleanup_interval_ticks: u32,
-    /// Incremental known-destination cleanup pass, if one is active.
-    known_destination_cleanup: Option<KnownDestinationCleanup>,
     /// Low-priority ratchet filesystem cleanup associated with the last pass.
     ratchet_cleanup_handle: Option<std::thread::JoinHandle<()>>,
     /// Timers and housekeeping the driver runs itself when they are folded
@@ -510,8 +501,6 @@ pub struct Driver {
     /// The probe server, when it runs on the driver loop (with services
     /// folded); otherwise the node runs it on a thread of its own.
     pub(crate) probe_server: Option<crate::holepunch::probe::FoldedProbeServer>,
-    /// Count of known-destination cap evictions since start.
-    pub(crate) known_destinations_cap_evict_count: usize,
     /// Runtime-configurable interval for starting announce cache cleanup.
     pub(crate) announce_cache_cleanup_interval_ticks: u32,
     /// When set, announce cache cleanup is in progress (contains active packet hashes).

@@ -345,7 +345,7 @@ impl Driver {
             )),
             "global.known_destinations_ttl_secs" => Some(make_entry(
                 key,
-                RuntimeConfigValue::Float(self.known_destinations_ttl),
+                RuntimeConfigValue::Float(self.known.ttl),
                 RuntimeConfigValue::Float(defaults.known_destinations_ttl),
                 RuntimeConfigApplyMode::Immediate,
                 "TTL for known destinations without an active path.",
@@ -359,7 +359,7 @@ impl Driver {
             )),
             "global.known_destinations_cleanup_interval_ticks" => Some(make_entry(
                 key,
-                RuntimeConfigValue::Int(self.known_destinations_cleanup_interval_ticks as i64),
+                RuntimeConfigValue::Int(self.known.cleanup_interval_ticks as i64),
                 RuntimeConfigValue::Int(defaults.known_destinations_cleanup_interval_ticks as i64),
                 RuntimeConfigApplyMode::Immediate,
                 "Tick interval between known-destinations cleanup passes.",

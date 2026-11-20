@@ -394,11 +394,7 @@ impl Driver {
         &mut self,
         destination: &[u8; 16],
     ) -> Option<Option<rns_crypto::ed25519::Ed25519PublicKey>> {
-        let public_key = self
-            .known_destinations
-            .get(destination)?
-            .announced
-            .public_key;
+        let public_key = self.known.entries.get(destination)?.announced.public_key;
         if let Some(key) = self.proof_keys.get(destination) {
             return Some(Some(key.clone()));
         }

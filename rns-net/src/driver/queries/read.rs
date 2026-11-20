@@ -36,7 +36,7 @@ impl Driver {
                             .map(|i| i.name.clone())
                     })
                     .unwrap_or_default();
-                let known = self.known_destinations.get(hash);
+                let known = self.known.entries.get(hash);
                 PathTableEntry {
                     hash: *hash,
                     timestamp: entry.timestamp,

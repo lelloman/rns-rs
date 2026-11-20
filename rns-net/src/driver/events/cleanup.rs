@@ -4,29 +4,29 @@ use super::*;
 
 impl Driver {
     pub(super) fn continue_known_destination_cleanup(&mut self, now: f64) {
-        let Some(mut cleanup) = self.known_destination_cleanup.take() else {
+        let Some(mut cleanup) = self.known.cleanup.take() else {
             return;
         };
         let end =
             (cleanup.cursor + KNOWN_DESTINATION_CLEANUP_BATCH_SIZE).min(cleanup.candidates.len());
         for destination_hash in &cleanup.candidates[cleanup.cursor..end] {
             let remove = self
-                .known_destinations
+                .known
+                .entries
                 .get(destination_hash)
                 .is_some_and(|state| {
                     !self.engine.has_path(destination_hash)
                         && !self.local_destinations.contains_key(destination_hash)
                         && !state.retained
-                        && now - Self::known_destination_relevance_time(state)
-                            >= self.known_destinations_ttl
+                        && now - Self::known_destination_relevance_time(state) >= self.known.ttl
                 });
-            if remove && self.known_destinations.remove(destination_hash).is_some() {
+            if remove && self.known.entries.remove(destination_hash).is_some() {
                 cleanup.removed += 1;
             }
         }
         cleanup.cursor = end;
         if cleanup.cursor < cleanup.candidates.len() {
-            self.known_destination_cleanup = Some(cleanup);
+            self.known.cleanup = Some(cleanup);
             return;
         }
 
@@ -69,7 +69,7 @@ impl Driver {
         let Some(store) = self.ratchet_store.clone() else {
             return;
         };
-        let known_destinations = self.known_destinations.keys().copied().collect();
+        let known_destinations = self.known.entries.keys().copied().collect();
         let expiry = self.ratchet_expiry_secs;
         if crate::engine::FOLD_TIMERS {
             let queued = self

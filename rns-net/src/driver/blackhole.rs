@@ -77,7 +77,7 @@ impl Driver {
             .path_table_entries()
             .map(|(dest_hash, _)| *dest_hash)
             .filter(|dest_hash| {
-                self.known_destinations.get(dest_hash).is_some_and(|known| {
+                self.known.entries.get(dest_hash).is_some_and(|known| {
                     self.engine
                         .is_blackholed(&known.announced.identity_hash.0, now)
                 })
