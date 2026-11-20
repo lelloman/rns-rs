@@ -224,7 +224,10 @@ pub enum MultiPathDecision {
 ///   against **that** specific path entry
 /// - New `next_hop` → accept as `AddAlternative` if the blob is genuinely
 ///   new (not in any stored path's blobs) and emission timestamp is valid
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the announce acceptance decision, on the announce hot path"
+)]
 pub fn decide_announce_multipath(
     existing_set: Option<&PathSet>,
     announce_hops: u8,
@@ -250,7 +253,10 @@ pub fn decide_announce_multipath(
 }
 
 /// Multi-path announce decision with interface gravity context.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of the announce acceptance decision, on the announce hot path"
+)]
 pub fn decide_announce_multipath_with_gravity(
     existing_set: Option<&PathSet>,
     announce_hops: u8,

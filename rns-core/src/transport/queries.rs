@@ -613,25 +613,21 @@ impl TransportEngine {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn path_table(&self) -> &BTreeMap<[u8; 16], PathSet> {
         &self.path_table
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn announce_table(&self) -> &BTreeMap<[u8; 16], AnnounceEntry> {
         &self.announce_table
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn held_announces(&self) -> &BTreeMap<[u8; 16], AnnounceEntry> {
         &self.held_announces
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn announce_retained_bytes(&self) -> usize {
         self.announce_retained_bytes_total()
     }
@@ -653,12 +649,6 @@ impl TransportEngine {
             tables::ReverseTable::with_capacity_and_hasher(self.reverse_table.len(), hasher);
         table.extend(self.reverse_table.drain());
         self.reverse_table = table;
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn reverse_table(&self) -> &tables::ReverseTable {
-        &self.reverse_table
     }
 }
 

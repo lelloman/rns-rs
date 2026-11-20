@@ -173,7 +173,10 @@ impl AnnounceQueues {
     /// returns the action immediately. Otherwise, queues it.
     ///
     /// Returns Some(action) if the announce should be sent now, None if queued.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is a distinct property of the announce or its interface, on the announce hot path"
+    )]
     pub fn gate_announce(
         &mut self,
         interface: InterfaceId,

@@ -297,7 +297,10 @@ impl RawPacket {
     /// Pack only wire bytes when the caller does not need a packet hash.
     /// Validation and encoding match the hash-producing packing methods.
     /// [`RawPacket::pack_raw_with_hash_with_max_mtu`] into shared bytes.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per packet header field, mirroring the other pack_raw constructors"
+    )]
     pub fn pack_raw_shared_with_hash_with_max_mtu(
         flags: PacketFlags,
         hops: u8,
@@ -329,7 +332,10 @@ impl RawPacket {
     /// `payload_len` bytes that `fill` writes in place, so a payload produced
     /// for this packet (a ciphertext, say) needs no buffer of its own. `fill`
     /// receives the payload zeroed.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per packet header field, mirroring the other pack_raw constructors"
+    )]
     pub fn pack_raw_shared_filled_with_max_mtu(
         flags: PacketFlags,
         hops: u8,

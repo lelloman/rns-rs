@@ -12,7 +12,10 @@ use super::*;
 /// alternative path, and with `prefer_shorter_path` a shorter one can
 /// replace the path regardless of emission time, so both keep every
 /// announce.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the engine tables are passed as separate borrows so the caller can hold other engine fields mutably; runs for every received announce"
+)]
 pub(super) fn announce_passes_prefilter(
     config: &TransportConfig,
     path_table: &BTreeMap<[u8; 16], PathSet>,
@@ -447,7 +450,6 @@ impl TransportEngine {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn link_table_ref(&self) -> &BTreeMap<[u8; 16], LinkEntry> {
         &self.link_table
     }

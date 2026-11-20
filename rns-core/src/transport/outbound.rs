@@ -66,7 +66,10 @@ pub(crate) fn route_outbound_with_options(
 }
 
 /// [`route_outbound_with_options`], appending to `actions`.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the engine tables are passed as separate borrows so the caller can hold other engine fields mutably; outbound routing is a hot path"
+)]
 pub(crate) fn route_outbound_into<B: PacketStorage>(
     path_table: &alloc::collections::BTreeMap<[u8; 16], PathSet>,
     interfaces: &alloc::collections::BTreeMap<InterfaceId, InterfaceInfo>,
