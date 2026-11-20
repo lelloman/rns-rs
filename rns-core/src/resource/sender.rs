@@ -363,19 +363,23 @@ impl ResourceSender {
             start..start,
             parts
                 .iter()
-                .map(|&index| ResourceAction::SendPart(self.part(index).to_vec())),
+                .map(|&(index, _)| ResourceAction::SendPart(self.part(index).to_vec())),
         );
     }
 
     /// [`Self::handle_request_into`] without copying the requested parts:
     /// their indices are appended to `parts` in sending order, each standing
     /// for a [`ResourceAction::SendPart`] of [`Self::part_data`] that comes
-    /// before the actions appended to `out`.
+    /// before the actions appended to `out`. With each index goes whether
+    /// that part was sent before: upstream's `Resource.request` sends a
+    /// part with `part.send()` the first time and `part.resend()` after,
+    /// and only the first counts toward the link's traffic (01ffb98e
+    /// `Transport.link_txb`).
     pub fn handle_request_parts_into(
         &mut self,
         request_data: &[u8],
         now: f64,
-        parts: &mut Vec<usize>,
+        parts: &mut Vec<(usize, bool)>,
         out: &mut Vec<ResourceAction>,
     ) {
         if self.status == ResourceStatus::Failed {
@@ -422,7 +426,7 @@ impl ResourceSender {
                 .clone()
                 .any(|h| h == self.part_hashes[part_idx].as_slice())
             {
-                parts.push(part_idx);
+                parts.push((part_idx, self.sent_indices[part_idx]));
                 if !self.sent_indices[part_idx] {
                     self.sent_indices[part_idx] = true;
                     self.sent_parts += 1;
@@ -852,6 +856,36 @@ mod tests {
                 assert_eq!(sender.sent_parts, expected.len());
             }
         }
+    }
+
+    #[test]
+    fn requested_parts_say_whether_they_were_sent_before() {
+        // upstream's Resource.request: part.send() the first time a part is
+        // requested, part.resend() after.
+        let data = varying_data(RESOURCE_SDU * 2 + 5);
+        let mut sender = make_sender(&data);
+        sender.advertise(1000.0);
+        let request = |hashes: &[[u8; RESOURCE_MAPHASH_LEN]], sender: &ResourceSender| {
+            let mut request = vec![RESOURCE_HASHMAP_IS_NOT_EXHAUSTED];
+            request.extend_from_slice(&sender.resource_hash);
+            for hash in hashes {
+                request.extend_from_slice(hash);
+            }
+            request
+        };
+        let hashes = sender.part_hashes.clone();
+        let mut ask = |hashes: Vec<[u8; RESOURCE_MAPHASH_LEN]>, now: f64| {
+            let request = request(&hashes, &sender);
+            let (mut parts, mut out) = (Vec::new(), Vec::new());
+            sender.handle_request_parts_into(&request, now, &mut parts, &mut out);
+            parts
+        };
+        assert_eq!(ask(vec![hashes[0]], 1001.0), [(0, false)]);
+        assert_eq!(
+            ask(hashes.clone(), 1002.0),
+            [(0, true), (1, false), (2, false)]
+        );
+        assert_eq!(ask(hashes, 1003.0), [(0, true), (1, true), (2, true)]);
     }
 
     #[test]

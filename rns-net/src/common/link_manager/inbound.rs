@@ -51,6 +51,7 @@ impl LinkManager {
         // Python accounts link traffic once the packet is accepted on its
         // attached interface, before dispatch/decryption of its context.
         if packet.flags.packet_type != constants::PACKET_TYPE_LINKREQUEST {
+            let on_attached_interface = self.link_route_accepts(&dest_hash, receiving_interface);
             if let Some(link) = self.links.get_mut(&dest_hash) {
                 // `Link.__receive` drops a keepalive probe arriving at the
                 // initiator, which sends them (an echo of its own probe), before
@@ -63,6 +64,9 @@ impl LinkManager {
                     return;
                 }
                 link.engine.record_inbound_traffic(packet.data().len());
+                if Self::link_receives(&link.engine, &packet, on_attached_interface) {
+                    self.local_link_rxb += raw.len() as u64;
+                }
                 // Every packet `Link.__receive` handles counts as inbound
                 // and reactivates a STALE link, before it is dispatched or
                 // decrypted (a responder answering a probe sees an ACTIVE
@@ -103,6 +107,39 @@ impl LinkManager {
             ),
             _ => {}
         }
+    }
+
+    /// Whether upstream's `Link.__receive` accepts `packet` and adds its raw
+    /// length to `Transport.link_rxb` (01ffb98e).
+    ///
+    /// Transport hands a link DATA packet to `Link.receive` unless it is a
+    /// CACHE_REQUEST, which Transport answers itself, and only on the link's
+    /// attached interface; and a RESOURCE_PRF proof, whose interface
+    /// `Link.__receive` checks. Other proofs go to the receipts and LRPROOF
+    /// to `validate_proof`, uncounted. The link must be in
+    /// `Transport.active_links_map` (a responder's from its request on, an
+    /// initiator's once its proof activated it), and `Link.__receive`
+    /// ignores it when closed. The initiator's own keepalive echo returns
+    /// before this. rns-rs's attached-interface check is
+    /// [`Self::link_route_accepts`], which the driver already applies to
+    /// link DATA.
+    pub(super) fn link_receives(
+        engine: &LinkEngine,
+        packet: &RawPacket<&[u8]>,
+        on_attached_interface: bool,
+    ) -> bool {
+        let state = engine.state();
+        let active =
+            state != LinkState::Closed && !(engine.is_initiator() && state == LinkState::Pending);
+        let handed_to_link = match packet.flags.packet_type {
+            constants::PACKET_TYPE_DATA => {
+                packet.flags.destination_type == constants::DESTINATION_LINK
+                    && packet.context != constants::CONTEXT_CACHE_REQUEST
+            }
+            constants::PACKET_TYPE_PROOF => packet.context == constants::CONTEXT_RESOURCE_PRF,
+            _ => false,
+        };
+        active && handed_to_link && on_attached_interface
     }
 
     /// Handle DATA packets on an established link.

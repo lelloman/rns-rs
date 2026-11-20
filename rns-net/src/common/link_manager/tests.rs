@@ -7542,3 +7542,215 @@ fn channel_retries_running_out_on_the_direct_path_fall_back_before_resending() {
         2
     );
 }
+
+/// The raws of the link manager's `SendPacket` actions, counted as the
+/// driver counts them when it dispatches them.
+fn dispatch_counted(mgr: &mut LinkManager, actions: &[LinkManagerAction]) -> Vec<Vec<u8>> {
+    actions
+        .iter()
+        .filter_map(|action| match action {
+            LinkManagerAction::SendPacket { raw, .. } => {
+                mgr.count_sent_link_packet(&RawPacket::unpack(raw).unwrap());
+                Some(raw.to_vec())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn deliver_on(
+    mgr: &mut LinkManager,
+    raw: &[u8],
+    interface: u64,
+    rng: &mut dyn Rng,
+) -> Vec<LinkManagerAction> {
+    let packet = RawPacket::unpack(raw).unwrap();
+    mgr.handle_local_delivery(
+        packet.destination_hash,
+        raw,
+        packet.packet_hash,
+        rns_core::transport::types::InterfaceId(interface),
+        rng,
+    )
+}
+
+fn link_packet(link_id: &LinkId, packet_type: u8, context: u8, data: &[u8]) -> Vec<u8> {
+    RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type,
+        },
+        0,
+        link_id,
+        None,
+        context,
+        data,
+    )
+    .unwrap()
+    .raw
+    .to_vec()
+}
+
+// upstream 01ffb98e: `Link.__receive` adds `len(packet.raw)` to
+// `Transport.link_rxb` for every packet a link accepts, and `Packet.send`
+// adds `len(self.raw)` to `link_txb` for every packet sent on a link it
+// does not refuse as closed (`Packet.resend()` adds nothing).
+#[test]
+fn local_link_traffic_counts_raw_bytes_as_upstream() {
+    let mut rng = OsRng;
+    let dest_hash = [0xDD; 16];
+    let mut resp = LinkManager::new();
+    let (sig_prv, sig_pub) = make_dest_keys(&mut rng);
+    resp.register_link_destination(dest_hash, sig_prv, sig_pub, ResourceStrategy::AcceptNone);
+    let mut init = LinkManager::new();
+    let len = |raws: &[Vec<u8>]| raws.iter().map(Vec::len).sum::<usize>() as u64;
+    let (mut init_rx, mut init_tx, mut resp_rx, mut resp_tx) = (0, 0, 0, 0);
+
+    // The link request goes to the destination: neither side counts it.
+    let (link_id, actions) =
+        init.create_link(&dest_hash, &sig_pub, 1, constants::MTU as u32, &mut rng);
+    let request = dispatch_counted(&mut init, &actions);
+    assert_eq!(request.len(), 1);
+    let actions = deliver_on(&mut resp, &request[0], 0, &mut rng);
+    assert_eq!(init.local_link_traffic(), (0, 0));
+    assert_eq!(resp.local_link_traffic(), (0, 0));
+
+    // The proof is sent on the link; the initiator validates it outside
+    // `Link.receive`, so it does not count as received.
+    let proof = dispatch_counted(&mut resp, &actions);
+    resp_tx += len(&proof);
+    let actions = deliver_on(&mut init, &proof[0], 0, &mut rng);
+    assert_eq!(init.local_link_traffic(), (0, 0));
+    assert_eq!(resp.local_link_traffic(), (0, resp_tx));
+
+    // The RTT packet reaches the responder's link in its handshake.
+    let rtt = dispatch_counted(&mut init, &actions);
+    init_tx += len(&rtt);
+    let actions = deliver_on(&mut resp, &rtt[0], 0, &mut rng);
+    resp_rx += rtt[0].len() as u64;
+    resp_tx += len(&dispatch_counted(&mut resp, &actions));
+    assert_eq!(resp.link_state(&link_id), Some(LinkState::Active));
+    assert_eq!(init.local_link_traffic(), (init_rx, init_tx));
+    assert_eq!(resp.local_link_traffic(), (resp_rx, resp_tx));
+
+    // Data both ways, as sent.
+    let actions = init.send_on_link(&link_id, b"hello", constants::CONTEXT_NONE, &mut rng);
+    let data = dispatch_counted(&mut init, &actions);
+    init_tx += len(&data);
+    let actions = deliver_on(&mut resp, &data[0], 0, &mut rng);
+    resp_rx += data[0].len() as u64;
+    resp_tx += len(&dispatch_counted(&mut resp, &actions));
+    let actions = resp.send_on_link(&link_id, b"hi there", constants::CONTEXT_NONE, &mut rng);
+    let data = dispatch_counted(&mut resp, &actions);
+    resp_tx += len(&data);
+    let actions = deliver_on(&mut init, &data[0], 0, &mut rng);
+    init_rx += data[0].len() as u64;
+    init_tx += len(&dispatch_counted(&mut init, &actions));
+    assert_eq!(init.local_link_traffic(), (init_rx, init_tx));
+    assert_eq!(resp.local_link_traffic(), (resp_rx, resp_tx));
+
+    // Keepalives: the responder's link takes the probe, the initiator's
+    // its answer, but not its own probe echoed back.
+    let probe = link_packet(
+        &link_id,
+        constants::PACKET_TYPE_DATA,
+        constants::CONTEXT_KEEPALIVE,
+        &[0xff],
+    );
+    let actions = deliver_on(&mut resp, &probe, 0, &mut rng);
+    resp_rx += probe.len() as u64;
+    resp_tx += len(&dispatch_counted(&mut resp, &actions));
+    deliver_on(&mut init, &probe, 0, &mut rng);
+    let answer = link_packet(
+        &link_id,
+        constants::PACKET_TYPE_DATA,
+        constants::CONTEXT_KEEPALIVE,
+        &[0xfe],
+    );
+    deliver_on(&mut init, &answer, 0, &mut rng);
+    init_rx += answer.len() as u64;
+    assert_eq!(init.local_link_traffic(), (init_rx, init_tx));
+    assert_eq!(resp.local_link_traffic(), (resp_rx, resp_tx));
+
+    // Not handed to `Link.receive`: a cache request (Transport answers it)
+    // and a packet proof (it goes to the receipts).
+    let cache_request = link_packet(
+        &link_id,
+        constants::PACKET_TYPE_DATA,
+        constants::CONTEXT_CACHE_REQUEST,
+        &[0x11; 32],
+    );
+    deliver_on(&mut resp, &cache_request, 0, &mut rng);
+    let packet_proof = link_packet(
+        &link_id,
+        constants::PACKET_TYPE_PROOF,
+        constants::CONTEXT_NONE,
+        &[0x22; 96],
+    );
+    deliver_on(&mut init, &packet_proof, 0, &mut rng);
+    assert_eq!(init.local_link_traffic(), (init_rx, init_tx));
+    assert_eq!(resp.local_link_traffic(), (resp_rx, resp_tx));
+
+    // A resource proof is, on the link's interface only.
+    let resource_proof = link_packet(
+        &link_id,
+        constants::PACKET_TYPE_PROOF,
+        constants::CONTEXT_RESOURCE_PRF,
+        &[0x33; 64],
+    );
+    deliver_on(&mut resp, &resource_proof, 7, &mut rng);
+    assert_eq!(resp.local_link_traffic(), (resp_rx, resp_tx));
+    deliver_on(&mut resp, &resource_proof, 0, &mut rng);
+    resp_rx += resource_proof.len() as u64;
+    assert_eq!(resp.local_link_traffic(), (resp_rx, resp_tx));
+
+    // A channel envelope counts when first sent, not when resent.
+    let send = |resend| rns_core::channel::ChannelAction::SendOnLink {
+        raw: b"envelope".to_vec(),
+        sequence: 0,
+        resend,
+    };
+    let actions = resp.process_channel_actions(&link_id, vec![send(false)], &mut rng);
+    resp_tx += len(&dispatch_counted(&mut resp, &actions));
+    let actions = resp.process_channel_actions(&link_id, vec![send(true)], &mut rng);
+    assert_eq!(dispatch_counted(&mut resp, &actions).len(), 1);
+    assert_eq!(resp.local_link_traffic(), (resp_rx, resp_tx));
+
+    // So does a resource part: requested twice, it is sent twice and
+    // counted once.
+    let actions = init.send_resource(&link_id, &[0x5a; 1200], None, &mut rng);
+    init_tx += len(&dispatch_counted(&mut init, &actions));
+    let sender = &init.links[&link_id].outgoing_resources[0];
+    let mut request = vec![constants::RESOURCE_HASHMAP_IS_NOT_EXHAUSTED];
+    request.extend_from_slice(&sender.resource_hash);
+    for hash in &sender.part_hashes {
+        request.extend_from_slice(hash);
+    }
+    let mut actions = Vec::new();
+    init.handle_resource_req_into(&link_id, &request, &mut rng, &mut actions);
+    let parts = dispatch_counted(&mut init, &actions);
+    assert!(!parts.is_empty());
+    init_tx += len(&parts);
+    assert_eq!(init.local_link_traffic(), (init_rx, init_tx));
+    let mut actions = Vec::new();
+    init.handle_resource_req_into(&link_id, &request, &mut rng, &mut actions);
+    assert_eq!(dispatch_counted(&mut init, &actions), parts);
+    assert_eq!(init.local_link_traffic(), (init_rx, init_tx));
+
+    // LINKCLOSE goes out before the link closes and counts; a closed link
+    // then takes nothing.
+    let actions = resp.teardown_link(&link_id);
+    let close = dispatch_counted(&mut resp, &actions);
+    assert_eq!(close.len(), 1);
+    resp_tx += len(&close);
+    assert_eq!(resp.link_state(&link_id), Some(LinkState::Closed));
+    let actions = init.send_on_link(&link_id, b"late", constants::CONTEXT_NONE, &mut rng);
+    let late = dispatch_counted(&mut init, &actions);
+    init_tx += len(&late);
+    deliver_on(&mut resp, &late[0], 0, &mut rng);
+    assert_eq!(init.local_link_traffic(), (init_rx, init_tx));
+    assert_eq!(resp.local_link_traffic(), (resp_rx, resp_tx));
+}

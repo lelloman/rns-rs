@@ -136,7 +136,11 @@ impl Channel {
             delivered: false,
         });
 
-        Ok(alloc::vec![ChannelAction::SendOnLink { raw, sequence }])
+        Ok(alloc::vec![ChannelAction::SendOnLink {
+            raw,
+            sequence,
+            resend: false,
+        }])
     }
 
     /// Receive decrypted envelope bytes.
@@ -237,7 +241,11 @@ impl Channel {
             }
         }
 
-        alloc::vec![ChannelAction::SendOnLink { raw, sequence }]
+        alloc::vec![ChannelAction::SendOnLink {
+            raw,
+            sequence,
+            resend: true,
+        }]
     }
 
     /// The link moved to another path (an rns-rs Direct Link fell back):
@@ -258,6 +266,7 @@ impl Channel {
             actions.push(ChannelAction::SendOnLink {
                 raw: envelope.raw.clone(),
                 sequence: envelope.sequence,
+                resend: true,
             });
         }
     }
@@ -432,8 +441,13 @@ mod tests {
         let actions = ch.send(0x01, b"hello", 1.0, 500).unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            ChannelAction::SendOnLink { raw, sequence } => {
+            ChannelAction::SendOnLink {
+                raw,
+                sequence,
+                resend,
+            } => {
                 assert_eq!(*sequence, 0);
+                assert!(!*resend);
                 // Simulate receive on the other side
                 let mut ch2 = Channel::new(0.1);
                 let recv_actions = ch2.receive(raw, 1.1);
@@ -536,7 +550,10 @@ mod tests {
         let actions = ch.tick(timeout + 0.01);
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            ChannelAction::SendOnLink { sequence, .. } => assert_eq!(*sequence, 0),
+            // A resend, which upstream does not count as link traffic.
+            ChannelAction::SendOnLink {
+                sequence, resend, ..
+            } => assert_eq!((*sequence, *resend), (0, true)),
             _ => panic!("Expected SendOnLink"),
         }
         assert_eq!(ch.get_tries(0), Some(2));
@@ -618,7 +635,11 @@ mod tests {
         let resent: Vec<(Sequence, Vec<u8>)> = actions
             .into_iter()
             .map(|a| match a {
-                ChannelAction::SendOnLink { sequence, raw } => (sequence, raw),
+                ChannelAction::SendOnLink {
+                    sequence,
+                    raw,
+                    resend: true,
+                } => (sequence, raw),
                 other => panic!("unexpected {other:?}"),
             })
             .collect();

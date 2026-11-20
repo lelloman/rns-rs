@@ -6233,6 +6233,77 @@ fn link_traffic_speeds_are_reported_once_measured() {
     assert_eq!(driver.registry.link_traffic.sampled_at(), first);
 }
 
+// upstream 01ffb98e: the node's own links feed the same link traffic
+// totals as the link table: what the driver hands out for a link counts
+// as packed, and what a link takes on its interface as received.
+#[test]
+fn own_link_traffic_joins_the_link_totals() {
+    let mut driver = new_test_driver();
+    let interface = InterfaceId(1);
+    let (link_manager, link_id) = active_link_manager_with_route(interface);
+    let mut rng = OsRng;
+    let outbound = link_manager.send_on_link(&link_id, b"out", constants::CONTEXT_NONE, &mut rng);
+    let sent_len = match &outbound[..] {
+        [LinkManagerAction::SendPacket { raw, .. }] => raw.len() as u64,
+        other => panic!("expected one packet, got {other:?}"),
+    };
+    driver.link_manager = link_manager;
+    assert_eq!(driver.interface_stats().link_traffic.rxb, 0);
+    assert_eq!(driver.interface_stats().link_traffic.txb, 0);
+
+    // Counted when dispatched, whether or not an interface then sends it.
+    driver.dispatch_link_actions(outbound);
+    let traffic = driver.interface_stats().link_traffic;
+    assert_eq!((traffic.rxb, traffic.txb), (0, sent_len));
+    assert_eq!(driver.link_traffic(), (0, sent_len));
+
+    let inbound = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &link_id,
+        None,
+        constants::CONTEXT_KEEPALIVE,
+        &[0xfe],
+    )
+    .unwrap();
+    let deliver = |driver: &mut Driver, receiving_interface| {
+        driver.dispatch_all(vec![TransportAction::DeliverLocal {
+            destination_hash: link_id,
+            raw: inbound.raw.clone().into(),
+            packet_hash: inbound.packet_hash,
+            receiving_interface,
+        }]);
+    };
+    // Not on the link's interface: dropped before the link sees it.
+    deliver(&mut driver, InterfaceId(2));
+    assert_eq!(driver.interface_stats().link_traffic.rxb, 0);
+    deliver(&mut driver, interface);
+    let traffic = driver.interface_stats().link_traffic;
+    assert_eq!(
+        (traffic.rxb, traffic.txb),
+        (inbound.raw.len() as u64, sent_len)
+    );
+
+    // The speeds measure the same totals: the first pass over the time
+    // since the start.
+    driver.started = 1_000.0;
+    driver.sample_link_traffic(1_001.0);
+    let td = driver.registry.link_traffic.sampled_at().unwrap() - driver.started;
+    assert_eq!(
+        driver.interface_stats().link_traffic.speeds,
+        Some((
+            (inbound.raw.len() * 8) as f64 / td,
+            (sent_len * 8) as f64 / td
+        ))
+    );
+}
+
 #[test]
 fn traffic_sampler_reports_current_window_and_resets_idle_rates() {
     let mut driver = new_test_driver();

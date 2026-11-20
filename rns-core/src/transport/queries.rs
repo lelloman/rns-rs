@@ -42,7 +42,9 @@ impl TransportEngine {
 
     /// Upstream's `Transport.link_rxb` and `link_txb` (ef3e8086): the bytes
     /// of link packets this node received for and relayed through its link
-    /// table, local clients' not counted.
+    /// table, local clients' not counted. Upstream's counters also take
+    /// the traffic of the node's own links (01ffb98e), which the link
+    /// manager counts and the driver adds to these.
     pub fn link_traffic(&self) -> (u64, u64) {
         (self.link_rxb, self.link_txb)
     }
