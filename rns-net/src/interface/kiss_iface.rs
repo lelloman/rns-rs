@@ -4,12 +4,11 @@
 //! sends TNC configuration commands, handles KISS framing with
 //! optional flow control.
 
-use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rns_core::transport::types::InterfaceId;
 
@@ -20,7 +19,10 @@ use crate::interface::{
 use crate::kiss;
 use crate::serial::{Parity, SerialConfig, SerialPort};
 
+mod flow;
 mod folded;
+
+use flow::{Beacon, FlowState};
 
 /// Configuration for a KISS interface.
 #[derive(Debug, Clone)]
@@ -91,45 +93,21 @@ impl Default for KissIfaceConfig {
     }
 }
 
-/// Shared flow-control state between writer and reader threads.
-struct FlowState {
-    ready: bool,
-    queue: VecDeque<Vec<u8>>,
-    lock_time: Instant,
-    /// When a frame other than the beacon was first written since the last
-    /// beacon (upstream's `first_tx`): the beacon goes out `id_interval`
-    /// after it.
-    first_tx: Option<Instant>,
-}
-
-impl FlowState {
-    /// Note that a frame other than the beacon was written.
-    fn wrote(&mut self) {
-        self.first_tx.get_or_insert_with(Instant::now);
-    }
-}
-
 /// Writer that sends KISS-framed data over a serial port.
 /// Handles flow control: when enabled, queues packets until CMD_READY.
 struct KissWriter {
     confirmed_pending: Option<Vec<u8>>,
     file: std::fs::File,
-    flow_control: bool,
     flow_state: Arc<Mutex<FlowState>>,
     ax25_source: Option<Ax25Address>,
 }
 
 impl Writer for KissWriter {
     fn send_frame_confirmed(&mut self, data: &[u8]) -> io::Result<()> {
-        if !self.flow_control {
+        if !lock_or_recover(&self.flow_state, "kiss flow state").flow_control {
             return self.send_frame(data);
         }
-        let data = self
-            .ax25_source
-            .as_ref()
-            .map(|source| super::ax25_kiss::encode_ui_frame(source, data))
-            .unwrap_or_else(|| data.to_vec());
-        self.confirmed_pending = Some(kiss::frame(&data));
+        self.confirmed_pending = Some(flow::frame(self.ax25_source.as_ref(), data));
         self.flush()
     }
 
@@ -138,40 +116,21 @@ impl Writer for KissWriter {
             return Ok(());
         };
         let mut state = lock_or_recover(&self.flow_state, "kiss flow state");
-        if !state.ready || !state.queue.is_empty() {
+        if !state.sends_now() {
             return Err(io::ErrorKind::WouldBlock.into());
         }
-        state.ready = false;
-        state.lock_time = Instant::now();
-        state.wrote();
+        state.transmit();
         drop(state);
         let written = self.file.write_all(frame);
         self.confirmed_pending = None;
         written
     }
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        let data = self
-            .ax25_source
-            .as_ref()
-            .map(|source| super::ax25_kiss::encode_ui_frame(source, data))
-            .unwrap_or_else(|| data.to_vec());
-        if self.flow_control {
-            let mut state = lock_or_recover(&self.flow_state, "kiss flow state");
-            if state.ready {
-                state.ready = false;
-                state.lock_time = Instant::now();
-                state.wrote();
-                drop(state);
-                self.file.write_all(&kiss::frame(&data))
-            } else {
-                state.queue.push_back(data);
-                Ok(())
-            }
-        } else {
-            // As upstream, every frame written starts the beacon interval,
-            // with flow control or without.
-            lock_or_recover(&self.flow_state, "kiss flow state").wrote();
-            self.file.write_all(&kiss::frame(&data))
+        let frame = flow::frame(self.ax25_source.as_ref(), data);
+        let frame = lock_or_recover(&self.flow_state, "kiss flow state").submit(frame);
+        match frame {
+            Some(frame) => self.file.write_all(&frame),
+            None => Ok(()),
         }
     }
 }
@@ -194,12 +153,7 @@ fn start_with_control(
     };
 
     let control = ListenerControl::new();
-    let flow_state = Arc::new(Mutex::new(FlowState {
-        ready: true,
-        queue: VecDeque::new(),
-        lock_time: Instant::now(),
-        first_tx: None,
-    }));
+    let flow_state = Arc::new(Mutex::new(FlowState::new(config.flow_control)));
     let port = match SerialPort::open(&serial_config) {
         Ok(port) => port,
         Err(error) => {
@@ -267,7 +221,6 @@ fn start_with_control(
         Box::new(KissWriter {
             confirmed_pending: None,
             file: writer_file,
-            flow_control: config.flow_control,
             flow_state,
             ax25_source: config.ax25_source.clone(),
         }),
@@ -335,6 +288,7 @@ fn reader_loop(
 ) {
     let mut decoder = kiss::Decoder::new();
     let mut buf = [0u8; 4096];
+    let beacon = Beacon::from_config(&config);
     loop {
         if control.should_stop() {
             return;
@@ -424,35 +378,21 @@ fn reader_loop(
             }
         }
 
-        // Flow control timeout check
-        if config.flow_control {
-            let state = lock_or_recover(&flow_state, "kiss flow state");
-            if !state.ready && state.lock_time.elapsed() > Duration::from_secs(5) {
-                drop(state);
-                log::warn!("[{}] unlocking flow control due to timeout", config.name);
-                process_queue(&flow_state, &mut flow_writer, &config);
-            }
+        let mut state = lock_or_recover(&flow_state, "kiss flow state");
+        let unlocked = state.unlock_if_stuck(&config.name);
+        drop(state);
+        if let Some(frame) = unlocked {
+            write_queued(&mut flow_writer, &frame, &config);
         }
 
-        // Beacon check
-        if let (Some(interval), Some(ref beacon_data)) =
-            (config.beacon_interval, &config.beacon_data)
-        {
-            let first_tx = lock_or_recover(&flow_state, "kiss flow state").first_tx;
-            if let Some(first) = first_tx {
-                if first.elapsed() > Duration::from_secs(interval as u64) {
-                    log::debug!("[{}] transmitting beacon data", config.name);
-                    // Pad to minimum 15 bytes
-                    let mut frame = beacon_data.clone();
-                    while frame.len() < 15 {
-                        frame.push(0x00);
-                    }
-                    if let Err(e) = flow_writer.write_all(&kiss::frame(&frame)) {
-                        log::debug!("[{}] beacon not written: {e}", config.name);
-                    }
-                    lock_or_recover(&flow_state, "kiss flow state").first_tx = None;
-                }
+        let state = lock_or_recover(&flow_state, "kiss flow state");
+        let due = state.due_beacon(beacon.as_ref(), &config.name);
+        drop(state);
+        if let Some(frame) = due {
+            if let Err(e) = flow_writer.write_all(frame) {
+                log::debug!("[{}] beacon not written: {e}", config.name);
             }
+            lock_or_recover(&flow_state, "kiss flow state").beacon_sent();
         }
     }
 }
@@ -463,18 +403,17 @@ fn process_queue(
     writer: &mut std::fs::File,
     config: &KissIfaceConfig,
 ) {
-    let mut state = lock_or_recover(flow_state, "kiss flow state");
-    if let Some(data) = state.queue.pop_front() {
-        state.ready = false;
-        state.lock_time = Instant::now();
-        state.wrote();
-        drop(state);
-        // A port that fails is noticed and reopened by the reader.
-        if let Err(e) = writer.write_all(&kiss::frame(&data)) {
-            log::debug!("[{}] queued frame not written: {e}", config.name);
-        }
-    } else {
-        state.ready = true;
+    let frame = lock_or_recover(flow_state, "kiss flow state").tnc_ready();
+    if let Some(frame) = frame {
+        write_queued(writer, &frame, config);
+    }
+}
+
+/// Write a frame flow control held. A port that fails is noticed and
+/// reopened by the reader.
+fn write_queued(writer: &mut std::fs::File, frame: &[u8], config: &KissIfaceConfig) {
+    if let Err(e) = writer.write_all(frame) {
+        log::debug!("[{}] queued frame not written: {e}", config.name);
     }
 }
 
@@ -499,16 +438,11 @@ fn reconnect(
                 continue;
             }
         };
-        // Reset flow state
-        let mut state = lock_or_recover(flow_state, "kiss flow state");
-        state.ready = true;
-        state.queue.clear();
-        drop(state);
+        lock_or_recover(flow_state, "kiss flow state").reset();
 
         let new_writer: Box<dyn Writer> = Box::new(KissWriter {
             confirmed_pending: None,
             file: cfg_writer,
-            flow_control: config.flow_control,
             flow_state: flow_state.clone(),
             ax25_source: config.ax25_source.clone(),
         });
@@ -722,6 +656,7 @@ mod tests {
     use crate::serial::open_pty_pair;
     use std::os::unix::io::{AsRawFd, FromRawFd};
     use std::sync::mpsc;
+    use std::time::Instant;
 
     /// Helper: poll an fd for reading with timeout (ms).
     fn poll_read(fd: i32, timeout_ms: i32) -> bool {
@@ -871,12 +806,7 @@ mod tests {
         let (tx, rx) = crate::event::channel();
         let control = ListenerControl::new();
         let reader_control = control.clone();
-        let flow_state = Arc::new(Mutex::new(FlowState {
-            ready: true,
-            queue: VecDeque::new(),
-            lock_time: Instant::now(),
-            first_tx: None,
-        }));
+        let flow_state = Arc::new(Mutex::new(FlowState::new(false)));
         let config = KissIfaceConfig {
             name: "detach-test".into(),
             interface_id: InterfaceId(72),
@@ -937,17 +867,11 @@ mod tests {
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
 
         let writer_file = unsafe { std::fs::File::from_raw_fd(slave_fd) };
-        let flow_state = Arc::new(Mutex::new(FlowState {
-            ready: true,
-            queue: VecDeque::new(),
-            lock_time: Instant::now(),
-            first_tx: None,
-        }));
+        let flow_state = Arc::new(Mutex::new(FlowState::new(false)));
 
         let mut writer = KissWriter {
             confirmed_pending: None,
             file: writer_file,
-            flow_control: false,
             flow_state,
             ax25_source: None,
         };
@@ -1058,17 +982,11 @@ mod tests {
     /// without flow control.
     #[test]
     fn kiss_frame_without_flow_control_starts_the_beacon_interval() {
-        let flow_state = Arc::new(Mutex::new(FlowState {
-            ready: true,
-            queue: VecDeque::new(),
-            lock_time: Instant::now(),
-            first_tx: None,
-        }));
+        let flow_state = Arc::new(Mutex::new(FlowState::new(false)));
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
         let mut writer = KissWriter {
             confirmed_pending: None,
             file: unsafe { std::fs::File::from_raw_fd(slave_fd) },
-            flow_control: false,
             flow_state: flow_state.clone(),
             ax25_source: None,
         };
@@ -1079,12 +997,7 @@ mod tests {
 
     #[test]
     fn kiss_flow_control_lock() {
-        let flow_state = Arc::new(Mutex::new(FlowState {
-            ready: true,
-            queue: VecDeque::new(),
-            lock_time: Instant::now(),
-            first_tx: None,
-        }));
+        let flow_state = Arc::new(Mutex::new(FlowState::new(true)));
 
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
         let writer_file = unsafe { std::fs::File::from_raw_fd(slave_fd) };
@@ -1092,7 +1005,6 @@ mod tests {
         let mut writer = KissWriter {
             confirmed_pending: None,
             file: writer_file,
-            flow_control: true,
             flow_state: flow_state.clone(),
             ax25_source: None,
         };
@@ -1124,12 +1036,12 @@ mod tests {
 
     #[test]
     fn kiss_flow_control_timeout() {
-        let flow_state = Arc::new(Mutex::new(FlowState {
-            ready: false,
-            queue: VecDeque::new(),
-            lock_time: Instant::now() - Duration::from_secs(6), // already timed out
-            first_tx: None,
-        }));
+        let flow_state = Arc::new(Mutex::new(FlowState::new(true)));
+        {
+            let mut state = flow_state.lock().unwrap();
+            state.ready = false;
+            state.lock_time = Instant::now() - Duration::from_secs(6); // already timed out
+        }
 
         // Check that the timeout condition triggers
         let state = flow_state.lock().unwrap();
@@ -1141,16 +1053,11 @@ mod tests {
     fn confirmed_kiss_frame_waits_for_ready_and_flushes_once() {
         let (master_fd, slave_fd) = open_pty_pair().unwrap();
         let mut master = unsafe { std::fs::File::from_raw_fd(master_fd) };
-        let state = Arc::new(Mutex::new(FlowState {
-            ready: false,
-            queue: VecDeque::new(),
-            lock_time: Instant::now(),
-            first_tx: None,
-        }));
+        let state = Arc::new(Mutex::new(FlowState::new(true)));
+        state.lock().unwrap().ready = false;
         let mut writer = KissWriter {
             confirmed_pending: None,
             file: unsafe { std::fs::File::from_raw_fd(slave_fd) },
-            flow_control: true,
             flow_state: state.clone(),
             ax25_source: None,
         };
