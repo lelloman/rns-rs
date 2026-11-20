@@ -15,7 +15,7 @@ use crate::pyfmt::{prettyhexrep, round_float, str_of};
 use rns_core::types::{DestHash, PacketHash};
 use rns_net::event::{QueryRequest, QueryResponse, MAX_PROBE_PAYLOAD_SIZE};
 use rns_net::pickle::PickleValue;
-use rns_net::{config, storage, Callbacks, Destination, RnsNode, RpcAddr, RpcClient};
+use rns_net::{config, storage, Callbacks, Destination, RnsNode, SharedInstanceRpc};
 
 const VERSION: &str = env!("FULL_VERSION");
 const DEFAULT_PROBE_SIZE: usize = 16;
@@ -524,10 +524,7 @@ fn rtt_string(rtt: f64) -> String {
 /// The shared instance's RPC, for what upstream's shared clients ask it:
 /// the first-hop timeout and the next hop of a path. Absent when no shared
 /// instance RPC key is available; the probe itself never needs it.
-struct InstanceRpc {
-    addr: RpcAddr,
-    auth_key: [u8; 32],
-}
+struct InstanceRpc(SharedInstanceRpc);
 
 impl InstanceRpc {
     fn for_config_dir(config_dir: &Path) -> Option<Self> {
@@ -537,23 +534,15 @@ impl InstanceRpc {
         } else {
             config::parse("").ok()?
         };
-        let auth_key = match rns_config.reticulum.rpc_key {
-            Some(key) => key,
-            None => {
-                let identity =
-                    storage::load_identity(&config_dir.join("storage").join("transport_identity"))
-                        .ok()?;
-                rns_net::rpc::derive_auth_key(&identity.get_private_key()?)
-            }
-        };
-        Some(InstanceRpc {
-            addr: RpcAddr::for_shared_instance(&rns_config.reticulum),
-            auth_key,
+        SharedInstanceRpc::new(&rns_config.reticulum, || {
+            storage::load_identity(&config_dir.join("storage").join("transport_identity"))
         })
+        .ok()
+        .map(InstanceRpc)
     }
 
     fn get(&self, what: &str, dest_hash: &[u8; 16]) -> Option<PickleValue> {
-        let mut client = RpcClient::connect(&self.addr, &self.auth_key).ok()?;
+        let mut client = self.0.connect().ok()?;
         client
             .call(&PickleValue::Dict(vec![
                 (
@@ -570,7 +559,7 @@ impl InstanceRpc {
 
     /// Upstream's `get_packet_rssi` / `_snr` / `_q` on the shared instance.
     fn packet_stat(&self, what: &str, packet_hash: &[u8; 32]) -> Option<PickleValue> {
-        let mut client = RpcClient::connect(&self.addr, &self.auth_key).ok()?;
+        let mut client = self.0.connect().ok()?;
         client
             .call(&PickleValue::Dict(vec![
                 (
@@ -586,7 +575,7 @@ impl InstanceRpc {
     }
 
     fn medium_path_timeout(&self) -> Option<f64> {
-        let mut client = RpcClient::connect(&self.addr, &self.auth_key).ok()?;
+        let mut client = self.0.connect().ok()?;
         let value = client
             .call(&PickleValue::Dict(vec![(
                 PickleValue::String("get".into()),

@@ -2,11 +2,10 @@ use std::path::Path;
 use std::process;
 
 use crate::args::Args;
-use rns_net::config;
+use rns_cli::shared_instance::LocalInstance;
 use rns_net::pickle::PickleValue;
-use rns_net::rpc::derive_auth_key;
 use rns_net::storage;
-use rns_net::{RpcAddr, RpcClient};
+use rns_net::RpcClient;
 use serde_json::{json, Value};
 
 /// Run `rns-ctl backbone`: list or clear the backbone blacklist, or show
@@ -325,47 +324,14 @@ fn print_provider_stats(response: &PickleValue) {
 
 fn connect(config_path: Option<&str>) -> RpcClient {
     let config_dir = storage::resolve_config_dir(config_path.map(Path::new));
-    let config_file = config_dir.join("config");
-    let rns_config = if config_file.exists() {
-        match config::parse_file(&config_file) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Error reading config: {}", e);
-                process::exit(1);
-            }
-        }
-    } else {
-        match config::parse("") {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                process::exit(1);
-            }
-        }
-    };
-
-    let paths = match storage::ensure_storage_dirs(&config_dir) {
-        Ok(p) => p,
+    let rpc = match LocalInstance::open(&config_dir) {
+        Ok(instance) => instance.rpc,
         Err(e) => {
-            eprintln!("Error: {}", e);
+            eprintln!("{e}");
             process::exit(1);
         }
     };
-
-    let identity = match storage::load_rpc_identity(&paths) {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("Error loading identity: {}", e);
-            process::exit(1);
-        }
-    };
-
-    let auth_key = rns_config
-        .reticulum
-        .rpc_key
-        .unwrap_or_else(|| derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64])));
-    let rpc_addr = RpcAddr::for_shared_instance(&rns_config.reticulum);
-    match RpcClient::connect(&rpc_addr, &auth_key) {
+    match rpc.connect() {
         Ok(client) => client,
         Err(e) => {
             eprintln!("Could not connect to rnsd: {}", e);
