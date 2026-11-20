@@ -2122,6 +2122,13 @@ fn remote_path_tables(managed: Daemon) -> (String, String) {
         let shown = stdout.rsplit('\r').next().unwrap_or_default().to_string();
         (output.status.code(), shown)
     };
+    // Since upstream 9568b704 a path table line shows its next hop only
+    // with `-V`.
+    let table_args: &[&str] = if python_rnpath_source_contains("\"--vias\"") {
+        &["-t", "-V"]
+    } else {
+        &["-t"]
+    };
     // Once the managed instance has a path to the client's blackhole
     // destination; until then its empty table counts as a failed request,
     // as upstream's rnpath decides.
@@ -2129,7 +2136,7 @@ fn remote_path_tables(managed: Daemon) -> (String, String) {
     let table = loop {
         managed_daemon.assert_running("managed");
         client_daemon.assert_running("client");
-        let (status, table) = rnpath(&["-t"]);
+        let (status, table) = rnpath(table_args);
         if status == Some(0) && table.lines().any(|line| line.starts_with('<')) {
             break table;
         }
@@ -3218,7 +3225,9 @@ fn python_rnstatus_manages_rust_interface() {
 
 /// Whether the Python rnpath's source contains `needle`: `"--usage"` for
 /// releases with `-u`, `{u_str}` for those that print its suffix (upstream
-/// db67adea; before it the suffix was computed and never printed).
+/// db67adea; before it the suffix was computed and never printed),
+/// `"--vias"` for those that print next hops only with `-V` (upstream
+/// 9568b704).
 fn python_rnpath_source_contains(needle: &str) -> bool {
     python_utility_source_contains("rnpath", needle)
 }

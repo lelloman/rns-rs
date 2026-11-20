@@ -26,8 +26,12 @@ pub const OPTIONS: OptionSpec = OptionSpec {
     options: &[
         Opt::value("", "config"),
         Opt::flag("t", "table"),
+        Opt::flag("a", "active"),
         Opt::flag("u", "usage"),
+        Opt::flag("V", "vias"),
+        Opt::flag("E", "expiry"),
         Opt::value("m", "max"),
+        Opt::value("M", "min-value"),
         Opt::flag("r", "rates"),
         Opt::flag("d", "drop"),
         Opt::flag("D", "drop-announces"),
@@ -94,6 +98,10 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
     let config_path = args.config_path().map(|s| s.to_string());
     let show_table = args.has("t");
     let show_usage = args.has("u") || args.has("usage");
+    let active = args.has("a");
+    let vias = args.has("V");
+    let expiry = args.has("E");
+    let min_value = args.get("M").and_then(crate::argparse::python_float);
     let show_rates = args.has("r");
     let drop_hash = flag_target(&args, "d");
     let drop_via = flag_target(&args, "x");
@@ -160,6 +168,12 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
             json: json_output,
             usage: show_usage,
             sort: false,
+            filters: PathFilters {
+                active,
+                vias,
+                expiry,
+                min_value,
+            },
         };
         remote_path(
             remote,
@@ -255,7 +269,20 @@ pub fn run_with_args(args: Args, usage_name: &str, version_name: &str) {
         do_unblackhole(&mut client, &hash_str);
     } else if show_table {
         let destination = destination_filter(destination.as_deref());
-        show_path_table(&mut client, json_output, max_hops, show_usage, destination);
+        let filters = PathFilters {
+            active,
+            vias,
+            expiry,
+            min_value,
+        };
+        show_path_table(
+            &mut client,
+            json_output,
+            max_hops,
+            show_usage,
+            filters,
+            destination,
+        );
     } else if show_rates {
         let destination = destination_filter(destination.as_deref());
         show_rate_table(&mut client, json_output, destination);
@@ -374,6 +401,7 @@ fn show_path_table(
     json_output: bool,
     max_hops: Option<u8>,
     show_usage: bool,
+    filters: PathFilters,
     destination: Option<[u8; 16]>,
 ) {
     let max_hops_val = match max_hops {
@@ -404,6 +432,7 @@ fn show_path_table(
         json: json_output,
         usage: show_usage,
         sort: true,
+        filters,
     };
     render_path_table(&response, &view, rns_net::time::now()).print_and_exit();
 }
@@ -418,12 +447,34 @@ struct TableView {
     /// upstream sorts a local path table by interface and hops; a remote
     /// one is shown as it arrives.
     sort: bool,
+    /// What else the path table lines show, and which they leave out.
+    filters: PathFilters,
+}
+
+/// `rnpath -t`'s display and filtering options (upstream 9568b704). Only
+/// the text lines heed them, not `-j`.
+#[derive(Clone, Copy, Default)]
+struct PathFilters {
+    /// `-a`: only paths that have been used.
+    active: bool,
+    /// `-V`: each path's next hop.
+    vias: bool,
+    /// `-E`: when each path expires.
+    expiry: bool,
+    /// `-M`: only paths whose destination value is at least this.
+    min_value: Option<f64>,
 }
 
 /// upstream's `rnpath -t`: one line per path, sorted by interface and hops
-/// (`<hash>   1h via <hash> on <interface> expires in 6d and 23h
-/// (dv:n/lc:n)`), or the table in JSON with `-j`. An empty table prints
-/// nothing.
+/// (`<hash>   1h on <interface> (dv:n/lc:n)`, with ` via <hash>` after the
+/// hops for `-V` and ` expires in 6d and 23h` after the interface for `-E`),
+/// or the table in JSON with `-j`. An empty table prints nothing.
+///
+/// As upstream, `-M` and `-a` leave a path out only after counting it as
+/// displayed, so `rnpath -t <hash>` for a path they leave out prints
+/// nothing rather than "No path known". `-M` filters only when its value is
+/// not zero and leaves out paths with no or a zero value; `-a` leaves out
+/// paths never used, and none from a table without usage info.
 fn render_path_table(response: &PickleValue, view: &TableView, now: f64) -> Rendered {
     let Some(entries) = response.as_list() else {
         return Rendered {
@@ -476,6 +527,14 @@ fn render_path_table(response: &PickleValue, view: &TableView, now: f64) -> Rend
             continue;
         }
         displayed += 1;
+        // `if min_value:` then `if not path["value"]` and
+        // `if path["value"] < min_value`.
+        if let Some(min_value) = view.filters.min_value.filter(|m| *m != 0.0) {
+            let value = path.get("value").unwrap_or(&PickleValue::None);
+            if !truthy(value) || number(value).is_some_and(|v| v < min_value) {
+                continue;
+            }
+        }
         let hops = match path.get("hops") {
             Some(PickleValue::Int(hops)) => hops.to_string(),
             other => python_str(other),
@@ -484,6 +543,7 @@ fn render_path_table(response: &PickleValue, view: &TableView, now: f64) -> Rend
         let expires = path.get("expires").and_then(number).unwrap_or(0.0);
         let usage = match path.get("used") {
             None => ", no usage info".to_string(),
+            Some(used) if view.filters.active && !truthy(used) => continue,
             Some(used) if view.usage && truthy(used) => format!(
                 ", last used {} ago",
                 upstream_prettytime(now - number(used).unwrap_or(0.0))
@@ -491,12 +551,20 @@ fn render_path_table(response: &PickleValue, view: &TableView, now: f64) -> Rend
             Some(_) if view.usage => ", never used".to_string(),
             Some(_) => String::new(),
         };
+        let via = if view.filters.vias {
+            format!(" via {}", pretty(via))
+        } else {
+            String::new()
+        };
+        let expires = if view.filters.expiry {
+            format!(" expires in {}", upstream_prettytime_compact(expires - now))
+        } else {
+            String::new()
+        };
         text.push_str(&format!(
-            "{} {hops:>3}h via {} on {} expires in {} {}{usage}\n",
+            "{} {hops:>3}h{via} on {}{expires} {}{usage}\n",
             pretty(hash),
-            pretty(via),
             python_str(path.get("interface")),
-            upstream_prettytime_compact(expires - now),
             path_costs(path),
         ));
     }
@@ -542,6 +610,7 @@ fn show_rate_table(client: &mut RpcClient, json_output: bool, destination: Optio
         json: json_output,
         usage: false,
         sort: true,
+        filters: PathFilters::default(),
     };
     render_rate_table(&response, &view, rns_net::time::now()).print_and_exit();
 }
@@ -1433,6 +1502,18 @@ mod tests {
             (&["-t", HASH], &[("t", "true")], Some(HASH)),
             (&["-tj"], &[("t", "true"), ("j", "true")], None),
             (
+                &["-taVE"],
+                &[("t", "true"), ("a", "true"), ("V", "true"), ("E", "true")],
+                None,
+            ),
+            (
+                &["-t", "--active", "--vias", "--expiry"],
+                &[("a", "true"), ("V", "true"), ("E", "true")],
+                None,
+            ),
+            (&["-tM", "2.5"], &[("t", "true"), ("M", "2.5")], None),
+            (&["-t", "--min-value=1"], &[("M", "1")], None),
+            (
                 &["--rates", "--json", HASH],
                 &[("r", "true"), ("j", "true")],
                 Some(HASH),
@@ -1487,6 +1568,36 @@ mod tests {
     }
 
     const PLAIN: &str = concat!(
+        r#"<22222222222222222222222222222222>   3h on AutoInterface[Local] (dv:25.000/lc:19.199)"#,
+        "\n",
+        r#"<44444444444444444444444444444444>  12h on AutoInterface[Local] (dv:n/lc:7.000)"#,
+        "\n",
+        r#"<11111111111111111111111111111111>   1h on TCPInterface[B/127.0.0.1:4242] (dv:n/lc:n)"#,
+        "\n",
+        r#"<33333333333333333333333333333333>   2h on TCPInterface[B/127.0.0.1:4242] (dv:0.000/lc:n)"#,
+        "\n",
+    );
+    const USAGE: &str = concat!(
+        r#"<44444444444444444444444444444444>  12h on AutoInterface[Local] (dv:n/lc:7.000), last used 1.0s ago"#,
+        "\n",
+        r#"<11111111111111111111111111111111>   1h on TCPInterface[B/127.0.0.1:4242] (dv:n/lc:n), last used 1m and 5.5s ago"#,
+        "\n",
+        r#"<33333333333333333333333333333333>   2h on TCPInterface[B/127.0.0.1:4242] (dv:0.000/lc:n), last used 2h ago"#,
+        "\n",
+        r#"<22222222222222222222222222222222>   3h on AutoInterface[Local] (dv:25.000/lc:19.199), never used"#,
+        "\n",
+    );
+    const NO_USED: &str = concat!(
+        r#"<22222222222222222222222222222222>   3h on AutoInterface[Local] (dv:25.000/lc:19.199)"#,
+        "\n",
+        r#"<44444444444444444444444444444444>  12h on AutoInterface[Local] (dv:n/lc:7.000)"#,
+        "\n",
+        r#"<11111111111111111111111111111111>   1h on TCPInterface[B/127.0.0.1:4242] (dv:n/lc:n), no usage info"#,
+        "\n",
+        r#"<33333333333333333333333333333333>   2h on TCPInterface[B/127.0.0.1:4242] (dv:0.000/lc:n)"#,
+        "\n",
+    );
+    const VIAS_EXPIRY: &str = concat!(
         r#"<22222222222222222222222222222222>   3h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on AutoInterface[Local] expires in 1h and 1m (dv:25.000/lc:19.199)"#,
         "\n",
         r#"<44444444444444444444444444444444>  12h via <cccccccccccccccccccccccccccccccc> on AutoInterface[Local] expires in 1d (dv:n/lc:7.000)"#,
@@ -1496,24 +1607,24 @@ mod tests {
         r#"<33333333333333333333333333333333>   2h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on TCPInterface[B/127.0.0.1:4242] expires in -30s (dv:0.000/lc:n)"#,
         "\n",
     );
-    const USAGE: &str = concat!(
-        r#"<44444444444444444444444444444444>  12h via <cccccccccccccccccccccccccccccccc> on AutoInterface[Local] expires in 1d (dv:n/lc:7.000), last used 1.0s ago"#,
+    const VIAS: &str = concat!(
+        r#"<22222222222222222222222222222222>   3h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on AutoInterface[Local] (dv:25.000/lc:19.199)"#,
         "\n",
-        r#"<11111111111111111111111111111111>   1h via <aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> on TCPInterface[B/127.0.0.1:4242] expires in 6d and 23h (dv:n/lc:n), last used 1m and 5.5s ago"#,
+        r#"<44444444444444444444444444444444>  12h via <cccccccccccccccccccccccccccccccc> on AutoInterface[Local] (dv:n/lc:7.000)"#,
         "\n",
-        r#"<33333333333333333333333333333333>   2h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on TCPInterface[B/127.0.0.1:4242] expires in -30s (dv:0.000/lc:n), last used 2h ago"#,
+        r#"<11111111111111111111111111111111>   1h via <aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> on TCPInterface[B/127.0.0.1:4242] (dv:n/lc:n)"#,
         "\n",
-        r#"<22222222222222222222222222222222>   3h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on AutoInterface[Local] expires in 1h and 1m (dv:25.000/lc:19.199), never used"#,
+        r#"<33333333333333333333333333333333>   2h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on TCPInterface[B/127.0.0.1:4242] (dv:0.000/lc:n)"#,
         "\n",
     );
-    const NO_USED: &str = concat!(
-        r#"<22222222222222222222222222222222>   3h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on AutoInterface[Local] expires in 1h and 1m (dv:25.000/lc:19.199)"#,
+    const EXPIRY: &str = concat!(
+        r#"<22222222222222222222222222222222>   3h on AutoInterface[Local] expires in 1h and 1m (dv:25.000/lc:19.199)"#,
         "\n",
-        r#"<44444444444444444444444444444444>  12h via <cccccccccccccccccccccccccccccccc> on AutoInterface[Local] expires in 1d (dv:n/lc:7.000)"#,
+        r#"<44444444444444444444444444444444>  12h on AutoInterface[Local] expires in 1d (dv:n/lc:7.000)"#,
         "\n",
-        r#"<11111111111111111111111111111111>   1h via <aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> on TCPInterface[B/127.0.0.1:4242] expires in 6d and 23h (dv:n/lc:n), no usage info"#,
+        r#"<11111111111111111111111111111111>   1h on TCPInterface[B/127.0.0.1:4242] expires in 6d and 23h (dv:n/lc:n)"#,
         "\n",
-        r#"<33333333333333333333333333333333>   2h via <bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> on TCPInterface[B/127.0.0.1:4242] expires in -30s (dv:0.000/lc:n)"#,
+        r#"<33333333333333333333333333333333>   2h on TCPInterface[B/127.0.0.1:4242] expires in -30s (dv:0.000/lc:n)"#,
         "\n",
     );
     const JSON: &str = r#"[{"hash": "22222222222222222222222222222222", "timestamp": 1763099900.25, "via": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "hops": 3, "expires": 1763103662.15, "value": 25.0, "used": 0, "lr_cost": 19.19921875, "interface": "AutoInterface[Local]"}, {"hash": "44444444444444444444444444444444", "timestamp": 1763099900.25, "via": "cccccccccccccccccccccccccccccccc", "hops": 12, "expires": 1763186400.25, "value": null, "used": 1763099999.25, "lr_cost": 7, "interface": "AutoInterface[Local]"}, {"hash": "11111111111111111111111111111111", "timestamp": 1763099900.25, "via": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "hops": 1, "expires": 1763704700.75, "value": null, "used": 1763099934.75, "lr_cost": null, "interface": "TCPInterface[B/127.0.0.1:4242]"}, {"hash": "33333333333333333333333333333333", "timestamp": 1763099900.25, "via": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "hops": 2, "expires": 1763099970.25, "value": 0.0, "used": 1763092800.25, "lr_cost": null, "interface": "TCPInterface[B/127.0.0.1:4242]"}]"#;
@@ -1624,11 +1735,13 @@ mod tests {
             json,
             usage,
             sort: true,
+            filters: PathFilters::default(),
         }
     }
 
-    // The expected texts are what upstream rnpath 1.6.0 prints for the same
-    // tables: its rendering code, run on them with the same time.
+    // The expected texts are what upstream rnpath prints for the same
+    // tables, at 9568b704: its rendering code, run on them with the same
+    // time.
     #[test]
     fn path_table_prints_as_upstream() {
         let plain = render_path_table(&path_table(true), &view(None, false, false), NOW);
@@ -1653,6 +1766,97 @@ mod tests {
         assert_eq!(rendered.text, "");
         let rendered = render_path_table(&empty, &view(None, true, false), NOW);
         assert_eq!(rendered.text, "[]\n");
+    }
+
+    /// Upstream 9568b704's `-V`, `-E`, `-a` and `-M`, and its quirks: a
+    /// path they leave out still counts as displayed, `-M 0` does not
+    /// filter, and `-j` ignores them.
+    #[test]
+    fn path_table_display_options_and_filters_as_upstream() {
+        let render = |first_used: bool, destination: Option<u8>, usage: bool, filters| {
+            let view = TableView {
+                filters,
+                ..view(destination, false, usage)
+            };
+            let rendered = render_path_table(&path_table(first_used), &view, NOW);
+            (rendered.text, rendered.status)
+        };
+        let lines = |text: &str, keep: &[usize]| -> String {
+            keep.iter()
+                .map(|i| format!("{}\n", text.lines().nth(*i).unwrap()))
+                .collect()
+        };
+        let none = PathFilters::default();
+        let vias = PathFilters { vias: true, ..none };
+        let expiry = PathFilters {
+            expiry: true,
+            ..none
+        };
+        let both = PathFilters {
+            vias: true,
+            expiry: true,
+            ..none
+        };
+        let active = PathFilters {
+            active: true,
+            ..none
+        };
+        let min = |value: f64| PathFilters {
+            min_value: Some(value),
+            ..none
+        };
+
+        assert_eq!(render(true, None, false, none).0, PLAIN);
+        assert_eq!(render(true, None, false, both).0, VIAS_EXPIRY);
+        assert_eq!(render(true, None, false, vias).0, VIAS);
+        assert_eq!(render(true, None, false, expiry).0, EXPIRY);
+
+        // -a: not a path never used, but every path of a table without
+        // usage info.
+        assert_eq!(
+            render(true, None, false, active).0,
+            lines(PLAIN, &[1, 2, 3])
+        );
+        assert_eq!(render(true, None, true, active).0, lines(USAGE, &[0, 1, 2]));
+        assert_eq!(
+            render(false, None, false, active).0,
+            lines(NO_USED, &[1, 2, 3])
+        );
+
+        // -M: not a path without a value, or with a zero one; -M 0 does
+        // not filter, a negative or NaN value does.
+        assert_eq!(render(true, None, false, min(10.0)).0, lines(PLAIN, &[0]));
+        assert_eq!(render(true, None, false, min(0.0)).0, PLAIN);
+        assert_eq!(render(true, None, false, min(-1.0)).0, lines(PLAIN, &[0]));
+        assert_eq!(
+            render(true, None, false, min(f64::NAN)).0,
+            lines(PLAIN, &[0])
+        );
+        assert_eq!(render(true, None, false, min(30.0)).0, "");
+
+        // A destination left out by a filter was displayed: no message.
+        assert_eq!(
+            render(true, Some(0x33), false, min(10.0)),
+            (String::new(), 0)
+        );
+        assert_eq!(render(true, Some(0x22), false, active), (String::new(), 0));
+        assert_eq!(
+            render(true, Some(0x99), false, min(10.0)),
+            ("No path known\n".to_string(), 1)
+        );
+
+        // JSON ignores them.
+        let view = TableView {
+            filters: PathFilters {
+                active: true,
+                vias: true,
+                expiry: true,
+                min_value: Some(30.0),
+            },
+            ..view(None, true, false)
+        };
+        let json = render_path_table(&path_table(true), &view, NOW);
+        assert_eq!(json.text, format!("{JSON}\n"));
     }
 
     fn rate(byte: u8, last: f64, violations: i64, blocked: PickleValue, ts: &[f64]) -> PickleValue {
