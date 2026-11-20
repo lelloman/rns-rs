@@ -3,6 +3,18 @@
 //! Follows upstream `RNS/Stamps.py`: destination stamps are 14-byte detached
 //! proof-of-work stamps over `destination_hash || public_key || name_hash`,
 //! persisted per destination under `storage/stamps/<hash>.dstamp`.
+//!
+//! Stamp searches run on threads in this process (a rayon scope or scoped
+//! threads, see `SearchPool`), never in forked worker processes as
+//! upstream's `multiprocessing` jobs do. So the deadlock upstream patched in
+//! 0123133e cannot occur here: a CPython child forked while another thread
+//! held the buffered-stdin lock deadlocked in `multiprocessing`'s
+//! `_close_stdin()` before reaching any application code, and upstream now
+//! detaches stdin with a lock-free `dup2` instead. No rns-rs code forks to
+//! search for stamps, and the processes rns-rs does fork (rnsh's
+//! `libc::fork`, `std::process::Command` children) make only
+//! async-signal-safe calls before `exec`, never touching Rust's `Stdin`
+//! lock.
 
 use std::io;
 use std::path::{Path, PathBuf};
