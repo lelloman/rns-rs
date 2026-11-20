@@ -142,7 +142,7 @@ Client lifecycle:
 3. Resolve or request a path to the supplied gateway destination hash.
 4. Establish a Reticulum Link.
 5. Identify on the Link.
-6. Send `ClientHello` with protocol capabilities and requested routes.
+6. Send `ClientHello` with protocol versions and requested routes.
 7. Receive `ServerAccept` or `ServerReject`.
 8. Configure the packet device, routes, and any required full-tunnel DNS and
    fail-closed state only after acceptance.
@@ -209,10 +209,17 @@ checks are required even when host firewall rules also exist.
 Policy reload should be atomic. Removed or materially restricted identities are
 disconnected; unchanged sessions remain active.
 
-## Protocol version 1
+## Protocol version 2
 
 Control and packet data use a dedicated `rntun` message namespace over a
 Reticulum Link. No `rnsh` message types or stream protocol are reused.
+
+Protocol version 2 removed the unused `Ping` / `Pong` messages and the
+`ClientHello` capabilities field that protocol version 1 defined. Every frame
+carries the protocol version byte, so a version 1 peer and a version 2 peer fail
+at the first control frame with an unsupported-version error instead of
+misparsing each other. Liveness is left to the Reticulum Link and the gateway's
+idle timeout.
 
 The control state machine is:
 
@@ -224,8 +231,8 @@ PendingLink -> Identified -> Negotiating -> DeviceSetup -> Active -> Closing
 
 Control messages:
 
-- `ClientHello`: protocol versions, capabilities, maximum IP packet size, and
-  requested routes;
+- `ClientHello`: protocol versions, maximum IP packet size, and requested
+  routes;
 - `ServerAccept`: selected version, session epoch, assigned address/prefix,
   gateway address, accepted routes, accepted DNS servers, packet MTU, and timer
   values;
@@ -234,7 +241,6 @@ Control messages:
   writer are ready;
 - `ServerReady`: confirmation that the gateway processed `ClientReady` and the
   client may begin submitting outbound packet data;
-- `Ping` / `Pong`: liveness and RTT sampling;
 - `Close`: stable reason code.
 
 Data messages:
@@ -413,11 +419,13 @@ contents.
 
 The version 1 implementation uses Channel message type `0x5254` for every
 control message and direct Link context `0x0f` for packet fragments. Both frame
-families begin with ASCII magic `RNTU`, followed by version byte `1`, a kind
-byte, and a big-endian zero flags field. Unknown versions, kinds, or flags fail
-closed. Control kinds `1` through `9` are `ClientHello`, `ServerAccept`,
-`ServerReject`, `ClientReady`, `ServerReady`, `Ping`, `Pong`, `Close`, and
-`CloseAck`; direct fragment kind is `0x20`.
+families begin with ASCII magic `RNTU`, followed by protocol version byte `2`, a
+kind byte, and a big-endian zero flags field. Unknown versions, kinds, or flags
+fail closed; a gateway answers a hello of another protocol version with
+`ServerReject` reason 4. Control kinds `1` through `5` are `ClientHello`,
+`ServerAccept`, `ServerReject`, `ClientReady`, and `ServerReady`; `8` and `9` are
+`Close` and `CloseAck`. Kinds `6` and `7` were `Ping` and `Pong` in protocol
+version 1 and stay unassigned. Direct fragment kind is `0x20`.
 
 Version 1 bounds control frames to 384 bytes, diagnostics to 128 UTF-8 bytes,
 routes to 32, DNS servers to 4, IPv4 packets to 1500 bytes, and tunnel fragments
@@ -695,6 +703,9 @@ Resolution gate: during Phase 0, before golden encodings and fuzz targets become
 normative.
 
 ### O-10: liveness, close, and reconnect semantics
+
+Status: `Ping` / `Pong` were never sent or answered and were removed in protocol
+version 2; liveness is left to the Reticulum Link and the gateway idle timeout.
 
 Define which peer sends `Ping`, whether `Pong` echoes a nonce or timestamp, how
 RTT is sampled, whether valid control or data traffic resets idle timers, and the

@@ -9,8 +9,9 @@ use std::net::Ipv4Addr;
 
 use crate::policy::Cidr;
 
-/// The protocol version this crate speaks.
-pub const VERSION: u8 = 1;
+/// The protocol version this crate speaks. Version 1 had `Ping`/`Pong`
+/// kinds and a capabilities field in `ClientHello`; version 2 has neither.
+pub const VERSION: u8 = 2;
 /// First four bytes of every frame.
 pub const MAGIC: [u8; 4] = *b"RNTU";
 /// Largest control frame in bytes, header included.
@@ -35,8 +36,7 @@ const KIND_SERVER_ACCEPT: u8 = 2;
 const KIND_SERVER_REJECT: u8 = 3;
 const KIND_CLIENT_READY: u8 = 4;
 const KIND_SERVER_READY: u8 = 5;
-const KIND_PING: u8 = 6;
-const KIND_PONG: u8 = 7;
+// Kinds 6 and 7 were `Ping` and `Pong` in version 1; they stay unassigned.
 const KIND_CLOSE: u8 = 8;
 const KIND_CLOSE_ACK: u8 = 9;
 const KIND_PACKET_FRAGMENT: u8 = 0x20;
@@ -93,8 +93,6 @@ pub enum ControlMessage {
     ClientHello {
         /// Protocol versions the client speaks, 1..=[`VERSION_MAX`] of them.
         versions: Vec<u8>,
-        /// Capability bits; none are defined and clients send 0.
-        capabilities: u32,
         /// Largest IPv4 packet, in bytes, the client will send or receive.
         maximum_packet_size: u16,
         /// Networks the client wants routed through the tunnel.
@@ -145,16 +143,6 @@ pub enum ControlMessage {
         /// Epoch from `ServerAccept`.
         session_epoch: u64,
     },
-    /// Liveness probe; answered with a `Pong` carrying the same nonce.
-    Ping {
-        /// Value echoed by the `Pong`.
-        nonce: u64,
-    },
-    /// Answer to a `Ping`.
-    Pong {
-        /// The `Ping`'s nonce.
-        nonce: u64,
-    },
     /// Either side ends the session.
     Close {
         /// Epoch of the session being closed.
@@ -180,13 +168,11 @@ impl ControlMessage {
         let kind = match self {
             Self::ClientHello {
                 versions,
-                capabilities,
                 maximum_packet_size,
                 requested_routes,
             } => {
                 put_count(&mut body, versions.len(), VERSION_MAX, "version count")?;
                 body.extend_from_slice(versions);
-                put_u32(&mut body, *capabilities);
                 put_u16(&mut body, *maximum_packet_size);
                 put_routes(&mut body, requested_routes)?;
                 KIND_CLIENT_HELLO
@@ -232,14 +218,6 @@ impl ControlMessage {
             Self::ServerReady { session_epoch } => {
                 put_epoch(&mut body, *session_epoch)?;
                 KIND_SERVER_READY
-            }
-            Self::Ping { nonce } => {
-                put_u64(&mut body, *nonce);
-                KIND_PING
-            }
-            Self::Pong { nonce } => {
-                put_u64(&mut body, *nonce);
-                KIND_PONG
             }
             Self::Close {
                 session_epoch,
@@ -304,12 +282,10 @@ impl ControlMessage {
                     return Err(ProtocolError::LimitExceeded("version count"));
                 }
                 let versions = reader.bytes(count)?.to_vec();
-                let capabilities = reader.u32()?;
                 let maximum_packet_size = reader.u16()?;
                 let requested_routes = reader.routes()?;
                 Self::ClientHello {
                     versions,
-                    capabilities,
                     maximum_packet_size,
                     requested_routes,
                 }
@@ -346,12 +322,6 @@ impl ControlMessage {
             },
             KIND_SERVER_READY => Self::ServerReady {
                 session_epoch: reader.epoch()?,
-            },
-            KIND_PING => Self::Ping {
-                nonce: reader.u64()?,
-            },
-            KIND_PONG => Self::Pong {
-                nonce: reader.u64()?,
             },
             KIND_CLOSE => Self::Close {
                 session_epoch: reader.epoch()?,
@@ -626,16 +596,53 @@ mod tests {
     }
 
     #[test]
-    fn ping_wire_format_is_stable() {
-        let encoded = ControlMessage::Ping {
-            nonce: 0x0102_0304_0506_0708,
+    fn hello_wire_format_is_stable() {
+        let encoded = ControlMessage::ClientHello {
+            versions: vec![VERSION],
+            maximum_packet_size: 1280,
+            requested_routes: vec!["10.20.0.0/16".parse().unwrap()],
         }
         .encode()
         .unwrap();
         assert_eq!(
             encoded,
-            b"RNTU\x01\x06\x00\x00\x00\x08\x01\x02\x03\x04\x05\x06\x07\x08"
+            b"RNTU\x02\x01\x00\x00\x00\x0a\x01\x02\x05\x00\x01\x0a\x14\x00\x00\x10"
         );
+    }
+
+    #[test]
+    fn server_ready_wire_format_is_stable() {
+        let encoded = ControlMessage::ServerReady {
+            session_epoch: 0x0102_0304_0506_0708,
+        }
+        .encode()
+        .unwrap();
+        assert_eq!(
+            encoded,
+            b"RNTU\x02\x05\x00\x00\x00\x08\x01\x02\x03\x04\x05\x06\x07\x08"
+        );
+    }
+
+    #[test]
+    fn rejects_version_1_frames_and_retired_kinds() {
+        let mut encoded = ControlMessage::ServerReady { session_epoch: 1 }
+            .encode()
+            .unwrap();
+        encoded[4] = 1;
+        assert!(matches!(
+            ControlMessage::decode(&encoded),
+            Err(ProtocolError::UnsupportedVersion(1))
+        ));
+        for kind in [6, 7] {
+            let mut encoded = ControlMessage::ServerReady { session_epoch: 1 }
+                .encode()
+                .unwrap();
+            encoded[5] = kind;
+            assert!(matches!(
+                ControlMessage::decode(&encoded),
+                Err(ProtocolError::UnknownKind(k)) if k == kind
+            ));
+        }
     }
 
     #[test]
@@ -671,20 +678,24 @@ mod tests {
         .unwrap();
         assert_eq!(
             encoded,
-            b"RNTU\x01\x20\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\
+            b"RNTU\x02\x20\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\
               \x00\x00\x00\x00\x00\x00\x00\x02\x00\x03\x00\x01\x00\x02\xaa\xbb"
         );
     }
 
     #[test]
     fn rejects_unknown_flags_and_trailing_data() {
-        let mut encoded = ControlMessage::Ping { nonce: 1 }.encode().unwrap();
+        let mut encoded = ControlMessage::ServerReady { session_epoch: 1 }
+            .encode()
+            .unwrap();
         encoded[7] = 1;
         assert!(matches!(
             ControlMessage::decode(&encoded),
             Err(ProtocolError::UnknownFlags(1))
         ));
-        let mut encoded = ControlMessage::Ping { nonce: 1 }.encode().unwrap();
+        let mut encoded = ControlMessage::ServerReady { session_epoch: 1 }
+            .encode()
+            .unwrap();
         encoded.push(0);
         assert!(matches!(
             ControlMessage::decode(&encoded),

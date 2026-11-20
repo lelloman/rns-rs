@@ -12,6 +12,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use rns_tun::policy::canonicalize_routes;
+use rns_tun::protocol::VERSION;
 use rns_tun::reticulum::{NodeEvent, PrivateNode};
 use rns_tun::{
     Cidr, ClientSession, ControlMessage, PacketDirection, PacketTransport, SocketProtectorGuard,
@@ -401,8 +402,7 @@ fn negotiate(
         private,
         link_id,
         ControlMessage::ClientHello {
-            versions: vec![1],
-            capabilities: 0,
+            versions: vec![VERSION],
             maximum_packet_size: config.mtu.unwrap_or(1280),
             requested_routes: requested.to_vec(),
         },
