@@ -133,11 +133,15 @@ impl Token {
         body[..16].copy_from_slice(iv);
         body[16..16 + plaintext.len()].copy_from_slice(plaintext);
         body[16 + plaintext.len()..].fill(padding as u8);
-        match &self.mode {
+        let encrypted = match &self.mode {
             AesMode::Aes128(aes) => aes.encrypt_cbc_in_place(&mut body[16..], iv),
             AesMode::Aes256(aes) => aes.encrypt_cbc_in_place(&mut body[16..], iv),
-        }
-        .expect("PKCS7 padding always produces block-aligned plaintext");
+        };
+        #[allow(
+            clippy::expect_used,
+            reason = "PKCS7 padding makes the plaintext a whole number of blocks"
+        )]
+        encrypted.expect("PKCS7 padding always produces block-aligned plaintext");
     }
 
     /// `plaintext` as a token, under `iv`.
@@ -151,11 +155,15 @@ impl Token {
         token.extend_from_slice(iv);
         token.extend_from_slice(plaintext);
         token.resize(token.len() + padding, padding as u8);
-        match &self.mode {
+        let encrypted = match &self.mode {
             AesMode::Aes128(aes) => aes.encrypt_cbc_in_place(&mut token[16..], iv),
             AesMode::Aes256(aes) => aes.encrypt_cbc_in_place(&mut token[16..], iv),
-        }
-        .expect("PKCS7 padding always produces block-aligned plaintext");
+        };
+        #[allow(
+            clippy::expect_used,
+            reason = "PKCS7 padding makes the plaintext a whole number of blocks"
+        )]
+        encrypted.expect("PKCS7 padding always produces block-aligned plaintext");
 
         let mac = self.tag(&token);
         token.extend_from_slice(&mac);

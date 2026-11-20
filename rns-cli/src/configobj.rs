@@ -452,20 +452,18 @@ pub fn validate(section: &mut Section, spec: &Section) -> bool {
         if name == "__many__" {
             continue;
         }
-        if !section.sections.iter().any(|(k, _)| k == name) {
-            if section.scalars.iter().any(|(k, _)| k == name) {
-                ok = false;
-                continue;
+        let index = match section.sections.iter().position(|(k, _)| k == name) {
+            Some(index) => index,
+            None => {
+                if section.scalars.iter().any(|(k, _)| k == name) {
+                    ok = false;
+                    continue;
+                }
+                section.sections.push((name.clone(), Section::default()));
+                section.sections.len() - 1
             }
-            section.sections.push((name.clone(), Section::default()));
-        }
-        let sub = section
-            .sections
-            .iter_mut()
-            .find(|(k, _)| k == name)
-            .map(|(_, s)| s)
-            .expect("just added");
-        ok &= validate(sub, subspec);
+        };
+        ok &= validate(&mut section.sections[index].1, subspec);
     }
     ok
 }

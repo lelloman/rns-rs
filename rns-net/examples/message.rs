@@ -10,6 +10,8 @@
 //!
 //! Usage: RUST_LOG=info cargo run --example message
 
+#![allow(clippy::expect_used, reason = "an example stops at the first failure")]
+
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 

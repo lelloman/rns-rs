@@ -52,7 +52,7 @@ impl Driver {
         ) {
             return Some(false);
         }
-        let managed = self.registry.managed.remove(name).expect("checked above");
+        let managed = self.registry.managed.remove(name)?;
         self.registry.retired_parents.insert(managed.parent_id);
         self.registry.listener_stats.retain(|listener| {
             listener.id != managed.parent_id
@@ -241,7 +241,7 @@ impl Driver {
             .registry
             .management
             .as_ref()
-            .expect("checked by manage_interface");
+            .ok_or(io::ErrorKind::Unsupported)?;
         let queue_capacity = management.queue_capacity;
         let transport_enabled = management.transport_enabled;
         let underlay_mark = management.underlay_mark;

@@ -596,7 +596,12 @@ impl EventSender {
         let mut pending = Some(event);
         futures::future::poll_fn(|cx| {
             waiter.register(cx);
-            match self.try_send(pending.take().expect("not polled after it completed")) {
+            #[allow(
+                clippy::expect_used,
+                reason = "a future is not polled again once it is ready"
+            )]
+            let event = pending.take().expect("not polled after it completed");
+            match self.try_send(event) {
                 Ok(()) => std::task::Poll::Ready(Ok(())),
                 Err(std::sync::mpsc::TrySendError::Full(event)) => {
                     pending = Some(event);

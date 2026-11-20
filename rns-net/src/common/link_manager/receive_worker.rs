@@ -127,6 +127,10 @@ impl Worker {
         let Some(bytes) = Self::charge(&assembly).filter(|bytes| self.can_submit(*bytes)) else {
             return Err(assembly);
         };
+        // The sender is gone only once the worker is being dropped.
+        let Some(tx) = &self.tx else {
+            return Err(assembly);
+        };
         let id = self.next;
         let cancelled = Arc::new(AtomicBool::new(false));
         let pending = Pending {
@@ -136,7 +140,7 @@ impl Worker {
             cancelled: cancelled.clone(),
             bytes,
         };
-        match self.tx.as_ref().expect("live worker sender").try_send(Job {
+        match tx.try_send(Job {
             id,
             assembly,
             cancelled,
@@ -172,6 +176,10 @@ impl Worker {
                 }
             }
         };
+        #[allow(
+            clippy::expect_used,
+            reason = "the worker answers each submitted job once, and only here is it removed"
+        )]
         let pending = self.pending.remove(&ready.id).expect("known receive job");
         self.bytes -= pending.bytes;
         Some((pending, ready))

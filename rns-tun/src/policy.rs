@@ -31,6 +31,13 @@ impl Cidr {
             prefix_len,
         })
     }
+    /// The /32 network of the single host `address`.
+    pub fn host(address: Ipv4Addr) -> Self {
+        Self {
+            network: address,
+            prefix_len: 32,
+        }
+    }
     /// Network address (host bits zero).
     pub fn network(self) -> Ipv4Addr {
         self.network
@@ -265,7 +272,7 @@ impl GatewayPolicy {
         }
         for peer in &grant.allow_peers {
             if let Some(peer_grant) = self.grant(peer) {
-                let peer_route = Cidr::new(peer_grant.address, 32).expect("/32 is valid");
+                let peer_route = Cidr::host(peer_grant.address);
                 if requested
                     .iter()
                     .any(|request| request.contains_cidr(peer_route))

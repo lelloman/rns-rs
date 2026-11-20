@@ -2,8 +2,13 @@
 //! cost.
 
 // A failed precondition aborts the measurement, which is what a benchmark
-// run should do; the workspace lint against unwrap is for shipped code.
-#![allow(clippy::unwrap_used, reason = "a benchmark run aborts on failure")]
+// run should do; the workspace lints against unwrap and expect are for
+// shipped code.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "a benchmark run aborts on failure"
+)]
 
 #[cfg(feature = "allocation-profiler")]
 mod allocations;

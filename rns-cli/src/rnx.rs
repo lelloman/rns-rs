@@ -300,8 +300,20 @@ fn flush() {
 }
 
 impl Rnx {
+    #[allow(
+        clippy::expect_used,
+        reason = "only called once start_reticulum has set the node"
+    )]
     fn node(&self) -> &RnsNode {
         self.node.as_ref().expect("Reticulum is running")
+    }
+
+    #[allow(
+        clippy::expect_used,
+        reason = "only called once start_reticulum has set the sender"
+    )]
+    fn event_sender(&self) -> mpsc::Sender<RnxEvent> {
+        self.tx.clone().expect("Reticulum is running")
     }
 
     /// Python's `exit(code)`: Reticulum's exit handler runs first.
@@ -350,8 +362,15 @@ impl Rnx {
 
     /// `prepare_identity`: an unreadable identity file is replaced.
     fn prepare_identity(&mut self) {
-        if self.identity.is_some() {
-            return;
+        let identity = self.take_identity();
+        self.identity = Some(identity);
+    }
+
+    /// The prepared identity, taken out of `self`: the one already
+    /// prepared, else the saved one, else a new one, saved.
+    fn take_identity(&mut self) -> rns_crypto::identity::Identity {
+        if let Some(identity) = self.identity.take() {
+            return identity;
         }
         let identity_path = match &self.args.identity {
             Some(path) => path.clone(),
@@ -364,17 +383,17 @@ impl Rnx {
                 .into_owned(),
         };
         if Path::new(&identity_path).is_file() {
-            self.identity = pylog::identity_from_file(&identity_path);
+            if let Some(identity) = pylog::identity_from_file(&identity_path) {
+                return identity;
+            }
         }
-        if self.identity.is_none() {
-            pylog::log("No valid saved identity found, creating new...", LOG_INFO);
-            let identity = pylog::new_identity();
-            pylog::key_to_file(
-                &identity.get_private_key().unwrap_or([0; 64]),
-                &identity_path,
-            );
-            self.identity = Some(identity);
-        }
+        pylog::log("No valid saved identity found, creating new...", LOG_INFO);
+        let identity = pylog::new_identity();
+        pylog::key_to_file(
+            &identity.get_private_key().unwrap_or([0; 64]),
+            &identity_path,
+        );
+        identity
     }
 
     fn main(&mut self) -> i32 {
@@ -425,8 +444,7 @@ impl Rnx {
 
     fn listen(&mut self) -> ! {
         self.start_reticulum();
-        self.prepare_identity();
-        let identity = self.identity.take().expect("prepared");
+        let identity = self.take_identity();
         let destination =
             Destination::single_in(APP_NAME, &[ASPECT], IdentityHash(*identity.hash()));
         if self.args.print_identity {
@@ -503,7 +521,7 @@ impl Rnx {
             signature_public,
             0,
         );
-        let request_tx = self.tx.clone().expect("Reticulum is running");
+        let request_tx = self.event_sender();
         let _ = node.register_deferred_request_handler(
             COMMAND_PATH,
             (!allow_all).then(|| allowed_identity_hashes.clone()),
@@ -527,7 +545,7 @@ impl Rnx {
             let _ = self.node().announce_queued(&destination, &identity, None);
         }
 
-        let tx = self.tx.clone().expect("Reticulum is running");
+        let tx = self.event_sender();
         loop {
             let Some(event) = self.events.as_ref().and_then(|events| events.recv().ok()) else {
                 self.exit(0);
@@ -728,7 +746,9 @@ impl Rnx {
             && req.as_ref().is_some_and(|r| r.status == Receipt::Receiving)
         {
             self.pump(Duration::from_millis(100), &mut req);
-            let r = req.as_ref().expect("request");
+            let Some(r) = req.as_ref() else {
+                break;
+            };
             let prg = r.progress;
             let stat_str = format!(
                 "{}% - {} of {} - {}ps",
@@ -1154,8 +1174,12 @@ fn execute_request(data: &[u8], cancel: &AtomicBool, remote: Option<[u8; 16]>) -
             let _ = stdin.write_all(&input[..input.len().min(MAX_STDIN)]);
         }
     }
-    let stdout = child.stdout.take().expect("stdout is piped");
-    let stderr = child.stderr.take().expect("stderr is piped");
+    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        // Both are piped above, so the child always has them.
+        let _ = child.kill();
+        let _ = child.wait();
+        return encode_result(false, None, None, None, None, None, started, None);
+    };
     let stdout_limit = request
         .stdout_limit
         .unwrap_or(DEFAULT_OUTPUT_LIMIT)

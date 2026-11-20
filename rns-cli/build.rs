@@ -5,7 +5,9 @@ use std::process::Command;
 #[path = "build_common.rs"]
 mod build_common;
 
-fn main() {
+use anyhow::Context;
+
+fn main() -> anyhow::Result<()> {
     build_common::emit_git_rerun_inputs();
     println!("cargo:rerun-if-changed=../rns-stats-hook/src/lib.rs");
     println!("cargo:rerun-if-changed=../rns-stats-hook/Cargo.toml");
@@ -14,9 +16,10 @@ fn main() {
     build_common::emit_full_version();
 
     if env::var_os("CARGO_FEATURE_RNS_HOOKS_WASM").is_some() {
-        embed_stats_hook().expect("failed to build embedded stats hook");
-        embed_sentinel_hook().expect("failed to build embedded sentinel hook");
+        embed_stats_hook().context("failed to build embedded stats hook")?;
+        embed_sentinel_hook().context("failed to build embedded sentinel hook")?;
     }
+    Ok(())
 }
 
 fn embed_stats_hook() -> anyhow::Result<()> {

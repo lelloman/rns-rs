@@ -3,6 +3,8 @@
 //! Usage: cargo run --example tcp_connect -- [host] [port]
 //! Default: 127.0.0.1:4242
 
+#![allow(clippy::expect_used, reason = "an example stops at the first failure")]
+
 use std::env;
 use std::sync::mpsc;
 

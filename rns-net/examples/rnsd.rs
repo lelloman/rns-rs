@@ -3,6 +3,8 @@
 //! Usage:
 //!   RUST_LOG=info cargo run --example rnsd [/path/to/config/dir]
 
+#![allow(clippy::expect_used, reason = "an example stops at the first failure")]
+
 use std::env;
 use std::path::PathBuf;
 use std::sync::mpsc;

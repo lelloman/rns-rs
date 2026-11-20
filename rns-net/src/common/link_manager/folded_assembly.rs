@@ -72,17 +72,18 @@ impl FoldedAssembly {
 impl LinkManager {
     /// Queue an authenticated assembly for the driver loop. Returns it back
     /// when the queue is full, for the caller to assemble at once.
+    /// Takes the queue rather than the manager, so a caller can queue while
+    /// it still holds the link.
     pub(super) fn queue_folded_assembly(
-        &mut self,
+        queue: &mut std::collections::VecDeque<FoldedAssembly>,
         link: LinkId,
         generation: Arc<()>,
         assembly: ResourceAssembly,
     ) -> Result<(), ResourceAssembly> {
-        if self.folded_assemblies.len() >= MAX_FOLDED_ASSEMBLIES {
+        if queue.len() >= MAX_FOLDED_ASSEMBLIES {
             return Err(assembly);
         }
-        self.folded_assemblies
-            .push_back(FoldedAssembly::new(link, generation, assembly));
+        queue.push_back(FoldedAssembly::new(link, generation, assembly));
         Ok(())
     }
 

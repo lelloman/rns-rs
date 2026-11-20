@@ -221,8 +221,9 @@ pub(super) fn extract_firmware(args: &Args) -> ! {
         }
     };
     println!("\nProbing device...");
-    let (reader, writer) = match open_serial(&port) {
-        Ok(handles) => handles,
+    let opened = open_serial(&port).and_then(|(reader, writer)| RNode::new(reader, writer));
+    let mut rnode = match opened {
+        Ok(rnode) => rnode,
         Err(e) => {
             log("Could not open the specified serial port. The contained exception was:");
             log(&format!(
@@ -232,7 +233,6 @@ pub(super) fn extract_firmware(args: &Args) -> ! {
             graceful_exit(0);
         }
     };
-    let mut rnode = RNode::new(reader, writer);
     if rnode.device_probe().is_err() {
         log("No answer from device");
     } else {
