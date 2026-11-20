@@ -211,31 +211,41 @@ pub fn should_update_path(
     }
 }
 
-/// Upstream Transport.py's path decision (at cff4d03f) for an announce
-/// against a destination's single path `existing` when that path is
-/// unresponsive (`unresponsive_path_recovery = upstream`). The
-/// higher-gravity replacement is decided before this, as
-/// [`is_higher_gravity_replacement`].
+/// Upstream Transport.py's path table decision (at cff4d03f, `inbound`,
+/// the announce branch) for an announce against a destination's single path
+/// `existing` (`unresponsive_path_recovery = upstream`).
 ///
-/// Over the same or fewer hops, only a new announce emitted after the
-/// path's newest random blob is taken. Over more hops, an expired path
-/// takes any new announce; otherwise a new announce emitted later is taken,
-/// and one emitted at the path's emission time (upstream's scan of the
-/// path's random blobs, which stops at the first that reaches the
-/// announce's emission time) is upstream's lenient insertion,
-/// [`PathDecision::AddForUnresponsive`], whether or not it was heard
-/// before. Emission times implausibly far in the future count as unknown,
-/// as everywhere in path selection (see [`MAX_EMISSION_TIME_SKEW_SECS`]).
-pub fn upstream_unresponsive_path_decision(
+/// Over the same or fewer hops, a new announce emitted after the path's
+/// newest random blob is taken, and so is one emitted at that time (heard
+/// before or not) that arrived on an interface of higher gravity than the
+/// path's (`path_gravity` and `announce_gravity`, either `None` when
+/// unknown, which upstream treats as no replacement). Over more hops, an
+/// expired path takes any new announce; otherwise a new announce emitted
+/// later is taken, and one emitted at the path's emission time (upstream's
+/// scan of the path's random blobs, which stops at the first that reaches
+/// the announce's emission time) is upstream's lenient insertion for an
+/// unresponsive path, [`PathDecision::AddForUnresponsive`], whether or not
+/// it was heard before. Emission times implausibly far in the future count
+/// as unknown, as everywhere in path selection (see
+/// [`MAX_EMISSION_TIME_SKEW_SECS`]).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct input of upstream's announce acceptance decision"
+)]
+pub fn upstream_path_decision(
     existing: &PathEntry,
     announce_hops: u8,
     announce_emitted_ts: u64,
     random_blob: &[u8; 10],
+    path_is_unresponsive: bool,
+    path_gravity: Option<i64>,
+    announce_gravity: Option<i64>,
     now: f64,
 ) -> PathDecision {
     if announce_hops > constants::PATHFINDER_M {
         return PathDecision::Reject;
     }
+    let raw_announce_emitted_ts = announce_emitted_ts;
     let announce_emitted_ts = trusted_emission_time(announce_emitted_ts, now);
     let blob_is_new = !existing.random_blobs.contains(random_blob);
     let new_blob = |accept: bool| {
@@ -247,7 +257,17 @@ pub fn upstream_unresponsive_path_decision(
     };
     if announce_hops <= existing.hops {
         let path_timebase = trusted_timebase_from_random_blobs(&existing.random_blobs, now);
-        return new_blob(announce_emitted_ts > path_timebase);
+        if blob_is_new && announce_emitted_ts > path_timebase {
+            return PathDecision::Add;
+        }
+        let higher_gravity = matches!(
+            (path_gravity, announce_gravity),
+            (Some(path), Some(announce)) if announce > path
+        );
+        if higher_gravity && is_same_emission(existing, raw_announce_emitted_ts, now) {
+            return PathDecision::Add;
+        }
+        return PathDecision::Reject;
     }
     let mut path_announce_emitted = 0;
     for blob in &existing.random_blobs {
@@ -260,7 +280,7 @@ pub fn upstream_unresponsive_path_decision(
     // An expired path takes any new announce and nothing else.
     if now >= existing.expires || announce_emitted_ts > path_announce_emitted {
         new_blob(true)
-    } else if announce_emitted_ts == path_announce_emitted {
+    } else if announce_emitted_ts == path_announce_emitted && path_is_unresponsive {
         PathDecision::AddForUnresponsive
     } else {
         PathDecision::Reject
@@ -278,11 +298,11 @@ pub enum MultiPathDecision {
     /// does, accepted only because the path is unresponsive: a table
     /// insertion that is not rebroadcast (upstream 8c73e203).
     RecoverUnresponsive,
-    /// `unresponsive_path_recovery = upstream`: replace the unresponsive
-    /// primary path whatever the announce's next hop, as upstream replaces
-    /// its single path. `rebroadcast` is false for upstream's lenient
-    /// insertion (8c73e203).
-    ReplaceUnresponsive {
+    /// `unresponsive_path_recovery = upstream`: replace the primary path
+    /// whatever the announce's next hop, as upstream replaces its single
+    /// path. `rebroadcast` is false for upstream's lenient insertion for an
+    /// unresponsive path (8c73e203).
+    ReplaceAsUpstream {
         /// Whether the announce is rebroadcast.
         rebroadcast: bool,
     },
@@ -358,6 +378,34 @@ pub fn decide_announce_multipath_with_gravity(
         Some(ps) => ps,
     };
 
+    // `unresponsive_path_recovery = upstream`: upstream's decision against
+    // the primary path, which an accepted announce replaces. Only
+    // `prefer_shorter_path` still takes a strictly shorter announce, as it
+    // would for any path.
+    if recovery == UnresponsivePathRecovery::Upstream {
+        if let Some(primary) = path_set
+            .primary()
+            .filter(|primary| !(prefer_shorter_path && announce_hops < primary.hops))
+        {
+            return match upstream_path_decision(
+                primary,
+                announce_hops,
+                announce_emitted_ts,
+                random_blob,
+                path_is_unresponsive,
+                current_gravity,
+                announce_gravity,
+                now,
+            ) {
+                PathDecision::Add => MultiPathDecision::ReplaceAsUpstream { rebroadcast: true },
+                PathDecision::AddForUnresponsive => {
+                    MultiPathDecision::ReplaceAsUpstream { rebroadcast: false }
+                }
+                PathDecision::Reject => MultiPathDecision::Reject,
+            };
+        }
+    }
+
     if is_higher_gravity_replacement(
         path_set,
         announce_hops,
@@ -367,29 +415,6 @@ pub fn decide_announce_multipath_with_gravity(
         announce_gravity,
     ) {
         return MultiPathDecision::ReplacePrimary;
-    }
-
-    // An unresponsive path recovered as upstream does. `prefer_shorter_path`
-    // still takes a strictly shorter announce, as it would for any path.
-    if recovery == UnresponsivePathRecovery::Upstream && path_is_unresponsive {
-        if let Some(primary) = path_set
-            .primary()
-            .filter(|primary| !(prefer_shorter_path && announce_hops < primary.hops))
-        {
-            return match upstream_unresponsive_path_decision(
-                primary,
-                announce_hops,
-                announce_emitted_ts,
-                random_blob,
-                now,
-            ) {
-                PathDecision::Add => MultiPathDecision::ReplaceUnresponsive { rebroadcast: true },
-                PathDecision::AddForUnresponsive => {
-                    MultiPathDecision::ReplaceUnresponsive { rebroadcast: false }
-                }
-                PathDecision::Reject => MultiPathDecision::Reject,
-            };
-        }
     }
 
     // Check if there's already a path with the same next_hop
@@ -460,17 +485,27 @@ pub fn is_higher_gravity_replacement(
     else {
         return false;
     };
-    // Deliberate deviation from Transport.py (see MAX_EMISSION_TIME_SKEW_SECS):
-    // a plausible emission time is compared against the timebase of the
-    // plausible blobs only. An implausible one only matches the exact same
-    // raw value, i.e. the very same (garbage) emission re-heard, so it can
-    // never displace a path learned from a genuine, more recent announce.
-    let same_emission = if is_plausible_emission_time(announce_emitted_ts, now) {
-        announce_emitted_ts == trusted_timebase_from_random_blobs(&primary.random_blobs, now)
+    announce_hops <= primary.hops
+        && is_same_emission(primary, announce_emitted_ts, now)
+        && announce_gravity > current_gravity
+}
+
+/// Whether an announce emitted at `announce_emitted_ts` carries the same
+/// emission time as `path`'s newest random blob, for the higher-gravity
+/// replacement.
+///
+/// Deliberate deviation from Transport.py (see
+/// [`MAX_EMISSION_TIME_SKEW_SECS`]): a plausible emission time is compared
+/// against the timebase of the plausible blobs only. An implausible one only
+/// matches the exact same raw value, i.e. the very same (garbage) emission
+/// re-heard, so it can never displace a path learned from a genuine, more
+/// recent announce.
+fn is_same_emission(path: &PathEntry, announce_emitted_ts: u64, now: f64) -> bool {
+    if is_plausible_emission_time(announce_emitted_ts, now) {
+        announce_emitted_ts == trusted_timebase_from_random_blobs(&path.random_blobs, now)
     } else {
-        announce_emitted_ts == timebase_from_random_blobs(&primary.random_blobs)
-    };
-    announce_hops <= primary.hops && same_emission && announce_gravity > current_gravity
+        announce_emitted_ts == timebase_from_random_blobs(&path.random_blobs)
+    }
 }
 
 #[cfg(test)]
@@ -694,11 +729,14 @@ mod tests {
         let entry = |blobs: &[[u8; 10]], expires: f64| make_path_entry(2, blobs, expires);
         let known = make_blob(1000);
         let decide = |path: &PathEntry, hops: u8, blob: &[u8; 10]| {
-            upstream_unresponsive_path_decision(
+            upstream_path_decision(
                 path,
                 hops,
                 timebase_from_random_blob(blob),
                 blob,
+                true,
+                None,
+                None,
                 2000.0,
             )
         };
@@ -733,6 +771,39 @@ mod tests {
         assert_eq!(
             decide(&entry(&[known], 1500.0), 5, &make_blob(900)),
             PathDecision::Add
+        );
+    }
+
+    #[test]
+    fn upstream_path_decision_for_a_responsive_path() {
+        let known = make_blob(1000);
+        let path = make_path_entry(2, &[known], 9999.0);
+        let decide = |hops: u8, blob: &[u8; 10], gravities: (Option<i64>, Option<i64>)| {
+            upstream_path_decision(
+                &path,
+                hops,
+                timebase_from_random_blob(blob),
+                blob,
+                false,
+                gravities.0,
+                gravities.1,
+                2000.0,
+            )
+        };
+        // A newer new announce, over more hops or not.
+        assert_eq!(decide(5, &make_blob(1001), (None, None)), PathDecision::Add);
+        assert_eq!(decide(2, &make_blob(1001), (None, None)), PathDecision::Add);
+        // The same announce: over more hops only an unresponsive path
+        // takes it; over as many hops a higher-gravity interface does.
+        assert_eq!(decide(5, &known, (None, None)), PathDecision::Reject);
+        assert_eq!(decide(2, &known, (Some(0), Some(0))), PathDecision::Reject);
+        assert_eq!(decide(2, &known, (Some(0), Some(1))), PathDecision::Add);
+        assert_eq!(decide(2, &known, (None, Some(1))), PathDecision::Reject);
+        assert_eq!(decide(5, &known, (Some(0), Some(1))), PathDecision::Reject);
+        // An older new announce.
+        assert_eq!(
+            decide(1, &make_blob(999), (None, None)),
+            PathDecision::Reject
         );
     }
 
@@ -1088,7 +1159,7 @@ mod tests {
                 MultiPathDecision::ReplacePrimary => ps.upsert_primary(entry),
                 MultiPathDecision::AddAlternative => ps.upsert(entry),
                 MultiPathDecision::RecoverUnresponsive
-                | MultiPathDecision::ReplaceUnresponsive { .. }
+                | MultiPathDecision::ReplaceAsUpstream { .. }
                 | MultiPathDecision::Reject => unreachable!(),
             }
             let primary = ps.primary().unwrap();

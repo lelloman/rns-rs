@@ -50,7 +50,7 @@ found by the gates.
 | Known destinations | 9 (`48c77061`), 18 (`4a058544`) | Integrated: a split-mode client loads the instance's known destinations over RPC. `known_destinations` answers upstream's dict (decision 1), with the announce packet hash now kept; the native list is `known_destination_entries`. Commit 18 is structurally covered. |
 | Process and listeners | 11 (`0123133e`), 33 (`52898683`) | Structurally covered: rns-rs's stamp workers are threads and its forks only exec, and every listener it binds already queues at least upstream's new backlog. |
 | rngit | 12 (`05ac4bba`) | Integrated: `link_cost` (default 18.0) and `stamp_value` in `[rngit]` and `[pages]`, quantised as upstream; an invalid value is a startup error (decision 5). |
-| Path responsiveness | 13 (`833f6cf2`), 14 (`d72cfdd7`), 15 (`5bd93ad9`), 16 (`70eb417d`), 17 (`8c73e203`) | Integrated or structurally covered: instance-local paths survive culling and are never rediscovered through links, a local client's path response marks its path responsive and answers only the requesting interface, and a replacement accepted only because a path is unresponsive is not rebroadcast. Decision 8 adds `unresponsive_path_recovery`. |
+| Path responsiveness | 13 (`833f6cf2`), 14 (`d72cfdd7`), 15 (`5bd93ad9`), 16 (`70eb417d`), 17 (`8c73e203`) | Integrated or structurally covered: instance-local paths survive culling and are never rediscovered through links, a local client's path response marks its path responsive and answers only the requesting interface, and a replacement accepted only because a path is unresponsive is not rebroadcast. Decision 8 adds `unresponsive_path_recovery`, whose `upstream` mode decides every path update as upstream. |
 | Interface properties | 19 (`8e7dc8b7`) | Integrated: `lossless_medium()` with upstream's per-class values, unread as upstream (decision 6). |
 | rnpath and path tables | 20 (`9568b704`), 24 (`1a71073c`), 25 (`b9903c53`), 26 (`1f7cd145`), 27 (`41260ea1`), 28 (`48ba76df`), 31 (`eb00622f`) | Integrated: upstream's display and filter options, `--capture`, the path `state` key and the ` (R)`/` (u)`/` (?)` marker, and the analysis mode as it is at each commit, ending at 31's `Not yet implemented` (decision 3); 28's guard never fires. |
 | Destination types | 21 (`c90a5d58`), 22 (`3f55e9eb`), 23 (`f7b54ccc`) | Integrated or non-runtime: the `known_destination_types` and `flagged_destination_types` files name types in logs; `link_distribution` follows upstream's shape at each commit (decision 2). |
@@ -87,14 +87,19 @@ and the rebase.
 ## Caveats and Deferred Validation
 
 - `unresponsive_path_recovery` defaults to `native`, which keeps rns-rs's
-  own recovery of unresponsive paths (decision 8): an already-heard
+  own path updates (decision 8): for an unresponsive path an already-heard
   announce through a new next hop does not replace the path, it is taken
   over the same or fewer hops and for an expired path, and the emission
-  time compared is the newest random blob. `upstream` decides as
-  Transport.py at `cff4d03f`, except that `prefer_shorter_path` still takes
-  a strictly shorter announce and `max_paths_per_destination` above 1
-  changes when a path is unresponsive. Documented in
-  `docs/interoperability.md` and `docs/configuration.md`.
+  time compared is the newest random blob; for any path an announce
+  through a new next hop is an alternative, which a single-path table
+  drops when it has more hops (a newer announce over more hops through
+  another neighbour leaves the path), and one emitted before the path's
+  newest random blob is rejected even for an expired path. `upstream`
+  decides every path update as Transport.py at `cff4d03f`, against the
+  primary path, which an accepted announce replaces (so announces add no
+  alternative paths), except that `prefer_shorter_path` still takes a
+  strictly shorter announce. Documented in `docs/interoperability.md` and
+  `docs/configuration.md`.
 - In both modes rns-rs keeps distrusting announce emission times
   implausibly far in the future (`MAX_EMISSION_TIME_SKEW_SECS`), which
   upstream does not.

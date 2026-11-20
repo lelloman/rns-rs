@@ -202,8 +202,8 @@ pub struct ReticulumSection {
     /// Maximum number of alternative paths stored per destination.
     /// Default 1 (single path, backward-compatible).
     pub max_paths_per_destination: usize,
-    /// How an announce may recover an unresponsive path: `native`
-    /// (default) or `upstream`.
+    /// How an announce may update a path, including an unresponsive one:
+    /// `native` (default) or `upstream`.
     pub unresponsive_path_recovery: rns_core::transport::types::UnresponsivePathRecovery,
     /// Maximum number of packet hashes retained for duplicate suppression.
     pub packet_hashlist_max_entries: usize,

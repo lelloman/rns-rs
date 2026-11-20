@@ -9,9 +9,10 @@ use super::*;
 ///
 /// The test assumes upstream's single path per destination. With
 /// `max_paths_per_destination` above 1 an older announce can still add an
-/// alternative path, and with `prefer_shorter_path` a shorter one can
-/// replace the path regardless of emission time, so both keep every
-/// announce.
+/// alternative path (except under `unresponsive_path_recovery = upstream`,
+/// where announces only replace the primary path as upstream does), and
+/// with `prefer_shorter_path` a shorter one can replace the path regardless
+/// of emission time, so both keep every announce.
 #[allow(
     clippy::too_many_arguments,
     reason = "the engine tables are passed as separate borrows so the caller can hold other engine fields mutably; runs for every received announce"
@@ -26,7 +27,9 @@ pub(super) fn announce_passes_prefilter(
     announce_iface: InterfaceId,
     now: f64,
 ) -> bool {
-    if config.max_paths_per_destination > 1 || config.prefer_shorter_path {
+    let keeps_alternatives = config.max_paths_per_destination > 1
+        && config.unresponsive_path_recovery == types::UnresponsivePathRecovery::Native;
+    if keeps_alternatives || config.prefer_shorter_path {
         return true;
     }
     let Some(existing) = path_table.get(destination_hash).and_then(PathSet::primary) else {

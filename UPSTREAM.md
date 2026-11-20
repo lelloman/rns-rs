@@ -43,8 +43,9 @@ rgit. The range has 34 commits:
   `flagged_destination_types` files.
 - Listener backlogs are raised.
 
-`unresponsive_path_recovery` (default `native`) keeps rns-rs's own
-recovery of unresponsive paths, or decides as upstream with `upstream`.
+`unresponsive_path_recovery` (default `native`) keeps rns-rs's own path
+updates, including its recovery of unresponsive paths, or decides every
+path update as upstream with `upstream`.
 Acceptance evidence is in
 [`docs/upstream-parity/reticulum-1.6.1-rgit-parity.md`](docs/upstream-parity/reticulum-1.6.1-rgit-parity.md)
 and the detailed audit is

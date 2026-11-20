@@ -521,22 +521,27 @@ pub enum PacketHashlistAllocation {
     Lazy,
 }
 
-/// How an announce may recover a destination's path once that path is
-/// marked unresponsive (`[reticulum] unresponsive_path_recovery`).
+/// How an announce may update a destination's path, including one marked
+/// unresponsive (`[reticulum] unresponsive_path_recovery`).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum UnresponsivePathRecovery {
     /// rns-rs's own rules. An already-heard announce (same emission time)
     /// replaces an unresponsive path only through the path's own next hop,
     /// over more hops, or, unlike upstream, over the same or fewer hops;
     /// through another next hop it is rejected. A replacement accepted only
-    /// because the path is unresponsive is not rebroadcast.
+    /// because the path is unresponsive is not rebroadcast. An announce
+    /// through another next hop is stored as an alternative path, which a
+    /// single-path table keeps only when it ranks first.
     #[default]
     Native,
-    /// Upstream Transport.py's rules for an unresponsive path: the path is
-    /// decided as upstream's single path, and an accepted announce replaces
-    /// it whatever its next hop. An already-heard announce over more hops
-    /// replaces it without being rebroadcast; one over the same or fewer
-    /// hops does not.
+    /// Upstream Transport.py's rules for every path update: an announce is
+    /// decided against the primary path as upstream decides against its
+    /// single path, and an accepted announce replaces it whatever its next
+    /// hop, so announces add no alternative paths. For an unresponsive path
+    /// an already-heard announce over more hops replaces it without being
+    /// rebroadcast; one over the same or fewer hops does not.
+    /// `prefer_shorter_path` still takes a strictly shorter announce by
+    /// rns-rs's rules.
     Upstream,
 }
 
@@ -558,8 +563,8 @@ pub struct TransportConfig {
     /// when the primary becomes unresponsive.  Default 1 (single path,
     /// backward-compatible with Python Reticulum behaviour).
     pub max_paths_per_destination: usize,
-    /// How an announce may recover an unresponsive path. Default
-    /// [`UnresponsivePathRecovery::Native`].
+    /// How an announce may update a path, including an unresponsive one.
+    /// Default [`UnresponsivePathRecovery::Native`].
     pub unresponsive_path_recovery: UnresponsivePathRecovery,
     /// Maximum number of packet hashes retained for duplicate suppression.
     pub packet_hashlist_max_entries: usize,

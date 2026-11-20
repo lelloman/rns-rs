@@ -996,6 +996,188 @@ fn unresponsive_path_recovery_native_and_upstream() {
     }
 }
 
+/// `unresponsive_path_recovery = upstream` decides every path update as
+/// upstream Transport.py at cff4d03f, not only for an unresponsive path. A
+/// path two hops away through next hop `[0x30; 16]` on interface 1, learnt
+/// from an announce emitted at 1000 and not marked unresponsive, then an
+/// announce on interface 2. An accepted announce replaces the path
+/// whatever its next hop, keeping its random blobs; `native` keeps rns-rs's
+/// rules (a new next hop is an alternative, which a single-path table only
+/// keeps when it ranks first).
+#[test]
+fn upstream_recovery_decides_every_path_update_as_upstream() {
+    use super::local_client_announce_tests::announce_with_random_blob;
+    use crate::transport::tests::make_random_blob;
+    use crate::transport::types::UnresponsivePathRecovery::{Native, Upstream};
+    const A: [u8; 16] = [0x30; 16];
+    const B: [u8; 16] = [0x29; 16];
+    struct Case {
+        recovery: crate::transport::types::UnresponsivePathRecovery,
+        max_paths: usize,
+        path_via: [u8; 16],
+        expired: bool,
+        path_response: bool,
+        gravity: i64,
+        emitted: u64,
+        hops: u8,
+        // The primary's next hop, hops and interface afterwards, the
+        // number of paths and the rebroadcast.
+        primary: ([u8; 16], u8, u64),
+        paths: usize,
+        rebroadcast: bool,
+    }
+    let case = |recovery, emitted, hops, primary, rebroadcast| Case {
+        recovery,
+        max_paths: 1,
+        path_via: A,
+        expired: false,
+        path_response: false,
+        gravity: 0,
+        emitted,
+        hops,
+        primary,
+        paths: 1,
+        rebroadcast,
+    };
+    let cases = [
+        // A newer announce through another next hop, over more hops:
+        // upstream takes it; rns-rs adds an alternative, which a
+        // single-path table drops.
+        case(Upstream, 1001, 4, (B, 4, 2), true),
+        case(Native, 1001, 4, (A, 2, 1), true),
+        // ... with room for two paths.
+        Case {
+            max_paths: 2,
+            ..case(Upstream, 1001, 4, (B, 4, 2), true)
+        },
+        Case {
+            max_paths: 2,
+            paths: 2,
+            ..case(Native, 1001, 4, (A, 2, 1), true)
+        },
+        // A newer announce over as many hops.
+        case(Upstream, 1001, 2, (B, 2, 2), true),
+        case(Native, 1001, 2, (B, 2, 2), true),
+        // An older new announce over fewer hops.
+        case(Upstream, 999, 1, (A, 2, 1), false),
+        case(Native, 999, 1, (A, 2, 1), false),
+        // The same announce over as many hops on a higher-gravity interface.
+        Case {
+            gravity: 1,
+            ..case(Upstream, 1000, 2, (B, 2, 2), true)
+        },
+        Case {
+            gravity: 1,
+            ..case(Native, 1000, 2, (B, 2, 2), true)
+        },
+        // The same announce over as many hops, same gravity.
+        case(Upstream, 1000, 2, (A, 2, 1), false),
+        case(Native, 1000, 2, (A, 2, 1), false),
+        // An expired path takes an older new announce over more hops
+        // upstream, when it is a path response (upstream's prefilter drops
+        // an older announce); rns-rs rejects it through a new next hop.
+        Case {
+            expired: true,
+            path_response: true,
+            ..case(Upstream, 999, 4, (B, 4, 2), false)
+        },
+        Case {
+            expired: true,
+            path_response: true,
+            ..case(Native, 999, 4, (A, 2, 1), false)
+        },
+        Case {
+            expired: true,
+            ..case(Upstream, 999, 4, (A, 2, 1), false)
+        },
+        // ... but not the announce it already has.
+        Case {
+            expired: true,
+            ..case(Upstream, 1000, 4, (A, 2, 1), false)
+        },
+        Case {
+            expired: true,
+            ..case(Native, 1000, 4, (A, 2, 1), false)
+        },
+        // A newer announce through the path's own next hop, over more hops.
+        Case {
+            path_via: B,
+            ..case(Upstream, 1001, 4, (B, 4, 2), true)
+        },
+        Case {
+            path_via: B,
+            ..case(Native, 1001, 4, (B, 4, 2), true)
+        },
+        // The same announce over more hops: not unresponsive, so rejected.
+        case(Upstream, 1000, 4, (A, 2, 1), false),
+        case(Native, 1000, 4, (A, 2, 1), false),
+    ];
+    for case in cases {
+        let announce = announce_with_random_blob(
+            14,
+            false,
+            constants::HEADER_2,
+            case.hops - 1,
+            if case.path_response {
+                constants::CONTEXT_PATH_RESPONSE
+            } else {
+                constants::CONTEXT_NONE
+            },
+            &make_random_blob(case.emitted),
+        );
+        let dest = announce.destination_hash;
+        let mut engine = engine_with_known_path(dest, 2, None);
+        engine.config.unresponsive_path_recovery = case.recovery;
+        engine.config.max_paths_per_destination = case.max_paths;
+        engine.interfaces.get_mut(&InterfaceId(2)).unwrap().gravity = case.gravity;
+        let mut path = make_path_entry(900.0, 2, InterfaceId(1), case.path_via);
+        path.random_blobs = vec![make_random_blob(1000)];
+        if case.expired {
+            path.expires = 1000.0;
+        }
+        engine
+            .path_table
+            .insert(dest, PathSet::from_single(path, case.max_paths));
+        receive(&mut engine, &announce, 2);
+        let label = format!(
+            "{:?} max {} via {:02x} expired {} response {} gravity {} emitted {} hops {}",
+            case.recovery,
+            case.max_paths,
+            case.path_via[0],
+            case.expired,
+            case.path_response,
+            case.gravity,
+            case.emitted,
+            case.hops
+        );
+        let paths = engine.path_table.get(&dest).unwrap();
+        let primary = paths.primary().unwrap();
+        assert_eq!(
+            (
+                primary.next_hop,
+                primary.hops,
+                primary.receiving_interface.0
+            ),
+            case.primary,
+            "{label}"
+        );
+        assert_eq!(paths.len(), case.paths, "{label}");
+        assert_eq!(
+            engine.announce_table.contains_key(&dest),
+            case.rebroadcast,
+            "{label}"
+        );
+        if case.recovery == Upstream && primary.receiving_interface == InterfaceId(2) {
+            // Upstream's replacement keeps the replaced path's random blobs.
+            let mut blobs = vec![make_random_blob(1000)];
+            if case.emitted != 1000 {
+                blobs.push(make_random_blob(case.emitted));
+            }
+            assert_eq!(primary.random_blobs, blobs, "{label}");
+        }
+    }
+}
+
 fn table_entry(hops: u8, retries: u8, retransmit_timeout: f64) -> AnnounceEntry {
     AnnounceEntry {
         timestamp: 1000.0,
