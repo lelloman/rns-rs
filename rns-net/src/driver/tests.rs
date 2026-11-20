@@ -654,13 +654,15 @@ fn make_pool_candidate_with_priority(
         target_host: "127.0.0.1".to_string(),
         target_port: port,
         interface_id: InterfaceId(id),
-        reconnect_wait: Duration::from_millis(10),
         max_reconnect_tries: Some(0),
-        connect_timeout: Duration::from_millis(50),
         transport_identity: None,
         ..BackboneClientConfig::default()
     };
-    client.runtime = Arc::new(Mutex::new(BackboneClientRuntime::from_config(&client)));
+    client.runtime = Arc::new(Mutex::new(BackboneClientRuntime {
+        reconnect_wait: Duration::from_millis(10),
+        max_reconnect_tries: Some(0),
+        connect_timeout: Duration::from_millis(50),
+    }));
     BackbonePeerPoolCandidateConfig {
         client,
         mode: constants::MODE_FULL,
@@ -1514,7 +1516,6 @@ fn backbone_peer_pool_configured_peer_backoff_is_bounded() {
     // never wait out the pool cooldown.
     let mut driver = new_test_driver();
     let mut candidate = make_pool_candidate("down", 1, 7111);
-    candidate.client.reconnect_wait = Duration::from_secs(5);
     candidate.client.runtime = Arc::new(Mutex::new(BackboneClientRuntime::from_config(
         &candidate.client,
     )));

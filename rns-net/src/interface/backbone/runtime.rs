@@ -74,12 +74,13 @@ pub struct BackboneClientRuntime {
 }
 
 impl BackboneClientRuntime {
-    /// The settings `config` starts with.
+    /// The settings `config` starts with: its `max_reconnect_tries`, and
+    /// upstream's fixed reconnect wait and connect timeout.
     pub fn from_config(config: &BackboneClientConfig) -> Self {
         Self {
-            reconnect_wait: config.reconnect_wait,
+            reconnect_wait: RECONNECT_WAIT,
             max_reconnect_tries: config.max_reconnect_tries,
-            connect_timeout: config.connect_timeout,
+            connect_timeout: CONNECT_TIMEOUT,
         }
     }
 }

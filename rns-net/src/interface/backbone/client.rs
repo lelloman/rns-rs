@@ -13,14 +13,9 @@ pub struct BackboneClientConfig {
     pub target_port: u16,
     /// ID of the interface.
     pub interface_id: InterfaceId,
-    /// Startup wait between connection attempts, and the base of the backoff
-    /// after a lost connection; default 5 seconds.
-    pub reconnect_wait: Duration,
     /// Startup limit on reconnection attempts (`max_reconnect_tries`); `None`
     /// retries forever.
     pub max_reconnect_tries: Option<u32>,
-    /// Startup TCP connect timeout; default 5 seconds.
-    pub connect_timeout: Duration,
     /// The `transport_identity` config value (hex), as upstream writes it in
     /// the config entries of discovered interfaces; upstream's interfaces
     /// ignore it. The Backbone peer pool matches a discovered peer to this
@@ -41,27 +36,30 @@ impl BackboneClientConfig {
     }
 }
 
+/// Upstream's `RECONNECT_WAIT`: the wait between connection attempts, and
+/// the base of the backoff after a lost connection. Not configurable.
+pub const RECONNECT_WAIT: Duration = Duration::from_secs(5);
+
+/// Upstream's `INITIAL_CONNECT_TIMEOUT`, the TCP connect timeout. Upstream
+/// parses a `connect_timeout` option but connects with this constant.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
 impl Default for BackboneClientConfig {
     fn default() -> Self {
-        let mut config = BackboneClientConfig {
+        BackboneClientConfig {
             name: String::new(),
             target_host: "127.0.0.1".into(),
             target_port: 4242,
             interface_id: InterfaceId(0),
-            reconnect_wait: Duration::from_secs(5),
             max_reconnect_tries: None,
-            connect_timeout: Duration::from_secs(5),
             transport_identity: None,
             bitrate: CLIENT_BITRATE_GUESS,
             runtime: Arc::new(Mutex::new(BackboneClientRuntime {
-                reconnect_wait: Duration::from_secs(5),
+                reconnect_wait: RECONNECT_WAIT,
                 max_reconnect_tries: None,
-                connect_timeout: Duration::from_secs(5),
+                connect_timeout: CONNECT_TIMEOUT,
             })),
-        };
-        let startup = BackboneClientRuntime::from_config(&config);
-        config.runtime = Arc::new(Mutex::new(startup));
-        config
+        }
     }
 }
 
