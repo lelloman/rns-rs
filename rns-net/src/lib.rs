@@ -33,7 +33,6 @@ pub(crate) mod blackhole_store;
 pub mod destination_types;
 pub mod ifac;
 pub mod local_ratchet;
-pub mod md5;
 pub mod pickle;
 /// Process-global live profiling.
 ///

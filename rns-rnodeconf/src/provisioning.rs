@@ -258,7 +258,7 @@ pub(super) fn bootstrap_eeprom(
     let mut info_chunk = vec![product, model, hwrev];
     info_chunk.extend_from_slice(&serial_bytes);
     info_chunk.extend_from_slice(&time_bytes);
-    let checksum = rns_net::md5::md5(&info_chunk);
+    let checksum = rns_crypto::md5::md5(&info_chunk);
 
     log("Loading signing key...");
     let signing_key = keys::signing_key_path(&firmware);

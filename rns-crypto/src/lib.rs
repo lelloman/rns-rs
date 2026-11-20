@@ -20,6 +20,8 @@ pub mod hkdf;
 pub mod hmac;
 /// Identities: encryption, decryption, signing and verification.
 pub mod identity;
+/// MD5 and HMAC-MD5, for compatibility only.
+pub mod md5;
 /// PKCS#7 padding.
 pub mod pkcs7;
 pub mod ratchet;

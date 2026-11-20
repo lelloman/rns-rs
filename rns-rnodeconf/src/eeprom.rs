@@ -131,7 +131,7 @@ fn parse_fields(eeprom: &[u8], keys: &[(String, PublicKey)]) -> Option<DeviceInf
     let mut checksummed = vec![info.product, info.model, info.hw_rev];
     checksummed.extend_from_slice(&info.serialno);
     checksummed.extend_from_slice(&info.made);
-    info.checksum_valid = rns_net::md5::md5(&checksummed) == info.checksum;
+    info.checksum_valid = rns_crypto::md5::md5(&checksummed) == info.checksum;
     if !info.checksum_valid {
         info.provisioned = false;
         return Some(info);
@@ -177,7 +177,7 @@ pub fn provisioned_image(
     let mut checksummed = vec![product, model, hw_rev];
     checksummed.extend_from_slice(&serialno);
     checksummed.extend_from_slice(&made);
-    let checksum = rns_net::md5::md5(&checksummed);
+    let checksum = rns_crypto::md5::md5(&checksummed);
     eeprom[rom::ADDR_CHKSUM as usize..rom::ADDR_CHKSUM as usize + 16].copy_from_slice(&checksum);
     eeprom[rom::ADDR_INFO_LOCK as usize] = rom::INFO_LOCK_BYTE;
     if let Some(tnc) = tnc {

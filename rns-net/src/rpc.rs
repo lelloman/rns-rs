@@ -53,8 +53,8 @@ use crate::event::{
     RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
 use crate::listen::{Listener, ListenerWake};
-use crate::md5::hmac_md5;
 use crate::pickle::{self, PickleValue};
+use rns_crypto::md5::hmac_md5;
 
 const CHALLENGE_PREFIX: &[u8] = b"#CHALLENGE#";
 const WELCOME: &[u8] = b"#WELCOME#";
