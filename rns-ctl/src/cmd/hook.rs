@@ -2,6 +2,9 @@
 //!
 //! Connects to a running rns-ctl HTTP server to list, load, and unload hooks.
 
+use std::fmt;
+use std::io::{self, Read, Write};
+
 use crate::args::Args;
 use rns_cli::exit::{Exit, Status};
 
@@ -281,63 +284,80 @@ fn do_set_priority(args: &Args, base_url: &str, token: Option<&str>) -> Status {
     Ok(())
 }
 
+/// Why a request to the HTTP API failed. `Display` is what is printed
+/// after `Error: `.
+#[derive(Debug)]
+enum RequestError {
+    /// The URL's port is not a number.
+    InvalidPort,
+    /// The server could not be reached.
+    Connect { addr: String, source: io::Error },
+    /// Sending the request failed.
+    Write(io::Error),
+    /// Reading the response failed.
+    Read(io::Error),
+}
+
+impl fmt::Display for RequestError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPort => f.write_str("invalid port"),
+            Self::Connect { addr, source } => write!(f, "connect to {}: {}", addr, source),
+            Self::Write(e) => write!(f, "write: {}", e),
+            Self::Read(e) => write!(f, "read: {}", e),
+        }
+    }
+}
+
 /// Simple HTTP GET using std::net::TcpStream (no external HTTP client dependency).
-fn simple_get(url: &str, token: Option<&str>) -> Result<String, String> {
+fn simple_get(url: &str, token: Option<&str>) -> Result<String, RequestError> {
+    request("GET", url, None, token)
+}
+
+/// Simple HTTP POST of a JSON `body` using std::net::TcpStream.
+fn simple_post(url: &str, body: &str, token: Option<&str>) -> Result<String, RequestError> {
+    request("POST", url, Some(body), token)
+}
+
+/// One HTTP/1.1 request on a connection of its own; the response body.
+fn request(
+    method: &str,
+    url: &str,
+    body: Option<&str>,
+    token: Option<&str>,
+) -> Result<String, RequestError> {
     let (host, port, path) = parse_url(url)?;
     let addr = format!("{}:{}", host, port);
-    let mut stream =
-        std::net::TcpStream::connect(&addr).map_err(|e| format!("connect to {}: {}", addr, e))?;
+    let mut stream = std::net::TcpStream::connect(&addr)
+        .map_err(|source| RequestError::Connect { addr, source })?;
 
-    use std::io::{Read, Write};
     let auth = match token {
         Some(t) => format!("Authorization: Bearer {}\r\n", t),
         None => String::new(),
     };
-    let request = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\n{}Connection: close\r\n\r\n",
-        path, host, auth
-    );
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|e| format!("write: {}", e))?;
-
-    let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .map_err(|e| format!("read: {}", e))?;
-
-    extract_body(&response)
-}
-
-/// Simple HTTP POST using std::net::TcpStream.
-fn simple_post(url: &str, body: &str, token: Option<&str>) -> Result<String, String> {
-    let (host, port, path) = parse_url(url)?;
-    let addr = format!("{}:{}", host, port);
-    let mut stream =
-        std::net::TcpStream::connect(&addr).map_err(|e| format!("connect to {}: {}", addr, e))?;
-
-    use std::io::{Read, Write};
-    let auth = match token {
-        Some(t) => format!("Authorization: Bearer {}\r\n", t),
-        None => String::new(),
+    let request = match body {
+        Some(body) => format!(
+            "{} {} HTTP/1.1\r\nHost: {}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            method, path, host, auth, body.len(), body
+        ),
+        None => format!(
+            "{} {} HTTP/1.1\r\nHost: {}\r\n{}Connection: close\r\n\r\n",
+            method, path, host, auth
+        ),
     };
-    let request = format!(
-        "POST {} HTTP/1.1\r\nHost: {}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        path, host, auth, body.len(), body
-    );
     stream
         .write_all(request.as_bytes())
-        .map_err(|e| format!("write: {}", e))?;
+        .map_err(RequestError::Write)?;
 
     let mut response = String::new();
     stream
         .read_to_string(&mut response)
-        .map_err(|e| format!("read: {}", e))?;
+        .map_err(RequestError::Read)?;
 
-    extract_body(&response)
+    Ok(extract_body(&response))
 }
 
-fn parse_url(url: &str) -> Result<(String, u16, String), String> {
+fn parse_url(url: &str) -> Result<(String, u16, String), RequestError> {
     let url = url.strip_prefix("http://").unwrap_or(url);
     let (hostport, path) = match url.find('/') {
         Some(i) => (&url[..i], &url[i..]),
@@ -348,16 +368,17 @@ fn parse_url(url: &str) -> Result<(String, u16, String), String> {
             &hostport[..i],
             hostport[i + 1..]
                 .parse::<u16>()
-                .map_err(|_| "invalid port".to_string())?,
+                .map_err(|_| RequestError::InvalidPort)?,
         ),
         None => (hostport, 80),
     };
     Ok((host.to_string(), port, path.to_string()))
 }
 
-fn extract_body(response: &str) -> Result<String, String> {
+/// What follows the headers, or the whole response without any.
+fn extract_body(response: &str) -> String {
     match response.find("\r\n\r\n") {
-        Some(i) => Ok(response[i + 4..].to_string()),
-        None => Ok(response.to_string()),
+        Some(i) => response[i + 4..].to_string(),
+        None => response.to_string(),
     }
 }
