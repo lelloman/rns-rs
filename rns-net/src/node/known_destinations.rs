@@ -232,6 +232,18 @@ impl RnsNode {
         }
     }
 
+    /// Save the known destinations at shutdown.
+    ///
+    /// Upstream 4a058544 guards `Identity.persist_data` and
+    /// `Transport.exit_handler` against a missing `Transport.owner` (an exit
+    /// before Reticulum was set up) before checking that the process is not
+    /// a shared instance client. Neither case needs a guard here: this runs
+    /// only on a constructed `RnsNode` (from its shutdown), and a shared
+    /// instance client is built with `RnsNode::from_parts`, which leaves
+    /// both the known destinations store and path unset, so it returns at
+    /// once, as upstream's shared instance check does. The same holds for
+    /// `persist_transport_state`, whose storage directory `from_parts`
+    /// leaves unset.
     pub(super) fn persist_known_destinations(&self) {
         if self.known_destinations_store.is_none() && self.known_destinations_path.is_none() {
             return;
