@@ -146,15 +146,22 @@ pub struct ProviderBridgeStats {
     pub consumers: Vec<ProviderBridgeConsumerStats>,
 }
 
-/// Per-destination link totals for status reporting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One destination's links in the transport link table, as upstream's
+/// `Transport.link_distribution()` (3f55e9eb) reports them.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkDistributionEntry {
     /// The destination.
     pub destination_hash: [u8; 16],
-    /// Links to it in the transport link table.
-    pub total: usize,
-    /// Those of them that are validated.
+    /// Its links that are validated (`active`).
     pub active: usize,
+    /// Its links that are not validated yet (`pending`).
+    pub pending: usize,
+    /// Bytes forwarded along its links (`traffic`).
+    pub traffic: u64,
+    /// `from_ifs`: the `get_hash()` of each interface its link requests
+    /// came in on, each once. Upstream keeps them in a Python set at
+    /// 3f55e9eb, which its msgpack RPC cannot encode.
+    pub from_interface_hashes: Vec<[u8; 32]>,
 }
 
 /// A locally registered destination.

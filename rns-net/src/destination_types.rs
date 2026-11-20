@@ -3,8 +3,10 @@
 //! A destination type is known by its name hash. Upstream records the name
 //! behind a hash when the `[filter]` section blocks or allows it, when a
 //! local application asks for it, and, since c90a5d58, from the
-//! `known_destination_types` file in the config directory. Its log lines
-//! name a type through this map (`Transport.destination_type_name`).
+//! `known_destination_types` file in the config directory. Since 3f55e9eb
+//! it also keeps `Transport.flagged_type_map`: the names of the types the
+//! `[filter]` section blocks and of the `flagged_destination_types` file.
+//! Its log lines name a type through both (`Transport.destination_type_name`).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -21,11 +23,13 @@ pub const KNOWN_DESTINATION_TYPES_FILE: &str = "known_destination_types";
 /// The file of flagged destination type names, in the config directory.
 pub const FLAGGED_DESTINATION_TYPES_FILE: &str = "flagged_destination_types";
 
-/// Upstream's `Transport.destination_type_map`: a name for each destination
-/// type hash it has seen one for.
+/// Upstream's `Transport.destination_type_map`, a name for each destination
+/// type hash it has seen one for, and `Transport.flagged_type_map`, a name
+/// for each flagged one.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DestinationTypeNames {
     names: BTreeMap<DestinationType, String>,
+    flagged: BTreeMap<DestinationType, String>,
 }
 
 impl DestinationTypeNames {
@@ -47,8 +51,8 @@ impl DestinationTypeNames {
     ///
     /// Upstream reads the options in file order. `block_destination_type`
     /// logs `Blocked <name> <hash> destinations` for each ignored type, and
-    /// `allow_destination_type` logs `Allowing <<name>> <hash> destinations`
-    /// for each allowed type, but only when `required_destinations_only` is
+    /// `allow_destination_type` logs `Allowing <type name> <hash>
+    /// destinations` for each allowed type, but only when `required_destinations_only` is
     /// already set, so only when `required_only = yes` comes before
     /// `allowed_types`. Each records its name, so of a type listed under
     /// both keys the later key's name stays. An empty name is ignored
@@ -82,6 +86,8 @@ impl DestinationTypeNames {
                         "Blocked {name} <{}> destinations",
                         hex(&destination_type)
                     ));
+                    // Since 3f55e9eb a blocked type is flagged too.
+                    names.flagged.insert(destination_type, name.clone());
                 }
                 names.insert(destination_type, name);
                 if allowing && required_only {
@@ -105,14 +111,21 @@ impl DestinationTypeNames {
         self.names.get(destination_type).map(String::as_str)
     }
 
-    /// `Transport.destination_type_name`: the name in angle brackets, or
-    /// `<unknown>`.
+    /// The flagged name recorded for `destination_type`, if any.
+    pub fn flagged(&self, destination_type: &DestinationType) -> Option<&str> {
+        self.flagged.get(destination_type).map(String::as_str)
+    }
+
+    /// `Transport.destination_type_name` since 3f55e9eb: the name, else the
+    /// flagged name, else the hash in bare hex.
     pub fn type_name(&self, destination_type: &DestinationType) -> String {
-        format!("<{}>", self.get(destination_type).unwrap_or("unknown"))
+        self.get(destination_type)
+            .or_else(|| self.flagged(destination_type))
+            .map_or_else(|| hex(destination_type), str::to_string)
     }
 
     /// How upstream's log lines show a destination type: its name, then its
-    /// hash (`<lxmf.delivery> <hash>`).
+    /// hash (`lxmf.delivery <hash>`).
     pub fn describe(&self, destination_type: &DestinationType) -> String {
         format!(
             "{} <{}>",
@@ -125,12 +138,9 @@ impl DestinationTypeNames {
     /// of `config_dir`, as upstream c90a5d58 reads them at startup: each
     /// one only if it is a file, its text stripped and split into lines,
     /// each line stripped, lines starting with `#` skipped, and every other
-    /// line, an empty one included, recorded under its name hash. A file
-    /// that cannot be read is logged as an error and adds nothing.
-    ///
-    /// Upstream records the flagged names in `Transport.flagged_type_map`,
-    /// which it does not have yet at c90a5d58 (commit 3f55e9eb adds it):
-    /// the first line to record fails, and that error is logged, as there.
+    /// line, an empty one included, recorded under its name hash, the
+    /// flagged ones in the flagged map (which upstream has since 3f55e9eb).
+    /// A file that cannot be read is logged as an error and adds nothing.
     pub fn load_files(&mut self, config_dir: &Path) {
         if let Some(lines) = read_type_file(
             &config_dir.join(KNOWN_DESTINATION_TYPES_FILE),
@@ -140,14 +150,12 @@ impl DestinationTypeNames {
                 self.insert(destination_type(&name), name);
             }
         }
-        if let Some(mut lines) = read_type_file(
+        if let Some(lines) = read_type_file(
             &config_dir.join(FLAGGED_DESTINATION_TYPES_FILE),
             "flagged destination types list",
         ) {
-            if lines.next().is_some() {
-                log::error!(
-                    "Error while loading flagged destination types list: type object 'Transport' has no attribute 'flagged_type_map'"
-                );
+            for name in lines {
+                self.flagged.insert(destination_type(&name), name);
             }
         }
     }
@@ -262,23 +270,64 @@ mod tests {
         assert_eq!(names.names, expected);
         assert_eq!(
             names.type_name(&destination_type("lxmf.delivery")),
-            "<lxmf.delivery>"
+            "lxmf.delivery"
         );
         assert_eq!(
             names.describe(&destination_type("lxmf.delivery")),
             format!(
-                "<lxmf.delivery> <{}>",
+                "lxmf.delivery <{}>",
                 hex(&destination_type("lxmf.delivery"))
             )
         );
+    }
+
+    // Upstream 3f55e9eb `destination_type_name`: the name, the flagged
+    // name, or the bare hash.
+    #[test]
+    fn type_names_come_from_the_map_then_the_flagged_map_then_the_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(KNOWN_DESTINATION_TYPES_FILE),
+            "lxmf.delivery\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join(FLAGGED_DESTINATION_TYPES_FILE),
+            "# flagged\n lxmf.propagation \nlxmf.delivery\n",
+        )
+        .unwrap();
+        let mut names = DestinationTypeNames::default();
+        names.load_files(dir.path());
+        let lxmf = destination_type("lxmf.delivery");
+        let propagation = destination_type("lxmf.propagation");
+        let execute = destination_type("rnx.execute");
+        assert_eq!(names.flagged(&propagation), Some("lxmf.propagation"));
+        assert_eq!(names.get(&propagation), None);
+        assert_eq!(names.type_name(&lxmf), "lxmf.delivery");
+        assert_eq!(names.type_name(&propagation), "lxmf.propagation");
+        assert_eq!(names.type_name(&execute), hex(&execute));
         assert_eq!(
-            names.type_name(&destination_type("rnx.execute")),
-            "<unknown>"
+            names.describe(&execute),
+            format!("{} <{}>", hex(&execute), hex(&execute))
         );
+
+        // A name recorded later still comes before the flagged one.
+        names.insert(propagation, "renamed".into());
+        assert_eq!(names.type_name(&propagation), "renamed");
+
+        // The [filter] section flags the types it blocks.
+        let (names, _) = DestinationTypeNames::from_filter(&filter_of(
+            "[filter]\nignored_types = nomadnetwork.node\nallowed_types = lxmf.delivery\n",
+        ));
+        assert_eq!(
+            names.flagged(&destination_type("nomadnetwork.node")),
+            Some("nomadnetwork.node")
+        );
+        assert_eq!(names.flagged(&lxmf), None);
     }
 
     #[test]
-    fn missing_unreadable_and_flagged_type_files_add_nothing() {
+    fn missing_and_unreadable_type_files_add_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let mut names = DestinationTypeNames::default();
         names.load_files(dir.path());
@@ -290,13 +339,9 @@ mod tests {
         names.load_files(dir.path());
         assert_eq!(names, DestinationTypeNames::default());
 
-        // At c90a5d58 flagged names have nowhere to go upstream.
+        // Not UTF-8 either.
         std::fs::remove_dir(dir.path().join(FLAGGED_DESTINATION_TYPES_FILE)).unwrap();
-        std::fs::write(
-            dir.path().join(FLAGGED_DESTINATION_TYPES_FILE),
-            "# flagged\nlxmf.propagation\n",
-        )
-        .unwrap();
+        std::fs::write(dir.path().join(FLAGGED_DESTINATION_TYPES_FILE), [0xfe]).unwrap();
         names.load_files(dir.path());
         assert_eq!(names, DestinationTypeNames::default());
     }
@@ -342,9 +387,9 @@ mod tests {
         let rncp = destination_type("rncp.receive");
         let blocked =
             |name: &str, t: &DestinationType| format!("Blocked {name} <{}> destinations", hex(t));
-        let allowing = |name: &str, t: &DestinationType| {
-            format!("Allowing <{name}> <{}> destinations", hex(t))
-        };
+        // destination_type_name gives the bare name since 3f55e9eb.
+        let allowing =
+            |name: &str, t: &DestinationType| format!("Allowing {name} <{}> destinations", hex(t));
 
         // required_only before allowed_types: every type is logged.
         let (names, lines) = DestinationTypeNames::from_filter(&filter_of(

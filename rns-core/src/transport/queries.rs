@@ -384,21 +384,42 @@ impl TransportEngine {
         (total, unused)
     }
 
-    /// Count active and validated links per destination hash.
-    pub fn link_distribution(&self) -> Vec<([u8; 16], usize, usize)> {
-        let mut distribution: alloc::collections::BTreeMap<[u8; 16], (usize, usize)> =
-            alloc::collections::BTreeMap::new();
+    /// Upstream's `Transport.link_distribution()` (3f55e9eb): for each
+    /// destination with links in the link table, how many are validated
+    /// (`active`) and how many are not (`pending`), the bytes forwarded
+    /// along them (`traffic`) and the interfaces their link requests came in
+    /// on (`from_ifs`), each once. Destinations and interfaces come in the
+    /// order the link table first yields them; this link table is ordered by
+    /// link id, where upstream's dict keeps insertion order.
+    pub fn link_distribution(&self) -> Vec<LinkDistribution> {
+        let mut distribution: Vec<LinkDistribution> = Vec::new();
+        let mut index_of: BTreeMap<[u8; 16], usize> = BTreeMap::new();
         for entry in self.link_table.values() {
-            let counts = distribution.entry(entry.destination_hash).or_default();
-            counts.0 += 1;
+            let index = *index_of.entry(entry.destination_hash).or_insert_with(|| {
+                distribution.push(LinkDistribution {
+                    destination_hash: entry.destination_hash,
+                    active: 0,
+                    pending: 0,
+                    traffic: 0,
+                    from_interfaces: Vec::new(),
+                });
+                distribution.len() - 1
+            });
+            let destination = &mut distribution[index];
+            destination.traffic += entry.traffic;
+            if !destination
+                .from_interfaces
+                .contains(&entry.received_interface)
+            {
+                destination.from_interfaces.push(entry.received_interface);
+            }
             if entry.validated {
-                counts.1 += 1;
+                destination.active += 1;
+            } else {
+                destination.pending += 1;
             }
         }
         distribution
-            .into_iter()
-            .map(|(hash, (total, active))| (hash, total, active))
-            .collect()
     }
 
     /// Every announce rate table entry.
@@ -692,6 +713,7 @@ mod tests {
             destination_hash: [0xD0; 16],
             validated,
             proof_timeout: 2000.0,
+            traffic: 0,
         }
     }
 

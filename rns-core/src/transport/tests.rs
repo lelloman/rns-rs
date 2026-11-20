@@ -240,6 +240,7 @@ fn test_deregister_interface_removes_transport_state() {
             destination_hash,
             validated: true,
             proof_timeout: 1100.0,
+            traffic: 0,
         },
     );
     engine.register_link(
@@ -254,6 +255,7 @@ fn test_deregister_interface_removes_transport_state() {
             destination_hash,
             validated: false,
             proof_timeout: 1100.0,
+            traffic: 0,
         },
     );
 
@@ -708,6 +710,7 @@ fn test_link_table_operations() {
             destination_hash: [0xAA; 16],
             validated: false,
             proof_timeout: 200.0,
+            traffic: 0,
         },
     );
 
@@ -740,6 +743,7 @@ fn test_lrproof_routes_from_originating_side_via_link_table() {
             destination_hash: [0xBB; 16],
             validated: false,
             proof_timeout: 200.0,
+            traffic: 0,
         },
     );
 
@@ -817,6 +821,7 @@ fn lrproof_rebalance_fixture() -> (TransportEngine, [u8; 16], [u8; 16], [u8; 32]
             destination_hash,
             validated: false,
             proof_timeout: 200.0,
+            traffic: 0,
         },
     );
     engine.inject_path(
@@ -1121,6 +1126,7 @@ fn lrproof_hop_mismatch_diagnostic_contains_complete_route_context() {
         destination_hash: [0xAA; 16],
         validated: false,
         proof_timeout: 200.0,
+        traffic: 0,
     };
 
     assert_eq!(
@@ -1141,6 +1147,7 @@ fn lrproof_hop_mismatch_diagnostic_does_not_confuse_hops_with_interface_ids() {
         destination_hash: [0xAA; 16],
         validated: false,
         proof_timeout: 200.0,
+        traffic: 0,
     };
 
     assert_eq!(
@@ -4960,6 +4967,7 @@ fn test_local_client_link_routing_to_external_applies_local_hops_delta() {
             destination_hash: [0xBB; 16],
             validated: true,
             proof_timeout: 1100.0,
+            traffic: 0,
         },
     );
 
@@ -5016,6 +5024,7 @@ fn test_instance_local_link_routing_preserves_hops() {
             destination_hash: [0xBB; 16],
             validated: true,
             proof_timeout: 1100.0,
+            traffic: 0,
         },
     );
 
@@ -5499,6 +5508,7 @@ fn relay_with_validated_link(link_id: [u8; 16]) -> TransportEngine {
             destination_hash: [0xBB; 16],
             validated: true,
             proof_timeout: 1100.0,
+            traffic: 0,
         },
     );
     engine
@@ -6731,11 +6741,20 @@ fn path_pool_counts_report_never_used_destinations() {
     assert_eq!(engine.path_pool_counts(), (2, 1));
 }
 
+// Upstream 3f55e9eb `Transport.link_distribution()`: per destination,
+// validated and pending links, their forwarded bytes summed, and the
+// interfaces their requests came in on, each once.
 #[test]
 fn link_distribution_counts_per_destination() {
     let mut engine = TransportEngine::new(make_config(true));
     let dest = [0xAA; 16];
-    for (link_id, validated) in [([0x01; 16], true), ([0x02; 16], false)] {
+    let other = [0xBB; 16];
+    for (link_id, destination_hash, validated, received, traffic) in [
+        ([0x01; 16], dest, true, 3, 100),
+        ([0x02; 16], dest, false, 1, 0),
+        ([0x03; 16], other, false, 2, 7),
+        ([0x04; 16], dest, true, 3, 25),
+    ] {
         engine.link_table.insert(
             link_id,
             LinkEntry {
@@ -6743,15 +6762,37 @@ fn link_distribution_counts_per_destination() {
                 next_hop_transport_id: [0; 16],
                 next_hop_interface: InterfaceId(1),
                 remaining_hops: 1,
-                received_interface: InterfaceId(1),
+                received_interface: InterfaceId(received),
                 taken_hops: 0,
-                destination_hash: dest,
+                destination_hash,
                 validated,
                 proof_timeout: 0.0,
+                traffic,
             },
         );
     }
-    assert_eq!(engine.link_distribution(), vec![(dest, 2, 1)]);
+    assert_eq!(
+        engine.link_distribution(),
+        vec![
+            LinkDistribution {
+                destination_hash: dest,
+                active: 2,
+                pending: 1,
+                traffic: 125,
+                from_interfaces: vec![InterfaceId(3), InterfaceId(1)],
+            },
+            LinkDistribution {
+                destination_hash: other,
+                active: 0,
+                pending: 1,
+                traffic: 7,
+                from_interfaces: vec![InterfaceId(2)],
+            },
+        ]
+    );
+    assert!(TransportEngine::new(make_config(true))
+        .link_distribution()
+        .is_empty());
 }
 
 #[test]
@@ -7171,6 +7212,7 @@ fn insert_unproven_link(engine: &mut TransportEngine, link: u8, dest: [u8; 16], 
             destination_hash: dest,
             validated: false,
             proof_timeout: 1010.0,
+            traffic: 0,
         },
     );
 }

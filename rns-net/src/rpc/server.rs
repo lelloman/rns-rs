@@ -237,6 +237,10 @@ pub(crate) fn answer_request(
     driver: &mut dyn RpcDriver,
 ) -> io::Result<Vec<u8>> {
     let (request, codec) = decode_rpc_payload(request_bytes)?;
-    let response = handle_rpc_request(&request, driver)?;
+    let response = handle_rpc_request(&request, driver).inspect_err(|error| {
+        if let Some(line) = upstream_rpc_exception_line(error) {
+            log::error!("{line}");
+        }
+    })?;
     Ok(encode_rpc_payload(&response, codec))
 }

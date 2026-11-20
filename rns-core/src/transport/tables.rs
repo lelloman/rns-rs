@@ -103,6 +103,25 @@ pub struct LinkEntry {
     pub validated: bool,
     /// Deadline for the link proof, in seconds.
     pub proof_timeout: f64,
+    /// Bytes of link traffic this node has forwarded along the link (upstream
+    /// 3f55e9eb `IDX_LT_TRXB`): each forwarded packet adds its raw length.
+    pub traffic: u64,
+}
+
+/// One destination's links in the link table, as upstream's
+/// `Transport.link_distribution()` (3f55e9eb) reports them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkDistribution {
+    /// The destination the links lead to.
+    pub destination_hash: [u8; 16],
+    /// Links to it that are validated.
+    pub active: usize,
+    /// Links to it that are not validated yet.
+    pub pending: usize,
+    /// Bytes forwarded along its links ([`LinkEntry::traffic`]).
+    pub traffic: u64,
+    /// The interfaces its link requests came in on, each once.
+    pub from_interfaces: Vec<InterfaceId>,
 }
 
 /// A pending discovery path request — stored when a path request arrives
@@ -353,6 +372,7 @@ mod tests {
             destination_hash: [0x22; 16],
             validated: false,
             proof_timeout: 200.0,
+            traffic: 0,
         };
         assert!(!entry.validated);
         assert_eq!(entry.remaining_hops, 5);

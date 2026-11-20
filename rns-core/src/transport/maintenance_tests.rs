@@ -97,6 +97,7 @@ fn unproven_link(engine: &mut TransportEngine, link: u8, destination: [u8; 16], 
             destination_hash: destination,
             validated: false,
             proof_timeout: proof,
+            traffic: 0,
         },
     );
 }

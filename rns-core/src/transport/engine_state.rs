@@ -963,6 +963,7 @@ mod tests {
                 destination_hash: dest,
                 validated: false,
                 proof_timeout: 2000.0,
+                traffic: 0,
             },
         );
 
