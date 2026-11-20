@@ -1086,6 +1086,38 @@ fn parse_autoconnect_policy_and_count() {
     assert!(parse("[reticulum]\nautoconnect_discovered_interfaces = some\n").is_err());
 }
 
+// Upstream aecc1547 reads `[reticulum]` options in file order, so the
+// disable key only lifts the caps when it comes before the count.
+#[test]
+fn autoconnect_caps_are_disabled_only_by_a_key_before_the_count() {
+    let caps_disabled = |text: &str| {
+        parse(text)
+            .unwrap()
+            .reticulum
+            .autoconnect_discovered_interfaces_caps_disabled
+    };
+    assert!(!caps_disabled(
+        "[reticulum]\nautoconnect_discovered_interfaces = 20\n"
+    ));
+    assert!(caps_disabled(
+        "[reticulum]\nautoconnect_discovered_interfaces_disable_caps = yes\nautoconnect_discovered_interfaces = 20\n"
+    ));
+    assert!(!caps_disabled(
+        "[reticulum]\nautoconnect_discovered_interfaces = 20\nautoconnect_discovered_interfaces_disable_caps = yes\n"
+    ));
+    assert!(!caps_disabled(
+        "[reticulum]\nautoconnect_discovered_interfaces_disable_caps = no\nautoconnect_discovered_interfaces = 20\n"
+    ));
+    let config = parse(
+        "[reticulum]\nautoconnect_discovered_interfaces_disable_caps = yes\nautoconnect_discovered_interfaces = 20\n",
+    )
+    .unwrap();
+    assert_eq!(config.reticulum.autoconnect_discovered_interfaces, 20);
+    assert!(
+        parse("[reticulum]\nautoconnect_discovered_interfaces_disable_caps = maybe\n").is_err()
+    );
+}
+
 #[test]
 fn parse_remote_management_defaults() {
     let input = "[reticulum]\n";

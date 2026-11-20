@@ -99,6 +99,11 @@ Upstream's behaviour. Nothing is auto-connected unless
   startup the stored discoveries are connected the same way, best first.
   Interfaces from the configuration file always connect and do not count
   against the limit.
+- As upstream, the limit is capped at 12, with a warning, and a limit above
+  6 logs a warning that it is excessive.
+  `autoconnect_discovered_interfaces_disable_caps = yes` turns both off, but
+  only when it comes before `autoconnect_discovered_interfaces` in the
+  `[reticulum]` section, since upstream reads the options in file order.
 - From the first auto-connect on, a monitor runs every 5 seconds. An
   auto-connected interface that has been down for 12 seconds is detached. When
   more than a quarter of the slots are free, one random available transport

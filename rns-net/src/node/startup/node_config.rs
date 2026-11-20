@@ -175,7 +175,14 @@ pub(super) fn node_config_from(
         discovery: DiscoverySettings {
             interface_discovery_sources: reticulum.interface_discovery_sources.clone(),
             autoconnect_discovered_interfaces: if upstream_policy {
-                reticulum.autoconnect_discovered_interfaces
+                let (target, warnings) = upstream_autoconnect_target(
+                    reticulum.autoconnect_discovered_interfaces,
+                    reticulum.autoconnect_discovered_interfaces_caps_disabled,
+                );
+                for line in warnings {
+                    log::warn!("{line}");
+                }
+                target
             } else {
                 0
             },
@@ -346,6 +353,54 @@ pub(super) fn queue_config_from(
     }
 }
 
+/// Above this many auto-connected interfaces upstream warns (aecc1547
+/// `__autoconnect_warn`).
+const AUTOCONNECT_WARN: usize = 6;
+/// Upstream caps the auto-connected interfaces at this many (aecc1547
+/// `__autoconnect_cap`).
+const AUTOCONNECT_CAP: usize = 12;
+
+/// The number of discovered interfaces to auto-connect, and the warnings
+/// upstream logs for it, line by line (aecc1547): above
+/// [`AUTOCONNECT_CAP`] the count is capped, and above [`AUTOCONNECT_WARN`]
+/// it is called excessive, unless the caps are disabled.
+fn upstream_autoconnect_target(configured: usize, caps_disabled: bool) -> (usize, Vec<String>) {
+    let mut target = configured;
+    let mut warnings = Vec::new();
+    if caps_disabled {
+        return (target, warnings);
+    }
+    if target > AUTOCONNECT_CAP {
+        target = AUTOCONNECT_CAP;
+        warnings.extend([
+            String::new(),
+            format!("Auto-connect interface target was capped to {target}"),
+            "Using large numbers of auto-connected interfaces will not lead to better".into(),
+            "connectivity or redundancy. If you really know what you're doing, and are".into(),
+            "certain that you need this, you will also know how to get around this check.".into(),
+        ]);
+    }
+    if target > AUTOCONNECT_WARN {
+        warnings.extend([
+            String::new(),
+            format!("You have configured more than {AUTOCONNECT_WARN} auto-connect interfaces."),
+            "In almost all situations, this is excessive, and should be avoided.".into(),
+            "For a normal home or office node, 2-3 autoconnects will be sufficient.".into(),
+            String::new(),
+            "If you're running a fast, well-connected transport node that can actually".into(),
+            "provide additional capacity and transport to the network, you can consider".into(),
+            format!(
+                "raising this number to {}-{}. Only in the rarest of cases will going beyond",
+                AUTOCONNECT_WARN,
+                AUTOCONNECT_WARN + 3
+            ),
+            "this actually provide any benefit.".into(),
+            String::new(),
+        ]);
+    }
+    (target, warnings)
+}
+
 impl RnsNode {
     /// Hand the node the known destinations loaded from storage, with the
     /// stamp store beside them, and start flushing them back.
@@ -363,5 +418,40 @@ impl RnsNode {
         self.set_stamp_store(crate::stamps::DestinationStampStore::new(storage_dir));
         self.restore_known_destinations(known_destinations);
         self.start_known_destinations_flush(flushed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn autoconnect_count_is_capped_unless_caps_are_disabled() {
+        let (target, warnings) = upstream_autoconnect_target(20, false);
+        assert_eq!(target, 12);
+        assert_eq!(
+            warnings[1],
+            "Auto-connect interface target was capped to 12"
+        );
+        assert!(warnings
+            .contains(&"You have configured more than 6 auto-connect interfaces.".to_string()));
+        assert!(warnings.contains(
+            &"raising this number to 6-9. Only in the rarest of cases will going beyond"
+                .to_string()
+        ));
+        assert_eq!(warnings.len(), 5 + 10);
+
+        assert_eq!(upstream_autoconnect_target(20, true), (20, Vec::new()));
+
+        let (target, warnings) = upstream_autoconnect_target(7, false);
+        assert_eq!(target, 7);
+        assert_eq!(warnings.len(), 10);
+        assert_eq!(
+            warnings[1],
+            "You have configured more than 6 auto-connect interfaces."
+        );
+
+        assert_eq!(upstream_autoconnect_target(6, false), (6, Vec::new()));
+        assert_eq!(upstream_autoconnect_target(0, false), (0, Vec::new()));
     }
 }

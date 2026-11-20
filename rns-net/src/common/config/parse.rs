@@ -8,6 +8,9 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
     let mut current_subsection: Option<String> = None;
 
     let mut reticulum_kvs: HashMap<String, String> = HashMap::new();
+    // The [reticulum] keys in file order, for the options whose effect
+    // upstream's in-order reading makes depend on it.
+    let mut reticulum_key_order: Vec<String> = Vec::new();
     let mut logging_kvs: HashMap<String, String> = HashMap::new();
     let mut stamps_kvs: HashMap<String, String> = HashMap::new();
     let mut filter_kvs: HashMap<String, String> = HashMap::new();
@@ -135,6 +138,10 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
             } else if let Some(ref section) = current_section {
                 match section.as_str() {
                     "reticulum" => {
+                        // A repeated key (which ConfigObj rejects) keeps
+                        // its last value, so it takes its last position.
+                        reticulum_key_order.retain(|k| *k != key);
+                        reticulum_key_order.push(key.clone());
                         reticulum_kvs.insert(key, value);
                     }
                     "logging" => {
@@ -169,7 +176,7 @@ pub fn parse(input: &str) -> Result<RnsConfig, ConfigError> {
     }
 
     // Build typed sections
-    let mut reticulum = build_reticulum_section(&reticulum_kvs)?;
+    let mut reticulum = build_reticulum_section(&reticulum_kvs, &reticulum_key_order)?;
     if let Some(hop_limiter) = parse_hop_limiter(&filter_kvs)? {
         reticulum.hop_limiter = hop_limiter;
     }

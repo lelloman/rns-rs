@@ -65,7 +65,7 @@ error; see [Building](building.md#selecting-interfaces).
 | `link_mtu_discovery` | `yes` | Set to `no` to omit MTU signalling from outbound link requests |
 | `underlay_mark` | unset | Linux `SO_MARK` for owned IP sockets, see below |
 | `probe_port`, `probe_source_rate`, `probe_source_burst`, `probe_total_rate`, `probe_addr`, `direct_connect_policy`, `direct_connect_allowed_identities`, `direct_connect_allow_private_endpoints`, `direct_connect_reupgrade`, `direct_connect_reupgrade_attempts`, `direct_connect_reupgrade_delay`, `direct_connect_reupgrade_max_delay` | | [Direct Link](direct-link.md) |
-| `autoconnect_policy`, `autoconnect_discovered_interfaces`, `interface_discovery_sources`, `default_gravity`, `autoconnect_interface_mode`, `autoconnect_interface_gravity`, `autoconnect_announces_to_internal`, `autoconnect_unverified_implementations` | | [Interface Discovery](interface-discovery.md) |
+| `autoconnect_policy`, `autoconnect_discovered_interfaces`, `autoconnect_discovered_interfaces_disable_caps`, `interface_discovery_sources`, `default_gravity`, `autoconnect_interface_mode`, `autoconnect_interface_gravity`, `autoconnect_announces_to_internal`, `autoconnect_unverified_implementations` | | [Interface Discovery](interface-discovery.md) |
 | `blackhole_sources`, `blackhole_update_interval` | | [Blackholes](#blackholes) |
 
 Log levels run from `0` (critical only) to `8` (extreme); `7` adds path
