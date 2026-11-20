@@ -15,7 +15,9 @@ pub(crate) const OPCODE_PONG: u8 = 0xA;
 
 /// A decoded WebSocket frame.
 pub struct WsFrame {
+    /// Frame opcode (`0x1` text, `0x8` close, `0x9` ping, `0xA` pong, ...).
     pub opcode: u8,
+    /// Payload, already unmasked.
     pub payload: Vec<u8>,
 }
 
@@ -244,6 +246,7 @@ impl Default for WsBuf {
 }
 
 impl WsBuf {
+    /// An empty buffer.
     pub fn new() -> Self {
         WsBuf {
             buf: Vec::with_capacity(4096),

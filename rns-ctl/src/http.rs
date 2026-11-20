@@ -18,22 +18,36 @@ const BODY_READ_CHUNK_BYTES: usize = 16 * 1024;
 
 /// Parsed HTTP request.
 pub struct HttpRequest {
+    /// Request method, as sent (`GET`, `POST`, ...).
     pub method: String,
+    /// Request target before any `?`, not percent-decoded.
     pub path: String,
+    /// Everything after the first `?`, without it; empty when there is none.
+    /// Decode it with [`parse_query`].
     pub query: String,
+    /// Header values by lowercased name. A repeated header keeps its last value.
     pub headers: HashMap<String, String>,
+    /// The request body. [`parse_request`] fills it; [`parse_request_head`]
+    /// leaves it empty for the caller to read with [`read_body`].
     pub body: Vec<u8>,
 }
 
 /// HTTP response.
 pub struct HttpResponse {
+    /// Status code.
     pub status: u16,
+    /// Reason phrase sent after the status code.
     pub status_text: &'static str,
+    /// Response headers, written in order. The constructors set
+    /// `Content-Type`, `Content-Length` and `Connection: close`.
     pub headers: Vec<(String, String)>,
+    /// Response body.
     pub body: Vec<u8>,
 }
 
 impl HttpResponse {
+    /// A JSON response with the given status. A value that fails to serialize
+    /// gives an empty body.
     pub fn json(status: u16, status_text: &'static str, body: &serde_json::Value) -> Self {
         let body_bytes = serde_json::to_vec(body).unwrap_or_default();
         HttpResponse {
@@ -48,10 +62,12 @@ impl HttpResponse {
         }
     }
 
+    /// `200 OK` with a JSON body.
     pub fn ok(body: serde_json::Value) -> Self {
         Self::json(200, "OK", &body)
     }
 
+    /// `200 OK` with an HTML body.
     pub fn html(body: &str) -> Self {
         Self::bytes(
             200,
@@ -61,26 +77,32 @@ impl HttpResponse {
         )
     }
 
+    /// `201 Created` with a JSON body.
     pub fn created(body: serde_json::Value) -> Self {
         Self::json(201, "Created", &body)
     }
 
+    /// `400 Bad Request` with body `{"error": msg}`.
     pub fn bad_request(msg: &str) -> Self {
         Self::json(400, "Bad Request", &serde_json::json!({"error": msg}))
     }
 
+    /// `401 Unauthorized` with body `{"error": msg}`.
     pub fn unauthorized(msg: &str) -> Self {
         Self::json(401, "Unauthorized", &serde_json::json!({"error": msg}))
     }
 
+    /// `411 Length Required` with body `{"error": msg}`.
     pub fn length_required(msg: &str) -> Self {
         Self::json(411, "Length Required", &serde_json::json!({"error": msg}))
     }
 
+    /// `413 Payload Too Large` with body `{"error": msg}`.
     pub fn payload_too_large(msg: &str) -> Self {
         Self::json(413, "Payload Too Large", &serde_json::json!({"error": msg}))
     }
 
+    /// `503 Service Unavailable` with body `{"error": msg}`.
     pub fn service_unavailable(msg: &str) -> Self {
         Self::json(
             503,
@@ -89,14 +111,17 @@ impl HttpResponse {
         )
     }
 
+    /// `409 Conflict` with body `{"error": msg}`.
     pub fn conflict(msg: &str) -> Self {
         Self::json(409, "Conflict", &serde_json::json!({"error": msg}))
     }
 
+    /// `404 Not Found` with body `{"error": "Not found"}`.
     pub fn not_found() -> Self {
         Self::json(404, "Not Found", &serde_json::json!({"error": "Not found"}))
     }
 
+    /// `500 Internal Server Error` with body `{"error": msg}`.
     pub fn internal_error(msg: &str) -> Self {
         Self::json(
             500,
@@ -105,6 +130,7 @@ impl HttpResponse {
         )
     }
 
+    /// A response with an arbitrary body and content type.
     pub fn bytes(
         status: u16,
         status_text: &'static str,

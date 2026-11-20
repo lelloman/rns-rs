@@ -13,6 +13,9 @@ pub struct CtlCallbacks {
 }
 
 impl CtlCallbacks {
+    /// Callbacks that record events into `state` and push them to the
+    /// subscribers in `ws_broadcast`. They never take the node handle lock, so
+    /// they cannot deadlock against a request handler waiting on the node.
     pub fn new(state: SharedState, ws_broadcast: WsBroadcast) -> Self {
         CtlCallbacks {
             state,

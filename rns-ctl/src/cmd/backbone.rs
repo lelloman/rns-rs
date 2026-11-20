@@ -9,6 +9,10 @@ use rns_net::storage;
 use rns_net::{RpcAddr, RpcClient};
 use serde_json::{json, Value};
 
+/// Run `rns-ctl backbone`: list or clear the backbone blacklist, or show
+/// the provider bridge statistics, over the RPC socket of the node using the
+/// config directory. Prints help without a command. Exits with status 1 when
+/// the node cannot be reached or the call fails.
 pub fn run(args: Args) {
     if args.has("help") || args.positional.is_empty() {
         crate::cli::BACKBONE.print_help("rns-ctl backbone");
