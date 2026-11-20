@@ -461,9 +461,9 @@ fn announce_rate_limit_spares_path_responses() {
 }
 
 /// As upstream, a path response that answers a pending request is
-/// retransmitted only when it comes from a local client, and then as a
-/// plain announce on every interface; one from the network is not
-/// retransmitted.
+/// retransmitted only when it comes from a local client, and since
+/// upstream 70eb417d then only to the requesting interface, as a path
+/// response; one from the network is not retransmitted.
 #[test]
 fn only_a_local_clients_path_response_answers_a_pending_request() {
     use super::local_client_announce_tests::announce_in_context;
@@ -490,10 +490,58 @@ fn only_a_local_clients_path_response_answers_a_pending_request() {
                 .announce_table
                 .get(&dest)
                 .map(|entry| (entry.attached_interface, entry.block_rebroadcasts)),
-            answered.then_some((None, false)),
+            answered.then_some((Some(InterfaceId(3)), true)),
             "from {from}"
         );
     }
+}
+
+/// Upstream 70eb417d: the answer to a pending path request from a local
+/// client's path response goes out exactly once, on the requesting
+/// interface only, in the path response context.
+#[test]
+fn a_local_clients_path_response_answers_only_the_requesting_interface() {
+    use super::local_client_announce_tests::announce_in_context;
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.register_interface(make_local_client_interface(2));
+    engine.register_interface(make_interface(3, constants::MODE_FULL));
+    let response = announce_in_context(
+        12,
+        false,
+        constants::HEADER_1,
+        0,
+        constants::CONTEXT_PATH_RESPONSE,
+    );
+    let dest = response.destination_hash;
+    engine
+        .pending_local_path_requests
+        .insert(dest, (InterfaceId(3), 1000.0));
+    receive(&mut engine, &response, 2);
+
+    let mut rng = rns_crypto::FixedRng::new(&[0x45; 32]);
+    let mut sent = Vec::new();
+    for step in 0..40 {
+        for action in engine.tick(1002.0 + f64::from(step), &mut rng) {
+            match action {
+                TransportAction::SendOnInterface { interface, raw } => {
+                    let packet = RawPacket::unpack(&raw).unwrap();
+                    if packet.destination_hash == dest {
+                        sent.push((interface, packet.context));
+                    }
+                }
+                TransportAction::BroadcastOnAllInterfaces { raw, .. } => {
+                    let packet = RawPacket::unpack(&raw).unwrap();
+                    assert_ne!(packet.destination_hash, dest, "broadcast at step {step}");
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(
+        sent,
+        vec![(InterfaceId(3), constants::CONTEXT_PATH_RESPONSE)]
+    );
 }
 
 /// Upstream 833f6cf2: an announce from a local client this instance
