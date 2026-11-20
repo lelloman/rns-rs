@@ -204,6 +204,7 @@ impl Driver {
             announce_cap: constants::ANNOUNCE_CAP,
             is_local_client: false,
             wants_tunnel: false,
+            shared_medium: true,
             hop_limiter: None,
             tunnel_id: None,
             // A frame of up to 508 bytes, split over two LoRa packets,

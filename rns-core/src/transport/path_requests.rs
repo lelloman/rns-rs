@@ -555,6 +555,8 @@ impl TransportEngine {
             local_rebroadcasts: 0,
             block_rebroadcasts: true,
             attached_interface: Some(ctx.interface_id),
+            packet_hash: parsed.packet_hash,
+            blocked_interfaces: Default::default(),
         };
 
         self.insert_announce_entry(ctx.destination_hash, entry, ctx.now);

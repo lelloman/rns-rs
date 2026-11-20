@@ -293,6 +293,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     // Synthesize a tunnel on each connect, as upstream's
                     // BackboneClientInterface does.
                     wants_tunnel: true,
+                    shared_medium: false,
                     hop_limiter: None,
                     tunnel_id: None,
                     mtu: cfg.hw_mtu() as u32,

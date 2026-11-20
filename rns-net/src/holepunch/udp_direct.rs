@@ -279,6 +279,7 @@ pub fn start_direct_interface(
         announce_cap: 1.0,
         is_local_client: false,
         wants_tunnel: false,
+        shared_medium: false,
         hop_limiter: None,
         tunnel_id: None,
         mtu: DIRECT_MTU,

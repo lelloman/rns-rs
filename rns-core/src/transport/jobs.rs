@@ -1,3 +1,4 @@
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use super::announce_proc::build_retransmit_announce;
@@ -10,11 +11,17 @@ use crate::constants;
 /// Transport.py:519-577: For each announce_table entry where the
 /// retransmit timeout has passed, either complete (remove) or
 /// retransmit and schedule the next retry.
+///
+/// A broadcast whose announce was heard again on some interfaces while it
+/// waited (upstream da368e05) gets those interfaces recorded in
+/// `blocked_broadcasts`, by destination, for the gating that expands the
+/// broadcast to skip them.
 pub fn process_pending_announces(
     announce_table: &mut alloc::collections::BTreeMap<[u8; 16], AnnounceEntry>,
     held_announces: &mut alloc::collections::BTreeMap<[u8; 16], AnnounceEntry>,
     transport_identity_hash: &[u8; 16],
     now: f64,
+    blocked_broadcasts: &mut BTreeMap<[u8; 16], BTreeSet<InterfaceId>>,
 ) -> Vec<TransportAction> {
     let mut actions = Vec::new();
     let mut completed = Vec::new();
@@ -53,6 +60,9 @@ pub fn process_pending_announces(
                 None
             } else {
                 let raw = build_retransmit_announce(entry, transport_identity_hash);
+                if entry.attached_interface.is_none() && !entry.blocked_interfaces.is_empty() {
+                    blocked_broadcasts.insert(dest_hash, entry.blocked_interfaces.clone());
+                }
                 Some((raw, entry.attached_interface, entry.hops))
             }
         } else {
@@ -322,6 +332,8 @@ mod tests {
             local_rebroadcasts,
             block_rebroadcasts: false,
             attached_interface: None,
+            packet_hash: [0; 32],
+            blocked_interfaces: Default::default(),
         }
     }
 
@@ -345,6 +357,7 @@ mod tests {
             announce_cap: constants::ANNOUNCE_CAP,
             is_local_client: false,
             wants_tunnel: false,
+            shared_medium: false,
             hop_limiter: None,
             tunnel_id: None,
             mtu: constants::MTU as u32,
@@ -367,7 +380,13 @@ mod tests {
         let mut held = BTreeMap::new();
         let transport_hash = [0xBB; 16];
 
-        let actions = process_pending_announces(&mut table, &mut held, &transport_hash, 1000.0);
+        let actions = process_pending_announces(
+            &mut table,
+            &mut held,
+            &transport_hash,
+            1000.0,
+            &mut BTreeMap::new(),
+        );
 
         // Should have retransmitted (broadcast + announce retransmit notification)
         assert_eq!(actions.len(), 2);
@@ -391,7 +410,13 @@ mod tests {
         table.insert(dest, make_announce_entry(dest, 999.0, 2, 0)); // retries > PATHFINDER_R(1)
         let mut held = BTreeMap::new();
 
-        let actions = process_pending_announces(&mut table, &mut held, &[0; 16], 1000.0);
+        let actions = process_pending_announces(
+            &mut table,
+            &mut held,
+            &[0; 16],
+            1000.0,
+            &mut BTreeMap::new(),
+        );
 
         assert!(actions.is_empty());
         assert!(!table.contains_key(&dest)); // removed
@@ -406,7 +431,13 @@ mod tests {
         table.insert(dest, entry);
         let mut held = BTreeMap::new();
 
-        let actions = process_pending_announces(&mut table, &mut held, &[0; 16], 1000.0);
+        let actions = process_pending_announces(
+            &mut table,
+            &mut held,
+            &[0; 16],
+            1000.0,
+            &mut BTreeMap::new(),
+        );
 
         assert!(actions.is_empty());
         assert!(!table.contains_key(&dest));
@@ -419,7 +450,13 @@ mod tests {
         table.insert(dest, make_announce_entry(dest, 2000.0, 0, 0)); // timeout in future
         let mut held = BTreeMap::new();
 
-        let actions = process_pending_announces(&mut table, &mut held, &[0; 16], 1000.0);
+        let actions = process_pending_announces(
+            &mut table,
+            &mut held,
+            &[0; 16],
+            1000.0,
+            &mut BTreeMap::new(),
+        );
 
         assert!(actions.is_empty());
         assert!(table.contains_key(&dest)); // still there
@@ -438,7 +475,13 @@ mod tests {
         table.insert(low_hop_dest, low_hop);
         let mut held = BTreeMap::new();
 
-        let actions = process_pending_announces(&mut table, &mut held, &[0; 16], 1000.0);
+        let actions = process_pending_announces(
+            &mut table,
+            &mut held,
+            &[0; 16],
+            1000.0,
+            &mut BTreeMap::new(),
+        );
 
         let sent_hops: Vec<u8> = actions
             .iter()
@@ -466,7 +509,13 @@ mod tests {
         let mut held = BTreeMap::new();
         held.insert(dest, held_entry.clone());
 
-        let actions = process_pending_announces(&mut table, &mut held, &[0; 16], 1000.0);
+        let actions = process_pending_announces(
+            &mut table,
+            &mut held,
+            &[0; 16],
+            1000.0,
+            &mut BTreeMap::new(),
+        );
 
         assert!(actions.iter().any(|action| matches!(
             action,
@@ -1173,8 +1222,22 @@ mod tests {
         let mut table = BTreeMap::new();
         table.insert(dest, make_announce_entry(dest, 1000.0, 0, 0));
         let mut held = BTreeMap::new();
-        assert!(process_pending_announces(&mut table, &mut held, &[0xBB; 16], 1000.0).is_empty());
-        assert!(!process_pending_announces(&mut table, &mut held, &[0xBB; 16], 1000.5).is_empty());
+        assert!(process_pending_announces(
+            &mut table,
+            &mut held,
+            &[0xBB; 16],
+            1000.0,
+            &mut BTreeMap::new()
+        )
+        .is_empty());
+        assert!(!process_pending_announces(
+            &mut table,
+            &mut held,
+            &[0xBB; 16],
+            1000.5,
+            &mut BTreeMap::new()
+        )
+        .is_empty());
         assert_eq!(
             table[&dest].retransmit_timeout,
             1000.5 + constants::PATHFINDER_G + constants::PATHFINDER_RW

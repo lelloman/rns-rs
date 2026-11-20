@@ -126,6 +126,8 @@ pub fn process_validated_announce(
                 local_rebroadcasts: 0,
                 block_rebroadcasts: false,
                 attached_interface: None,
+                packet_hash,
+                blocked_interfaces: Default::default(),
             })
         } else {
             None
@@ -172,6 +174,8 @@ mod tests {
             local_rebroadcasts: 0,
             block_rebroadcasts: false,
             attached_interface: None,
+            packet_hash: [0; 32],
+            blocked_interfaces: Default::default(),
         };
 
         let transport_hash = [0xBB; 16];
@@ -206,6 +210,8 @@ mod tests {
             local_rebroadcasts: 0,
             block_rebroadcasts: true,
             attached_interface: None,
+            packet_hash: [0; 32],
+            blocked_interfaces: Default::default(),
         };
 
         let raw = build_retransmit_announce(&entry, &[0x11; 16]);
@@ -228,6 +234,8 @@ mod tests {
             local_rebroadcasts: 0,
             block_rebroadcasts: false,
             attached_interface: None,
+            packet_hash: [0; 32],
+            blocked_interfaces: Default::default(),
         };
 
         let raw = build_retransmit_announce(&entry, &[0x22; 16]);
@@ -423,6 +431,8 @@ mod tests {
             local_rebroadcasts: 0,
             block_rebroadcasts: false,
             attached_interface: None,
+            packet_hash: [0; 32],
+            blocked_interfaces: Default::default(),
         }
     }
 

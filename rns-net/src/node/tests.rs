@@ -348,6 +348,7 @@ fn test_interface_info(id: u64) -> rns_core::transport::types::InterfaceInfo {
         announce_cap: rns_core::constants::ANNOUNCE_CAP,
         is_local_client: false,
         wants_tunnel: false,
+        shared_medium: false,
         hop_limiter: None,
         tunnel_id: None,
         mtu: rns_core::constants::MTU as u32,

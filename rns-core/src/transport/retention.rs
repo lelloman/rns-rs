@@ -98,7 +98,10 @@ impl TransportEngine {
     }
 
     pub(crate) fn announce_entry_size_bytes(entry: &AnnounceEntry) -> usize {
-        size_of::<AnnounceEntry>() + entry.packet_raw.capacity() + entry.packet_data.capacity()
+        size_of::<AnnounceEntry>()
+            + entry.packet_raw.capacity()
+            + entry.packet_data.capacity()
+            + entry.blocked_interfaces.len() * size_of::<InterfaceId>()
     }
 
     pub(crate) fn announce_retained_bytes_total(&self) -> usize {

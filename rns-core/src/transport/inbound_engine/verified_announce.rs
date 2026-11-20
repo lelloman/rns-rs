@@ -4,6 +4,29 @@
 use super::*;
 
 impl TransportEngine {
+    /// Upstream da368e05: a copy of the announce waiting in the announce
+    /// table (same packet hash, so any hop count and relaying node), heard
+    /// on an interface that is not a shared medium, means the neighbour
+    /// there already has it, so the rebroadcast skips that interface.
+    fn record_announce_heard_while_waiting(
+        &mut self,
+        packet: &RawPacket<PacketBytes>,
+        iface: InterfaceId,
+    ) {
+        let shared_medium = self
+            .interfaces
+            .get(&iface)
+            .is_some_and(|info| info.shared_medium);
+        if shared_medium {
+            return;
+        }
+        if let Some(waiting) = self.announce_table.get_mut(&packet.destination_hash) {
+            if waiting.packet_hash == packet.packet_hash {
+                waiting.blocked_interfaces.insert(iface);
+            }
+        }
+    }
+
     pub(super) fn process_verified_announce(
         &mut self,
         mut ctx: VerifiedAnnounceCtx<'_>,
@@ -110,6 +133,7 @@ impl TransportEngine {
                 ctx.packet.destination_hash[2],
                 ctx.packet.destination_hash[3],
             );
+            self.record_announce_heard_while_waiting(ctx.packet, ctx.iface);
             return;
         }
         if higher_gravity_replacement {
@@ -272,6 +296,8 @@ impl TransportEngine {
                     local_rebroadcasts: 0,
                     block_rebroadcasts: false,
                     attached_interface: None,
+                    packet_hash: ctx.packet.packet_hash,
+                    blocked_interfaces: Default::default(),
                 };
                 self.insert_announce_entry(ctx.packet.destination_hash, entry, ctx.now);
             }
@@ -337,6 +363,8 @@ impl TransportEngine {
                 local_rebroadcasts: 0,
                 block_rebroadcasts: true,
                 attached_interface: requesting_interfaces.first().copied(),
+                packet_hash: ctx.packet.packet_hash,
+                blocked_interfaces: Default::default(),
             };
             if let Some(identity_hash) = self.config.identity_hash.filter(|_| sendable) {
                 let raw = announce_proc::build_retransmit_announce(&entry, &identity_hash);

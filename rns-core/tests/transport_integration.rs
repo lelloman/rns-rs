@@ -202,6 +202,7 @@ impl TestHarness {
             announce_cap: rns_core::constants::ANNOUNCE_CAP,
             is_local_client: false,
             wants_tunnel: false,
+            shared_medium: false,
             hop_limiter: None,
             tunnel_id: None,
             mtu: rns_core::constants::MTU as u32,
@@ -348,6 +349,8 @@ fn test_announce_retransmit_interop() {
             local_rebroadcasts: 0,
             block_rebroadcasts: context == constants::CONTEXT_PATH_RESPONSE,
             attached_interface: None,
+            packet_hash: [0; 32],
+            blocked_interfaces: Default::default(),
         };
 
         let raw =
@@ -414,6 +417,7 @@ fn test_transport_routing_interop() {
                     announce_cap: rns_core::constants::ANNOUNCE_CAP,
                     is_local_client: false,
                     wants_tunnel: false,
+                    shared_medium: false,
                     hop_limiter: None,
                     tunnel_id: None,
                     mtu: rns_core::constants::MTU as u32,
@@ -1694,6 +1698,7 @@ fn test_issue4_shared_client_outbound_data_to_1hop_dest() {
         announce_cap: constants::ANNOUNCE_CAP,
         is_local_client: true,
         wants_tunnel: false,
+        shared_medium: false,
         hop_limiter: None,
         tunnel_id: None,
         mtu: constants::MTU as u32,
@@ -1781,6 +1786,7 @@ fn test_issue4_shared_client_outbound_linkrequest_to_1hop_dest() {
         announce_cap: constants::ANNOUNCE_CAP,
         is_local_client: true,
         wants_tunnel: false,
+        shared_medium: false,
         hop_limiter: None,
         tunnel_id: None,
         mtu: constants::MTU as u32,

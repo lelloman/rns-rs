@@ -15,6 +15,8 @@ fn entry(timestamp: f64, len: usize) -> AnnounceEntry {
         local_rebroadcasts: 0,
         block_rebroadcasts: false,
         attached_interface: None,
+        packet_hash: [0; 32],
+        blocked_interfaces: Default::default(),
     }
 }
 

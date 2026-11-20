@@ -380,6 +380,7 @@ pub(super) fn add_peer(context: AddPeerContext<'_>) -> Option<Event> {
         announce_cap: rns_core::constants::ANNOUNCE_CAP,
         is_local_client: false,
         wants_tunnel: false,
+        shared_medium: false,
         hop_limiter: None,
         tunnel_id: None,
         mtu: HW_MTU as u32,

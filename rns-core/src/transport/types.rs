@@ -221,6 +221,11 @@ pub struct InterfaceInfo {
     pub is_local_client: bool,
     /// Whether this interface wants tunnel synthesis on connect.
     pub wants_tunnel: bool,
+    /// Whether the interface shares its medium with other nodes, as radio,
+    /// serial and UDP links do (upstream `Interface.shared_medium`). An
+    /// announce heard again on such an interface while it waits for
+    /// rebroadcast is still rebroadcast there.
+    pub shared_medium: bool,
     /// The interface's own hop limiter (upstream bb63dd44
     /// `Interface.hop_limiter`): an inbound packet whose hop count is not
     /// below it is a hop limiter hit, checked before the transport-wide
