@@ -1064,6 +1064,13 @@ fn known_destinations_persist_across_restart() {
     let identity = Identity::new(&mut OsRng);
     let last_used_at = 77.0;
     let receiving_interface = rns_core::transport::types::InterfaceId(42);
+    // Not shared: with the default config the node would attach as a
+    // client to any other process serving the "default" instance.
+    fs::write(
+        dir.path().join("config"),
+        "[reticulum]\nshare_instance = No\n",
+    )
+    .unwrap();
 
     let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
     let (response_tx, response_rx) = std::sync::mpsc::channel();
