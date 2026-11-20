@@ -23,7 +23,7 @@ use std::sync::Arc;
 use rns_core::transport::types::InterfaceId;
 
 use super::{
-    android_client_sleep_hold, frame_decoder, make_local_interface_info, reconnect_local_client,
+    android_client_sleep_hold, frame_decoder, log_shared_connection_lost, reconnect_local_client,
     ClientSleepHold, LocalClientConfig, LocalClientStream, LocalWriter,
 };
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
@@ -94,7 +94,7 @@ impl Stream {
                 transmit_buffer: TransmitBuffer::new(),
             }),
             #[cfg(target_os = "linux")]
-            Stream::Unix(stream) => Box::new(super::UnixLocalWriter {
+            Stream::Unix(stream) => Box::new(LocalWriter {
                 stream,
                 sleep_hold: Some(sleep_hold),
                 transmit_buffer: TransmitBuffer::new(),
@@ -267,7 +267,6 @@ impl ListenerSource {
                 scratch: Vec::new(),
             }),
         };
-        let info = make_local_interface_info(client_id);
         // Register the client with the driver before any of its frames: the
         // queue never delivers a frame ahead of an older control event.
         let names = match &stream {
@@ -277,13 +276,8 @@ impl ListenerSource {
                 super::ClientNames::Unix(super::unix_client_display_name(&self.name))
             }
         };
-        let events = super::client_up_events(
-            client_id,
-            writer,
-            info,
-            self.dynamic_template.as_ref(),
-            names,
-        );
+        let events =
+            super::client_up_events(client_id, writer, self.dynamic_template.as_ref(), names);
         if self.tx.push_from_loop(events).is_err() {
             return Admitted::DriverGone;
         }
@@ -466,12 +460,12 @@ impl LoopSource for SharedConnection {
             StreamRead::Rearm => SourceStatus::Rearm,
             StreamRead::Suspend => SourceStatus::Suspend,
             StreamRead::Closed => {
-                log::warn!("[{}] shared connection closed", name);
+                log_shared_connection_lost(&link.config, None);
                 link.connection_lost();
                 SourceStatus::Remove
             }
             StreamRead::Failed(e) => {
-                log::warn!("[{}] shared read error: {}", name, e);
+                log_shared_connection_lost(&link.config, Some(&e));
                 link.connection_lost();
                 SourceStatus::Remove
             }
