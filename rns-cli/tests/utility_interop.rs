@@ -2009,8 +2009,21 @@ fn compare_rnpath_blackhole_views(config: &str, publisher: &str, blackholed: &st
         &["-p", publisher, "no such entry"],
         &["-p", "0123"],
     ];
+    // Before 1.6.0 an instance keeps no known_destinations.db, so a client
+    // following 1.6.1 (as Rust's rnpath does) falls back to the
+    // `known_destinations` RPC, which those releases don't answer, and logs
+    // upstream's error for it. Their own rnpath never asks.
+    let old_instance = python_rns_version().as_slice() < [1, 6].as_slice();
     for args in cases {
-        let rust = rnpath(false, args);
+        let mut rust = rnpath(false, args);
+        const RPC_ERROR: &str = "Shared instance RPC failed while getting known destinations";
+        if old_instance && rust.1.contains(RPC_ERROR) {
+            rust.1 = rust
+                .1
+                .split_inclusive('\n')
+                .filter(|line| !line.contains(RPC_ERROR))
+                .collect();
+        }
         // Python's rnpath, a client of the running instance, now and then
         // exits 0 where it calls exit(20) (seen on CI with 1.6.0, while
         // shutting down its shared instance connection): ask it again
@@ -3688,6 +3701,12 @@ print("LATER " + json.dumps({
 #[test]
 #[ignore = "requires Python Reticulum; exercised by the pinned interop CI matrix"]
 fn python_split_mode_client_loads_rust_known_destinations_over_rpc() {
+    // Upstream loads known destinations over RPC in split mode from 1.6.1 on.
+    let version = python_rns_version();
+    if version.as_slice() < [1, 6, 1].as_slice() {
+        eprintln!("Python Reticulum {version:?} predates split mode RPC loading; skipping");
+        return;
+    }
     let harness = Harness::start("python-split-known");
     let known_identity = harness.path("known.identity");
     let receive = harness.path("receive");
@@ -3816,4 +3835,18 @@ fn python_split_mode_client_loads_rust_known_destinations_over_rpc() {
     let later = line("LATER ");
     assert_eq!(later["recalled"], true, "{text}");
     assert_eq!(later["types"].as_array().map(Vec::len), Some(8), "{text}");
+}
+
+/// The `RNS.__version__` of the Python Reticulum the interop tests run, as
+/// numbers.
+fn python_rns_version() -> Vec<u32> {
+    let mut version = Command::new("python3");
+    version.args(["-c", "import RNS; print(RNS.__version__)"]);
+    let version = run(version);
+    assert_success(&version, "read Python Reticulum version");
+    String::from_utf8_lossy(&version.stdout)
+        .trim()
+        .split('.')
+        .filter_map(|part| part.parse().ok())
+        .collect()
 }
