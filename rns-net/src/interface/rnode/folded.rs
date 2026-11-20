@@ -8,28 +8,19 @@
 //! on a thread of its own, at start and after the connection is lost, which
 //! exits once the configured device is served on the driver.
 
-use std::io::{self, Write};
+use std::io;
 use std::os::fd::{AsFd, AsRawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use rns_core::transport::types::InterfaceId;
-
-use super::setup;
 use super::transport::{Readable, Transport};
 use super::DeviceWriter;
 use super::{bring_up, reconnect_until_configured, RNodeConfig, RNodeReceiver, SubFlowState};
-use super::{identify_station, station_id_due};
-use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
-use crate::interface::lock_or_recover;
+use super::{identify_station, send_keepalive, station_id_due, KEEPALIVE_INTERVAL};
+use crate::event::{EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::interface::stream_read::{set_nonblocking, STREAM_READ_BUDGET};
-use crate::rnode_kiss;
-
-/// How often a detect request keeps the device's host bridge awake (ESP32
-/// RNodes revert to standalone after 30 seconds idle).
-const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 /// What serving an RNode on the driver loop needs across reconnects.
 pub(super) struct RNodeLink {
@@ -91,9 +82,7 @@ impl RNodeLink {
                 self.config.name,
                 e
             );
-            self.report_down(|event| {
-                let _ = self.tx.send(event);
-            });
+            super::signal_interface_down(&self.tx, &self.config);
             self.reconnect();
         }
     }
@@ -114,14 +103,6 @@ impl RNodeLink {
         )
     }
 
-    fn report_down(&self, mut send: impl FnMut(Event)) {
-        for i in 0..self.config.subinterfaces.len() {
-            send(Event::InterfaceDown(InterfaceId(
-                self.config.base_interface_id.0 + i as u64,
-            )));
-        }
-    }
-
     /// Reopen and reconfigure the connection until it is served again or
     /// the interface stops. Runs on a reconnect thread.
     fn reconnect(self: &Arc<Self>) {
@@ -139,9 +120,9 @@ impl RNodeLink {
     /// Report the subinterfaces down and, unless the connection was handed
     /// over pre-opened, reconnect on a thread of its own.
     fn connection_lost(self: &Arc<Self>) {
-        let mut events = Vec::new();
-        self.report_down(|event| events.push(event));
-        let _ = self.tx.push_from_loop(events);
+        let _ = self
+            .tx
+            .push_from_loop(super::interface_down_events(&self.config));
         if self.config.pre_opened_fd.is_some() {
             return;
         }
@@ -242,16 +223,7 @@ impl LoopSource for RNodeSource {
                 if !self.link.running() {
                     return SourceStatus::Remove;
                 }
-                let name = &self.link.config.name;
-                if setup::is_ble(&self.link.config) {
-                    // Upstream's disconnect callback says so.
-                    self.reader.lost();
-                } else {
-                    match error {
-                        Some(e) => log::error!("[{}] serial read error: {}", name, e),
-                        None => log::warn!("[{}] serial port closed", name),
-                    }
-                }
+                super::connection_lost(&self.link.config, error.as_ref(), || self.reader.lost());
                 self.link.connection_lost();
                 SourceStatus::Remove
             }
@@ -273,14 +245,7 @@ impl LoopSource for RNodeSource {
             return SourceStatus::Rearm;
         }
         self.keepalive_at = Instant::now() + KEEPALIVE_INTERVAL;
-        if let Err(e) = lock_or_recover(&self.link.writer, "rnode shared writer")
-            .write_all(&rnode_kiss::detect_request())
-        {
-            // Not while the device is away: that was said already.
-            if e.kind() != io::ErrorKind::NotConnected {
-                log::debug!("[{}] keepalive write failed: {}", self.link.config.name, e);
-            }
-        }
+        send_keepalive(&self.link.writer, &self.link.config.name);
         SourceStatus::Rearm
     }
 }

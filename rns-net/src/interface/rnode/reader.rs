@@ -131,11 +131,7 @@ pub(super) fn reader_loop_connected(
                     if !running.load(Ordering::Relaxed) {
                         return;
                     }
-                    if setup::is_ble(&config) {
-                        reader.lost();
-                    } else {
-                        log::warn!("[{}] serial port closed", config.name);
-                    }
+                    connection_lost(&config, None, || reader.lost());
                     signal_interface_down(&tx, &config);
                     break true;
                 }
@@ -151,11 +147,7 @@ pub(super) fn reader_loop_connected(
                     if !running.load(Ordering::Relaxed) {
                         return;
                     }
-                    if setup::is_ble(&config) {
-                        reader.lost();
-                    } else {
-                        log::error!("[{}] serial read error: {}", config.name, e);
-                    }
+                    connection_lost(&config, Some(&e), || reader.lost());
                     signal_interface_down(&tx, &config);
                     break true;
                 }
@@ -178,10 +170,50 @@ pub(super) fn reader_ready(reader: &impl AsRawFd, timeout: Duration) -> bool {
     matches!(crate::sys::poll_in(reader.as_raw_fd(), timeout_ms), Ok(revents) if revents != 0)
 }
 
+/// Say the connection to the device is lost: `error` is the read error,
+/// `None` when the device closed it. A BLE connection is marked lost by
+/// `mark_lost` instead, which says so as upstream's disconnect callback
+/// does.
+pub(super) fn connection_lost(
+    config: &RNodeConfig,
+    error: Option<&io::Error>,
+    mark_lost: impl FnOnce(),
+) {
+    if setup::is_ble(config) {
+        mark_lost();
+        return;
+    }
+    match error {
+        Some(e) => log::error!("[{}] serial read error: {}", config.name, e),
+        None => log::warn!("[{}] serial port closed", config.name),
+    }
+}
+
+/// The events reporting every subinterface down.
+pub(super) fn interface_down_events(config: &RNodeConfig) -> impl Iterator<Item = Event> + '_ {
+    (0..config.subinterfaces.len())
+        .map(|i| Event::InterfaceDown(InterfaceId(config.base_interface_id.0 + i as u64)))
+}
+
 pub(super) fn signal_interface_down(tx: &EventSender, config: &RNodeConfig) {
-    for i in 0..config.subinterfaces.len() {
-        let sub_id = InterfaceId(config.base_interface_id.0 + i as u64);
-        let _ = tx.send(Event::InterfaceDown(sub_id));
+    for event in interface_down_events(config) {
+        let _ = tx.send(event);
+    }
+}
+
+/// How often a detect request keeps the device's host bridge awake (ESP32
+/// RNodes revert to standalone after 30 seconds idle).
+pub(super) const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+
+/// Send the keepalive detect request.
+pub(super) fn send_keepalive(writer: &Mutex<DeviceWriter>, name: &str) {
+    if let Err(e) =
+        lock_or_recover(writer, "rnode shared writer").write_all(&rnode_kiss::detect_request())
+    {
+        // Not while the device is away: that was said already.
+        if e.kind() != io::ErrorKind::NotConnected {
+            log::debug!("[{}] keepalive write failed: {}", name, e);
+        }
     }
 }
 
