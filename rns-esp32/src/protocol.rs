@@ -27,6 +27,10 @@ pub const CMD_MCU: u8 = 0x49;
 pub const CMD_FW_VERSION: u8 = 0x50;
 pub const CMD_FW_DETAIL: u8 = 0x51;
 
+/// The platform and MCU bytes RNode firmware reports on ESP32 boards.
+pub const PLATFORM_ESP32: u8 = 0x80;
+pub const MCU_ESP32: u8 = 0x81;
+
 pub const DETECT_REQ: u8 = 0x73;
 pub const DETECT_RESP: u8 = 0x46;
 pub const RADIO_STATE_ON: u8 = 0x01;
@@ -137,6 +141,30 @@ pub fn kiss_encode(cmd: u8, data: &[u8]) -> Vec<u8> {
     out
 }
 
+/// The KISS reply to a query for the board's identity: firmware version and
+/// detail, platform and MCU. RNode firmware answers these whatever its
+/// state, so a host can identify the board without a DETECT first.
+pub fn identity_reply(command: u8) -> Option<Vec<u8>> {
+    match command {
+        CMD_FW_VERSION => Some(kiss_encode(
+            CMD_FW_VERSION,
+            &[
+                crate::version::RNODE_PROTOCOL_MAJOR,
+                crate::version::RNODE_PROTOCOL_MINOR,
+            ],
+        )),
+        CMD_FW_DETAIL => Some(kiss_encode(
+            CMD_FW_DETAIL,
+            crate::version::FULL_VERSION.as_bytes(),
+        )),
+        CMD_PLATFORM => Some(kiss_encode(CMD_PLATFORM, &[PLATFORM_ESP32])),
+        CMD_MCU => Some(kiss_encode(CMD_MCU, &[MCU_ESP32])),
+        _ => None,
+    }
+}
+
+/// Watches serial input in standalone mode for the DETECT handshake that
+/// switches the board to bridge mode.
 pub struct DetectBuffer {
     decoder: KissDecoder,
 }
@@ -148,16 +176,23 @@ impl DetectBuffer {
         }
     }
 
-    pub fn feed(&mut self, bytes: &[u8]) -> Option<Vec<KissFrame>> {
+    /// Returns every frame read with a DETECT, for the bridge to handle.
+    /// Without one, appends to `replies` the answers to identity queries
+    /// and drops the rest.
+    pub fn feed(&mut self, bytes: &[u8], replies: &mut Vec<u8>) -> Option<Vec<KissFrame>> {
         let frames = self.decoder.feed(bytes);
         if frames
             .iter()
             .any(|frame| frame.command == CMD_DETECT && frame.data.first() == Some(&DETECT_REQ))
         {
-            Some(frames)
-        } else {
-            None
+            return Some(frames);
         }
+        for frame in &frames {
+            if let Some(reply) = identity_reply(frame.command) {
+                replies.extend_from_slice(&reply);
+            }
+        }
+        None
     }
 }
 
@@ -311,11 +346,40 @@ mod tests {
         let mut bytes = kiss_encode(CMD_DETECT, &[DETECT_REQ]);
         bytes.extend_from_slice(&kiss_encode(CMD_FREQUENCY, &[0x00, 0x00, 0x00, 0x01]));
 
-        let frames = buf.feed(&bytes).expect("detect should trigger bridge mode");
+        let mut replies = Vec::new();
+        let frames = buf
+            .feed(&bytes, &mut replies)
+            .expect("detect should trigger bridge mode");
 
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0].command, CMD_DETECT);
         assert_eq!(frames[1].command, CMD_FREQUENCY);
+        assert!(replies.is_empty());
+    }
+
+    #[test]
+    fn detect_buffer_answers_identity_queries_without_detect() {
+        let mut buf = DetectBuffer::new();
+        let mut bytes = kiss_encode(CMD_FW_VERSION, &[0x00]);
+        bytes.extend_from_slice(&kiss_encode(CMD_FREQUENCY, &[0x00, 0x00, 0x00, 0x01]));
+        bytes.extend_from_slice(&kiss_encode(CMD_MCU, &[0x00]));
+
+        let mut replies = Vec::new();
+        assert!(buf.feed(&bytes, &mut replies).is_none());
+
+        let mut expected = identity_reply(CMD_FW_VERSION).unwrap();
+        expected.extend_from_slice(&kiss_encode(CMD_MCU, &[MCU_ESP32]));
+        assert_eq!(replies, expected);
+    }
+
+    #[test]
+    fn identity_reply_reports_esp32_as_rnode_firmware_does() {
+        assert_eq!(
+            identity_reply(CMD_PLATFORM),
+            Some(kiss_encode(CMD_PLATFORM, &[0x80]))
+        );
+        assert_eq!(identity_reply(CMD_MCU), Some(kiss_encode(CMD_MCU, &[0x81])));
+        assert_eq!(identity_reply(CMD_FREQUENCY), None);
     }
 
     #[test]

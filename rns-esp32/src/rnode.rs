@@ -19,12 +19,12 @@ use crate::lora::SharedRadio;
 use crate::version;
 use rns_esp32::channel::{airtime_limit, ChannelMonitor, TxChannel};
 use rns_esp32::protocol::{
-    channel_stats_frame, csma_stats_frame, kiss_encode, packet_count_frame, phy_stats_frame,
-    reception_stat_frames, validate_radio_config, ChannelReport, DetectBuffer, KissDecoder,
-    KissFrame, RadioConfig, CMD_BANDWIDTH, CMD_CR, CMD_DATA, CMD_DETECT, CMD_FREQUENCY,
-    CMD_FW_DETAIL, CMD_FW_VERSION, CMD_LEAVE, CMD_LT_ALOCK, CMD_MCU, CMD_PLATFORM, CMD_RADIO_STATE,
-    CMD_READY, CMD_SF, CMD_STAT_RX, CMD_STAT_TX, CMD_ST_ALOCK, CMD_TXPOWER, DETECT_REQ,
-    DETECT_RESP, RADIO_STATE_ON,
+    channel_stats_frame, csma_stats_frame, identity_reply, kiss_encode, packet_count_frame,
+    phy_stats_frame, reception_stat_frames, validate_radio_config, ChannelReport, DetectBuffer,
+    KissDecoder, KissFrame, RadioConfig, CMD_BANDWIDTH, CMD_CR, CMD_DATA, CMD_DETECT,
+    CMD_FREQUENCY, CMD_FW_DETAIL, CMD_FW_VERSION, CMD_LEAVE, CMD_LT_ALOCK, CMD_MCU, CMD_PLATFORM,
+    CMD_RADIO_STATE, CMD_READY, CMD_SF, CMD_STAT_RX, CMD_STAT_TX, CMD_ST_ALOCK, CMD_TXPOWER,
+    DETECT_REQ, DETECT_RESP, RADIO_STATE_ON,
 };
 
 /// Transport-agnostic serial interface for the RNode bridge.
@@ -102,10 +102,6 @@ impl BridgeTransport for BleTransport {
         }
     }
 }
-
-// Device identity, as RNode firmware reports it on ESP32 boards
-const PLATFORM_ESP32: u8 = 0x80;
-const MCU_ESP32: u8 = 0x81;
 
 const DETECT_POLL_MS: u32 = 5;
 
@@ -321,24 +317,10 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                 log::info!("RNode: LEAVE received, exiting bridge mode");
                 return Ok(true);
             }
-            CMD_FW_VERSION => {
-                let resp = kiss_encode(
-                    CMD_FW_VERSION,
-                    &[version::RNODE_PROTOCOL_MAJOR, version::RNODE_PROTOCOL_MINOR],
-                );
-                self.transport.write(&resp)?;
-            }
-            CMD_FW_DETAIL => {
-                let resp = kiss_encode(CMD_FW_DETAIL, version::FULL_VERSION.as_bytes());
-                self.transport.write(&resp)?;
-            }
-            CMD_PLATFORM => {
-                let resp = kiss_encode(CMD_PLATFORM, &[PLATFORM_ESP32]);
-                self.transport.write(&resp)?;
-            }
-            CMD_MCU => {
-                let resp = kiss_encode(CMD_MCU, &[MCU_ESP32]);
-                self.transport.write(&resp)?;
+            CMD_FW_VERSION | CMD_FW_DETAIL | CMD_PLATFORM | CMD_MCU => {
+                if let Some(resp) = identity_reply(frame.command) {
+                    self.transport.write(&resp)?;
+                }
             }
             CMD_FREQUENCY => {
                 if frame.data.len() >= 4 {
@@ -603,6 +585,7 @@ impl<T: BridgeTransport> RNodeBridge<T> {
 pub struct BridgeDetectState {
     detector: DetectBuffer,
     rx_buf: [u8; 256],
+    replies: Vec<u8>,
 }
 
 impl BridgeDetectState {
@@ -610,14 +593,25 @@ impl BridgeDetectState {
         Self {
             detector: DetectBuffer::new(),
             rx_buf: [0u8; 256],
+            replies: Vec::new(),
         }
     }
 
+    /// Returns the frames to hand to the bridge once a host sends DETECT,
+    /// answering identity queries that come without one.
     pub fn poll(&mut self, uart: &UartDriver<'_>) -> Option<Vec<KissFrame>> {
-        match uart.read(&mut self.rx_buf, DETECT_POLL_MS) {
-            Ok(n) if n > 0 => self.detector.feed(&self.rx_buf[..n]),
-            _ => None,
+        let n = match uart.read(&mut self.rx_buf, DETECT_POLL_MS) {
+            Ok(n) if n > 0 => n,
+            _ => return None,
+        };
+        let frames = self.detector.feed(&self.rx_buf[..n], &mut self.replies);
+        if !self.replies.is_empty() {
+            if let Err(err) = UartTransport::new(uart).write(&self.replies) {
+                log::warn!("RNode: identity reply failed: {}", err);
+            }
+            self.replies.clear();
         }
+        frames
     }
 }
 
