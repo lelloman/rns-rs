@@ -6,6 +6,7 @@
 
 mod hooks;
 mod interfaces;
+mod keys;
 mod parse;
 mod reticulum;
 mod sections;
