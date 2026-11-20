@@ -161,6 +161,8 @@ pub struct AutoConfig {
     pub max_peers: usize,
     /// Base interface ID. Per-peer IDs will be assigned dynamically.
     pub interface_id: InterfaceId,
+    /// Ingress control applied to each peer interface; set from the start context.
+    pub ingress_control: rns_core::transport::types::IngressControlConfig,
     /// Timing settings shared with the running interface, adjustable at runtime.
     pub runtime: Arc<Mutex<AutoRuntime>>,
 }
@@ -179,6 +181,7 @@ impl Default for AutoConfig {
             configured_bitrate: BITRATE_GUESS,
             max_peers: DEFAULT_MAX_PEERS,
             interface_id: InterfaceId(0),
+            ingress_control: rns_core::transport::types::IngressControlConfig::enabled(),
             runtime: Arc::new(Mutex::new(AutoRuntime::default())),
         }
     }
