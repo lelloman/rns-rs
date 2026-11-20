@@ -50,13 +50,14 @@ the records are named `-rgit-2` and the 1.6.1 rgit records stay unchanged.
 ## Commit Inventory
 
 Every commit in the audited range appears exactly once, in ancestry order.
-The dispositions below are the ones proposed by the 2026-11-20 diff review;
-the local evidence column is filled in as each mapping commit lands.
+The 2026-11-20 diff review proposed a disposition for each; every row now
+has its final disposition, recorded with its mapping commit and the
+evidence that ran.
 
-| # | Upstream commit | Date | Subject | Proposed disposition | Local evidence |
+| # | Upstream commit | Date | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|---|
-| 1 | `840eb369` | 2026-11-19 | Added rngit media conversion max input size cap, improved logging and error handling | Needs port | pending |
-| 2 | `f55c0c6e` | 2026-11-20 | Added security notice | Non-runtime | pending |
+| 1 | `840eb369` | 2026-11-19 | Added rngit media conversion max input size cap, improved logging and error handling | Integrated | `daafb06e`; `image_formats_are_classified_by_their_signatures_as_upstream`, `only_imagemagick_backends_take_the_explicit_input_coder`, `input_that_is_not_a_supported_image_never_reaches_the_encoder`, `input_over_the_size_cap_never_reaches_the_encoder`, `a_supported_image_reaches_the_encoder_whole_with_its_coder`, `encoder_failures_and_invalid_output_are_not_converted`, `encoder_runs_report_exit_status_and_timeout`, `failures_are_logged_with_upstreams_messages`, `image_paths_are_the_media_modules_supported_image_extensions`; the ignored real-backend tests pass with ImageMagick 6 `convert` and with ffmpeg |
+| 2 | `f55c0c6e` | 2026-11-20 | Added security notice | Non-runtime | `a6127d80`; security note in `docs/rns-git.md` |
 
 ## Per-Commit Analysis
 
@@ -132,18 +133,63 @@ size cap and the explicit coder carry over unchanged; the relay-only failures
 (input read timeout, encoder exiting before the input is consumed) have no
 Rust counterpart.
 
-**Local handling and evidence:** Planned: port the constants,
-`detect_image_format` and the signature table, apply `<format>:-` to the
-ImageMagick and GraphicsMagick argument lists exactly as upstream does, sniff
-and cap in both `convert_to_webp` and `convert_file_to_webp` in upstream's
-order, take upstream's log lines and levels for every outcome, and derive
-`is_image_path` from `SUPPORTED_IMAGE_EXTS`. Focused tests with fake encoder
-commands: the signature table (including the DIB sizes and WebP header), the
-per-backend argument lists, non-image input and oversized input never
-reaching the encoder, and an accepted image reaching it with its coder.
-Update the media section of `docs/rns-git.md`.
+**Local handling and evidence:** `daafb06e`. `rns-git/src/media.rs` gains
+`SUPPORTED_IMAGE_EXTS`, `CONV_SIZE_MAX` and `detect_image_format` (public)
+with upstream's signature table in upstream's order, and `configured_args`
+replaces the first `-` with `<format>:-` for `magick`, `convert` and `gm`
+only. In-memory conversion (`convert_to_webp`, used by `/media`) selects the
+backend first (the existing no-backend warning), classifies the first 64
+bytes, refuses input over 32 MiB, then encodes with the coder;
+`convert_file_to_webp` checks backend, missing file, size, then the
+signature of the first 64 bytes, and the encoder reads the file from its
+start (no longer through memory). Every outcome logs upstream's line at
+upstream's level: `Media conversion failed: Input format is not supported`
+and `... Streaming input exceeded maximum size of 33.55 MB` (debug),
+`Cannot convert media: Source file does not exist: <path>` (warning),
+`... Source file exceeds maximum size of 33.55 MB` and `... Source file is
+not a supported media format` (debug), `Media conversion via <name> timed
+out after <prettytime>`, `... failed.` with ` Encoder: <stderr>`, `... produced
+invalid WebP output`, `Invalid media conversion output from <name>` and
+`Error during media conversion: <error>` (warning), `Media converted to WebP
+with <name>` (debug). The timeout text is `RNS.prettytime` of what upstream
+passes: the time left of the deadline (a float) for in-memory conversion,
+the configured timeout (`8s` by default) for files. `pages/downloads.rs`
+`is_image_path` now derives from `SUPPORTED_IMAGE_EXTS`. The real-backend
+tests use a BMP, since PPM input is now refused, as upstream refuses it.
+`docs/rns-git.md` describes the check, the coder and the cap.
 
-**Proposed disposition:** Needs port.
+Tests (with `sh` stand-ins for the encoders that record their arguments and
+standard input): `image_formats_are_classified_by_their_signatures_as_upstream`
+(31 cases, every one also run through upstream's `detect_image_format` at
+`f55c0c6e`, which agrees), `only_imagemagick_backends_take_the_explicit_input_coder`
+(checked against upstream's `_configured_backend` for all five backends),
+`input_that_is_not_a_supported_image_never_reaches_the_encoder` (text, PPM,
+SVG, MVG and a BMP with an unknown DIB size, from memory and from a file),
+`input_over_the_size_cap_never_reaches_the_encoder` (32 MiB + 1 refused,
+exactly 32 MiB encoded, from memory and from a file),
+`a_supported_image_reaches_the_encoder_whole_with_its_coder` (each backend,
+from memory and from a file), `encoder_failures_and_invalid_output_are_not_converted`,
+`encoder_runs_report_exit_status_and_timeout`,
+`failures_are_logged_with_upstreams_messages` (`RNS.prettysize` and
+`RNS.prettytime` values taken from upstream) and, in `pages`,
+`image_paths_are_the_media_modules_supported_image_extensions`. The tests
+need functions the change adds, so they cannot build before it; to show
+they catch the behaviour, each guard was removed in turn and the suite run:
+no signature check (1 failure), no size cap (1), no coder (2), the coder
+also given to ffmpeg/avconv (2), no rewind of the source file (2). The two
+ignored real-backend tests pass with this host's ImageMagick 6 `convert`
+and with `RNGIT_MEDIA_BACKEND=ffmpeg`. `cargo test -p rns-git`: lib 231
+passed (2 ignored), e2e 8, releases 11, stats 6, 0 failures;
+`cargo fmt --all --check` and `bash scripts/lint-host.sh` clean.
+
+Notes: rns-git resolves the backend once per conversion, where upstream
+resolves it again after the sniff; the no-backend warning keeps rns-git's
+earlier wording, which this commit does not touch upstream. Upstream's
+relay-only failures (no input within the deadline, the encoder exiting
+before the input is consumed) cannot occur, because the encoder's standard
+input is a file.
+
+**Final disposition:** Integrated.
 
 ### 2. `f55c0c6e` — Added security notice
 
@@ -161,20 +207,20 @@ release (commit 1) makes those code paths unreachable. No code changes.
 **Rust applicability:** No runtime change. rns-rs has no `SECURITY.md`; the
 operator-facing surface is the rns-git media documentation.
 
-**Local handling and evidence:** Planned: a security note in the media
-section of `docs/rns-git.md` linking upstream's notice, stating which
-rns-git revision applies the same mitigation, and that older builds should
-set `[pages] media_conversion = no` (or have no ImageMagick installed).
+**Local handling and evidence:** `a6127d80`: the media section of
+`docs/rns-git.md` links upstream's notice, summarises the exposure, says
+that rns-git applies the same mitigation since the port of `840eb369`, and
+tells operators of older builds to set `[pages] media_conversion = no` (or
+run without ImageMagick) until they update. A `SECURITY.md` for rns-rs (a
+reporting contact and a notices directory) would be a project decision, not
+a port, and is not added.
 
-**Proposed disposition:** Non-runtime.
+**Final disposition:** Non-runtime.
 
 ## Integration Plan
 
-1. `840eb369`: port the mitigation into `rns-git/src/media.rs` and
-   `pages/downloads.rs` with focused tests and `docs/rns-git.md`.
-2. `f55c0c6e`: the security note in `docs/rns-git.md`.
-3. Record final dispositions, local hashes and test results here, run the
-   promotion gates, and write the parity record.
+Every commit has a final disposition and one mapping commit. What remains is
+the promotion gates and the parity record.
 
 ## Promotion Gates
 
