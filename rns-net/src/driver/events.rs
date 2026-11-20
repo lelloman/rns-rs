@@ -2,6 +2,7 @@
 //! application's sends, timers and interface changes, run by its event loop.
 
 mod cleanup;
+mod dispatch;
 mod event_loop;
 mod folded;
 mod inbound;
@@ -10,6 +11,7 @@ mod management;
 mod memory;
 mod outbound;
 mod paths;
+mod requests;
 mod tick;
 mod tunnels;
 
