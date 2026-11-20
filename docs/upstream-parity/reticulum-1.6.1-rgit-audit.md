@@ -51,9 +51,9 @@ changelog identifies the target but is not acceptance evidence.
 ## Commit Inventory
 
 Every commit in the audited range appears exactly once, in ancestry order.
-A `Proposed:` status is the outcome of the 2026-11-20 diff review. It
-becomes a final disposition only when the commit's mapping commit and
-evidence exist; until then nothing here is claimed as passed.
+The 2026-11-20 diff review proposed a disposition for each; every row now
+has its final disposition, recorded with its mapping commit and the
+evidence that ran.
 
 | # | Upstream commit | Date | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|---|
@@ -87,10 +87,10 @@ evidence exist; until then nothing here is claimed as passed.
 | 28 | `48ba76df` | 2026-11-18 | Catch announce unpack failure | Structurally covered | `dc8c5bf0`; `analysis_counts_destination_types_as_upstream` (extended; the guard never fires, checked against upstream at `48ba76df`) (decision 3) |
 | 29 | `ef3e8086` | 2026-11-18 | Added link traffic stats | Integrated | `c3661fa2`; `link_table_traffic_counts_relayed_bytes_but_local_clients`, `link_speeds_are_measured_as_upstreams_traffic_loop`, `link_traffic_speeds_are_reported_once_measured`, `link_traffic_keys_follow_upstreams_position_and_types`, `rnstatus_view_matches_upstream` (fixtures regenerated at `ef3e8086`, four new `totals_links*` cases), live idle-node comparison with Python at `ef3e8086` |
 | 30 | `e8b3b14b` | 2026-11-18 | Classic | Integrated | `22021dc1`; `rnstatus_view_matches_upstream` (fixtures regenerated at `e8b3b14b`; `totals_links_control_only` now prints, `totals_links_control_only_tx` new; both raise at `ef3e8086`) |
-| 31 | `eb00622f` | 2026-11-18 | Cleanup | Proposed: Needs port | Reviewed 2026-11-20; no mapping commit yet |
-| 32 | `01ffb98e` | 2026-11-18 | Local link traffic counting | Proposed: Needs coordinated port | Reviewed 2026-11-20; no mapping commit yet |
-| 33 | `52898683` | 2026-11-18 | Raised listener backlogs | Proposed: Structurally covered | Reviewed 2026-11-20; no mapping commit yet |
-| 34 | `cff4d03f` | 2026-11-18 | Updated changelog | Proposed: Non-runtime | Reviewed 2026-11-20; no mapping commit yet |
+| 31 | `eb00622f` | 2026-11-18 | Cleanup | Integrated | `0e4160ab`; `analysis_is_not_yet_implemented` (decision 3) |
+| 32 | `01ffb98e` | 2026-11-18 | Local link traffic counting | Integrated | `fdbbb06c`; `local_link_traffic_counts_raw_bytes_as_upstream`, `own_link_traffic_joins_the_link_totals`, `requested_parts_say_whether_they_were_sent_before`, `test_tick_retransmits_timed_out_packets` (extended) |
+| 33 | `52898683` | 2026-11-18 | Raised listener backlogs | Structurally covered | `71961537`; `abstract_rpc_listener_queues_upstreams_backlog`, invariant comments at the listener binds |
+| 34 | `cff4d03f` | 2026-11-18 | Updated changelog | Non-runtime | `a03de907`; changelog cross-check in section 34, `UPSTREAM.md` tag note |
 
 ## Per-Commit Analysis
 
@@ -1470,12 +1470,45 @@ passed.
 **Upstream change:** `rnpath -A` now always prints `Not yet implemented` and
 exits 0; the analysis body is commented out.
 
-**Rust applicability:** Covered if commit 24 is mapped as recommended.
+**Rust applicability:** Under decision 3 commit 24's analysis was ported,
+so this withdraws it. The whole diff was read: apart from `analyze_tables`
+(now `print("Not yet implemented")` and `exit()`, the old body commented
+out) nothing in `rnpath.py` changes. `program_setup` still evaluates
+`get_path_table()`, `get_rate_table()` and `get_link_distribution()` as
+the arguments, in that order and each on its own connection, before the
+call: a failure is still logged (`Shared instance RPC failed while
+getting ...`, returning `[]` or None) and the output is the same. An
+empty path table no longer prints `No path table to analyze`; Python's
+bare `exit()` is status 0.
 
-**Local handling:** A regression that `-A` prints exactly
-`Not yet implemented` and exits 0, even with an empty path table.
+**Local handling and evidence:** `0e4160ab`. `analyze_tables` makes the
+three calls through the unchanged `analysis_rpc`, then writes `Not yet
+implemented` and returns 0, locally and with `-R`. Removed as dead code,
+as upstream's is: `analyze_path_table`, `TypeAnalysis`,
+`cached_announce_name_hash`, `analysis_counts_destination_types_as_upstream`
+and `RnsNode::destination_type_names` with
+`QueryRequest`/`QueryResponse::DestinationTypeNames` (commit 24's
+mapping added them for the analysis only). Kept: `-A` and `--capture`
+(help unchanged, no fixture regenerated) and the startup path requests
+for `rnstransport.remote.management` and `rnstransport.info.blackhole`,
+which upstream's rnpath still makes. `docs/cli-tools.md` updated.
+`analysis_is_not_yet_implemented` runs `analyze_tables` against an RPC
+server answering an empty path table and then two paths, and with every
+call failing: the output is exactly `Not yet implemented\n`, status 0,
+and the queries arrive in upstream's order; with commit 24's analysis it
+fails on the empty table (`No path table to analyze\n`, checked by
+restoring that branch). Tests run: `cargo test -p rns-cli` passed (lib
+136, `cli_golden` 1, `utility_interop.rs` 5 with 33 ignored, the other
+targets), `cargo test -p rns-net` passed (lib 1607, `e2e.rs` 74 with 1
+ignored, `e2e_direct_connect.rs` 19, `python_interop.rs` 6 with 1
+ignored), `cargo fmt --check` and `bash scripts/lint-host.sh` passed.
 
-**Proposed disposition:** Needs port (decision 3).
+Unchanged, and not part of this commit: as in every local mode, rns-rs's
+rnpath exits 1 with `Could not connect to rnsd` when no shared instance
+runs, where upstream's would start its own instance and, here, print
+`Not yet implemented`.
+
+**Final disposition:** Integrated (decision 3).
 
 ### 32. `01ffb98e` — Local link traffic counting
 
@@ -1483,28 +1516,107 @@ exits 0; the analysis body is commented out.
 link DATA and resource proofs, and every packet sent on an open link.
 
 **Rust applicability:** The hook points exist
-(`link_manager/inbound.rs:52-75`, `link_manager/outbound.rs:120-129`); the
-counters do not.
+(`link_manager/inbound.rs`, the driver's `SendPacket` dispatch); the
+counters do not. Checked upstream at `cff4d03f`: `Link.__receive` counts
+after its own guards (not CLOSED, not the initiator's `0xff` keepalive
+echo, receiving interface equal to `attached_interface`), so a packet
+that then fails to decrypt still counts. Transport calls `link.receive`
+for link DATA of a link in `active_links_map` (a responder's from
+`register_link`, an initiator's from `activate_link`) on its attached
+interface, except CACHE_REQUEST, which it answers itself; and for
+RESOURCE_PRF proofs, whose interface `Link.__receive` checks. LRPROOF
+goes to `validate_proof` and other proofs to the receipts: not counted.
+`Packet.send` counts `len(self.raw)` before `Transport.outbound`, for
+every packet whose destination is a link not CLOSED: LRPROOF, LRRTT,
+keepalives, packet and resource proofs, LINKIDENTIFY, requests,
+responses, LINKCLOSE (sent before the status changes), channel
+envelopes, resource advertisements, requests, HMUs, parts and cancels,
+cache requests sent over a link and their answers; not LINKREQUEST
+(its destination is the destination). Not counted either:
+`Packet.resend()`, which a channel envelope's timeout resend
+(`LinkChannelOutlet.resend`) and a resource part requested again
+(`part.resend()`) use. The review did not list the resends.
 
-**Local handling:** Link-manager counters summed into the driver's totals,
-with `local_link_traffic_counts_raw_bytes_for_link_packets`. The
-CACHE_REQUEST exclusion needs checking.
+**Local handling and evidence:** `fdbbb06c`. The link manager counts
+both sides. Received: `handle_local_delivery_into` adds `raw.len()` when
+`link_receives` holds (link not closed and not a pending initiator link;
+link DATA but CACHE_REQUEST, or a RESOURCE_PRF proof; on the attached
+interface, which in rns-rs is `link_route_accepts`, the check the driver
+already applies to link DATA). The initiator's keepalive echo returns
+before it, as before. Sent: the driver calls `count_sent_link_packet` for
+every `SendPacket` the link manager hands it, on the packet as packed,
+before route hints add a transport header or an oversized packet is
+dropped; destination type LINK only, so LINKREQUEST (SINGLE) is
+excluded. Resends are taken off: rns-core's `ChannelAction::SendOnLink`
+gains `resend` (true for a timeout resend and for the rns-rs-only
+held-exhaustion resend of a direct path), and
+`ResourceSender::handle_request_parts_into` reports with each part
+whether it was sent before; the link manager records those packets'
+bytes and `local_link_traffic` subtracts them. `Driver::link_traffic`
+adds the link manager's totals to the engine's relayed ones (commit 29)
+for `lrxb`/`ltxb` and for the speed sampler (`lrxs`/`ltxs`). The per-link
+`rx`/`tx` statistics are unchanged (they still count resends and every
+packet type; upstream's `Link.tx` does not count resends, a pre-existing
+difference left as it was). rns-rs's Direct Link signalling packets are
+link packets and count as sent. `docs/rnstatus.md` describes what the
+Links totals include.
 
-**Proposed disposition:** Needs coordinated port.
+Tests: `local_link_traffic_counts_raw_bytes_as_upstream` (two link
+managers with the driver's dispatch counting simulated: link request
+uncounted on both sides, LRPROOF counted as sent and not as received,
+LRRTT, data both ways, keepalive probe and answer counted but the
+initiator's echo not, a cache request and a packet proof not counted, a
+resource proof counted only on the link's interface, a channel envelope
+and resource parts counted when first sent and not when resent, LINKCLOSE
+counted, a closed link taking nothing; it fails if every delivered packet
+counts, and if resends are not subtracted, both checked by mutation),
+`own_link_traffic_joins_the_link_totals` (driver: a dispatched packet and
+a packet received on the link's interface reach `interface_stats` and
+the speeds; one on another interface does not),
+`requested_parts_say_whether_they_were_sent_before` (rns-core), and the
+channel tests `test_send_receive`/`test_tick_retransmits_timed_out_packets`
+now check the flag. Tests run: `cargo test -p rns-core` passed (lib 1174
+and its other targets), `cargo test -p rns-net` passed (lib 1609,
+`e2e.rs` 74 with 1 ignored, `e2e_direct_connect.rs` 19,
+`python_interop.rs` 6 with 1 ignored), `cargo fmt --check` passed;
+`bash scripts/lint-host.sh` first failed on an unused `mut` in the new
+driver test, which was removed, then passed, and that test passed again
+alone. Not compared live with Python.
+
+**Final disposition:** Integrated.
 
 ### 33. `52898683` — Raised listener backlogs
 
 **Upstream change:** The Backbone listener backlog goes from 1 to 16 and the
 shared-instance RPC listener from 1 to 128.
 
-**Rust applicability:** The listeners use std `bind`, whose backlog on the
-pinned toolchain is 128 for TCP and `somaxconn` for Unix sockets, already at or
-above the new values.
+**Rust applicability:** Upstream's `BackboneInterface.add_listener` is
+also how its shared instance listens where it has epoll (Linux:
+`LocalInterface` on the abstract Unix socket or 127.0.0.1 TCP), so the
+16 applies there too. Verified against the pinned toolchain (Rust
+1.96.0, `rust-toolchain.toml`) and the std source it ships: `TcpListener`
+listens with 128 (`library/std/src/sys/net/connection/socket/mod.rs`),
+and `UnixListener::bind`/`bind_addr` on Linux with -1
+(`library/std/src/os/unix/net/listener.rs`), which the kernel caps at
+`net.core.somaxconn` (4096 by default since Linux 5.4, 128 before; 4096
+on the audit host). Every listener rns-rs creates binds through std
+without setting a backlog: Backbone (`interface/backbone/server.rs`),
+TCP server (`interface/tcp_server.rs`; upstream's `TCPServerInterface`
+is unchanged), the shared instance (`interface/local.rs`, abstract and
+TCP), the threaded RPC server (`rpc/server.rs`, TCP and abstract) and
+the driver's folded RPC service (`node/startup/services.rs`), and the
+non-upstream listeners (`rns-ctl` HTTP 128, the provider bridge and
+`rns-tun` Unix sockets). None is below upstream's new values.
 
-**Local handling:** Comments at `interface/backbone/server.rs:206` and
-`rpc/server.rs` citing the std values.
+**Local handling and evidence:** `71961537`. Comments citing upstream
+and the std values at the Backbone, shared-instance and RPC binds, and
+`abstract_rpc_listener_queues_upstreams_backlog` (128 connections to the
+RPC abstract socket queue with nobody accepting). Tests run: `cargo test
+-p rns-net` passed (lib 1610, `e2e.rs` 74 with 1 ignored,
+`e2e_direct_connect.rs` 19, `python_interop.rs` 6 with 1 ignored),
+`cargo fmt --check` and `bash scripts/lint-host.sh` passed.
 
-**Proposed disposition:** Structurally covered.
+**Final disposition:** Structurally covered.
 
 ### 34. `cff4d03f` — Updated changelog
 
@@ -1513,7 +1625,9 @@ above the new values.
 **Rust applicability:** Changelogs are not vendored. Every bullet is checked
 against its source commit above, not taken as evidence.
 
-**Local handling:** Analysis only.
+**Local handling and evidence:** `a03de907`: the analysis below, and
+`UPSTREAM.md` no longer says upstream has no `1.6.1` tag. Documentation
+only; no build or test was run for it.
 
 **Tag target.** The commit adds the `### RNS 1.6.1` section and moves the
 unchanged "Verified Retrieval" and "Release Signatures" text from 1.6.0 to
@@ -1574,7 +1688,7 @@ Android-specific, it runs for any split-mode client that finds no known
 destinations file. The section is release communication,
 not evidence: the evidence for each commit is its own row.
 
-**Proposed disposition:** Non-runtime.
+**Final disposition:** Non-runtime.
 
 ## Decisions (2026-11-20)
 
@@ -1597,6 +1711,9 @@ utilities included.
    `959bb94f`, see commit 24. Commit 28 mapped in `dc8c5bf0`: its guard
    never fires upstream (`Packet.unpack` does not raise), so the analysis
    is unchanged, see commit 28.
+   Commit 31 mapped in `0e4160ab`: `-A` prints `Not yet implemented` after
+   the three RPC calls, and the analysis and the type names query it
+   alone used are removed, see commit 31.
 4. **Commit 2:** upstream's order dependence is reproduced: the disable key
    only takes effect when it appears before the count. The parser records key
    order for this.
@@ -1644,15 +1761,11 @@ utilities included.
 
 ## Integration Plan
 
-Mapping commits land in ancestry order, one per upstream commit. The
-interop-breaking changes are commits 9 and 27; the others are user-visible
-behaviour or CLI changes. Dependencies: 13 → 14 → 15; 21 → 27; 20 → 24 → 25 →
-26 → 28 → 31; 22 → 26 → 29 → 30 → 32. The rnpath and rnstatus commits each
-regenerate their fixtures from a disposable upstream worktree at that exact
-commit.
-
-Summary of proposed dispositions: 16 Needs port, 5 Needs coordinated port,
-1 Integrated, 8 Structurally covered, 4 Non-runtime.
+All 34 commits are mapped, one mapping commit each in ancestry order, with
+the follow-ups of decisions 7 and 8 and the filter logging commit
+`4e2459a9` beside them. Final dispositions: 21 Integrated, 9 Structurally
+covered, 4 Non-runtime. What remains is the promotion gates below,
+none of which is ticked yet.
 
 ## Promotion Gates
 
