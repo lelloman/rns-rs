@@ -184,6 +184,7 @@ the records below each cover a commit range.
 
 | Version | Audit | Final parity record |
 |---|---|---|
+| 1.6.1 rgit `f55c0c6e` (1.6.1 security hot-patch, untagged) | [Audit](reticulum-1.6.1-rgit-2-audit.md) | [Parity](reticulum-1.6.1-rgit-2-parity.md) |
 | 1.6.1 rgit `cff4d03f` (signed `1.6.1` release) | [Audit](reticulum-1.6.1-rgit-audit.md) | [Parity](reticulum-1.6.1-rgit-parity.md) |
 | 1.6.1 rgit `884f109b` (untagged) | [Audit](reticulum-1.6.1-audit.md) | [Parity](reticulum-1.6.1-parity.md) |
 | 1.6.0 rgit `c850cdac` | [Audit](reticulum-1.6.0-rgit-5-audit.md) | [Parity](reticulum-1.6.0-rgit-5-parity.md) |
