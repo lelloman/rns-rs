@@ -4,7 +4,7 @@ exit: Some(0)
 usage: rnpath [-h] [--config CONFIG] [--version] [-t] [-a] [-u] [-V] [-E]
               [-m hops] [-M hops] [-r] [-d] [-D] [-x] [-w seconds] [-R hash]
               [-i path] [-W seconds] [-b] [-B] [-U] [--duration DURATION]
-              [--reason REASON] [-p] [-j] [-A] [-v]
+              [--reason REASON] [-p] [-j] [-A] [--capture hops] [-v]
               [destination] [list_filter]
 
 Reticulum Path Management Utility
@@ -43,6 +43,7 @@ options:
                         instance
   -j, --json            output in JSON format
   -A, --analyze         Analyze tables
+  --capture hops        path to capture file for analyze mode
   -v, --verbose
 --- stderr
 --- end
@@ -61,7 +62,7 @@ exit: Some(2)
 usage: rnpath [-h] [--config CONFIG] [--version] [-t] [-a] [-u] [-V] [-E]
               [-m hops] [-M hops] [-r] [-d] [-D] [-x] [-w seconds] [-R hash]
               [-i path] [-W seconds] [-b] [-B] [-U] [--duration DURATION]
-              [--reason REASON] [-p] [-j] [-A] [-v]
+              [--reason REASON] [-p] [-j] [-A] [--capture hops] [-v]
               [destination] [list_filter]
 rnpath: error: unrecognized arguments: --no-such-option
 --- end

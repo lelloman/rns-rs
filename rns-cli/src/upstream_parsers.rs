@@ -405,6 +405,16 @@ pub const RNPATH: Parser = Parser {
             required: false,
         },
         Action {
+            opts: &["--capture"],
+            dest: "capture",
+            kind: Kind::Store,
+            nargs: Nargs::One,
+            metavar: Some("hops"),
+            help: Some("path to capture file for analyze mode"),
+            ty: Ty::Str,
+            required: false,
+        },
+        Action {
             opts: &[],
             dest: "destination",
             kind: Kind::Store,
