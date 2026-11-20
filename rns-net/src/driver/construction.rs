@@ -92,8 +92,9 @@ impl Driver {
             management_config: Default::default(),
             last_management_announce: 0.0,
             initial_announce_sent: false,
-            known_destinations: HashMap::new(),
-            known_destinations_flushed: HashMap::new(),
+            known: known_destinations::KnownDestinations::new(
+                runtime_config_defaults.known_destinations_cleanup_interval_ticks,
+            ),
             packet_signals: std::collections::VecDeque::new(),
             blackhole_dir: None,
             blackhole_sources: Vec::new(),
@@ -106,8 +107,6 @@ impl Driver {
             forced_local_bitrate: None,
             ratchet_store: None,
             ratchet_expiry_secs: rns_core::constants::RATCHET_EXPIRY as f64,
-            known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
-            known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
             rate_limiter_ttl_secs: DEFAULT_RATE_LIMITER_TTL_SECS,
             path_request_dest,
             proof_strategies: HashMap::new(),
@@ -159,15 +158,11 @@ impl Driver {
             state_snapshot_schedule: Default::default(),
             cache_cleanup_counter: 0,
             announce_cache_cleanup_counter: 0,
-            known_destinations_cleanup_interval_ticks: runtime_config_defaults
-                .known_destinations_cleanup_interval_ticks,
-            known_destination_cleanup: None,
             ratchet_cleanup_handle: None,
             folded: FoldedTimers::new(),
             rpc_service: None,
             probe_server: None,
             resource_preparation: None,
-            known_destinations_cap_evict_count: 0,
             announce_cache_cleanup_interval_ticks: runtime_config_defaults
                 .announce_cache_cleanup_interval_ticks,
             announce_cache_cleanup_batch_size: runtime_config_defaults

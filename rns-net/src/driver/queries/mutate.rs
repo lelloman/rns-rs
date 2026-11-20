@@ -141,7 +141,7 @@ impl Driver {
                 Some(QueryResponse::InjectIdentity(true))
             }
             QueryRequest::RestoreKnownDestination(entry) => {
-                self.known_destinations.insert(
+                self.known.entries.insert(
                     entry.dest_hash,
                     KnownDestinationState {
                         announced: crate::destination::AnnouncedIdentity {
@@ -300,7 +300,7 @@ impl Driver {
                 })
             }
             QueryRequest::RecallDestinationStamp { dest_hash } => {
-                QueryResponse::RecallDestinationStamp(self.known_destinations.get(&dest_hash).map(
+                QueryResponse::RecallDestinationStamp(self.known.entries.get(&dest_hash).map(
                     |state| crate::event::DestinationStampInfo {
                         stamp_value: state.stamp_value,
                         lr_cost: state.lr_cost,
@@ -334,11 +334,11 @@ impl Driver {
         seed: bool,
     ) -> QueryResponse {
         if seed {
-            self.known_destinations_flushed.clear();
+            self.known.flushed.clear();
         }
-        self.known_destinations_flushed.extend(stored);
+        self.known.flushed.extend(stored);
         for dest_hash in removed {
-            self.known_destinations_flushed.remove(&dest_hash);
+            self.known.flushed.remove(&dest_hash);
         }
         QueryResponse::KnownDestinationFlushRecorded
     }
@@ -550,7 +550,7 @@ impl Driver {
             },
             "global.known_destinations_ttl_secs" => match Self::expect_f64(value, key) {
                 Ok(value) => {
-                    self.known_destinations_ttl = value;
+                    self.known.ttl = value;
                     Ok(())
                 }
                 Err(err) => Err(err),
@@ -569,7 +569,7 @@ impl Driver {
             "global.known_destinations_cleanup_interval_ticks" => {
                 match Self::expect_u64(value, key) {
                     Ok(value) if value > 0 => {
-                        self.known_destinations_cleanup_interval_ticks = value as u32;
+                        self.known.cleanup_interval_ticks = value as u32;
                         Ok(())
                     }
                     Ok(_) => Err(RuntimeConfigError {
@@ -736,13 +736,13 @@ impl Driver {
                     .store(defaults.tick_interval_ms, Ordering::Relaxed);
             }
             "global.known_destinations_ttl_secs" => {
-                self.known_destinations_ttl = defaults.known_destinations_ttl;
+                self.known.ttl = defaults.known_destinations_ttl;
             }
             "global.rate_limiter_ttl_secs" => {
                 self.rate_limiter_ttl_secs = defaults.rate_limiter_ttl_secs;
             }
             "global.known_destinations_cleanup_interval_ticks" => {
-                self.known_destinations_cleanup_interval_ticks =
+                self.known.cleanup_interval_ticks =
                     defaults.known_destinations_cleanup_interval_ticks;
             }
             "global.announce_cache_cleanup_interval_ticks" => {

@@ -33,7 +33,7 @@ impl Driver {
         &self,
         dest_hash: &[u8; 16],
     ) -> Option<(InterfaceId, u8)> {
-        let announced = &self.known_destinations.get(dest_hash)?.announced;
+        let announced = &self.known.entries.get(dest_hash)?.announced;
         let iface = announced.receiving_interface;
         if iface.0 == 0 {
             return None;

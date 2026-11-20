@@ -6,13 +6,13 @@ impl Driver {
         dest_hash: [u8; 16],
         announced: crate::destination::AnnouncedIdentity,
     ) {
-        if let Some(existing) = self.known_destinations.get_mut(&dest_hash) {
+        if let Some(existing) = self.known.entries.get_mut(&dest_hash) {
             existing.announced = announced;
             return;
         }
 
         self.enforce_known_destination_cap(true);
-        self.known_destinations.insert(
+        self.known.entries.insert(
             dest_hash,
             KnownDestinationState {
                 announced,
@@ -33,7 +33,7 @@ impl Driver {
         stamp_value: rns_core::stamp::StampValue,
         lr_cost: Option<rns_core::stamp::StampCost>,
     ) {
-        if let Some(state) = self.known_destinations.get_mut(&dest_hash) {
+        if let Some(state) = self.known.entries.get_mut(&dest_hash) {
             state.stamp = stamp;
             state.stamp_value = stamp_value;
             state.lr_cost = lr_cost;
@@ -42,7 +42,8 @@ impl Driver {
 
     /// Recall the link request stamp cost announced by a destination.
     pub fn recall_link_cost(&self, dest_hash: &[u8; 16]) -> Option<rns_core::stamp::StampCost> {
-        self.known_destinations
+        self.known
+            .entries
             .get(dest_hash)
             .and_then(|state| state.lr_cost)
     }
@@ -51,7 +52,8 @@ impl Driver {
         &self,
         dest_hash: &[u8; 16],
     ) -> Option<rns_core::stamp::StampValue> {
-        self.known_destinations
+        self.known
+            .entries
             .get(dest_hash)
             .map(|state| state.stamp_value)
     }
@@ -103,11 +105,12 @@ impl Driver {
         &self,
     ) -> (Vec<(KnownDestinationEntry, u64)>, Vec<[u8; 16]>) {
         let changed = self
-            .known_destinations
+            .known
+            .entries
             .iter()
             .filter_map(|(dest_hash, state)| {
                 let fingerprint = Self::known_destination_fingerprint(state);
-                (self.known_destinations_flushed.get(dest_hash) != Some(&fingerprint)).then(|| {
+                (self.known.flushed.get(dest_hash) != Some(&fingerprint)).then(|| {
                     (
                         Self::known_destination_entry(*dest_hash, state),
                         fingerprint,
@@ -116,9 +119,10 @@ impl Driver {
             })
             .collect();
         let removed = self
-            .known_destinations_flushed
+            .known
+            .flushed
             .keys()
-            .filter(|dest_hash| !self.known_destinations.contains_key(*dest_hash))
+            .filter(|dest_hash| !self.known.entries.contains_key(*dest_hash))
             .copied()
             .collect();
         (changed, removed)
@@ -126,7 +130,8 @@ impl Driver {
 
     pub(crate) fn known_destination_entries(&self) -> Vec<KnownDestinationEntry> {
         let mut entries: Vec<_> = self
-            .known_destinations
+            .known
+            .entries
             .iter()
             .map(|(dest_hash, state)| Self::known_destination_entry(*dest_hash, state))
             .collect();
@@ -138,7 +143,7 @@ impl Driver {
     /// used now. A retained destination is left as it is, and like upstream
     /// this then returns `false`.
     pub(crate) fn mark_known_destination_used(&mut self, dest_hash: &[u8; 16]) -> bool {
-        let Some(state) = self.known_destinations.get_mut(dest_hash) else {
+        let Some(state) = self.known.entries.get_mut(dest_hash) else {
             return false;
         };
         if state.retained {
@@ -150,7 +155,7 @@ impl Driver {
     }
 
     pub(crate) fn retain_known_destination(&mut self, dest_hash: &[u8; 16]) -> bool {
-        let Some(state) = self.known_destinations.get_mut(dest_hash) else {
+        let Some(state) = self.known.entries.get_mut(dest_hash) else {
             return false;
         };
         state.retained = true;
@@ -159,7 +164,7 @@ impl Driver {
 
     pub(crate) fn retain_identity(&mut self, identity_hash: &[u8; 16]) -> bool {
         let mut retained = false;
-        for state in self.known_destinations.values_mut() {
+        for state in self.known.entries.values_mut() {
             if &state.announced.identity_hash.0 == identity_hash {
                 state.retained = true;
                 retained = true;
@@ -172,7 +177,7 @@ impl Driver {
     /// Like upstream, it counts as used now, so it is not cleaned up before
     /// it has gone unused for the usual time.
     pub(crate) fn unretain_known_destination(&mut self, dest_hash: &[u8; 16]) -> bool {
-        let Some(state) = self.known_destinations.get_mut(dest_hash) else {
+        let Some(state) = self.known.entries.get_mut(dest_hash) else {
             return false;
         };
         state.retained = false;
@@ -185,7 +190,8 @@ impl Driver {
         &self,
         dest_hash: &[u8; 16],
     ) -> Option<crate::destination::AnnouncedIdentity> {
-        self.known_destinations
+        self.known
+            .entries
             .get(dest_hash)
             .map(|state| state.announced.clone())
     }
@@ -510,15 +516,15 @@ impl Driver {
     }
 
     pub(crate) fn enforce_known_destination_cap(&mut self, for_insert: bool) -> usize {
-        if self.known_destinations_max_entries == usize::MAX {
+        if self.known.max_entries == usize::MAX {
             return 0;
         }
 
         let mut evicted = 0usize;
         while if for_insert {
-            self.known_destinations.len() >= self.known_destinations_max_entries
+            self.known.entries.len() >= self.known.max_entries
         } else {
-            self.known_destinations.len() > self.known_destinations_max_entries
+            self.known.entries.len() > self.known.max_entries
         } {
             let active_dests = self.engine.active_destination_hashes();
             let candidate = self
@@ -527,9 +533,9 @@ impl Driver {
             let Some(dest_hash) = candidate else {
                 break;
             };
-            if self.known_destinations.remove(&dest_hash).is_some() {
+            if self.known.entries.remove(&dest_hash).is_some() {
                 evicted += 1;
-                self.known_destinations_cap_evict_count += 1;
+                self.known.cap_evict_count += 1;
             } else {
                 break;
             }
@@ -542,7 +548,8 @@ impl Driver {
         include_protected: bool,
         active_dests: &std::collections::BTreeSet<[u8; 16]>,
     ) -> Option<[u8; 16]> {
-        self.known_destinations
+        self.known
+            .entries
             .iter()
             .filter(|(dest_hash, state)| {
                 include_protected

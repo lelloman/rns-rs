@@ -186,8 +186,8 @@ pub(super) fn new_driver(
     driver.async_announce_verification = true;
     driver.set_tick_interval_handle(Arc::clone(&tick_interval_ms));
     let accepting_work = driver.accepting_work_handle();
-    driver.known_destinations_ttl = config.known_destinations_ttl.as_secs_f64();
-    driver.known_destinations_max_entries = config.known_destinations_max_entries;
+    driver.known.ttl = config.known_destinations_ttl.as_secs_f64();
+    driver.known.max_entries = config.known_destinations_max_entries;
     driver.ratchet_store = config.ratchet_store.clone();
     driver.ratchet_expiry_secs = config.ratchet_expiry.as_secs_f64();
     driver.interface_writer_queue_capacity = config.interface_writer_queue_capacity;

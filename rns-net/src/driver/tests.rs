@@ -391,7 +391,7 @@ fn the_known_destinations_flush_gets_only_what_changed() {
 
     // A use changes one entry; a removal shows as removed.
     assert!(driver.mark_known_destination_used(&a));
-    driver.known_destinations.remove(&b);
+    driver.known.entries.remove(&b);
     let (changed, removed) = changes(&mut driver);
     assert_eq!(
         changed.iter().map(|(hash, _)| *hash).collect::<Vec<_>>(),
@@ -534,7 +534,7 @@ fn make_known_destination_state(
 fn know_identity(driver: &mut Driver, destination: [u8; 16], identity: &Identity) {
     let mut known = make_known_destination_state(destination, time::now(), InterfaceId(1));
     known.announced.public_key = identity.get_public_key().unwrap();
-    driver.known_destinations.insert(destination, known);
+    driver.known.entries.insert(destination, known);
 }
 
 fn sent_contains_linkclose(sent: &[Vec<u8>], link_id: [u8; 16]) -> bool {
@@ -6190,7 +6190,7 @@ fn query_path_table() {
 
     // Upstream 21170877: entries carry the known destination's stamp value
     // and link request cost, and neither once it is no longer known.
-    let known = driver.known_destinations.get_mut(&dest_hash).unwrap();
+    let known = driver.known.entries.get_mut(&dest_hash).unwrap();
     known.stamp_value = rns_core::stamp::StampValue::from_fp(25 * 256 + 64);
     known.lr_cost = Some(rns_core::stamp::StampCost::from_fp(4915));
     let QueryResponse::PathTable(entries) = driver.handle_path_table_query(None) else {
@@ -6199,7 +6199,7 @@ fn query_path_table() {
     assert_eq!(entries[0].stamp_value.map(|v| v.as_f64()), Some(25.25));
     assert_eq!(entries[0].lr_cost.map(|c| c.fp()), Some(4915));
 
-    driver.known_destinations.remove(&dest_hash);
+    driver.known.entries.remove(&dest_hash);
     let QueryResponse::PathTable(entries) = driver.handle_path_table_query(None) else {
         panic!("unexpected response");
     };
@@ -6913,7 +6913,7 @@ fn create_link_uses_known_destination_interface_without_path() {
         .insert(InterfaceId(2), make_entry(2, Box::new(writer2), true));
 
     let dest_hash = [0xD1; 16];
-    driver.known_destinations.insert(
+    driver.known.entries.insert(
         dest_hash,
         make_known_destination_state(dest_hash, 10.0, InterfaceId(2)),
     );
@@ -6988,7 +6988,7 @@ fn create_link_ignores_sentinel_known_destination_interface() {
         .insert(InterfaceId(2), make_entry(2, Box::new(writer2), true));
 
     let dest_hash = [0xD2; 16];
-    driver.known_destinations.insert(
+    driver.known.entries.insert(
         dest_hash,
         make_known_destination_state(dest_hash, 10.0, InterfaceId(0)),
     );
@@ -9570,8 +9570,8 @@ fn announce_received_populates_known_destinations() {
     driver.run();
 
     // known_destinations should be populated
-    assert!(driver.known_destinations.contains_key(&dest_hash));
-    let recalled = &driver.known_destinations[&dest_hash];
+    assert!(driver.known.entries.contains_key(&dest_hash));
+    let recalled = &driver.known.entries[&dest_hash];
     assert_eq!(recalled.announced.dest_hash.0, dest_hash);
     assert_eq!(recalled.announced.identity_hash.0, *identity.hash());
     assert_eq!(
@@ -9613,12 +9613,12 @@ fn known_destinations_cleanup_respects_ttl() {
         Box::new(cbs),
     );
 
-    driver.known_destinations_ttl = 10.0;
+    driver.known.ttl = 10.0;
     driver.cache_cleanup_counter = 3599;
 
     let stale_dest = [0x11; 16];
     let fresh_dest = [0x22; 16];
-    driver.known_destinations.insert(
+    driver.known.entries.insert(
         stale_dest,
         KnownDestinationState {
             announced: crate::destination::AnnouncedIdentity {
@@ -9640,7 +9640,7 @@ fn known_destinations_cleanup_respects_ttl() {
             lr_cost: None,
         },
     );
-    driver.known_destinations.insert(
+    driver.known.entries.insert(
         fresh_dest,
         KnownDestinationState {
             announced: crate::destination::AnnouncedIdentity {
@@ -9667,73 +9667,74 @@ fn known_destinations_cleanup_respects_ttl() {
     tx.send(Event::Shutdown).unwrap();
     driver.run();
 
-    assert!(!driver.known_destinations.contains_key(&stale_dest));
-    assert!(driver.known_destinations.contains_key(&fresh_dest));
+    assert!(!driver.known.entries.contains_key(&stale_dest));
+    assert!(driver.known.entries.contains_key(&fresh_dest));
 }
 
 #[test]
 fn known_destinations_cleanup_is_incremental_and_bounded_per_tick() {
     let mut driver = new_test_driver();
-    driver.known_destinations_ttl = 1.0;
-    driver.known_destinations_cleanup_interval_ticks = 1;
+    driver.known.ttl = 1.0;
+    driver.known.cleanup_interval_ticks = 1;
     let stale_at = time::now() - 60.0;
     for n in 0..(KNOWN_DESTINATION_CLEANUP_BATCH_SIZE + 1) {
         let mut dest = [0u8; 16];
         dest[..8].copy_from_slice(&(n as u64).to_be_bytes());
-        driver.known_destinations.insert(
+        driver.known.entries.insert(
             dest,
             make_known_destination_state(dest, stale_at, InterfaceId(1)),
         );
     }
 
     driver.handle_tick_event();
-    assert_eq!(driver.known_destinations.len(), 1);
-    assert!(driver.known_destination_cleanup.is_some());
+    assert_eq!(driver.known.entries.len(), 1);
+    assert!(driver.known.cleanup.is_some());
 
     driver.handle_tick_event();
-    assert!(driver.known_destinations.is_empty());
-    assert!(driver.known_destination_cleanup.is_none());
+    assert!(driver.known.entries.is_empty());
+    assert!(driver.known.cleanup.is_none());
 }
 
 #[test]
 fn incremental_cleanup_rechecks_entries_changed_after_snapshot() {
     let mut driver = new_test_driver();
-    driver.known_destinations_ttl = 1.0;
-    driver.known_destinations_cleanup_interval_ticks = 1;
+    driver.known.ttl = 1.0;
+    driver.known.cleanup_interval_ticks = 1;
     let stale_at = time::now() - 60.0;
     for n in 0..(KNOWN_DESTINATION_CLEANUP_BATCH_SIZE + 1) {
         let mut dest = [0u8; 16];
         dest[..8].copy_from_slice(&(n as u64).to_be_bytes());
-        driver.known_destinations.insert(
+        driver.known.entries.insert(
             dest,
             make_known_destination_state(dest, stale_at, InterfaceId(1)),
         );
     }
 
     driver.handle_tick_event();
-    let remaining = *driver.known_destinations.keys().next().unwrap();
+    let remaining = *driver.known.entries.keys().next().unwrap();
     driver
-        .known_destinations
+        .known
+        .entries
         .get_mut(&remaining)
         .unwrap()
         .announced
         .received_at = time::now();
     driver.handle_tick_event();
 
-    assert!(driver.known_destinations.contains_key(&remaining));
-    assert!(driver.known_destination_cleanup.is_none());
+    assert!(driver.known.entries.contains_key(&remaining));
+    assert!(driver.known.cleanup.is_none());
 }
 
 #[test]
 fn incremental_cleanup_does_not_remove_destinations_added_mid_pass() {
     let mut driver = new_test_driver();
-    driver.known_destinations_ttl = 1.0;
-    driver.known_destinations_cleanup_interval_ticks = 1;
+    driver.known.ttl = 1.0;
+    driver.known.cleanup_interval_ticks = 1;
     let stale_at = time::now() - 60.0;
     for n in 0..(KNOWN_DESTINATION_CLEANUP_BATCH_SIZE + 1) {
         let mut dest = [0u8; 16];
         dest[..8].copy_from_slice(&(n as u64).to_be_bytes());
-        driver.known_destinations.insert(
+        driver.known.entries.insert(
             dest,
             make_known_destination_state(dest, stale_at, InterfaceId(1)),
         );
@@ -9741,13 +9742,13 @@ fn incremental_cleanup_does_not_remove_destinations_added_mid_pass() {
 
     driver.handle_tick_event();
     let added = [0xFA; 16];
-    driver.known_destinations.insert(
+    driver.known.entries.insert(
         added,
         make_known_destination_state(added, stale_at, InterfaceId(1)),
     );
     driver.handle_tick_event();
 
-    assert!(driver.known_destinations.contains_key(&added));
+    assert!(driver.known.entries.contains_key(&added));
 }
 
 #[test]
@@ -9782,16 +9783,16 @@ fn known_destinations_cleanup_prunes_ratchets_to_surviving_destinations() {
 
     let store = Arc::new(TestRatchetStore::default());
     driver.ratchet_store = Some(store.clone());
-    driver.known_destinations_ttl = 10.0;
+    driver.known.ttl = 10.0;
     driver.cache_cleanup_counter = 3599;
 
     let stale_dest = [0x31; 16];
     let fresh_dest = [0x32; 16];
-    driver.known_destinations.insert(
+    driver.known.entries.insert(
         stale_dest,
         make_known_destination_state(stale_dest, time::now() - 20.0, InterfaceId(1)),
     );
-    driver.known_destinations.insert(
+    driver.known.entries.insert(
         fresh_dest,
         make_known_destination_state(fresh_dest, time::now() - 5.0, InterfaceId(1)),
     );
@@ -9809,7 +9810,7 @@ fn known_destinations_cleanup_prunes_ratchets_to_surviving_destinations() {
 #[test]
 fn known_destinations_cap_prefers_evicting_oldest_non_active_non_local() {
     let mut driver = new_test_driver();
-    driver.known_destinations_max_entries = 2;
+    driver.known.max_entries = 2;
     driver.engine.register_interface(make_interface_info(1));
 
     let active_dest = [0x11; 16];
@@ -9844,16 +9845,16 @@ fn known_destinations_cap_prefers_evicting_oldest_non_active_non_local() {
         make_announced_identity(new_dest, 30.0, InterfaceId(1)),
     );
 
-    assert!(driver.known_destinations.contains_key(&active_dest));
-    assert!(!driver.known_destinations.contains_key(&evictable_dest));
-    assert!(driver.known_destinations.contains_key(&new_dest));
-    assert_eq!(driver.known_destinations_cap_evict_count, 1);
+    assert!(driver.known.entries.contains_key(&active_dest));
+    assert!(!driver.known.entries.contains_key(&evictable_dest));
+    assert!(driver.known.entries.contains_key(&new_dest));
+    assert_eq!(driver.known.cap_evict_count, 1);
 }
 
 #[test]
 fn known_destinations_cap_falls_back_to_oldest_overall_when_all_protected() {
     let mut driver = new_test_driver();
-    driver.known_destinations_max_entries = 2;
+    driver.known.max_entries = 2;
 
     let local_oldest = [0x41; 16];
     let local_newer = [0x42; 16];
@@ -9878,29 +9879,27 @@ fn known_destinations_cap_falls_back_to_oldest_overall_when_all_protected() {
         make_announced_identity(new_dest, 30.0, InterfaceId(1)),
     );
 
-    assert!(!driver.known_destinations.contains_key(&local_oldest));
-    assert!(driver.known_destinations.contains_key(&local_newer));
-    assert!(driver.known_destinations.contains_key(&new_dest));
-    assert_eq!(driver.known_destinations_cap_evict_count, 1);
+    assert!(!driver.known.entries.contains_key(&local_oldest));
+    assert!(driver.known.entries.contains_key(&local_newer));
+    assert!(driver.known.entries.contains_key(&new_dest));
+    assert_eq!(driver.known.cap_evict_count, 1);
 }
 
 #[test]
 fn known_destinations_cap_update_existing_entry_does_not_evict() {
     let mut driver = new_test_driver();
-    driver.known_destinations_max_entries = 1;
+    driver.known.max_entries = 1;
 
     let dest = [0x61; 16];
     driver.upsert_known_destination(dest, make_announced_identity(dest, 10.0, InterfaceId(1)));
     driver.upsert_known_destination(dest, make_announced_identity(dest, 20.0, InterfaceId(2)));
 
-    assert_eq!(driver.known_destinations.len(), 1);
+    assert_eq!(driver.known.entries.len(), 1);
     assert_eq!(
-        driver.known_destinations[&dest]
-            .announced
-            .receiving_interface,
+        driver.known.entries[&dest].announced.receiving_interface,
         InterfaceId(2)
     );
-    assert_eq!(driver.known_destinations_cap_evict_count, 0);
+    assert_eq!(driver.known.cap_evict_count, 0);
 }
 
 #[test]
@@ -9933,19 +9932,19 @@ fn known_destinations_cleanup_enforces_cap() {
         Box::new(cbs),
     );
 
-    driver.known_destinations_ttl = 1000.0;
-    driver.known_destinations_max_entries = 2;
+    driver.known.ttl = 1000.0;
+    driver.known.max_entries = 2;
     driver.cache_cleanup_counter = 3599;
     let now = time::now();
-    driver.known_destinations.insert(
+    driver.known.entries.insert(
         [0x71; 16],
         make_known_destination_state([0x71; 16], now - 30.0, InterfaceId(1)),
     );
-    driver.known_destinations.insert(
+    driver.known.entries.insert(
         [0x72; 16],
         make_known_destination_state([0x72; 16], now - 20.0, InterfaceId(1)),
     );
-    driver.known_destinations.insert(
+    driver.known.entries.insert(
         [0x73; 16],
         make_known_destination_state([0x73; 16], now - 10.0, InterfaceId(1)),
     );
@@ -9954,9 +9953,9 @@ fn known_destinations_cleanup_enforces_cap() {
     tx.send(Event::Shutdown).unwrap();
     driver.run();
 
-    assert_eq!(driver.known_destinations.len(), 2);
-    assert!(!driver.known_destinations.contains_key(&[0x71; 16]));
-    assert_eq!(driver.known_destinations_cap_evict_count, 1);
+    assert_eq!(driver.known.entries.len(), 2);
+    assert!(!driver.known.entries.contains_key(&[0x71; 16]));
+    assert_eq!(driver.known.cap_evict_count, 1);
 }
 
 #[test]
@@ -9968,7 +9967,7 @@ fn recall_identity_marks_known_destination_used() {
     let response = driver.handle_query_mut(QueryRequest::RecallIdentity { dest_hash: dest });
     assert!(matches!(response, QueryResponse::RecallIdentity(Some(_))));
 
-    let entry = driver.known_destinations.get(&dest).unwrap();
+    let entry = driver.known.entries.get(&dest).unwrap();
     assert!(entry.was_used);
     assert!(entry.last_used_at.is_some());
 }
@@ -10002,7 +10001,7 @@ fn retained_known_destination_survives_cleanup() {
         tx.clone(),
         Box::new(cbs),
     );
-    driver.known_destinations_ttl = 10.0;
+    driver.known.ttl = 10.0;
     driver.cache_cleanup_counter = 3599;
 
     let dest = [0x82; 16];
@@ -10016,7 +10015,7 @@ fn retained_known_destination_survives_cleanup() {
     tx.send(Event::Shutdown).unwrap();
     driver.run();
 
-    assert!(driver.known_destinations.contains_key(&dest));
+    assert!(driver.known.entries.contains_key(&dest));
 }
 
 #[test]
@@ -10041,9 +10040,9 @@ fn retain_identity_marks_all_matching_known_destinations() {
 
     assert!(driver.retain_identity(&identity_hash));
 
-    assert!(driver.known_destinations[&dest_a].retained);
-    assert!(driver.known_destinations[&dest_b].retained);
-    assert!(!driver.known_destinations[&dest_c].retained);
+    assert!(driver.known.entries[&dest_a].retained);
+    assert!(driver.known.entries[&dest_b].retained);
+    assert!(!driver.known.entries[&dest_c].retained);
 }
 
 #[test]
@@ -10053,7 +10052,7 @@ fn retain_identity_returns_false_when_no_known_destination_matches() {
     driver.upsert_known_destination(dest, make_announced_identity(dest, 10.0, InterfaceId(1)));
 
     assert!(!driver.retain_identity(&[0xFE; 16]));
-    assert!(!driver.known_destinations[&dest].retained);
+    assert!(!driver.known.entries[&dest].retained);
 }
 
 #[test]
@@ -10085,11 +10084,11 @@ fn used_known_destination_cleanup_uses_last_used_time() {
         tx.clone(),
         Box::new(cbs),
     );
-    driver.known_destinations_ttl = 10.0;
+    driver.known.ttl = 10.0;
     driver.cache_cleanup_counter = 3599;
 
     let dest = [0x83; 16];
-    driver.known_destinations.insert(
+    driver.known.entries.insert(
         dest,
         KnownDestinationState {
             announced: make_announced_identity(dest, time::now() - 50.0, InterfaceId(1)),
@@ -10106,7 +10105,7 @@ fn used_known_destination_cleanup_uses_last_used_time() {
     tx.send(Event::Shutdown).unwrap();
     driver.run();
 
-    assert!(driver.known_destinations.contains_key(&dest));
+    assert!(driver.known.entries.contains_key(&dest));
 }
 
 #[test]
@@ -11803,7 +11802,7 @@ fn inbound_proof_with_valid_signature_fires_callback() {
     // Create real identity and add to known_destinations
     let identity = Identity::new(&mut OsRng);
     let pub_key = identity.get_public_key();
-    driver.known_destinations.insert(
+    driver.known.entries.insert(
         dest,
         KnownDestinationState {
             announced: crate::destination::AnnouncedIdentity {
@@ -11927,7 +11926,7 @@ fn inbound_proof_with_invalid_signature_rejected() {
     // Create identity and add to known_destinations
     let identity = Identity::new(&mut OsRng);
     let pub_key = identity.get_public_key();
-    driver.known_destinations.insert(
+    driver.known.entries.insert(
         dest,
         KnownDestinationState {
             announced: crate::destination::AnnouncedIdentity {
@@ -13217,8 +13216,8 @@ fn announce_stores_receiving_interface_in_known_destinations() {
     driver.run();
 
     // The identity should be cached with the correct receiving interface
-    assert_eq!(driver.known_destinations.len(), 1);
-    let (_, announced) = driver.known_destinations.iter().next().unwrap();
+    assert_eq!(driver.known.entries.len(), 1);
+    let (_, announced) = driver.known.entries.iter().next().unwrap();
     assert_eq!(
         announced.announced.receiving_interface,
         InterfaceId(1),
@@ -13240,7 +13239,7 @@ fn frame_from_removed_interface_is_dropped() {
         Some(10.5),
     );
 
-    assert!(driver.known_destinations.is_empty());
+    assert!(driver.known.entries.is_empty());
     assert_eq!(driver.engine.path_table_count(), 0);
 }
 
@@ -13297,8 +13296,8 @@ fn announce_on_different_interfaces_stores_correct_id() {
     tx.send(Event::Shutdown).unwrap();
     driver.run();
 
-    assert_eq!(driver.known_destinations.len(), 1);
-    let (_, announced) = driver.known_destinations.iter().next().unwrap();
+    assert_eq!(driver.known.entries.len(), 1);
+    let (_, announced) = driver.known.entries.iter().next().unwrap();
     assert_eq!(announced.announced.receiving_interface, InterfaceId(2));
 }
 
@@ -13360,7 +13359,8 @@ fn inject_identity_stores_sentinel_interface() {
     }
 
     let announced = driver
-        .known_destinations
+        .known
+        .entries
         .get(&dest_hash)
         .expect("identity should be cached");
     assert_eq!(
@@ -13457,7 +13457,7 @@ fn inject_identity_overwrites_previous_entry() {
     ));
 
     // Should have the second injection's data
-    let announced = driver.known_destinations.get(&dest_hash).unwrap();
+    let announced = driver.known.entries.get(&dest_hash).unwrap();
     assert_eq!(announced.announced.app_data, Some(b"second".to_vec()));
     assert_eq!(announced.announced.hops, 3);
     assert_eq!(announced.announced.received_at, 20.0);
@@ -13529,8 +13529,8 @@ fn re_announce_updates_receiving_interface() {
     driver.run();
 
     // Both should be cached with their respective interface IDs
-    assert_eq!(driver.known_destinations.len(), 2);
-    for announced in driver.known_destinations.values() {
+    assert_eq!(driver.known.entries.len(), 2);
+    for announced in driver.known.entries.values() {
         // We can't predict ordering, but each should have a valid non-zero interface
         assert!(
             announced.announced.receiving_interface == InterfaceId(1)
@@ -13539,7 +13539,8 @@ fn re_announce_updates_receiving_interface() {
     }
     // Verify we actually got both interfaces represented
     let ifaces: Vec<_> = driver
-        .known_destinations
+        .known
+        .entries
         .values()
         .map(|a| a.announced.receiving_interface)
         .collect();
@@ -14341,7 +14342,7 @@ fn stamped_link_driver(
         .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
     let mut state = make_known_destination_state(dest, time::now(), InterfaceId(1));
     state.lr_cost = lr_cost.map(|cost| StampCost::from_whole(u32::from(cost)));
-    driver.known_destinations.insert(dest, state);
+    driver.known.entries.insert(dest, state);
     (driver, sent)
 }
 
@@ -15871,7 +15872,7 @@ fn single_packet_proofs_are_signed_and_checked_on_the_proof_pool() {
     let peer = [0xD1; 16];
     let mut known = make_known_destination_state(peer, time::now(), InterfaceId(1));
     known.announced.public_key = public;
-    driver.known_destinations.insert(peer, known);
+    driver.known.entries.insert(peer, known);
     let (good, forged) = ([0x41; 32], [0x42; 32]);
     for hash in [good, forged] {
         driver.sent_packets.insert(hash, (peer, time::now()));
