@@ -197,17 +197,39 @@ impl Supervisor {
     ///
     /// A process that fails to start or restart, an error from
     /// `on_started`, a failure to wait on a child, or a control command
-    /// naming an unknown process. Children still running are not stopped
-    /// when an error is returned.
+    /// naming an unknown process. The children started so far are stopped
+    /// before the error is returned.
     pub fn run_with_started_hook<F>(&self, on_started: F) -> Result<i32, String>
     where
         F: FnOnce() -> Result<(), String>,
     {
-        let mut children = self
-            .specs
-            .iter()
-            .map(|spec| spawn_child(spec, self.shared_state.as_ref(), self.log_store.clone()))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut children = Vec::with_capacity(self.specs.len());
+        let result = self.spawn_and_supervise(&mut children, on_started);
+        if result.is_err() {
+            // Don't leave the processes started so far running unsupervised.
+            terminate_children(&mut children, self.shared_state.as_ref(), &self.readiness);
+        }
+        result
+    }
+
+    /// Start the processes into `children` and supervise them until a
+    /// shutdown or an exit that is not restarted. On an error, the caller
+    /// stops the processes in `children`.
+    fn spawn_and_supervise<F>(
+        &self,
+        children: &mut Vec<ManagedChild>,
+        on_started: F,
+    ) -> Result<i32, String>
+    where
+        F: FnOnce() -> Result<(), String>,
+    {
+        for spec in &self.specs {
+            children.push(spawn_child(
+                spec,
+                self.shared_state.as_ref(),
+                self.log_store.clone(),
+            )?);
+        }
         let mut unexpected_restart_counts = HashMap::new();
 
         on_started()?;
@@ -222,13 +244,13 @@ impl Supervisor {
         loop {
             if stop {
                 log::info!("shutdown requested");
-                self.drain_rnsd(&children, "supervisor shutdown");
-                terminate_children(&mut children, self.shared_state.as_ref(), &self.readiness);
+                self.drain_rnsd(children, "supervisor shutdown");
+                terminate_children(children, self.shared_state.as_ref(), &self.readiness);
                 return Ok(0);
             }
 
             while let Some(command) = control.as_ref().and_then(|rx| rx.try_recv().ok()) {
-                self.handle_control_command(command, &mut children)?;
+                self.handle_control_command(command, children)?;
             }
 
             if Instant::now() >= next_probe {
@@ -241,12 +263,12 @@ impl Supervisor {
                 next_probe = Instant::now() + interval;
             }
 
-            if let Some((role, status)) = check_exits(&mut children)? {
+            if let Some((role, status)) = check_exits(children)? {
                 log::warn!("{} exited with status {}", role.display_name(), status);
                 if self.restart_unexpected_exit(
                     role,
                     status,
-                    &mut children,
+                    children,
                     &mut unexpected_restart_counts,
                 )? {
                     continue;
@@ -254,7 +276,7 @@ impl Supervisor {
                 if let Some(state) = self.shared_state.as_ref() {
                     mark_process_stopped(state, role.display_name(), status.code());
                 }
-                terminate_children(&mut children, self.shared_state.as_ref(), &self.readiness);
+                terminate_children(children, self.shared_state.as_ref(), &self.readiness);
                 return Ok(exit_code(status));
             }
 
@@ -263,7 +285,7 @@ impl Supervisor {
             // as often as the threads before did.
             exit_watches.retain(|pid, _| children.iter().any(|c| c.child.id() == *pid));
             let mut watched = true;
-            for managed in &children {
+            for managed in children.iter() {
                 let pid = managed.child.id();
                 if let std::collections::hash_map::Entry::Vacant(entry) = exit_watches.entry(pid) {
                     match wake::exit_watch(pid) {
@@ -512,6 +534,52 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::{Arc, RwLock};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn an_error_after_starting_stops_the_started_processes() {
+        let dir = std::env::temp_dir().join(format!(
+            "rns-server-failed-start-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid_file = dir.join("pid");
+        let specs = vec![ProcessSpec {
+            role: Role::Sentineld,
+            command: ProcessCommand::External(PathBuf::from("/bin/sh")),
+            args: vec![
+                "-c".into(),
+                format!("echo $$ > {}; exec sleep 30", pid_file.display()),
+            ],
+        }];
+        let supervisor = Supervisor::new(SupervisorConfig {
+            specs,
+            shared_state: None,
+            control_rx: None,
+            readiness: Vec::new(),
+            log_dir: None,
+            rnsd_drain: None,
+        });
+
+        let mut pid = String::new();
+        let result = supervisor.run_with_started_hook(|| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while pid.is_empty() && std::time::Instant::now() < deadline {
+                pid = std::fs::read_to_string(&pid_file)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err("startup failed".into())
+        });
+
+        assert_eq!(result, Err("startup failed".to_string()));
+        assert!(!pid.is_empty(), "the process never ran");
+        // Stopped and reaped.
+        assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn supervisor_holds_expected_specs() {
