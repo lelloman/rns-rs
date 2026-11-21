@@ -94,6 +94,12 @@ shifts were observed below 0.5 %.
 | `resource_assembly_64k` | a 64 KiB Resource on a fresh `ResourceReceiver`: advertisement, accept, all parts, hashmap update, `assemble` with hash check (no encryption, no compression) | 10 |
 | `msgpack_roundtrip` | `msgpack::pack` + `unpack_exact` of a request-like structure | 2000 |
 | `channel_envelope_roundtrip` | `pack_envelope` + `unpack_envelope`, 200 B | 5000 |
+| `driver_inbound_local` | rns-net `Driver`: an `Event::Frame` of a 128 B data packet for a registered SINGLE destination, delivered raw to the application callback | 1000 |
+| `driver_inbound_forward` | rns-net `Driver` of a transport node: an `Event::Frame` of a HEADER_2 data packet for a known path (257 paths), forwarded out of another interface | 1000 |
+| `driver_inbound_link_data` | rns-net `Driver`: an `Event::Frame` of 256 B link DATA on a link the driver answered, through `LinkManager` and the link-action dispatch to the callback | 1000 |
+| `link_data_receive` | `LinkManager::handle_local_delivery_into` of 256 B link DATA on an active link (decrypt, `LinkDataReceived`) | 1000 |
+| `link_resource_receive` | an 8 KiB Resource (stored, 18 parts) replayed into a link's `LinkManager`: advertisement, every part, assembly with hash check, then `tick` | 20 |
+| `pickle_decode_rpc` | `pickle::decode` of an RPC request and of a six-entry path table response | 2000 |
 
 Notes on the boundaries:
 
@@ -105,6 +111,30 @@ Notes on the boundaries:
   operation feeds that recording to a new receiver. Sender work is excluded.
 - Results and outputs of each operation are passed through `black_box`, so
   nothing is optimised away.
+- The `driver_*` cases build an rns-net `Driver` without its event loop and
+  hand it each frame through `Driver::handle_event_for_bench`: the handling
+  one loop turn gives the event (clock held for the turn), then the writer
+  wake and flush the loop does once its queue is empty. Each frame is first
+  copied into fresh `PacketBytes`, as an interface reader hands it over. The
+  interfaces' writers are inline sinks (no worker threads), the callbacks
+  only count, and the engine's table hashing is seeded from `FixedRng`. As in
+  `transport_forward`, the engine forgets the packet's hash after each frame.
+- `driver_inbound_link_data` sets its link up with a real handshake against
+  an initiator `LinkManager` during setup; the driver's side of the link
+  uses the OS random generator, which changes key bytes but not the counts.
+  `link_data_receive` and `link_resource_receive` use two `LinkManager`s
+  handshaking with `FixedRng`.
+- `link_resource_receive` records the initiator's packets of one live
+  transfer (advertisement and parts; the responder's requests are answered
+  live during setup) and replays them into the responder each operation.
+  The closing `LinkManager::tick` forgets the concluded Resource, which would
+  otherwise refuse the same advertisement again; it is part of the measured
+  operation. Its 18 parts fit the first four windows (4, 5, 6, 7 parts), so the
+  replay does not depend on rate-based window growth.
+- `pickle_decode_rpc` decodes fixed bytes as rns-net's own encoder writes
+  them (protocol 2, no memo opcodes). Memoized pickles, as Python writes
+  them, fill the decoder's memo, a `HashMap` with a per-process random
+  seed whose drop order moves glibc's allocator by about 1 % between runs.
 
 Adding a case: add it to `CASES` in `tools/rns-bench/src/hotpath.rs`. `check`
 reports a case missing from the baseline as `new` without gating it, and fails

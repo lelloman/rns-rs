@@ -22,6 +22,8 @@ use rns_crypto::identity::Identity;
 use rns_crypto::FixedRng;
 use std::hint::black_box;
 
+mod net;
+
 /// Iterations run before the measured window: first-use initialisation
 /// (lazy statics, buffer growth in reused state) stays out of the numbers.
 const WARMUP: u64 = 3;
@@ -132,6 +134,42 @@ pub(crate) const CASES: &[Case] = &[
         iterations: 5000,
         about: "channel pack_envelope + unpack_envelope, 200 B payload",
         build: channel_envelope_roundtrip,
+    },
+    Case {
+        name: "driver_inbound_local",
+        iterations: 1000,
+        about: "Driver: Frame event of a data packet for a registered destination, to the callback",
+        build: net::driver_inbound_local,
+    },
+    Case {
+        name: "driver_inbound_forward",
+        iterations: 1000,
+        about: "Driver: Frame event of a HEADER_2 data packet for a known path, forwarded",
+        build: net::driver_inbound_forward,
+    },
+    Case {
+        name: "driver_inbound_link_data",
+        iterations: 1000,
+        about: "Driver: Frame event of link DATA, 256 B, through LinkManager to the callback",
+        build: net::driver_inbound_link_data,
+    },
+    Case {
+        name: "link_data_receive",
+        iterations: 1000,
+        about: "LinkManager::handle_local_delivery of link DATA, 256 B, on an active link",
+        build: net::link_data_receive,
+    },
+    Case {
+        name: "link_resource_receive",
+        iterations: 20,
+        about: "LinkManager: 8 KiB Resource replayed into a link: advertisement, parts, assembly",
+        build: net::link_resource_receive,
+    },
+    Case {
+        name: "pickle_decode_rpc",
+        iterations: 2000,
+        about: "pickle::decode of an RPC request and a six-entry path table response",
+        build: net::pickle_decode_rpc,
     },
 ];
 
