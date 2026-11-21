@@ -189,11 +189,11 @@ impl ResourceSender {
         };
         let transfer_size = encrypted_data.len();
         if sdu == 0 {
-            if let Some(mut mac) = mac.take() {
-                let signed = encrypted_data.len() - 32;
-                mac.update(&encrypted_data[..signed]);
-                let tag = mac.finalize();
-                encrypted_data[signed..].copy_from_slice(&tag);
+            if let (Some(mut mac), Some((signed, tag_slot))) =
+                (mac.take(), encrypted_data.split_last_chunk_mut::<32>())
+            {
+                mac.update(signed);
+                *tag_slot = mac.finalize();
             }
         }
 
@@ -395,7 +395,13 @@ impl ResourceSender {
             1
         };
 
-        if request_data.len() < pad + 32 || request_data[pad..pad + 32] != self.resource_hash {
+        let Some((resource_hash, requested)) = request_data
+            .get(pad..)
+            .and_then(<[u8]>::split_first_chunk::<32>)
+        else {
+            return;
+        };
+        if *resource_hash != self.resource_hash {
             return;
         }
 
@@ -412,7 +418,7 @@ impl ResourceSender {
         self.last_activity = now;
 
         // Requested map hashes, read in place.
-        let map_hashes_requested = request_data[pad + 32..].chunks_exact(RESOURCE_MAPHASH_LEN);
+        let map_hashes_requested = requested.chunks_exact(RESOURCE_MAPHASH_LEN);
 
         // Search for requested parts within guard window
         let search_start = self.receiver_min_consecutive_height;
@@ -421,14 +427,21 @@ impl ResourceSender {
             self.total_parts,
         );
 
-        for part_idx in search_start..search_end {
+        let window = self
+            .part_hashes
+            .iter()
+            .zip(self.sent_indices.iter_mut())
+            .enumerate()
+            .take(search_end)
+            .skip(search_start);
+        for (part_idx, (part_hash, sent)) in window {
             if map_hashes_requested
                 .clone()
-                .any(|h| h == self.part_hashes[part_idx].as_slice())
+                .any(|h| h == part_hash.as_slice())
             {
-                parts.push((part_idx, self.sent_indices[part_idx]));
-                if !self.sent_indices[part_idx] {
-                    self.sent_indices[part_idx] = true;
+                parts.push((part_idx, *sent));
+                if !*sent {
+                    *sent = true;
                     self.sent_parts += 1;
                 }
                 self.last_part_sent = now;
@@ -467,13 +480,12 @@ impl ResourceSender {
     ) -> Result<Vec<u8>, ResourceError> {
         let mut part_index = self.receiver_min_consecutive_height;
         if !hashmap_is_empty {
-            if request_data.len() < 1 + RESOURCE_MAPHASH_LEN {
+            let Some(last_map_hash) = request_data
+                .get(1..)
+                .and_then(<[u8]>::first_chunk::<RESOURCE_MAPHASH_LEN>)
+            else {
                 return Err(ResourceError::InvalidState);
-            }
-
-            let last_map_hash_bytes = &request_data[1..1 + RESOURCE_MAPHASH_LEN];
-            let mut last_map_hash = [0u8; RESOURCE_MAPHASH_LEN];
-            last_map_hash.copy_from_slice(last_map_hash_bytes);
+            };
 
             // Find the part index of the last map hash
             let search_start = self.receiver_min_consecutive_height;
@@ -482,9 +494,15 @@ impl ResourceSender {
                 self.total_parts,
             );
 
-            for idx in search_start..search_end {
+            let window = self
+                .part_hashes
+                .iter()
+                .enumerate()
+                .take(search_end)
+                .skip(search_start);
+            for (idx, part_hash) in window {
                 part_index = idx + 1;
-                if self.part_hashes[idx] == last_map_hash {
+                if part_hash == last_map_hash {
                     break;
                 }
             }
@@ -507,12 +525,11 @@ impl ResourceSender {
         let hashmap_end =
             core::cmp::min((segment + 1) * RESOURCE_HASHMAP_MAX_LEN, self.total_parts);
 
-        let mut hashmap_segment = Vec::new();
-        for i in hashmap_start..hashmap_end {
-            hashmap_segment.extend_from_slice(
-                &self.hashmap[i * RESOURCE_MAPHASH_LEN..(i + 1) * RESOURCE_MAPHASH_LEN],
-            );
-        }
+        let hashmap_segment = self
+            .hashmap
+            .get(hashmap_start * RESOURCE_MAPHASH_LEN..hashmap_end * RESOURCE_MAPHASH_LEN)
+            .unwrap_or_default()
+            .to_vec();
 
         if hashmap_segment.is_empty() {
             return Err(ResourceError::InvalidState);
@@ -638,8 +655,8 @@ impl ResourceSender {
     }
 
     fn part(&self, index: usize) -> &[u8] {
-        let start = index * self.part_sdu;
-        &self.parts[start..start + self.part_sdu.min(self.parts.len() - start)]
+        let rest = self.parts.get(index * self.part_sdu..).unwrap_or_default();
+        rest.get(..self.part_sdu).unwrap_or(rest)
     }
 
     /// Get the total number of parts.

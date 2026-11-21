@@ -53,11 +53,10 @@ impl AdvertisementFields<'_> {
         let hashmap_start = segment * RESOURCE_HASHMAP_MAX_LEN * RESOURCE_MAPHASH_LEN;
         let max_end = (segment + 1) * RESOURCE_HASHMAP_MAX_LEN * RESOURCE_MAPHASH_LEN;
         let hashmap_end = core::cmp::min(max_end, self.hashmap.len());
-        let hashmap_segment = if hashmap_start < self.hashmap.len() {
-            &self.hashmap[hashmap_start..hashmap_end]
-        } else {
-            &[]
-        };
+        let hashmap_segment = self
+            .hashmap
+            .get(hashmap_start..hashmap_end)
+            .unwrap_or_default();
 
         // Written directly, in Python's key order (t, d, n, h, r, o, i, l, q,
         // f, m): building a msgpack value first cloned every field. Sized for
@@ -159,7 +158,9 @@ impl ResourceAdvertisement {
                 continue;
             };
             // The first entry for a key wins, as in `Value::map_get`.
-            fields[index].get_or_insert(field);
+            if let Some(slot) = fields.get_mut(index) {
+                slot.get_or_insert(field);
+            }
         }
         let [t, d, n, h, r, o, i, l, q, f, m] = fields;
         let uint =

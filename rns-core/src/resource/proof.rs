@@ -51,11 +51,10 @@ pub fn validate_proof(
     _expected_resource_hash: &[u8; 32],
     expected_proof: &[u8; 32],
 ) -> Result<bool, ResourceError> {
-    if proof_data.len() != 64 {
+    let ([_, recv_proof], []) = proof_data.as_chunks::<32>() else {
         return Err(ResourceError::InvalidProof);
-    }
-    let recv_proof = &proof_data[32..64];
-    Ok(recv_proof == expected_proof.as_slice())
+    };
+    Ok(recv_proof == expected_proof)
 }
 
 #[cfg(test)]

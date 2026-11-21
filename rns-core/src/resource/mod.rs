@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
+
 /// Resource advertisement encoding and decoding.
 pub mod advertisement;
 pub mod assembly;
