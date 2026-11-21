@@ -170,7 +170,8 @@ fn start_control_http(
         config.ctl_args(verbosity),
         HttpRunOptions::embedded(),
         Some(shared_state.clone()),
-    )?;
+    )
+    .map_err(|err| err.to_string())?;
     let listener = TcpListener::bind(prepared.addr).map_err(|e| {
         format!(
             "failed to bind embedded control plane {}: {}",
