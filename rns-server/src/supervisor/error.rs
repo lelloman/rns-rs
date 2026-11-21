@@ -1,5 +1,6 @@
 use std::fmt;
 use std::io;
+use std::path::PathBuf;
 
 use super::Role;
 
@@ -125,6 +126,80 @@ impl std::error::Error for RpcCallError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             RpcCallError::Connect(source) | RpcCallError::Call { source, .. } => Some(source),
+        }
+    }
+}
+
+/// Why a readiness file does not show its process ready.
+#[derive(Debug)]
+pub(crate) enum ReadyFileError {
+    /// The file could not be read (usually: not written yet).
+    Read { path: PathBuf, source: io::Error },
+    /// The `pid` line is not a pid.
+    InvalidPid {
+        value: String,
+        source: std::num::ParseIntError,
+    },
+    /// A required line is missing.
+    Missing(&'static str),
+    /// The file names another process.
+    WrongProcess { path: PathBuf, process: String },
+    /// The file was written by an earlier instance of the process.
+    Stale {
+        path: PathBuf,
+        pid: u32,
+        expected: u32,
+    },
+    /// The file reports a status other than `ready`.
+    NotReady { path: PathBuf, status: String },
+}
+
+impl fmt::Display for ReadyFileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReadyFileError::Read { path, source } => write!(
+                f,
+                "waiting for readiness file {}: {}",
+                path.display(),
+                source
+            ),
+            ReadyFileError::InvalidPid { value, source } => {
+                write!(f, "invalid readiness pid '{}': {}", value, source)
+            }
+            ReadyFileError::Missing(field) => write!(f, "readiness file missing {}", field),
+            ReadyFileError::WrongProcess { path, process } => write!(
+                f,
+                "readiness file {} belongs to {}",
+                path.display(),
+                process
+            ),
+            ReadyFileError::Stale {
+                path,
+                pid,
+                expected,
+            } => write!(
+                f,
+                "readiness file {} is stale for pid {} (expected {})",
+                path.display(),
+                pid,
+                expected
+            ),
+            ReadyFileError::NotReady { path, status } => write!(
+                f,
+                "readiness file {} reports status={}",
+                path.display(),
+                status
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ReadyFileError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ReadyFileError::Read { source, .. } => Some(source),
+            ReadyFileError::InvalidPid { source, .. } => Some(source),
+            _ => None,
         }
     }
 }
