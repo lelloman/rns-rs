@@ -396,10 +396,7 @@ impl InterfaceFactory for UdpFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> io::Result<StartResult> {
-        let udp_config = *config
-            .into_any()
-            .downcast::<UdpConfig>()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
+        let udp_config = config.into_own::<UdpConfig>()?;
 
         let id = udp_config.interface_id;
         let name = udp_config.name.clone();

@@ -109,9 +109,7 @@ impl InterfaceFactory for AutoFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> std::io::Result<StartResult> {
-        let mut auto_config = *config.into_any().downcast::<AutoConfig>().map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
-        })?;
+        let mut auto_config = config.into_own::<AutoConfig>()?;
 
         auto_config.ingress_control = ctx.ingress_control;
         let parent_id = auto_config.interface_id;

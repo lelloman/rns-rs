@@ -489,10 +489,7 @@ impl InterfaceFactory for TcpClientFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> io::Result<StartResult> {
-        let tcp_config = *config
-            .into_any()
-            .downcast::<TcpClientConfig>()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
+        let tcp_config = config.into_own::<TcpClientConfig>()?;
 
         let id = tcp_config.interface_id;
         let name = tcp_config.name.clone();

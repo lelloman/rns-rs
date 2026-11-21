@@ -550,10 +550,7 @@ impl InterfaceFactory for TcpServerFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> io::Result<StartResult> {
-        let mut cfg = *config
-            .into_any()
-            .downcast::<TcpServerConfig>()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
+        let mut cfg = config.into_own::<TcpServerConfig>()?;
         cfg.ingress_control = ctx.ingress_control;
         let parent_id = cfg.interface_id;
         let control = start_with_template(

@@ -467,12 +467,7 @@ impl InterfaceFactory for SerialFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> std::io::Result<StartResult> {
-        let serial_config = *config
-            .into_any()
-            .downcast::<SerialIfaceConfig>()
-            .map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
-            })?;
+        let serial_config = config.into_own::<SerialIfaceConfig>()?;
 
         let id = serial_config.interface_id;
         let name = serial_config.name.clone();

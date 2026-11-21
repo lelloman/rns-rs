@@ -1053,12 +1053,7 @@ impl InterfaceFactory for LocalServerFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> std::io::Result<StartResult> {
-        let server_config = *config
-            .into_any()
-            .downcast::<LocalServerConfig>()
-            .map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
-            })?;
+        let server_config = config.into_own::<LocalServerConfig>()?;
 
         let parent_id = server_config.interface_id;
         let (control, _) = start_server_with_template(
@@ -1122,12 +1117,7 @@ impl InterfaceFactory for LocalClientFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> std::io::Result<StartResult> {
-        let client_config = *config
-            .into_any()
-            .downcast::<LocalClientConfig>()
-            .map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
-            })?;
+        let client_config = config.into_own::<LocalClientConfig>()?;
 
         let id = client_config.interface_id;
         let name = client_config.name.clone();
