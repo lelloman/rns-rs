@@ -516,7 +516,7 @@ pub struct LinkManager {
 
 /// Best-known outbound route for a link's packets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LinkRouteHint {
+pub(crate) struct LinkRouteHint {
     /// Interface the link's packets go out on.
     pub interface: rns_core::transport::types::InterfaceId,
     /// Next-hop transport id, when the link was reached through a transport

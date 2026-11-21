@@ -4,7 +4,7 @@ use super::*;
 
 impl LinkManager {
     /// Return best-known routing hint for link packets.
-    pub fn get_link_route_hint(&self, link_id: &LinkId) -> Option<LinkRouteHint> {
+    pub(crate) fn get_link_route_hint(&self, link_id: &LinkId) -> Option<LinkRouteHint> {
         self.links.get(link_id).and_then(|link| {
             link.route_interface.map(|interface| LinkRouteHint {
                 interface,
