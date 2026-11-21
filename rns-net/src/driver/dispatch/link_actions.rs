@@ -154,7 +154,7 @@ impl Driver {
                     data,
                     metadata,
                 } => {
-                    if let Some(source) = self.blackhole_update_source(&link_id) {
+                    if let Some(source) = self.blackhole.update_source(&link_id) {
                         self.blackhole_update_response(link_id, source, Some(&data));
                         continue;
                     }
@@ -170,7 +170,7 @@ impl Driver {
                     request_id,
                     reason,
                 } => {
-                    if let Some(source) = self.blackhole_update_source(&link_id) {
+                    if let Some(source) = self.blackhole.update_source(&link_id) {
                         log::debug!("Blackhole list request failed: {reason:?}");
                         self.blackhole_update_response(link_id, source, None);
                         continue;
@@ -348,7 +348,7 @@ impl Driver {
             rtt,
             is_initiator,
         );
-        if is_initiator && self.blackhole_update_source(&link_id).is_some() {
+        if is_initiator && self.blackhole.update_source(&link_id).is_some() {
             self.blackhole_update_link_established(link_id);
             return;
         }
@@ -385,8 +385,8 @@ impl Driver {
         log::debug!("Link closed: {:02x?} reason={:?}", &link_id[..4], reason);
         // The link's direct interface, if any, goes with it.
         self.holepunch_manager.link_closed(&link_id);
-        if self.blackhole_update_source(&link_id).is_some() {
-            self.blackhole_update_link_closed(&link_id);
+        if self.blackhole.update_source(&link_id).is_some() {
+            self.blackhole.update_link_closed(&link_id);
             return;
         }
         if self.builtin.links.remove(&link_id) {

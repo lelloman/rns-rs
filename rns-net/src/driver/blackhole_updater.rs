@@ -55,41 +55,14 @@ impl Driver {
         let count = self.blackhole.sources.len();
         let s = if count == 1 { "" } else { "s" };
         log::debug!("Starting blackhole updater with {count} source{s}");
-        self.blackhole.updater = Some(BlackholeUpdater {
-            interval: interval.unwrap_or(DEFAULT_UPDATE_INTERVAL),
-            started_at: time::now(),
-            last_job: None,
-            last_updates: HashMap::new(),
-            links: HashMap::new(),
-            creating: Vec::new(),
-        });
+        self.blackhole.updater = Some(BlackholeUpdater::new(
+            interval.unwrap_or(DEFAULT_UPDATE_INTERVAL),
+        ));
     }
 
     /// Run the updater's check when it is due.
     pub(crate) fn tick_blackhole_updater(&mut self, now: f64) {
-        self.collect_blackhole_update_links();
-        let Some(updater) = self.blackhole.updater.as_mut() else {
-            return;
-        };
-        if now < updater.started_at + INITIAL_WAIT
-            || updater
-                .last_job
-                .is_some_and(|last_job| now < last_job + JOB_INTERVAL)
-        {
-            return;
-        }
-        updater.last_job = Some(now);
-        let interval = updater.interval;
-        let due: Vec<[u8; 16]> = self
-            .blackhole
-            .sources
-            .iter()
-            .copied()
-            .filter(|source| {
-                now > updater.last_updates.get(source).copied().unwrap_or(0.0) + interval
-            })
-            .collect();
-        for source in due {
+        for source in self.blackhole.due_updates(now) {
             self.start_blackhole_update(source, now);
         }
     }
@@ -118,39 +91,8 @@ impl Driver {
         if let Some(updater) = self.blackhole.updater.as_mut() {
             updater.creating.push((source, link_rx));
             updater.last_updates.insert(source, now);
+            updater.collect_links();
         }
-        self.collect_blackhole_update_links();
-    }
-
-    /// Record the ids of the updater's links once they are created.
-    fn collect_blackhole_update_links(&mut self) {
-        let Some(updater) = self.blackhole.updater.as_mut() else {
-            return;
-        };
-        let mut links = Vec::new();
-        updater
-            .creating
-            .retain(|(source, link_rx)| match link_rx.try_recv() {
-                Ok(link_id) => {
-                    // The all-zero id means the link request was never sent.
-                    if link_id != [0u8; 16] {
-                        links.push((link_id, *source));
-                    }
-                    false
-                }
-                Err(mpsc::TryRecvError::Empty) => true,
-                Err(mpsc::TryRecvError::Disconnected) => false,
-            });
-        updater.links.extend(links);
-    }
-
-    /// The source an updater link is to, or `None` for any other link.
-    pub(crate) fn blackhole_update_source(&mut self, link_id: &[u8; 16]) -> Option<[u8; 16]> {
-        self.collect_blackhole_update_links();
-        self.blackhole
-            .updater
-            .as_ref()
-            .and_then(|updater| updater.links.get(link_id).copied())
     }
 
     /// An updater link was established: ask for the list.
@@ -172,13 +114,6 @@ impl Driver {
             log::warn!("Could not request a blackhole list: {error:?}");
             let actions = self.link_manager.teardown_link(&link_id);
             self.dispatch_link_actions(actions);
-        }
-    }
-
-    /// An updater link was closed.
-    pub(crate) fn blackhole_update_link_closed(&mut self, link_id: &[u8; 16]) {
-        if let Some(updater) = self.blackhole.updater.as_mut() {
-            updater.links.remove(link_id);
         }
     }
 
@@ -223,5 +158,81 @@ impl Driver {
             self.remove_blackholed_paths();
         }
         log::debug!("Blackhole list update from {} completed", hex(&source));
+    }
+}
+
+impl BlackholeUpdater {
+    fn new(interval: f64) -> Self {
+        Self {
+            interval,
+            started_at: time::now(),
+            last_job: None,
+            last_updates: HashMap::new(),
+            links: HashMap::new(),
+            creating: Vec::new(),
+        }
+    }
+
+    /// Record the ids of the updater's links once they are created.
+    fn collect_links(&mut self) {
+        let mut links = Vec::new();
+        self.creating
+            .retain(|(source, link_rx)| match link_rx.try_recv() {
+                Ok(link_id) => {
+                    // The all-zero id means the link request was never sent.
+                    if link_id != [0u8; 16] {
+                        links.push((link_id, *source));
+                    }
+                    false
+                }
+                Err(mpsc::TryRecvError::Empty) => true,
+                Err(mpsc::TryRecvError::Disconnected) => false,
+            });
+        self.links.extend(links);
+    }
+
+    /// The `sources` to ask for their lists now, when a check is due.
+    fn due_sources(&mut self, sources: &[[u8; 16]], now: f64) -> Vec<[u8; 16]> {
+        if now < self.started_at + INITIAL_WAIT
+            || self
+                .last_job
+                .is_some_and(|last_job| now < last_job + JOB_INTERVAL)
+        {
+            return Vec::new();
+        }
+        self.last_job = Some(now);
+        sources
+            .iter()
+            .copied()
+            .filter(|source| {
+                now > self.last_updates.get(source).copied().unwrap_or(0.0) + self.interval
+            })
+            .collect()
+    }
+}
+
+impl blackhole::BlackholeState {
+    /// The sources whose lists to ask for now: none unless the updater
+    /// runs and its check is due.
+    fn due_updates(&mut self, now: f64) -> Vec<[u8; 16]> {
+        let Some(updater) = self.updater.as_mut() else {
+            return Vec::new();
+        };
+        updater.collect_links();
+        updater.due_sources(&self.sources, now)
+    }
+
+    /// The source an updater link is to, or `None` for any other link.
+    pub(crate) fn update_source(&mut self, link_id: &[u8; 16]) -> Option<[u8; 16]> {
+        let updater = self.updater.as_mut()?;
+        updater.collect_links();
+        updater.links.get(link_id).copied()
+    }
+
+    /// An updater link was closed.
+    pub(crate) fn update_link_closed(&mut self, link_id: &[u8; 16]) {
+        if let Some(updater) = self.updater.as_mut() {
+            updater.links.remove(link_id);
+        }
     }
 }
