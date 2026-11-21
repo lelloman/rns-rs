@@ -2,7 +2,7 @@
 //! ingress control, discovery and announce settings.
 
 use super::*;
-use crate::interface::InterfaceKind;
+use crate::interface::{InterfaceConfigError, InterfaceKind};
 
 /// Parse an interface mode string to the corresponding constant.
 /// Matches Python's `_synthesize_interface()` in `RNS/Reticulum.py`.
@@ -118,17 +118,24 @@ pub(super) fn default_ingress_control_for_type(
 pub(super) fn parse_ingress_control_config(
     kind: Option<InterfaceKind>,
     params: &std::collections::HashMap<String, String>,
-) -> Result<rns_core::transport::types::IngressControlConfig, String> {
+) -> Result<rns_core::transport::types::IngressControlConfig, InterfaceConfigError> {
     let mut config = default_ingress_control_for_type(kind);
 
     if let Some(v) = params.get("ingress_control") {
-        config.enabled = config::parse_bool_pub(v)
-            .ok_or_else(|| format!("ingress_control must be a boolean, got '{}'", v))?;
+        config.enabled = config::parse_bool_pub(v).ok_or_else(|| {
+            InterfaceConfigError::invalid_value(
+                "ingress_control",
+                format!("ingress_control must be a boolean, got '{}'", v),
+            )
+        })?;
     }
     if let Some(v) = params.get("ic_max_held_announces") {
-        config.max_held_announces = v
-            .parse::<usize>()
-            .map_err(|_| format!("ic_max_held_announces must be an integer, got '{}'", v))?;
+        config.max_held_announces = v.parse::<usize>().map_err(|_| {
+            InterfaceConfigError::invalid_value(
+                "ic_max_held_announces",
+                format!("ic_max_held_announces must be an integer, got '{}'", v),
+            )
+        })?;
     }
     if let Some(v) = params.get("ic_burst_hold") {
         config.burst_hold = parse_nonnegative_f64("ic_burst_hold", v)?;
@@ -146,8 +153,12 @@ pub(super) fn parse_ingress_control_config(
         config.pr_burst_freq = parse_nonnegative_f64("ic_pr_burst_freq", v)?;
     }
     if let Some(v) = params.get("egress_control") {
-        config.egress_enabled = config::parse_bool_pub(v)
-            .ok_or_else(|| format!("egress_control must be a boolean, got '{}'", v))?;
+        config.egress_enabled = config::parse_bool_pub(v).ok_or_else(|| {
+            InterfaceConfigError::invalid_value(
+                "egress_control",
+                format!("egress_control must be a boolean, got '{}'", v),
+            )
+        })?;
     }
     if let Some(v) = params.get("ec_pr_freq") {
         config.egress_pr_freq = parse_nonnegative_f64("ec_pr_freq", v)?;
@@ -165,12 +176,21 @@ pub(super) fn parse_ingress_control_config(
     Ok(config)
 }
 
-pub(super) fn parse_nonnegative_f64(key: &str, value: &str) -> Result<f64, String> {
-    let parsed = value
-        .parse::<f64>()
-        .map_err(|_| format!("{} must be numeric, got '{}'", key, value))?;
+pub(super) fn parse_nonnegative_f64(
+    key: &'static str,
+    value: &str,
+) -> Result<f64, InterfaceConfigError> {
+    let parsed = value.parse::<f64>().map_err(|_| {
+        InterfaceConfigError::invalid_value(
+            key,
+            format!("{} must be numeric, got '{}'", key, value),
+        )
+    })?;
     if parsed < 0.0 {
-        return Err(format!("{} must be >= 0, got '{}'", key, value));
+        return Err(InterfaceConfigError::invalid_value(
+            key,
+            format!("{} must be >= 0, got '{}'", key, value),
+        ));
     }
     Ok(parsed)
 }
@@ -513,18 +533,23 @@ pub(crate) fn derive_ifac_state(
 /// (upstream 9b464382): `as_float`, clamped to `0..=STAMP_COST_CAP`.
 pub(crate) fn parse_interface_stamp_costs(
     params: &HashMap<String, String>,
-) -> Result<rns_core::transport::types::InterfaceStampCosts, String> {
-    let cost = |key: &str| -> Result<Option<rns_core::stamp::StampCost>, String> {
-        let Some(value) = params.get(key) else {
-            return Ok(None);
+) -> Result<rns_core::transport::types::InterfaceStampCosts, InterfaceConfigError> {
+    let cost =
+        |key: &'static str| -> Result<Option<rns_core::stamp::StampCost>, InterfaceConfigError> {
+            let Some(value) = params.get(key) else {
+                return Ok(None);
+            };
+            let value = config::parse_config_float(value).ok_or_else(|| {
+                InterfaceConfigError::invalid_value(
+                    key,
+                    format!("{key} must be a number, got '{value}'"),
+                )
+            })?;
+            Ok(Some(rns_core::stamp::clamp_cost(
+                value,
+                rns_core::constants::STAMP_COST_CAP,
+            )))
         };
-        let value = config::parse_config_float(value)
-            .ok_or_else(|| format!("{key} must be a number, got '{value}'"))?;
-        Ok(Some(rns_core::stamp::clamp_cost(
-            value,
-            rns_core::constants::STAMP_COST_CAP,
-        )))
-    };
     Ok(rns_core::transport::types::InterfaceStampCosts {
         destination_cost: cost("destination_cost")?,
         pr_cost: cost("pr_cost")?,
@@ -538,21 +563,29 @@ pub(crate) fn parse_interface_stamp_costs(
 /// and stored as a fraction. A value that is not a number is an error.
 pub(crate) fn parse_interface_announce_limits(
     params: &HashMap<String, String>,
-) -> Result<InterfaceAnnounceLimits, String> {
-    let int = |key: &str| -> Result<Option<i64>, String> {
+) -> Result<InterfaceAnnounceLimits, InterfaceConfigError> {
+    let int = |key: &'static str| -> Result<Option<i64>, InterfaceConfigError> {
         params
             .get(key)
             .map(|value| {
-                config::parse_config_int(value)
-                    .ok_or_else(|| format!("{key} must be an integer, got '{value}'"))
+                config::parse_config_int(value).ok_or_else(|| {
+                    InterfaceConfigError::invalid_value(
+                        key,
+                        format!("{key} must be an integer, got '{value}'"),
+                    )
+                })
             })
             .transpose()
     };
     let cap = params
         .get("announce_cap")
         .map(|value| {
-            config::parse_config_float(value)
-                .ok_or_else(|| format!("announce_cap must be a number, got '{value}'"))
+            config::parse_config_float(value).ok_or_else(|| {
+                InterfaceConfigError::invalid_value(
+                    "announce_cap",
+                    format!("announce_cap must be a number, got '{value}'"),
+                )
+            })
         })
         .transpose()?;
     Ok(InterfaceAnnounceLimits {
