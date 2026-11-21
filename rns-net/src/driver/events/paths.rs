@@ -196,13 +196,6 @@ impl Driver {
         }
     }
 
-    /// How long a path-response announce is replayed for a repeated tag
-    /// (Python `Destination.PR_TAG_WINDOW`).
-    pub(crate) const LOCAL_PATH_RESPONSE_WINDOW: f64 = 30.0;
-
-    /// Upper bound on cached path-response announces.
-    pub(crate) const LOCAL_PATH_RESPONSE_MAX_ENTRIES: usize = 1024;
-
     /// Answer a path request for a destination hosted on this node, as Python
     /// `Transport.path_request()` does with
     /// `destination.announce(path_response=True, tag=tag, attached_interface=...)`.
@@ -218,7 +211,7 @@ impl Driver {
         interface: InterfaceId,
     ) {
         let now = time::now();
-        self.expire_local_path_responses(now);
+        self.path_responses.expire_local_responses(now);
 
         let key = (dest_hash, tag);
         let raw = if let Some((_, raw)) = self.path_responses.local_cache.get(&key) {
@@ -231,20 +224,8 @@ impl Driver {
             let Some(raw) = self.build_local_path_response(&dest_hash, now, Some(waiting)) else {
                 return;
             };
-            if self.path_responses.local_cache.len() >= Self::LOCAL_PATH_RESPONSE_MAX_ENTRIES {
-                if let Some(oldest) = self
-                    .path_responses
-                    .local_cache
-                    .iter()
-                    .min_by(|a, b| a.1 .0.total_cmp(&b.1 .0))
-                    .map(|(key, _)| key.clone())
-                {
-                    self.path_responses.local_cache.remove(&oldest);
-                }
-            }
             self.path_responses
-                .local_cache
-                .insert(key, (now, raw.clone()));
+                .cache_local_response(key, now, raw.clone());
             raw
         };
         self.send_local_path_response(dest_hash, &raw, interface, now);
@@ -378,13 +359,6 @@ impl Driver {
                 }
             }
         }
-    }
-
-    /// Drop path-response announces older than the replay window.
-    pub(crate) fn expire_local_path_responses(&mut self, now: f64) {
-        self.path_responses
-            .local_cache
-            .retain(|_, (created, _)| now - *created <= Self::LOCAL_PATH_RESPONSE_WINDOW);
     }
 
     /// Build a fresh `PATH_RESPONSE` announce for a local destination.

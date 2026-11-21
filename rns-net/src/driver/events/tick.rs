@@ -104,7 +104,7 @@ impl Driver {
         self.proofs
             .completed
             .retain(|_, (_, received)| now - *received < 120.0);
-        self.expire_local_path_responses(now);
+        self.path_responses.expire_local_responses(now);
 
         self.tick_discovery_announcer(now);
         #[cfg(feature = "iface-backbone")]
