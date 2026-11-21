@@ -210,12 +210,75 @@ impl Driver {
                 data[0]
             );
         }
-        let Some(entry) = self.interfaces.get(&interface_id) else {
-            log::warn!("[{}] dropping frame from unknown interface", interface_id.0);
+        let Some(packet) = self.unmask_inbound_frame(interface_id, data, received_size) else {
             return;
         };
-        if !entry.enabled || !entry.online {
+        let Some(decoded_packet) =
+            self.decode_inbound_frame(interface_id, packet, rssi, snr, received_size)
+        else {
             return;
+        };
+        let Some(decoded_packet) =
+            self.run_pre_ingress_hooks(interface_id, decoded_packet, received_size)
+        else {
+            return;
+        };
+        if let Some(entry) = self.interfaces.get(&interface_id) {
+            let now = time::now();
+            super::sync_interface_frequencies(
+                &mut self.engine,
+                interface_id,
+                entry.stats.frequencies(now),
+            );
+        }
+
+        self.check_inbound_lrproofs(interface_id, &decoded_packet);
+
+        // The engine consumes the packet; the hooks after it need the bytes.
+        let dispatch_hook_packet = self
+            .hooks
+            .attached(HookPoint::PreDispatch)
+            .then(|| decoded_packet.packet().raw.clone());
+        let inbound_frame = DecodedInboundFrame {
+            decoded: decoded_packet,
+            iface: interface_id,
+            now: time::now(),
+            rx: RxMetadata { rssi, snr },
+        };
+
+        let actions = self.process_inbound_frame(inbound_frame);
+
+        if let Some(packet) = dispatch_hook_packet {
+            // The engine has already handled this packet, so neither `Drop`
+            // nor `Modify` can change it any more: both act as `Continue` here
+            // and the replacement bytes of a `Modify` verdict are ignored.
+            self.run_hooks_with_effects(
+                HookPoint::PreDispatch,
+                &HookEvent::wire_packet(&packet, interface_id.0),
+                InjectedActions::Dispatch,
+            );
+        }
+
+        self.dispatch_all_with_ingress_class(actions, ingress_limited);
+        self.account_inbound_outcome(interface_id, received_size);
+    }
+
+    /// Count a frame from an enabled, online interface and strip its IFAC.
+    /// `None` when the frame is dropped: from an unknown, disabled or
+    /// offline interface, or failing its IFAC.
+    #[inline]
+    fn unmask_inbound_frame(
+        &mut self,
+        interface_id: InterfaceId,
+        data: PacketBytes,
+        received_size: usize,
+    ) -> Option<PacketBytes> {
+        let Some(entry) = self.interfaces.get(&interface_id) else {
+            log::warn!("[{}] dropping frame from unknown interface", interface_id.0);
+            return None;
+        };
+        if !entry.enabled || !entry.online {
+            return None;
         }
         // Where a received frame is counted. Only frames read from an
         // interface arrive here: rns-rs keeps no packet cache to replay into
@@ -237,7 +300,7 @@ impl Driver {
                             entry.stats.ifac_violations += 1;
                         }
                         self.record_filtered_inbound(interface_id, received_size);
-                        return;
+                        return None;
                     }
                 }
             } else {
@@ -250,14 +313,28 @@ impl Driver {
                         entry.stats.ifac_violations += 1;
                     }
                     self.record_filtered_inbound(interface_id, received_size);
-                    return;
+                    return None;
                 }
                 data
             }
         } else {
             data
         };
+        Some(packet)
+    }
 
+    /// Decode an unmasked frame and apply the hop limits and the admission
+    /// checks, remembering the packet's signal readings. `None` when it is
+    /// dropped.
+    #[inline]
+    fn decode_inbound_frame(
+        &mut self,
+        interface_id: InterfaceId,
+        packet: PacketBytes,
+        rssi: Option<i16>,
+        snr: Option<f32>,
+        received_size: usize,
+    ) -> Option<DecodedPacket> {
         // The decoded packet keeps the frame's bytes as its `raw`.
         let decoded_packet = match self.engine.decode_inbound(packet) {
             Ok(packet) => packet,
@@ -271,7 +348,7 @@ impl Driver {
                     entry.stats.protocol_violations += 1;
                 }
                 self.record_filtered_inbound(interface_id, received_size);
-                return;
+                return None;
             }
         };
         // `if not packet.hops < Transport.HOP_LIMITER: return
@@ -289,7 +366,7 @@ impl Driver {
                 entry.stats.hop_limiter_hits += 1;
             }
             self.record_filtered_inbound(interface_id, received_size);
-            return;
+            return None;
         }
         if let Some(packet_hash) = decoded_packet.packet_hash() {
             self.engine.prefetch_packet_hash(packet_hash);
@@ -309,59 +386,69 @@ impl Driver {
         let packet_len = decoded_packet.packet().raw.len();
         if !self.admit_decoded_inbound(interface_id, packet_len, &decoded_packet) {
             self.record_filtered_inbound(interface_id, received_size);
-            return;
+            return None;
         }
+        Some(decoded_packet)
+    }
 
-        let decoded_packet = if !self.hooks.attached(HookPoint::PreIngress) {
-            decoded_packet
-        } else {
-            let outcome = self.run_packet_hooks(
-                HookPoint::PreIngress,
-                &HookEvent::wire_packet(&decoded_packet.packet().raw, interface_id.0),
-                InjectedActions::Dispatch,
-                |driver| driver.hook_packet_limit(interface_id),
-            );
-            // A packet the hook drops is filtered inbound, as any other
-            // packet dropped before transport processes it.
-            match outcome {
-                PacketHookOutcome::Keep => decoded_packet,
-                PacketHookOutcome::Drop => {
-                    self.record_filtered_inbound(interface_id, received_size);
-                    return;
-                }
-                PacketHookOutcome::Replace(replacement) => {
-                    // Decode the replacement afresh and hold it to the same
-                    // admission checks as a received packet.
-                    let replacement_len = replacement.raw.len();
-                    let Ok(decoded) = DecodedPacket::unpack_owned(replacement.raw) else {
-                        self.record_filtered_inbound(interface_id, received_size);
-                        return;
-                    };
-                    if !self.admit_decoded_inbound(interface_id, replacement_len, &decoded) {
-                        self.record_filtered_inbound(interface_id, received_size);
-                        return;
-                    }
-                    decoded
-                }
+    /// Run the `PreIngress` hooks on a decoded packet. `None` when a hook
+    /// drops it, or its replacement fails decoding or admission.
+    #[inline]
+    fn run_pre_ingress_hooks(
+        &mut self,
+        interface_id: InterfaceId,
+        decoded_packet: DecodedPacket,
+        received_size: usize,
+    ) -> Option<DecodedPacket> {
+        if !self.hooks.attached(HookPoint::PreIngress) {
+            return Some(decoded_packet);
+        }
+        let outcome = self.run_packet_hooks(
+            HookPoint::PreIngress,
+            &HookEvent::wire_packet(&decoded_packet.packet().raw, interface_id.0),
+            InjectedActions::Dispatch,
+            |driver| driver.hook_packet_limit(interface_id),
+        );
+        // A packet the hook drops is filtered inbound, as any other
+        // packet dropped before transport processes it.
+        match outcome {
+            PacketHookOutcome::Keep => Some(decoded_packet),
+            PacketHookOutcome::Drop => {
+                self.record_filtered_inbound(interface_id, received_size);
+                None
             }
-        };
-
-        if let Some(entry) = self.interfaces.get(&interface_id) {
-            let now = time::now();
-            super::sync_interface_frequencies(
-                &mut self.engine,
-                interface_id,
-                entry.stats.frequencies(now),
-            );
+            PacketHookOutcome::Replace(replacement) => {
+                // Decode the replacement afresh and hold it to the same
+                // admission checks as a received packet.
+                let replacement_len = replacement.raw.len();
+                let Ok(decoded) = DecodedPacket::unpack_owned(replacement.raw) else {
+                    self.record_filtered_inbound(interface_id, received_size);
+                    return None;
+                };
+                if !self.admit_decoded_inbound(interface_id, replacement_len, &decoded) {
+                    self.record_filtered_inbound(interface_id, received_size);
+                    return None;
+                }
+                Some(decoded)
+            }
         }
+    }
 
+    /// Check a link request proof against the announced identity of its
+    /// destination, for the engine to re-balance or transport it.
+    #[inline]
+    fn check_inbound_lrproofs(
+        &mut self,
+        interface_id: InterfaceId,
+        decoded_packet: &DecodedPacket,
+    ) {
         // A relay can only accept a hop-count change after validating the
         // LRPROOF against the announced destination identity. Supplying the
         // key here keeps identity lifecycle state in the driver while the
         // transport engine owns the route mutation.
         if let Some((link_id, destination_hash, packet_hops, proof_data)) = self
             .engine
-            .decoded_lrproof_rebalance_candidate(&decoded_packet, interface_id)
+            .decoded_lrproof_rebalance_candidate(decoded_packet, interface_id)
         {
             if let Some(announced) = self.known.announced(&destination_hash) {
                 let mut sig_pub = [0u8; 32];
@@ -388,7 +475,7 @@ impl Driver {
         // cannot be recalled; a valid one proves the destination alive.
         if let Some((link_id, destination_hash, _, proof_data)) = self
             .engine
-            .decoded_transported_lrproof(&decoded_packet, interface_id)
+            .decoded_transported_lrproof(decoded_packet, interface_id)
         {
             let valid = self
                 .known
@@ -407,19 +494,15 @@ impl Driver {
                 self.known.mark_used(&destination_hash);
             }
         }
+    }
 
-        // The engine consumes the packet; the hooks after it need the bytes.
-        let dispatch_hook_packet = self
-            .hooks
-            .attached(HookPoint::PreDispatch)
-            .then(|| decoded_packet.packet().raw.clone());
-        let inbound_frame = DecodedInboundFrame {
-            decoded: decoded_packet,
-            iface: interface_id,
-            now: time::now(),
-            rx: RxMetadata { rssi, snr },
-        };
-
+    /// Hand a frame to the transport engine, queueing an announce for
+    /// verification off the driver thread when that is enabled.
+    #[inline]
+    fn process_inbound_frame(
+        &mut self,
+        inbound_frame: DecodedInboundFrame,
+    ) -> Vec<TransportAction> {
         let mut actions = self.transport_actions.take();
         if self.announce_verify.async_enabled {
             let mut announce_queue = crate::sync::lock_or_recover(
@@ -448,19 +531,13 @@ impl Driver {
                 &mut actions,
             );
         }
+        actions
+    }
 
-        if let Some(packet) = dispatch_hook_packet {
-            // The engine has already handled this packet, so neither `Drop`
-            // nor `Modify` can change it any more: both act as `Continue` here
-            // and the replacement bytes of a `Modify` verdict are ignored.
-            self.run_hooks_with_effects(
-                HookPoint::PreDispatch,
-                &HookEvent::wire_packet(&packet, interface_id.0),
-                InjectedActions::Dispatch,
-            );
-        }
-
-        self.dispatch_all_with_ingress_class(actions, ingress_limited);
+    /// Account for what the engine filtered of a frame, and publish the
+    /// interface's ingress burst state when it changed.
+    #[inline]
+    fn account_inbound_outcome(&mut self, interface_id: InterfaceId, received_size: usize) {
         // The engine drops, and the path request its actions delivered.
         if self.engine.take_inbound_filtered() {
             self.record_filtered_inbound(interface_id, received_size);
