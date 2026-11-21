@@ -40,7 +40,8 @@ fn find_special(data: &[u8]) -> Option<usize> {
             }
             offset += 16;
         }
-        data[offset..]
+        data.get(offset..)
+            .unwrap_or_default()
             .iter()
             .position(|&byte| byte == FLAG || byte == ESC)
             .map(|index| offset + index)
@@ -65,6 +66,10 @@ pub fn escape(data: &[u8]) -> Vec<u8> {
     out
 }
 
+#[allow(
+    clippy::indexing_slicing,
+    reason = "find_special returns an index below the length of the slice it searched; checked splits cost this hot loop 3%"
+)]
 fn append_escaped(data: &[u8], out: &mut Vec<u8>) {
     out.reserve(data.len());
     let mut rest = data;
@@ -265,6 +270,10 @@ impl Decoder {
         &mut self.batch
     }
 
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "find_special returns an index below the length of the slice it searched; checked splits cost this hot loop 3%"
+    )]
     fn feed_into<F: DecodedFrame>(&mut self, chunk: &[u8], decoded: &mut DecodeBatch<F>) {
         let mut rest = chunk;
         loop {
