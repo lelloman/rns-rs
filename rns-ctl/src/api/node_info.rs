@@ -67,7 +67,7 @@ pub(super) fn handle_config_validate(req: &HttpRequest, state: &SharedState) -> 
     match validator {
         Some(validator) => match validator(&req.body) {
             Ok(result) => HttpResponse::ok(json!({ "result": result })),
-            Err(err) => HttpResponse::bad_request(&err),
+            Err(err) => HttpResponse::bad_request(&err.to_string()),
         },
         None => HttpResponse::internal_error("Server config validation is not enabled"),
     }
@@ -86,7 +86,7 @@ pub(super) fn handle_config_mutation(
     match mutator {
         Some(mutator) => match mutator(mode, &req.body) {
             Ok(result) => HttpResponse::ok(json!({ "result": result })),
-            Err(err) => HttpResponse::bad_request(&err),
+            Err(err) => HttpResponse::bad_request(&err.to_string()),
         },
         None => HttpResponse::internal_error("Server config mutation is not enabled"),
     }

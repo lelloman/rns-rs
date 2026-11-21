@@ -16,16 +16,23 @@ pub type SharedState = Arc<RwLock<CtlState>>;
 /// Shared, live-reloadable HTTP control-plane configuration. Auth checks read
 /// it on every request, so writes take effect without a restart.
 pub type ControlPlaneConfigHandle = Arc<RwLock<crate::config::CtlConfig>>;
+/// Why a [`ServerConfigValidator`] or [`ServerConfigMutator`] rejected a
+/// document. Its `Display` text is the `error` of the 400 response.
+pub type ServerConfigRejection = Box<dyn std::error::Error + Send + Sync>;
 /// Checks a candidate `rns-server.json` document without saving it. Installed
 /// by the supervisor; returns the resolved configuration and any warnings, or
 /// the reason the document is rejected.
-pub type ServerConfigValidator =
-    Arc<dyn Fn(&[u8]) -> Result<ServerConfigValidationSnapshot, String> + Send + Sync>;
+pub type ServerConfigValidator = Arc<
+    dyn Fn(&[u8]) -> Result<ServerConfigValidationSnapshot, ServerConfigRejection> + Send + Sync,
+>;
 /// Saves (and, in [`ServerConfigMutationMode::Apply`], applies) a new
 /// `rns-server.json` document. Installed by the supervisor; returns what
 /// changed and what still has to restart, or the reason it was rejected.
 pub type ServerConfigMutator = Arc<
-    dyn Fn(ServerConfigMutationMode, &[u8]) -> Result<ServerConfigMutationResult, String>
+    dyn Fn(
+            ServerConfigMutationMode,
+            &[u8],
+        ) -> Result<ServerConfigMutationResult, ServerConfigRejection>
         + Send
         + Sync,
 >;

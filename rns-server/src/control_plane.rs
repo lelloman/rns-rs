@@ -71,7 +71,7 @@ pub fn install_config_bridge(shared_state: &SharedState, args: &Args, config: &S
         shared_state,
         Arc::new({
             let config = config.clone();
-            move |body| config.validate_json_with_current_context(body)
+            move |body| Ok(config.validate_json_with_current_context(body)?)
         }),
     );
     set_server_config_mutator(
