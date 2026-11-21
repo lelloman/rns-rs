@@ -21,10 +21,11 @@ use std::time::{Duration, Instant};
 use rns_crypto::identity::Identity;
 use rns_crypto::{OsRng, Rng};
 
+use rns_net::event::query;
 use rns_net::{
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig,
-    InterfaceId, NodeConfig, PacketHash, ProofStrategy, QueryRequest, QueryResponse, RnsNode,
-    RuntimeConfigValue, TcpClientConfig, TcpServerConfig, UdpConfig, MODE_FULL,
+    InterfaceId, NodeConfig, PacketHash, ProofStrategy, RnsNode, RuntimeConfigValue,
+    TcpClientConfig, TcpServerConfig, UdpConfig, MODE_FULL,
 };
 
 // ─── TestEvent ───────────────────────────────────────────────────────────────
@@ -548,8 +549,8 @@ fn wait_for_resource_progress(
 }
 
 fn runtime_config_value(node: &RnsNode, key: &str) -> RuntimeConfigValue {
-    match node.query(QueryRequest::GetRuntimeConfig { key: key.into() }) {
-        Ok(QueryResponse::RuntimeConfigEntry(Some(entry))) => entry.value,
+    match node.query(query::GetRuntimeConfig { key: key.into() }) {
+        Ok(Some(entry)) => entry.value,
         other => panic!("expected runtime config entry for {}, got {:?}", key, other),
     }
 }
@@ -580,7 +581,7 @@ fn wait_for_backbone_pool_member_state(
 ) -> Option<rns_net::BackbonePeerPoolMemberStatus> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if let Ok(QueryResponse::InterfaceStats(stats)) = node.query(QueryRequest::InterfaceStats) {
+        if let Ok(stats) = node.query(query::InterfaceStats) {
             if let Some(pool) = stats.backbone_peer_pool {
                 if let Some(member) = pool.members.into_iter().find(|member| {
                     member.source == expected_source
@@ -609,8 +610,7 @@ fn reannounce_discovery_once_connected(
 ) {
     let deadline = Instant::now() + TIMEOUT;
     loop {
-        if let Ok(QueryResponse::InterfaceStats(stats)) = client.query(QueryRequest::InterfaceStats)
-        {
+        if let Ok(stats) = client.query(query::InterfaceStats) {
             if stats
                 .interfaces
                 .iter()
@@ -966,8 +966,8 @@ fn config_file_ingress_control_knobs_apply_to_runtime_interface() {
 
     let deadline = Instant::now() + Duration::from_secs(2);
     let prefix = loop {
-        match node.query(QueryRequest::ListRuntimeConfig) {
-            Ok(QueryResponse::RuntimeConfigList(entries)) => {
+        match node.query(query::ListRuntimeConfig) {
+            Ok(entries) => {
                 if let Some(entry) = entries.iter().find(|entry| {
                     entry
                         .key
@@ -3542,7 +3542,7 @@ fn test_state_snapshot_answers_while_driver_is_blocked() {
         let node = Arc::clone(&bob_node);
         let (answered_tx, answered_rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = answered_tx.send(node.query(QueryRequest::LinkCount).is_ok());
+            let _ = answered_tx.send(node.query(query::LinkCount).is_ok());
         });
         match answered_rx.recv_timeout(Duration::from_millis(300)) {
             Ok(_) => {
@@ -3725,16 +3725,11 @@ fn test_query_interface_stats() {
         _bob_ann,
     ) = setup_two_peers_announced();
 
-    let resp = alice_node.query(QueryRequest::InterfaceStats).unwrap();
-    match resp {
-        QueryResponse::InterfaceStats(stats) => {
-            assert!(
-                !stats.interfaces.is_empty(),
-                "Should have at least one interface"
-            );
-        }
-        _ => panic!("Unexpected response type"),
-    }
+    let stats = alice_node.query(query::InterfaceStats).unwrap();
+    assert!(
+        !stats.interfaces.is_empty(),
+        "Should have at least one interface"
+    );
 
     alice_node.shutdown();
     _bob_node.shutdown();
@@ -3757,16 +3752,11 @@ fn test_query_path_table() {
         _bob_ann,
     ) = setup_two_peers_announced();
 
-    let resp = alice_node
-        .query(QueryRequest::PathTable { max_hops: None })
+    let entries = alice_node
+        .query(query::PathTable { max_hops: None })
         .unwrap();
-    match resp {
-        QueryResponse::PathTable(entries) => {
-            let found = entries.iter().any(|e| e.hash == bob_dest.hash.0);
-            assert!(found, "Bob's dest should appear in path table");
-        }
-        _ => panic!("Unexpected response type"),
-    }
+    let found = entries.iter().any(|e| e.hash == bob_dest.hash.0);
+    assert!(found, "Bob's dest should appear in path table");
 
     alice_node.shutdown();
     _bob_node.shutdown();
@@ -3789,23 +3779,13 @@ fn test_query_local_destinations_and_links() {
     ) = setup_link();
 
     // Query local destinations on Alice
-    let resp = alice_node.query(QueryRequest::LocalDestinations).unwrap();
-    match resp {
-        QueryResponse::LocalDestinations(dests) => {
-            let found = dests.iter().any(|d| d.hash == alice_dest.hash.0);
-            assert!(found, "Alice's dest should be in local destinations");
-        }
-        _ => panic!("Unexpected response type"),
-    }
+    let dests = alice_node.query(query::LocalDestinations).unwrap();
+    let found = dests.iter().any(|d| d.hash == alice_dest.hash.0);
+    assert!(found, "Alice's dest should be in local destinations");
 
     // Query links on Alice
-    let resp = alice_node.query(QueryRequest::Links).unwrap();
-    match resp {
-        QueryResponse::Links(links) => {
-            assert!(!links.is_empty(), "Should have at least one link");
-        }
-        _ => panic!("Unexpected response type"),
-    }
+    let links = alice_node.query(query::Links).unwrap();
+    assert!(!links.is_empty(), "Should have at least one link");
 
     alice_node.teardown_link(link_id).unwrap();
     std::thread::sleep(Duration::from_millis(500));
@@ -4366,12 +4346,10 @@ fn discovery_announce_received_by_client() {
     let mut found = false;
     for _ in 0..30 {
         std::thread::sleep(Duration::from_secs(1));
-        if let Ok(QueryResponse::DiscoveredInterfaces(interfaces)) =
-            client.query(QueryRequest::DiscoveredInterfaces {
-                only_available: false,
-                only_transport: false,
-            })
-        {
+        if let Ok(interfaces) = client.query(query::DiscoveredInterfaces {
+            only_available: false,
+            only_transport: false,
+        }) {
             if !interfaces.is_empty() {
                 let iface = &interfaces[0];
                 assert_eq!(iface.name, "TestBackbone");
@@ -5447,12 +5425,10 @@ fn discovery_announce_through_relay() {
     let mut found = false;
     for _ in 0..30 {
         std::thread::sleep(Duration::from_secs(1));
-        if let Ok(QueryResponse::DiscoveredInterfaces(interfaces)) =
-            client.query(QueryRequest::DiscoveredInterfaces {
-                only_available: false,
-                only_transport: false,
-            })
-        {
+        if let Ok(interfaces) = client.query(query::DiscoveredInterfaces {
+            only_available: false,
+            only_transport: false,
+        }) {
             if !interfaces.is_empty() {
                 let iface = &interfaces[0];
                 assert_eq!(iface.name, "RelayedBackbone");
@@ -6895,11 +6871,11 @@ fn test_path_request_answered_for_destination_hosted_on_transport_node() {
 const STAMP_TIMEOUT: Duration = Duration::from_secs(120);
 
 fn set_runtime_bool(node: &RnsNode, key: &str, value: bool) {
-    match node.query(QueryRequest::SetRuntimeConfig {
+    match node.query(query::SetRuntimeConfig {
         key: key.into(),
         value: RuntimeConfigValue::Bool(value),
     }) {
-        Ok(QueryResponse::RuntimeConfigSet(Ok(_))) => {}
+        Ok(Ok(_)) => {}
         other => panic!("setting {key} to {value} failed: {other:?}"),
     }
     assert_eq!(
@@ -6911,18 +6887,16 @@ fn set_runtime_bool(node: &RnsNode, key: &str, value: bool) {
 /// `(path requests received, of which stamped)` summed over the node's
 /// interfaces.
 fn path_request_counts(node: &RnsNode) -> (u64, u64) {
-    match node.query(QueryRequest::InterfaceStats) {
-        Ok(QueryResponse::InterfaceStats(stats)) => {
-            stats
-                .interfaces
-                .iter()
-                .fold((0, 0), |(received, stamped), iface| {
-                    (
-                        received + iface.traffic.prxc,
-                        stamped + iface.stamped_path_requests,
-                    )
-                })
-        }
+    match node.query(query::InterfaceStats) {
+        Ok(stats) => stats
+            .interfaces
+            .iter()
+            .fold((0, 0), |(received, stamped), iface| {
+                (
+                    received + iface.traffic.prxc,
+                    stamped + iface.stamped_path_requests,
+                )
+            }),
         other => panic!("unexpected interface stats response: {other:?}"),
     }
 }
@@ -7347,8 +7321,8 @@ fn test_shared_instance_stamps_path_requests_forwarded_for_local_clients() {
 
 /// Whether `node` has an interface named `name`, and whether it is up.
 fn interface_status(node: &RnsNode, name: &str) -> Option<bool> {
-    match node.query(QueryRequest::InterfaceStats) {
-        Ok(QueryResponse::InterfaceStats(stats)) => stats
+    match node.query(query::InterfaceStats) {
+        Ok(stats) => stats
             .interfaces
             .iter()
             .find(|iface| iface.name == name)

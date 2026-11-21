@@ -499,8 +499,8 @@ fn deliver(
 }
 
 fn interfaces(node: &RnsNode) -> Vec<rns_net::event::SingleInterfaceStat> {
-    match node.query(rns_net::event::QueryRequest::InterfaceStats) {
-        Ok(rns_net::event::QueryResponse::InterfaceStats(stats)) => stats.interfaces,
+    match node.query(rns_net::event::query::InterfaceStats) {
+        Ok(stats) => stats.interfaces,
         other => panic!("no interface stats: {other:?}"),
     }
 }

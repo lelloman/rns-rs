@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
-use rns_net::{Callbacks, Destination, IdentityHash, QueryRequest, QueryResponse, RnsNode};
+use rns_net::{event::query, Callbacks, Destination, IdentityHash, RnsNode};
 
 struct Quiet;
 
@@ -27,10 +27,7 @@ impl Callbacks for Quiet {}
 
 /// Whether the RNode interface is up, and the bytes it has sent.
 fn rnode_status(node: &RnsNode) -> Option<(bool, u64)> {
-    let QueryResponse::InterfaceStats(stats) = node.query(QueryRequest::InterfaceStats).ok()?
-    else {
-        return None;
-    };
+    let stats = node.query(query::InterfaceStats).ok()?;
     stats
         .interfaces
         .iter()

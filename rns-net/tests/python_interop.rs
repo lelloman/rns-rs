@@ -198,9 +198,7 @@ fn decrypt_delivery(raw: &[u8], identity: &Identity) -> Vec<u8> {
 fn wait_for_interop_interface(node: &RnsNode) {
     let deadline = Instant::now() + TIMEOUT;
     loop {
-        if let Ok(rns_net::event::QueryResponse::InterfaceStats(stats)) =
-            node.query(rns_net::event::QueryRequest::InterfaceStats)
-        {
+        if let Ok(stats) = node.query(rns_net::event::query::InterfaceStats) {
             if stats
                 .interfaces
                 .iter()
@@ -1166,11 +1164,11 @@ fn python_rns_stamped_link_request_interop() {
     // and must carry at least the announced cost. Link request stamping is
     // on by default again since upstream a8cc6cb2; enable it explicitly so
     // the test does not depend on that default.
-    match node.query(rns_net::event::QueryRequest::SetRuntimeConfig {
+    match node.query(rns_net::event::query::SetRuntimeConfig {
         key: "global.stamp_link_requests".into(),
         value: rns_net::event::RuntimeConfigValue::Bool(true),
     }) {
-        Ok(rns_net::event::QueryResponse::RuntimeConfigSet(Ok(_))) => {}
+        Ok(Ok(_)) => {}
         other => panic!("enabling link request stamps failed: {other:?}"),
     }
     let mut python_sig_pub = [0u8; 32];
@@ -1320,8 +1318,8 @@ fn python_rns_receives_tunnel_synthesis_from_rust_client() {
         .to_string();
     let deadline = Instant::now() + TIMEOUT;
     let remote = loop {
-        let reported = match node.query(rns_net::event::QueryRequest::InterfaceStats) {
-            Ok(rns_net::event::QueryResponse::InterfaceStats(stats)) => stats
+        let reported = match node.query(rns_net::event::query::InterfaceStats) {
+            Ok(stats) => stats
                 .interfaces
                 .into_iter()
                 .find(|iface| iface.remote_transport_info.is_some()),
@@ -1372,9 +1370,7 @@ fn rust_server_receives_tunnel_synthesis_from_python_client() {
         None,
         Default::default(),
     );
-    let Ok(rns_net::event::QueryResponse::TransportIdentity(Some(rust_transport))) =
-        node.query(rns_net::event::QueryRequest::TransportIdentity)
-    else {
+    let Ok(Some(rust_transport)) = node.query(rns_net::event::query::TransportIdentity) else {
         panic!("the Rust transport identity");
     };
     let rust_transport: String = rust_transport.iter().map(|b| format!("{b:02x}")).collect();
@@ -1390,13 +1386,11 @@ fn rust_server_receives_tunnel_synthesis_from_python_client() {
     // The Rust server records Python's tunnel on the client's interface.
     let deadline = Instant::now() + TIMEOUT;
     let client = loop {
-        let found = match node.query(rns_net::event::QueryRequest::InterfaceStats) {
-            Ok(rns_net::event::QueryResponse::InterfaceStats(stats)) => {
-                stats.interfaces.into_iter().find(|iface| {
-                    iface.remote_transport_id.is_some()
-                        && (!extension_supported || iface.remote_transport_info.is_some())
-                })
-            }
+        let found = match node.query(rns_net::event::query::InterfaceStats) {
+            Ok(stats) => stats.interfaces.into_iter().find(|iface| {
+                iface.remote_transport_id.is_some()
+                    && (!extension_supported || iface.remote_transport_info.is_some())
+            }),
             _ => None,
         };
         if let Some(iface) = found {

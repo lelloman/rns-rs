@@ -71,7 +71,7 @@ impl RnsNode {
         &self,
         dest_hash: &rns_core::types::DestHash,
     ) -> Result<Option<crate::destination::AnnouncedIdentity>, SendError> {
-        self.ask(query::RecallIdentity {
+        self.query(query::RecallIdentity {
             dest_hash: dest_hash.0,
         })
     }
@@ -82,7 +82,7 @@ impl RnsNode {
         &self,
         dest_hash: &rns_core::types::DestHash,
     ) -> Result<Option<crate::event::DestinationStampInfo>, SendError> {
-        self.ask(query::RecallDestinationStamp {
+        self.query(query::RecallDestinationStamp {
             dest_hash: dest_hash.0,
         })
     }
@@ -91,7 +91,7 @@ impl RnsNode {
     pub fn known_destinations(
         &self,
     ) -> Result<Vec<crate::event::KnownDestinationEntry>, SendError> {
-        self.ask(query::KnownDestinations)
+        self.query(query::KnownDestinations)
     }
 
     /// Mark a known destination as retained.
@@ -99,7 +99,7 @@ impl RnsNode {
         &self,
         dest_hash: &rns_core::types::DestHash,
     ) -> Result<bool, SendError> {
-        self.ask(query::RetainKnownDestination {
+        self.query(query::RetainKnownDestination {
             dest_hash: dest_hash.0,
         })
     }
@@ -130,7 +130,7 @@ impl RnsNode {
                 .and_then(|r| r.as_bool())
                 .unwrap_or(false));
         }
-        self.ask(query::RetainIdentity {
+        self.query(query::RetainIdentity {
             identity_hash: identity_hash.0,
         })
     }
@@ -141,7 +141,7 @@ impl RnsNode {
         known_destinations: impl IntoIterator<Item = ([u8; 16], storage::KnownDestination)>,
     ) {
         for (dest_hash, known) in known_destinations {
-            let _ = self.ask(query::RestoreKnownDestination(
+            let _ = self.query(query::RestoreKnownDestination(
                 crate::event::KnownDestinationEntry {
                     packet_hash: known.packet_hash,
                     dest_hash,
@@ -172,7 +172,7 @@ impl RnsNode {
         &self,
         dest_hash: &rns_core::types::DestHash,
     ) -> Result<bool, SendError> {
-        self.ask(query::UnretainKnownDestination {
+        self.query(query::UnretainKnownDestination {
             dest_hash: dest_hash.0,
         })
     }
@@ -182,7 +182,7 @@ impl RnsNode {
         &self,
         dest_hash: &rns_core::types::DestHash,
     ) -> Result<bool, SendError> {
-        self.ask(query::MarkKnownDestinationUsed {
+        self.query(query::MarkKnownDestinationUsed {
             dest_hash: dest_hash.0,
         })
     }
@@ -289,7 +289,7 @@ impl RnsNode {
         let Some(storage_dir) = self.transport_state_dir.as_ref() else {
             return;
         };
-        let Ok(snapshot) = self.ask(query::TransportStateSnapshot) else {
+        let Ok(snapshot) = self.query(query::TransportStateSnapshot) else {
             return;
         };
         if let Err(err) = storage::save_transport_state(&snapshot, storage_dir, true) {

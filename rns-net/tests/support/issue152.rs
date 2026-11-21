@@ -182,7 +182,7 @@ fn run_burst(async_api: bool) {
     let (prv, public) = extract_sig_keys(&bob_id);
     bob.register_link_destination(bob_dest.hash.0, prv, public, 0)
         .unwrap();
-    bob.query(QueryRequest::InterfaceStats).unwrap();
+    bob.query(query::InterfaceStats).unwrap();
 
     let armed = Arc::new(AtomicBool::new(false));
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -260,7 +260,7 @@ fn run_burst(async_api: bool) {
         }
     }
     // FIFO control-event barrier: all SendOnLink events have been dispatched.
-    alice.query(QueryRequest::InterfaceStats).unwrap();
+    alice.query(query::InterfaceStats).unwrap();
     assert!(alice.query_link([0; 16]).unwrap().is_none());
     let status = alice.query_link(link).unwrap().unwrap();
     assert_eq!(status.pending_send_packets, PACKETS as usize);

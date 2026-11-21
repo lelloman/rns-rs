@@ -69,37 +69,19 @@ fn managed_interface_attaches_disabled_section_and_reloads_from_disk() {
     write_config(9);
     let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
     let manage = |operation| {
-        node.query(QueryRequest::ManageInterface {
+        node.query(query::ManageInterface {
             operation,
             name: "Managed UDP".into(),
         })
         .unwrap()
     };
-    assert!(matches!(
-        manage(Operation::Detach),
-        QueryResponse::InterfaceManagement(None)
-    ));
-    assert!(matches!(
-        manage(Operation::Attach),
-        QueryResponse::InterfaceManagement(Some(true))
-    ));
-    assert!(matches!(
-        manage(Operation::Attach),
-        QueryResponse::InterfaceManagement(Some(false))
-    ));
+    assert!(manage(Operation::Detach).is_none());
+    assert!(matches!(manage(Operation::Attach), Some(true)));
+    assert!(matches!(manage(Operation::Attach), Some(false)));
     write_config(10);
-    assert!(matches!(
-        manage(Operation::Reload),
-        QueryResponse::InterfaceManagement(Some(true))
-    ));
-    assert!(matches!(
-        manage(Operation::Detach),
-        QueryResponse::InterfaceManagement(Some(true))
-    ));
-    assert!(matches!(
-        manage(Operation::Detach),
-        QueryResponse::InterfaceManagement(None)
-    ));
+    assert!(matches!(manage(Operation::Reload), Some(true)));
+    assert!(matches!(manage(Operation::Detach), Some(true)));
+    assert!(manage(Operation::Detach).is_none());
     node.shutdown();
 }
 
@@ -134,10 +116,7 @@ fn interface_ids_stay_unique_after_a_multi_interface() {
         )
         .unwrap();
     let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
-    let QueryResponse::InterfaceStats(stats) = node.query(QueryRequest::InterfaceStats).unwrap()
-    else {
-        panic!("expected interface stats");
-    };
+    let stats = node.query(query::InterfaceStats).unwrap();
     node.shutdown();
     let after_stat = stats
         .interfaces
@@ -174,12 +153,12 @@ fn interface_management_can_be_disabled() {
     .unwrap();
     let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
     assert!(matches!(
-        node.query(QueryRequest::ManageInterface {
+        node.query(query::ManageInterface {
             operation: Operation::Attach,
             name: "missing".into(),
         })
         .unwrap(),
-        QueryResponse::InterfaceManagement(Some(false))
+        Some(false)
     ));
     node.shutdown();
 }
@@ -197,25 +176,19 @@ fn managed_tcp_listener_releases_port_on_detach() {
         )).unwrap();
     let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
     let manage = |operation| {
-        node.query(QueryRequest::ManageInterface {
+        node.query(query::ManageInterface {
             operation,
             name: "Managed TCP".into(),
         })
         .unwrap()
     };
-    assert!(matches!(
-        manage(Operation::Attach),
-        QueryResponse::InterfaceManagement(Some(true))
-    ));
+    assert!(matches!(manage(Operation::Attach), Some(true)));
     let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
     client
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
     thread::sleep(Duration::from_millis(100));
-    assert!(matches!(
-        manage(Operation::Detach),
-        QueryResponse::InterfaceManagement(Some(true))
-    ));
+    assert!(matches!(manage(Operation::Detach), Some(true)));
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     while std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
         && std::time::Instant::now() < deadline
@@ -224,10 +197,7 @@ fn managed_tcp_listener_releases_port_on_detach() {
     }
     assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
     assert_eq!(client.read(&mut [0u8; 1]).unwrap(), 0);
-    assert!(matches!(
-        manage(Operation::Attach),
-        QueryResponse::InterfaceManagement(Some(true))
-    ));
+    assert!(matches!(manage(Operation::Attach), Some(true)));
     assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
     node.shutdown();
 }
@@ -1099,28 +1069,30 @@ fn known_destinations_persist_across_restart() {
     let (response_tx, response_rx) = std::sync::mpsc::channel();
     node.event_sender()
         .send(crate::event::Event::query(
-            QueryRequest::RestoreKnownDestination(crate::event::KnownDestinationEntry {
-                packet_hash: None,
-                dest_hash,
-                identity_hash: *identity.hash(),
-                public_key: identity.get_public_key().unwrap(),
-                app_data: Some(b"persisted".to_vec()),
-                hops: 2,
-                received_at: 55.0,
-                receiving_interface,
-                was_used: true,
-                last_used_at: Some(last_used_at),
-                retained: true,
-                stamp: None,
-                stamp_value: rns_core::stamp::StampValue::ZERO,
-                lr_cost: None,
-            }),
+            crate::event::QueryRequest::RestoreKnownDestination(
+                crate::event::KnownDestinationEntry {
+                    packet_hash: None,
+                    dest_hash,
+                    identity_hash: *identity.hash(),
+                    public_key: identity.get_public_key().unwrap(),
+                    app_data: Some(b"persisted".to_vec()),
+                    hops: 2,
+                    received_at: 55.0,
+                    receiving_interface,
+                    was_used: true,
+                    last_used_at: Some(last_used_at),
+                    retained: true,
+                    stamp: None,
+                    stamp_value: rns_core::stamp::StampValue::ZERO,
+                    lr_cost: None,
+                },
+            ),
             response_tx,
         ))
         .unwrap();
     assert!(matches!(
         response_rx.recv().unwrap(),
-        QueryResponse::RestoreKnownDestination(true)
+        crate::event::QueryResponse::RestoreKnownDestination(true)
     ));
     node.shutdown();
 
@@ -1225,11 +1197,7 @@ share_instance = False
     .unwrap();
 
     let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
-    let QueryResponse::TransportStateSnapshot(restored) =
-        node.query(QueryRequest::TransportStateSnapshot).unwrap()
-    else {
-        panic!("unexpected transport snapshot response");
-    };
+    let restored = node.query(query::TransportStateSnapshot).unwrap();
     // Upstream's full hashes load; the table keeps their first 16 bytes.
     let stored = |byte: u8| {
         let mut hash = [0u8; 32];
@@ -2146,8 +2114,8 @@ fn non_transport_node_uses_ephemeral_transport_identity_by_default() {
     )
     .unwrap();
 
-    let response = node.query(QueryRequest::TransportIdentity).unwrap();
-    let QueryResponse::TransportIdentity(Some(hash)) = response else {
+    let response = node.query(query::TransportIdentity).unwrap();
+    let Some(hash) = response else {
         panic!("transport identity query returned {response:?}");
     };
     assert_ne!(hash, stored_hash);
@@ -2220,8 +2188,8 @@ fn a_dialing_tcp_client_first_sends_a_synthesis_signed_by_the_transport_identity
         .expect("the first frame is a validly signed tunnel synthesis");
     let signer = Identity::from_public_key(&synthesis.public_key).unwrap();
 
-    let response = node.query(QueryRequest::TransportIdentity).unwrap();
-    let QueryResponse::TransportIdentity(Some(transport_identity)) = response else {
+    let response = node.query(query::TransportIdentity).unwrap();
+    let Some(transport_identity) = response else {
         panic!("transport identity query returned {response:?}");
     };
     assert_eq!(*signer.hash(), transport_identity);
@@ -2246,8 +2214,8 @@ fn non_transport_node_can_use_static_transport_identity() {
     )
     .unwrap();
 
-    let response = node.query(QueryRequest::TransportIdentity).unwrap();
-    let QueryResponse::TransportIdentity(Some(hash)) = response else {
+    let response = node.query(query::TransportIdentity).unwrap();
+    let Some(hash) = response else {
         panic!("transport identity query returned {response:?}");
     };
     assert_eq!(hash, stored_hash);
@@ -2296,19 +2264,15 @@ fn discoverable_interfaces_without_transport_need_static_transport_identity() {
         .unwrap();
         let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
         assert!(matches!(
-            node.query(QueryRequest::ManageInterface {
+            node.query(query::ManageInterface {
                 operation: Operation::Attach,
                 name: attached.clone(),
             })
             .unwrap(),
-            QueryResponse::InterfaceManagement(Some(true))
+            Some(true)
         ));
 
-        let QueryResponse::InterfaceStats(stats) =
-            node.query(QueryRequest::InterfaceStats).unwrap()
-        else {
-            panic!("expected interface stats");
-        };
+        let stats = node.query(query::InterfaceStats).unwrap();
         // The stored transport identity is used only when the instance is
         // allowed to be discoverable; otherwise it is ephemeral.
         let stored =
@@ -2319,8 +2283,8 @@ fn discoverable_interfaces_without_transport_need_static_transport_identity() {
             "{case}"
         );
         for name in [&startup, &attached] {
-            let QueryResponse::RuntimeConfigEntry(Some(entry)) = node
-                .query(QueryRequest::GetRuntimeConfig {
+            let Some(entry) = node
+                .query(query::GetRuntimeConfig {
                     key: format!("tcp_server.{name}.discoverable"),
                 })
                 .unwrap()
@@ -2579,9 +2543,7 @@ enable_transport = False
     );
     fs::write(dir.join("config"), config).unwrap();
     let node = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks)).unwrap();
-    let Ok(crate::event::QueryResponse::InterfaceStats(stats)) =
-        node.query(crate::event::QueryRequest::InterfaceStats)
-    else {
+    let Ok(stats) = node.query(crate::event::query::InterfaceStats) else {
         panic!("no interface stats");
     };
     let row = stats
@@ -3682,8 +3644,8 @@ fn from_config_applies_the_stamps_section_and_hop_limiter() {
         "global.stamp_link_requests",
         "global.always_stamp_link_requests",
     ] {
-        let QueryResponse::RuntimeConfigEntry(Some(entry)) = node
-            .query(QueryRequest::GetRuntimeConfig { key: key.into() })
+        let Some(entry) = node
+            .query(query::GetRuntimeConfig { key: key.into() })
             .unwrap()
         else {
             panic!("expected runtime config entry for {key}");
@@ -3731,8 +3693,8 @@ fn start_applies_the_node_config_stamps() {
         "global.stamps_enforced",
         "global.lr_stamps_enforced",
     ] {
-        let QueryResponse::RuntimeConfigEntry(Some(entry)) = node
-            .query(QueryRequest::GetRuntimeConfig { key: key.into() })
+        let Some(entry) = node
+            .query(query::GetRuntimeConfig { key: key.into() })
             .unwrap()
         else {
             panic!("expected runtime config entry for {key}");
