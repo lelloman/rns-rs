@@ -50,24 +50,16 @@ pub(super) fn handle_get_request(
 
 /// Upstream's `interface_stats` dict, with the inbound runtime counters.
 fn get_interface_stats(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::InterfaceStats)?;
-    if let QueryResponse::InterfaceStats(stats) = resp {
-        let mut response = interface_stats_to_pickle(&stats);
-        add_inbound_runtime_stats(&mut response, &stats, event_tx);
-        Ok(response)
-    } else {
-        Ok(PickleValue::None)
-    }
+    let stats = send_query(event_tx, query::InterfaceStats)?;
+    let mut response = interface_stats_to_pickle(&stats);
+    add_inbound_runtime_stats(&mut response, &stats, event_tx);
+    Ok(response)
 }
 
 /// Upstream's `get_link_distribution()`, see [`link_distribution_to_pickle`].
 fn get_link_distribution(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::LinkDistribution)?;
-    if let QueryResponse::LinkDistribution(entries) = resp {
-        Ok(link_distribution_to_pickle(&entries))
-    } else {
-        Ok(PickleValue::Dict(Vec::new()))
-    }
+    let entries = send_query(event_tx, query::LinkDistribution)?;
+    Ok(link_distribution_to_pickle(&entries))
 }
 
 /// The path table, optionally limited to `max_hops`.
@@ -75,42 +67,28 @@ fn get_path_table(request: &PickleValue, event_tx: &mut dyn RpcDriver) -> io::Re
     let max_hops = request
         .get("max_hops")
         .and_then(|v| v.as_int().map(|n| n as u8));
-    let resp = send_query(event_tx, QueryRequest::PathTable { max_hops })?;
-    if let QueryResponse::PathTable(entries) = resp {
-        Ok(path_table_to_pickle(&entries))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let entries = send_query(event_tx, query::PathTable { max_hops })?;
+    Ok(path_table_to_pickle(&entries))
 }
 
 /// The announce rate table.
 fn get_rate_table(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::RateTable)?;
-    if let QueryResponse::RateTable(entries) = resp {
-        Ok(rate_table_to_pickle(&entries))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let entries = send_query(event_tx, query::RateTable)?;
+    Ok(rate_table_to_pickle(&entries))
 }
 
 /// The lowest bitrate among the interfaces, or None.
 fn get_lowest_interface_bitrate(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::LowestInterfaceBitrate)?;
-    if let QueryResponse::LowestInterfaceBitrate(Some(bitrate)) = resp {
-        Ok(PickleValue::Int(bitrate as i64))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let bitrate = send_query(event_tx, query::LowestInterfaceBitrate)?;
+    Ok(bitrate.map_or(PickleValue::None, |bitrate| {
+        PickleValue::Int(bitrate as i64)
+    }))
 }
 
 /// The medium path timeout in seconds.
 fn get_medium_path_timeout(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::MediumPathTimeout)?;
-    if let QueryResponse::MediumPathTimeout(timeout) = resp {
-        Ok(PickleValue::Float(timeout))
-    } else {
-        Ok(PickleValue::Int(0))
-    }
+    let timeout = send_query(event_tx, query::MediumPathTimeout)?;
+    Ok(PickleValue::Float(timeout))
 }
 
 /// The first-hop timeout towards `destination_hash`.
@@ -119,27 +97,19 @@ fn get_first_hop_timeout(
     event_tx: &mut dyn RpcDriver,
 ) -> io::Result<PickleValue> {
     let hash = extract_dest_hash(request, "destination_hash")?;
-    let resp = send_query(event_tx, QueryRequest::FirstHopTimeout { dest_hash: hash })?;
+    let timeout = send_query(event_tx, query::FirstHopTimeout { dest_hash: hash })?;
     // Without a known bitrate upstream answers the
     // integer DEFAULT_PER_HOP_TIMEOUT.
-    if let QueryResponse::FirstHopTimeout(timeout) = resp {
-        Ok(python_number(timeout))
-    } else {
-        Ok(PickleValue::Float(
-            rns_core::constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP,
-        ))
-    }
+    Ok(python_number(timeout))
 }
 
 /// The next hop towards `destination_hash`, or None.
 fn get_next_hop(request: &PickleValue, event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
     let hash = extract_dest_hash(request, "destination_hash")?;
-    let resp = send_query(event_tx, QueryRequest::NextHop { dest_hash: hash })?;
-    if let QueryResponse::NextHop(Some(nh)) = resp {
-        Ok(PickleValue::Bytes(nh.next_hop.to_vec()))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let next_hop = send_query(event_tx, query::NextHop { dest_hash: hash })?;
+    Ok(next_hop.map_or(PickleValue::None, |nh| {
+        PickleValue::Bytes(nh.next_hop.to_vec())
+    }))
 }
 
 /// The name of the next-hop interface towards `destination_hash`.
@@ -148,54 +118,34 @@ fn get_next_hop_if_name(
     event_tx: &mut dyn RpcDriver,
 ) -> io::Result<PickleValue> {
     let hash = extract_dest_hash(request, "destination_hash")?;
-    let resp = send_query(event_tx, QueryRequest::NextHopIfName { dest_hash: hash })?;
+    let name = send_query(event_tx, query::NextHopIfName { dest_hash: hash })?;
     // Upstream answers str(next_hop_interface): "None"
     // when it has none.
-    if let QueryResponse::NextHopIfName(Some(name)) = resp {
-        Ok(PickleValue::String(name))
-    } else {
-        Ok(PickleValue::String("None".into()))
-    }
+    Ok(PickleValue::String(name.unwrap_or_else(|| "None".into())))
 }
 
 /// The number of links.
 fn get_link_count(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::LinkCount)?;
-    if let QueryResponse::LinkCount(n) = resp {
-        Ok(PickleValue::Int(n as i64))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let count = send_query(event_tx, query::LinkCount)?;
+    Ok(PickleValue::Int(count as i64))
 }
 
 /// The number of active links.
 fn get_active_link_count(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::ActiveLinkCount)?;
-    if let QueryResponse::ActiveLinkCount(n) = resp {
-        Ok(PickleValue::Int(n as i64))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let count = send_query(event_tx, query::ActiveLinkCount)?;
+    Ok(PickleValue::Int(count as i64))
 }
 
 /// The transport identity hash, or None.
 fn get_transport_identity(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::TransportIdentity)?;
-    if let QueryResponse::TransportIdentity(Some(hash)) = resp {
-        Ok(PickleValue::Bytes(hash.to_vec()))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let hash = send_query(event_tx, query::TransportIdentity)?;
+    Ok(hash.map_or(PickleValue::None, |hash| PickleValue::Bytes(hash.to_vec())))
 }
 
 /// The blackholed identities as a list.
 fn get_blackholed(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::GetBlackholed)?;
-    if let QueryResponse::Blackholed(entries) = resp {
-        Ok(blackholed_to_pickle(&entries))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let entries = send_query(event_tx, query::GetBlackholed)?;
+    Ok(blackholed_to_pickle(&entries))
 }
 
 /// The RSSI, SNR or link quality (by `path`) a packet arrived with.
@@ -211,8 +161,7 @@ fn get_packet_signal(
     else {
         return Ok(PickleValue::None);
     };
-    let resp = send_query(event_tx, QueryRequest::PacketSignal { packet_hash })?;
-    let QueryResponse::PacketSignal(Some(signal)) = resp else {
+    let Some(signal) = send_query(event_tx, query::PacketSignal { packet_hash })? else {
         return Ok(PickleValue::None);
     };
     Ok(match path {
@@ -228,12 +177,8 @@ fn get_packet_signal(
 
 /// The blackholed identities as a dict keyed by identity hash.
 fn get_blackholed_identities(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::GetBlackholed)?;
-    if let QueryResponse::Blackholed(entries) = resp {
-        Ok(blackholed_identities_to_pickle(&entries))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let entries = send_query(event_tx, query::GetBlackholed)?;
+    Ok(blackholed_identities_to_pickle(&entries))
 }
 
 /// Whether `identity_hash` is blackholed.
@@ -248,12 +193,10 @@ fn get_is_blackholed(
     else {
         return Ok(PickleValue::Bool(false));
     };
-    let resp = send_query(event_tx, QueryRequest::GetBlackholed)?;
-    Ok(PickleValue::Bool(matches!(
-        resp,
-        QueryResponse::Blackholed(entries)
-            if entries.iter().any(|e| e.identity_hash == identity_hash)
-    )))
+    let entries = send_query(event_tx, query::GetBlackholed)?;
+    Ok(PickleValue::Bool(
+        entries.iter().any(|e| e.identity_hash == identity_hash),
+    ))
 }
 
 /// The discovered interfaces, filtered as the request asks.
@@ -269,18 +212,14 @@ fn get_discovered_interfaces(
         .get("only_transport")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let resp = send_query(
+    let interfaces = send_query(
         event_tx,
-        QueryRequest::DiscoveredInterfaces {
+        query::DiscoveredInterfaces {
             only_available,
             only_transport,
         },
     )?;
-    if let QueryResponse::DiscoveredInterfaces(interfaces) = resp {
-        Ok(discovered_interfaces_to_pickle(&interfaces))
-    } else {
-        Ok(PickleValue::None)
-    }
+    Ok(discovered_interfaces_to_pickle(&interfaces))
 }
 
 /// The loaded hooks.
@@ -295,32 +234,20 @@ fn get_hooks(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
 
 /// Every runtime-config entry.
 fn get_runtime_config(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::ListRuntimeConfig)?;
-    if let QueryResponse::RuntimeConfigList(entries) = resp {
-        Ok(runtime_config_list_to_pickle(&entries))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let entries = send_query(event_tx, query::ListRuntimeConfig)?;
+    Ok(runtime_config_list_to_pickle(&entries))
 }
 
 /// The known destinations in upstream's shape.
 fn get_known_destinations(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::KnownDestinations)?;
-    if let QueryResponse::KnownDestinations(entries) = resp {
-        Ok(known_destinations_to_upstream(&entries))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let entries = send_query(event_tx, query::KnownDestinations)?;
+    Ok(known_destinations_to_upstream(&entries))
 }
 
 /// The known destinations as this implementation's list.
 fn get_known_destination_entries(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::KnownDestinations)?;
-    if let QueryResponse::KnownDestinations(entries) = resp {
-        Ok(known_destinations_to_pickle(&entries))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let entries = send_query(event_tx, query::KnownDestinations)?;
+    Ok(known_destinations_to_pickle(&entries))
 }
 
 /// The runtime-config entry for `key`, or None.
@@ -333,15 +260,11 @@ fn get_runtime_config_entry(
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
-    let resp = send_query(event_tx, QueryRequest::GetRuntimeConfig { key })?;
-    if let QueryResponse::RuntimeConfigEntry(entry) = resp {
-        Ok(entry
-            .as_ref()
-            .map(runtime_config_entry_to_pickle)
-            .unwrap_or(PickleValue::None))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let entry = send_query(event_tx, query::GetRuntimeConfig { key })?;
+    Ok(entry
+        .as_ref()
+        .map(runtime_config_entry_to_pickle)
+        .unwrap_or(PickleValue::None))
 }
 
 /// The backbone peer state, optionally of one interface.
@@ -353,43 +276,27 @@ fn get_backbone_peer_state(
         .get("interface")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let resp = send_query(event_tx, QueryRequest::BackbonePeerState { interface_name })?;
-    if let QueryResponse::BackbonePeerState(entries) = resp {
-        Ok(backbone_peer_state_to_pickle(&entries))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let entries = send_query(event_tx, query::BackbonePeerState { interface_name })?;
+    Ok(backbone_peer_state_to_pickle(&entries))
 }
 
 /// The backbone interfaces.
 fn get_backbone_interfaces(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::BackboneInterfaces)?;
-    if let QueryResponse::BackboneInterfaces(entries) = resp {
-        Ok(backbone_interfaces_to_pickle(&entries))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let entries = send_query(event_tx, query::BackboneInterfaces)?;
+    Ok(backbone_interfaces_to_pickle(&entries))
 }
 
 /// The provider bridge statistics, or None.
 fn get_provider_bridge_stats(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::ProviderBridgeStats)?;
-    if let QueryResponse::ProviderBridgeStats(stats) = resp {
-        Ok(stats
-            .as_ref()
-            .map(provider_bridge_stats_to_pickle)
-            .unwrap_or(PickleValue::None))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let stats = send_query(event_tx, query::ProviderBridgeStats)?;
+    Ok(stats
+        .as_ref()
+        .map(provider_bridge_stats_to_pickle)
+        .unwrap_or(PickleValue::None))
 }
 
 /// The drain status.
 fn get_drain_status(event_tx: &mut dyn RpcDriver) -> io::Result<PickleValue> {
-    let resp = send_query(event_tx, QueryRequest::DrainStatus)?;
-    if let QueryResponse::DrainStatus(status) = resp {
-        Ok(drain_status_to_pickle(&status))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let status = send_query(event_tx, query::DrainStatus)?;
+    Ok(drain_status_to_pickle(&status))
 }

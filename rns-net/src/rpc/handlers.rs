@@ -32,14 +32,6 @@ pub(super) fn send_probe_error_pickle(err: crate::event::SendProbeError) -> Pick
     PickleValue::Dict(entries)
 }
 
-/// The answer to a destination type registration: whether it was accepted.
-pub(super) fn destination_type_registration(response: QueryResponse) -> PickleValue {
-    PickleValue::Bool(matches!(
-        response,
-        QueryResponse::DestinationTypeRegistration(true)
-    ))
-}
-
 /// A handler for one kind of RPC request: `None` when the request is not
 /// of its kind, so the next handler gets to look at it.
 type RpcHandler = fn(&PickleValue, &mut dyn RpcDriver) -> io::Result<Option<PickleValue>>;
@@ -101,15 +93,12 @@ fn handle_manage_request(
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing interface name"))?;
     let result = send_query(
         event_tx,
-        QueryRequest::ManageInterface {
+        query::ManageInterface {
             operation,
             name: name.to_string(),
         },
     )?;
-    Ok(Some(match result {
-        QueryResponse::InterfaceManagement(Some(value)) => PickleValue::Bool(value),
-        _ => PickleValue::None,
-    }))
+    Ok(Some(result.map_or(PickleValue::None, PickleValue::Bool)))
 }
 
 /// `{"get": <path>, ...}`, answered by [`get::handle_get_request`].
@@ -152,24 +141,13 @@ fn handle_destination_data(
         return Ok(None);
     };
     let dest_hash = extract_dest_hash(request, "destination_hash")?;
-    let resp = match operation {
-        "used" => send_query(
-            event_tx,
-            QueryRequest::MarkKnownDestinationUsed { dest_hash },
-        )?,
-        "retain" => send_query(event_tx, QueryRequest::RetainKnownDestination { dest_hash })?,
-        "unretain" => send_query(
-            event_tx,
-            QueryRequest::UnretainKnownDestination { dest_hash },
-        )?,
+    let known = match operation {
+        "used" => send_query(event_tx, query::MarkKnownDestinationUsed { dest_hash })?,
+        "retain" => send_query(event_tx, query::RetainKnownDestination { dest_hash })?,
+        "unretain" => send_query(event_tx, query::UnretainKnownDestination { dest_hash })?,
         _ => return Ok(Some(PickleValue::None)),
     };
-    Ok(Some(match resp {
-        QueryResponse::MarkKnownDestinationUsed(ok)
-        | QueryResponse::RetainKnownDestination(ok)
-        | QueryResponse::UnretainKnownDestination(ok) => PickleValue::Bool(ok),
-        _ => PickleValue::None,
-    }))
+    Ok(Some(PickleValue::Bool(known)))
 }
 
 /// Upstream's `identity_data` call: "retain" every known destination of
@@ -185,11 +163,8 @@ fn handle_identity_data(
         return Ok(Some(PickleValue::None));
     }
     let identity_hash = extract_dest_hash(request, "identity_hash")?;
-    let resp = send_query(event_tx, QueryRequest::RetainIdentity { identity_hash })?;
-    Ok(Some(match resp {
-        QueryResponse::RetainIdentity(ok) => PickleValue::Bool(ok),
-        _ => PickleValue::None,
-    }))
+    let retained = send_query(event_tx, query::RetainIdentity { identity_hash })?;
+    Ok(Some(PickleValue::Bool(retained)))
 }
 
 /// `{"set": ...}` for known destinations, identities and runtime config.
@@ -204,33 +179,18 @@ fn handle_set_request(
     };
     if set_val == "known_destination_retained" {
         let dest_hash = extract_dest_hash(request, "dest_hash")?;
-        let resp = send_query(event_tx, QueryRequest::RetainKnownDestination { dest_hash })?;
-        return if let QueryResponse::RetainKnownDestination(ok) = resp {
-            Ok(Some(PickleValue::Bool(ok)))
-        } else {
-            Ok(Some(PickleValue::None))
-        };
+        let retained = send_query(event_tx, query::RetainKnownDestination { dest_hash })?;
+        return Ok(Some(PickleValue::Bool(retained)));
     }
     if set_val == "identity_retained" {
         let identity_hash = extract_dest_hash(request, "identity_hash")?;
-        let resp = send_query(event_tx, QueryRequest::RetainIdentity { identity_hash })?;
-        return if let QueryResponse::RetainIdentity(ok) = resp {
-            Ok(Some(PickleValue::Bool(ok)))
-        } else {
-            Ok(Some(PickleValue::None))
-        };
+        let retained = send_query(event_tx, query::RetainIdentity { identity_hash })?;
+        return Ok(Some(PickleValue::Bool(retained)));
     }
     if set_val == "known_destination_used" {
         let dest_hash = extract_dest_hash(request, "dest_hash")?;
-        let resp = send_query(
-            event_tx,
-            QueryRequest::MarkKnownDestinationUsed { dest_hash },
-        )?;
-        return if let QueryResponse::MarkKnownDestinationUsed(ok) = resp {
-            Ok(Some(PickleValue::Bool(ok)))
-        } else {
-            Ok(Some(PickleValue::None))
-        };
+        let marked = send_query(event_tx, query::MarkKnownDestinationUsed { dest_hash })?;
+        return Ok(Some(PickleValue::Bool(marked)));
     }
     if set_val == "runtime_config" {
         return set_runtime_config(request, event_tx).map(Some);
@@ -257,12 +217,8 @@ fn set_runtime_config(
             message: "runtime-config set requires a scalar value".into(),
         }));
     };
-    let resp = send_query(event_tx, QueryRequest::SetRuntimeConfig { key, value })?;
-    if let QueryResponse::RuntimeConfigSet(result) = resp {
-        Ok(runtime_config_result_to_pickle(result))
-    } else {
-        Ok(PickleValue::None)
-    }
+    let result = send_query(event_tx, query::SetRuntimeConfig { key, value })?;
+    Ok(runtime_config_result_to_pickle(result))
 }
 
 /// `{"reset": "runtime_config", "key": ...}`.
@@ -278,12 +234,8 @@ fn handle_reset_request(
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
-    let resp = send_query(event_tx, QueryRequest::ResetRuntimeConfig { key })?;
-    if let QueryResponse::RuntimeConfigReset(result) = resp {
-        Ok(Some(runtime_config_result_to_pickle(result)))
-    } else {
-        Ok(Some(PickleValue::None))
-    }
+    let result = send_query(event_tx, query::ResetRuntimeConfig { key })?;
+    Ok(Some(runtime_config_result_to_pickle(result)))
 }
 
 /// `{"clear": ...}` for a retained known destination or a backbone peer's
@@ -297,15 +249,8 @@ fn handle_clear_request(
     };
     if clear_val == "known_destination_retained" {
         let dest_hash = extract_dest_hash(request, "dest_hash")?;
-        let resp = send_query(
-            event_tx,
-            QueryRequest::UnretainKnownDestination { dest_hash },
-        )?;
-        return if let QueryResponse::UnretainKnownDestination(ok) = resp {
-            Ok(Some(PickleValue::Bool(ok)))
-        } else {
-            Ok(Some(PickleValue::None))
-        };
+        let unretained = send_query(event_tx, query::UnretainKnownDestination { dest_hash })?;
+        return Ok(Some(PickleValue::Bool(unretained)));
     }
     if clear_val == "backbone_peer_state" {
         let interface_name = required_string(request, "interface")?;
@@ -313,18 +258,14 @@ fn handle_clear_request(
         let peer_ip = peer_ip
             .parse()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid peer IP"))?;
-        let resp = send_query(
+        let cleared = send_query(
             event_tx,
-            QueryRequest::ClearBackbonePeerState {
+            query::ClearBackbonePeerState {
                 interface_name,
                 peer_ip,
             },
         )?;
-        return if let QueryResponse::ClearBackbonePeerState(ok) = resp {
-            Ok(Some(PickleValue::Bool(ok)))
-        } else {
-            Ok(Some(PickleValue::None))
-        };
+        return Ok(Some(PickleValue::Bool(cleared)));
     }
     Ok(None)
 }
@@ -356,9 +297,9 @@ fn handle_set_backbone_peer_blacklist(
         .and_then(|v| v.as_int())
         .unwrap_or(0)
         .clamp(0, u8::MAX as i64) as u8;
-    let resp = send_query(
+    let blacklisted = send_query(
         event_tx,
-        QueryRequest::BlacklistBackbonePeer {
+        query::BlacklistBackbonePeer {
             interface_name,
             peer_ip,
             duration: Duration::from_secs(duration_secs as u64),
@@ -366,11 +307,7 @@ fn handle_set_backbone_peer_blacklist(
             penalty_level,
         },
     )?;
-    if let QueryResponse::BlacklistBackbonePeer(ok) = resp {
-        Ok(Some(PickleValue::Bool(ok)))
-    } else {
-        Ok(Some(PickleValue::None))
-    }
+    Ok(Some(PickleValue::Bool(blacklisted)))
 }
 
 /// `{"request_path": <dest hash>}`: trigger a path request to the network.
@@ -418,15 +355,15 @@ fn handle_send_probe(
             },
         )));
     }
-    let resp = send_query(
+    let sent = send_query(
         event_tx,
-        QueryRequest::SendProbe {
+        query::SendProbe {
             dest_hash,
             payload_size,
         },
     )?;
-    Ok(Some(match resp {
-        QueryResponse::SendProbe(Ok((packet_hash, hops))) => PickleValue::Dict(vec![
+    Ok(Some(match sent {
+        Ok((packet_hash, hops)) => PickleValue::Dict(vec![
             (
                 PickleValue::String("packet_hash".into()),
                 PickleValue::Bytes(packet_hash.to_vec()),
@@ -436,8 +373,7 @@ fn handle_send_probe(
                 PickleValue::Int(hops as i64),
             ),
         ]),
-        QueryResponse::SendProbe(Err(err)) => send_probe_error_pickle(err),
-        _ => PickleValue::None,
+        Err(err) => send_probe_error_pickle(err),
     }))
 }
 
@@ -452,12 +388,8 @@ fn handle_check_proof(
             if hash_bytes.len() >= 32 {
                 let mut packet_hash = [0u8; 32];
                 packet_hash.copy_from_slice(&hash_bytes[..32]);
-                let resp = send_query(event_tx, QueryRequest::CheckProof { packet_hash })?;
-                if let QueryResponse::CheckProof(Some(rtt)) = resp {
-                    return Ok(Some(PickleValue::Float(rtt)));
-                } else {
-                    return Ok(Some(PickleValue::None));
-                }
+                let rtt = send_query(event_tx, query::CheckProof { packet_hash })?;
+                return Ok(Some(rtt.map_or(PickleValue::None, PickleValue::Float)));
             }
         }
     }
@@ -488,17 +420,18 @@ fn handle_blackhole_identity(
         .get("reason")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let resp = send_query(
+    let added = send_query(
         event_tx,
-        QueryRequest::BlackholeIdentity {
+        query::BlackholeIdentity {
             identity_hash,
             duration_hours,
             reason,
         },
     )?;
-    Ok(Some(match resp {
-        QueryResponse::BlackholeResult(true) => PickleValue::Bool(true),
-        _ => PickleValue::None,
+    Ok(Some(if added {
+        PickleValue::Bool(true)
+    } else {
+        PickleValue::None
     }))
 }
 
@@ -517,13 +450,11 @@ fn handle_unblackhole_identity(
     else {
         return Ok(Some(PickleValue::Bool(false)));
     };
-    let resp = send_query(
-        event_tx,
-        QueryRequest::UnblackholeIdentity { identity_hash },
-    )?;
-    Ok(Some(match resp {
-        QueryResponse::UnblackholeResult(true) => PickleValue::Bool(true),
-        _ => PickleValue::None,
+    let lifted = send_query(event_tx, query::UnblackholeIdentity { identity_hash })?;
+    Ok(Some(if lifted {
+        PickleValue::Bool(true)
+    } else {
+        PickleValue::None
     }))
 }
 
@@ -542,18 +473,15 @@ fn handle_blackhole(
                     .get("reason")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                let resp = send_query(
+                let added = send_query(
                     event_tx,
-                    QueryRequest::BlackholeIdentity {
+                    query::BlackholeIdentity {
                         identity_hash,
                         duration_hours,
                         reason,
                     },
                 )?;
-                return Ok(Some(PickleValue::Bool(matches!(
-                    resp,
-                    QueryResponse::BlackholeResult(true)
-                ))));
+                return Ok(Some(PickleValue::Bool(added)));
             }
         }
     }
@@ -573,14 +501,14 @@ fn handle_destination_type_wants(
             .and_then(|v| v.as_str()),
         request.get("requester").and_then(|v| v.as_bytes()),
     ) {
-        let resp = send_query(
+        let accepted = send_query(
             event_tx,
-            QueryRequest::WantsDestinationType {
+            query::WantsDestinationType {
                 full_name: full_name.to_string(),
                 requester: requester.to_vec(),
             },
         )?;
-        return Ok(Some(destination_type_registration(resp)));
+        return Ok(Some(PickleValue::Bool(accepted)));
     }
     if let (Some(full_name), Some(requester)) = (
         request
@@ -588,26 +516,26 @@ fn handle_destination_type_wants(
             .and_then(|v| v.as_str()),
         request.get("requester").and_then(|v| v.as_bytes()),
     ) {
-        let resp = send_query(
+        let accepted = send_query(
             event_tx,
-            QueryRequest::UnwantsDestinationType {
+            query::UnwantsDestinationType {
                 full_name: full_name.to_string(),
                 requester: requester.to_vec(),
             },
         )?;
-        return Ok(Some(destination_type_registration(resp)));
+        return Ok(Some(PickleValue::Bool(accepted)));
     }
     if let (Some(_), Some(requester)) = (
         request.get("unwants_all_destination_types"),
         request.get("requester").and_then(|v| v.as_bytes()),
     ) {
-        let resp = send_query(
+        let accepted = send_query(
             event_tx,
-            QueryRequest::UnwantsAllDestinationTypes {
+            query::UnwantsAllDestinationTypes {
                 requester: requester.to_vec(),
             },
         )?;
-        return Ok(Some(destination_type_registration(resp)));
+        return Ok(Some(PickleValue::Bool(accepted)));
     }
     Ok(None)
 }
@@ -622,14 +550,8 @@ fn handle_unblackhole(
             if hash_bytes.len() >= 16 {
                 let mut identity_hash = [0u8; 16];
                 identity_hash.copy_from_slice(&hash_bytes[..16]);
-                let resp = send_query(
-                    event_tx,
-                    QueryRequest::UnblackholeIdentity { identity_hash },
-                )?;
-                return Ok(Some(PickleValue::Bool(matches!(
-                    resp,
-                    QueryResponse::UnblackholeResult(true)
-                ))));
+                let lifted = send_query(event_tx, query::UnblackholeIdentity { identity_hash })?;
+                return Ok(Some(PickleValue::Bool(lifted)));
             }
         }
     }
@@ -648,29 +570,20 @@ fn handle_drop(
     let response = match path {
         "path" => {
             let hash = extract_dest_hash(request, "destination_hash")?;
-            let resp = send_query(event_tx, QueryRequest::DropPath { dest_hash: hash })?;
-            if let QueryResponse::DropPath(ok) = resp {
-                PickleValue::Bool(ok)
-            } else {
-                PickleValue::None
-            }
+            PickleValue::Bool(send_query(event_tx, query::DropPath { dest_hash: hash })?)
         }
         "all_via" => {
             let hash = extract_dest_hash(request, "destination_hash")?;
-            let resp = send_query(
+            let dropped = send_query(
                 event_tx,
-                QueryRequest::DropAllVia {
+                query::DropAllVia {
                     transport_hash: hash,
                 },
             )?;
-            if let QueryResponse::DropAllVia(n) = resp {
-                PickleValue::Int(n as i64)
-            } else {
-                PickleValue::None
-            }
+            PickleValue::Int(dropped as i64)
         }
         "announce_queues" => {
-            send_query(event_tx, QueryRequest::DropAnnounceQueues)?;
+            send_query(event_tx, query::DropAnnounceQueues)?;
             // Upstream's drop_announce_queues returns None.
             PickleValue::None
         }
@@ -852,11 +765,13 @@ impl RpcDriver for EventSender {
     }
 }
 
-pub(super) fn send_query(
+/// Ask the driver `query` and take its answer.
+pub(super) fn send_query<Q: Query>(
     event_tx: &mut dyn RpcDriver,
-    request: QueryRequest,
-) -> io::Result<QueryResponse> {
-    event_tx.query(request)
+    query: Q,
+) -> io::Result<Q::Response> {
+    Q::response(event_tx.query(query.into())?)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "driver answered another query"))
 }
 
 pub(super) fn try_send_event(event_tx: &mut dyn RpcDriver, event: Event) -> io::Result<()> {

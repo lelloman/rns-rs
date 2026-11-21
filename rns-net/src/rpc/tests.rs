@@ -590,7 +590,7 @@ fn full_event_queue_fails_rpc_query_without_blocking() {
 
     let (result_tx, result_rx) = mpsc::channel();
     let query_thread = thread::spawn(move || {
-        let _ = result_tx.send(send_query(&mut event_tx.clone(), QueryRequest::LinkCount));
+        let _ = result_tx.send(send_query(&mut event_tx.clone(), query::LinkCount));
     });
 
     let completed_promptly = match result_rx.recv_timeout(Duration::from_millis(250)) {

@@ -46,11 +46,12 @@ use rns_crypto::sha256::sha256;
 #[cfg(test)]
 use crate::event::TrafficDetail;
 use crate::event::{
-    BackboneInterfaceEntry, BackbonePeerStateEntry, BlackholeInfo, BurstClassStats, DrainStatus,
-    DynamicBurstStats, Event, EventSender, HookInfo, InterfaceStatsResponse, KnownDestinationEntry,
-    LifecycleState, LinkDistributionEntry, PathTableEntry, ProviderBridgeStats, QueryRequest,
-    QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
-    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
+    query, BackboneInterfaceEntry, BackbonePeerStateEntry, BlackholeInfo, BurstClassStats,
+    DrainStatus, DynamicBurstStats, Event, EventSender, HookInfo, InterfaceStatsResponse,
+    KnownDestinationEntry, LifecycleState, LinkDistributionEntry, PathTableEntry,
+    ProviderBridgeStats, Query, QueryRequest, QueryResponse, RateTableEntry,
+    RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
+    RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
 use crate::listen::{Listener, ListenerWake};
 use crate::pickle::{self, PickleValue};
