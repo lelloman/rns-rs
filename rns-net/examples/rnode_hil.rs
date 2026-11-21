@@ -9,8 +9,11 @@
 //! - verifies A -> B and B -> A payload delivery over RF
 //! - sends LEAVE and verifies each board can be detected again
 
-// Bench-top test code, outside the code-quality lints' scope.
-#![allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
+#![allow(
+    unsafe_code,
+    clippy::undocumented_unsafe_blocks,
+    reason = "bench-top test code, outside the code-quality lints' scope"
+)]
 
 use std::env;
 use std::fs::File;
