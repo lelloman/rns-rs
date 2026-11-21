@@ -683,7 +683,7 @@ fn make_pool_candidate_with_priority(
             size: 16,
         },
         ifac_enabled: false,
-        interface_type_name: "BackboneInterface".to_string(),
+        interface_kind: crate::interface::InterfaceKind::Backbone,
         source: BackbonePeerPoolCandidateSource::Configured,
         priority,
         discovery: None,

@@ -46,7 +46,7 @@ pub(crate) struct BackbonePeerPoolCandidateConfig {
     pub(crate) stamp_costs: rns_core::transport::types::InterfaceStampCosts,
     pub(crate) ifac_runtime: IfacRuntimeConfig,
     pub(crate) ifac_enabled: bool,
-    pub(crate) interface_type_name: String,
+    pub(crate) interface_kind: crate::interface::InterfaceKind,
     pub(crate) source: BackbonePeerPoolCandidateSource,
     pub(crate) priority: u8,
     pub(crate) discovery: Option<BackbonePeerPoolDiscoveryCandidate>,
@@ -226,7 +226,7 @@ impl BackbonePeerPool {
                 stamp_costs: Default::default(),
                 ifac_runtime,
                 ifac_enabled,
-                interface_type_name: "BackboneInterface".to_string(),
+                interface_kind: crate::interface::InterfaceKind::Backbone,
                 source: BackbonePeerPoolCandidateSource::Discovered,
                 priority: BACKBONE_PEER_POOL_DISCOVERED_PRIORITY,
                 discovery: Some(discovery),
@@ -452,9 +452,11 @@ impl BackbonePeerPool {
     pub(super) fn discovered_backbone_peer_endpoint(
         iface: &crate::discovery::DiscoveredInterface,
     ) -> Option<DiscoveredEndpoint> {
+        use crate::interface::InterfaceKind;
+
         if !matches!(
-            iface.interface_type.as_str(),
-            "BackboneInterface" | "TCPServerInterface"
+            InterfaceKind::from_type_name(&iface.interface_type),
+            Some(InterfaceKind::Backbone | InterfaceKind::TcpServer)
         ) {
             return None;
         }

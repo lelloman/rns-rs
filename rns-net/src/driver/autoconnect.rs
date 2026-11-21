@@ -275,7 +275,9 @@ impl Driver {
             return;
         }
         // Upstream auto-connects only Backbone interfaces.
-        if iface.interface_type != "BackboneInterface" {
+        if crate::interface::InterfaceKind::from_type_name(&iface.interface_type)
+            != Some(crate::interface::InterfaceKind::Backbone)
+        {
             return;
         }
         if !Self::autoconnect_qualified(
@@ -385,7 +387,7 @@ impl Driver {
             ifac_runtime,
             ifac_enabled,
             // Upstream auto-connects a BackboneClientInterface.
-            interface_type_name: "BackboneClientInterface".to_string(),
+            interface_kind: crate::interface::InterfaceKind::BackboneClient,
             source: BackbonePeerPoolCandidateSource::Discovered,
             priority: BACKBONE_PEER_POOL_DISCOVERED_PRIORITY,
             discovery: None,

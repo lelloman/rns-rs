@@ -231,7 +231,7 @@ impl InterfaceStarter<'_> {
                 ifac_enabled,
                 // Upstream starts a BackboneClientInterface for a Backbone
                 // interface with a target host.
-                interface_type_name: "BackboneClientInterface".to_string(),
+                interface_kind: crate::interface::InterfaceKind::BackboneClient,
                 source: crate::driver::BackbonePeerPoolCandidateSource::Configured,
                 priority,
                 discovery: None,
