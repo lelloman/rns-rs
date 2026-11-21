@@ -549,7 +549,7 @@ impl Driver {
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         match key {
-            "global.tick_interval_ms" => match Self::expect_u64(value, key) {
+            "global.tick_interval_ms" => match expect_u64(value, key) {
                 Ok(value) => {
                     let clamped = value.clamp(100, 10_000);
                     self.tick_interval_ms.store(clamped, Ordering::Relaxed);
@@ -557,14 +557,14 @@ impl Driver {
                 }
                 Err(err) => Err(err),
             },
-            "global.known_destinations_ttl_secs" => match Self::expect_f64(value, key) {
+            "global.known_destinations_ttl_secs" => match expect_f64(value, key) {
                 Ok(value) => {
                     self.known.ttl = value;
                     Ok(())
                 }
                 Err(err) => Err(err),
             },
-            "global.rate_limiter_ttl_secs" => match Self::expect_f64(value, key) {
+            "global.rate_limiter_ttl_secs" => match expect_f64(value, key) {
                 Ok(value) if value >= 0.0 => {
                     self.rate_limiter_ttl_secs = value;
                     Ok(())
@@ -575,20 +575,18 @@ impl Driver {
                 }),
                 Err(err) => Err(err),
             },
-            "global.known_destinations_cleanup_interval_ticks" => {
-                match Self::expect_u64(value, key) {
-                    Ok(value) if value > 0 => {
-                        self.known.cleanup_interval_ticks = value as u32;
-                        Ok(())
-                    }
-                    Ok(_) => Err(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::InvalidValue,
-                        message: format!("{} must be >= 1", key),
-                    }),
-                    Err(err) => Err(err),
+            "global.known_destinations_cleanup_interval_ticks" => match expect_u64(value, key) {
+                Ok(value) if value > 0 => {
+                    self.known.cleanup_interval_ticks = value as u32;
+                    Ok(())
                 }
-            }
-            "global.announce_cache_cleanup_interval_ticks" => match Self::expect_u64(value, key) {
+                Ok(_) => Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::InvalidValue,
+                    message: format!("{} must be >= 1", key),
+                }),
+                Err(err) => Err(err),
+            },
+            "global.announce_cache_cleanup_interval_ticks" => match expect_u64(value, key) {
                 Ok(value) if value > 0 => {
                     self.housekeeping.announce_cache_cleanup_interval_ticks = value as u32;
                     Ok(())
@@ -599,7 +597,7 @@ impl Driver {
                 }),
                 Err(err) => Err(err),
             },
-            "global.announce_cache_cleanup_batch_size" => match Self::expect_u64(value, key) {
+            "global.announce_cache_cleanup_batch_size" => match expect_u64(value, key) {
                 Ok(value) if value > 0 => {
                     self.housekeeping.announce_cache_cleanup_batch_size = value as usize;
                     Ok(())
@@ -610,7 +608,7 @@ impl Driver {
                 }),
                 Err(err) => Err(err),
             },
-            "global.discovery_cleanup_interval_ticks" => match Self::expect_u64(value, key) {
+            "global.discovery_cleanup_interval_ticks" => match expect_u64(value, key) {
                 Ok(value) if value > 0 => {
                     self.discovery.cleanup_interval_ticks = value as u32;
                     Ok(())
@@ -621,7 +619,7 @@ impl Driver {
                 }),
                 Err(err) => Err(err),
             },
-            "global.management_announce_interval_secs" => match Self::expect_f64(value, key) {
+            "global.management_announce_interval_secs" => match expect_f64(value, key) {
                 Ok(value) => {
                     self.management.announce_interval_secs = value;
                     Ok(())
@@ -639,7 +637,7 @@ impl Driver {
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         match key {
-            "global.stamp_destinations" => match Self::expect_bool(value, key) {
+            "global.stamp_destinations" => match expect_bool(value, key) {
                 Ok(value) => {
                     self.stamps
                         .stamp_destinations
@@ -648,35 +646,35 @@ impl Driver {
                 }
                 Err(err) => Err(err),
             },
-            "global.stamp_path_requests" => match Self::expect_bool(value, key) {
+            "global.stamp_path_requests" => match expect_bool(value, key) {
                 Ok(value) => {
                     self.engine.set_stamp_prs(value);
                     Ok(())
                 }
                 Err(err) => Err(err),
             },
-            "global.stamps_enforced" => match Self::expect_bool(value, key) {
+            "global.stamps_enforced" => match expect_bool(value, key) {
                 Ok(value) => {
                     self.set_stamps_enforced(value);
                     Ok(())
                 }
                 Err(err) => Err(err),
             },
-            "global.lr_stamps_enforced" => match Self::expect_bool(value, key) {
+            "global.lr_stamps_enforced" => match expect_bool(value, key) {
                 Ok(value) => {
                     self.link_manager.link_request_costs().set_enforced(value);
                     Ok(())
                 }
                 Err(err) => Err(err),
             },
-            "global.stamp_link_requests" => match Self::expect_bool(value, key) {
+            "global.stamp_link_requests" => match expect_bool(value, key) {
                 Ok(value) => {
                     self.stamps.settings.stamp_lrs = value;
                     Ok(())
                 }
                 Err(err) => Err(err),
             },
-            "global.always_stamp_link_requests" => match Self::expect_bool(value, key) {
+            "global.always_stamp_link_requests" => match expect_bool(value, key) {
                 Ok(value) => {
                     self.stamps.settings.always_stamp_lrs = value;
                     Ok(())
@@ -694,7 +692,7 @@ impl Driver {
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         match key {
-            "provider.queue_max_events" => match Self::expect_u64(value, key) {
+            "provider.queue_max_events" => match expect_u64(value, key) {
                 Ok(v) if v > 0 => {
                     self.hooks.set_provider_queue_max_events(v as usize);
                     Ok(())
@@ -705,7 +703,7 @@ impl Driver {
                 }),
                 Err(err) => Err(err),
             },
-            "provider.queue_max_bytes" => match Self::expect_u64(value, key) {
+            "provider.queue_max_bytes" => match expect_u64(value, key) {
                 Ok(v) if v > 0 => {
                     self.hooks.set_provider_queue_max_bytes(v as usize);
                     Ok(())

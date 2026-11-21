@@ -2,11 +2,11 @@
 
 use super::*;
 
-impl Driver {
+impl RuntimeConfigHandles {
     #[cfg(feature = "iface-rnode")]
     pub(crate) fn list_rnode_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
-        let mut names: Vec<&String> = self.runtime_config.rnode.keys().collect();
+        let mut names: Vec<&String> = self.rnode.keys().collect();
         names.sort();
         for name in names {
             for suffix in [
@@ -31,7 +31,7 @@ impl Driver {
     pub(crate) fn rnode_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("rnode.")?;
         let (name, setting) = rest.split_once('.')?;
-        let handle = self.runtime_config.rnode.get(name)?;
+        let handle = self.rnode.get(name)?;
         let current = recover_mutex_guard(&handle.runtime, "rnode runtime").clone();
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
@@ -145,39 +145,35 @@ impl Driver {
     #[cfg(feature = "iface-rnode")]
     pub(crate) fn set_rnode_runtime_config(
         &mut self,
+        interfaces: &mut Interfaces,
+        engine: &mut TransportEngine,
         key: &str,
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_rnode_runtime_key(key)?;
         let updated_sub = {
-            let handle = self
-                .runtime_config
-                .rnode
-                .get(name)
-                .ok_or(RuntimeConfigError {
-                    code: RuntimeConfigErrorCode::NotFound,
-                    message: format!("rnode interface '{}' not found", name),
-                })?;
+            let handle = self.rnode.get(name).ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("rnode interface '{}' not found", name),
+            })?;
             let mut runtime = recover_mutex_guard(&handle.runtime, "rnode runtime");
             let old = runtime.sub.clone();
             match setting {
-                "frequency_hz" => runtime.sub.frequency = Self::expect_u64(value, key)? as u32,
-                "bandwidth_hz" => runtime.sub.bandwidth = Self::expect_u64(value, key)? as u32,
-                "txpower_dbm" => runtime.sub.txpower = Self::expect_i64(value, key)? as i8,
-                "spreading_factor" => {
-                    runtime.sub.spreading_factor = Self::expect_u64(value, key)? as u8
-                }
-                "coding_rate" => runtime.sub.coding_rate = Self::expect_u64(value, key)? as u8,
+                "frequency_hz" => runtime.sub.frequency = expect_u64(value, key)? as u32,
+                "bandwidth_hz" => runtime.sub.bandwidth = expect_u64(value, key)? as u32,
+                "txpower_dbm" => runtime.sub.txpower = expect_i64(value, key)? as i8,
+                "spreading_factor" => runtime.sub.spreading_factor = expect_u64(value, key)? as u8,
+                "coding_rate" => runtime.sub.coding_rate = expect_u64(value, key)? as u8,
                 "st_alock_pct" => {
                     runtime.sub.st_alock = match value {
                         RuntimeConfigValue::Null => None,
-                        other => Some(Self::expect_f64(other, key)? as f32),
+                        other => Some(expect_f64(other, key)? as f32),
                     };
                 }
                 "lt_alock_pct" => {
                     runtime.sub.lt_alock = match value {
                         RuntimeConfigValue::Null => None,
-                        other => Some(Self::expect_f64(other, key)? as f32),
+                        other => Some(expect_f64(other, key)? as f32),
                     };
                 }
                 _ => {
@@ -193,25 +189,23 @@ impl Driver {
             }
             runtime.sub.clone()
         };
-        self.refresh_rnode_interface_bitrate(name, &updated_sub);
+        Self::refresh_rnode_interface_bitrate(interfaces, engine, name, &updated_sub);
         Ok(())
     }
 
     #[cfg(feature = "iface-rnode")]
     pub(crate) fn reset_rnode_runtime_config(
         &mut self,
+        interfaces: &mut Interfaces,
+        engine: &mut TransportEngine,
         key: &str,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_rnode_runtime_key(key)?;
         let updated_sub = {
-            let handle = self
-                .runtime_config
-                .rnode
-                .get(name)
-                .ok_or(RuntimeConfigError {
-                    code: RuntimeConfigErrorCode::NotFound,
-                    message: format!("rnode interface '{}' not found", name),
-                })?;
+            let handle = self.rnode.get(name).ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("rnode interface '{}' not found", name),
+            })?;
             let mut runtime = recover_mutex_guard(&handle.runtime, "rnode runtime");
             let old = runtime.sub.clone();
             let startup = handle.startup.clone();
@@ -236,16 +230,21 @@ impl Driver {
             }
             runtime.sub.clone()
         };
-        self.refresh_rnode_interface_bitrate(name, &updated_sub);
+        Self::refresh_rnode_interface_bitrate(interfaces, engine, name, &updated_sub);
         Ok(())
     }
 
     #[cfg(feature = "iface-rnode")]
-    pub(super) fn refresh_rnode_interface_bitrate(&mut self, name: &str, sub: &RNodeSubConfig) {
+    fn refresh_rnode_interface_bitrate(
+        interfaces: &mut Interfaces,
+        engine: &mut TransportEngine,
+        name: &str,
+        sub: &RNodeSubConfig,
+    ) {
         let bitrate = Some(crate::interface::rnode::estimate_lora_bitrate_bps(sub));
         let airtime_profile = Some(crate::interface::rnode::lora_airtime_profile(sub));
         let mut refreshed = Vec::new();
-        for entry in self.interfaces.values_mut() {
+        for entry in interfaces.values_mut() {
             if entry.info.name == name {
                 entry.info.bitrate = bitrate;
                 entry.info.airtime_profile = airtime_profile;
@@ -253,7 +252,7 @@ impl Driver {
             }
         }
         for info in refreshed {
-            self.engine.register_interface(info);
+            engine.register_interface(info);
         }
     }
 }

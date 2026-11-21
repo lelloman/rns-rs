@@ -13,7 +13,7 @@ mod registration;
 mod rnode;
 mod tcp;
 mod udp;
-mod values;
+pub(super) mod values;
 
 use super::*;
 
@@ -84,11 +84,11 @@ mod duration_value_tests {
     #[test]
     fn expect_f64_rejects_non_finite_values() {
         for value in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN, -1.0] {
-            let err = Driver::expect_f64(RuntimeConfigValue::Float(value), "k").unwrap_err();
+            let err = expect_f64(RuntimeConfigValue::Float(value), "k").unwrap_err();
             assert_eq!(err.code, RuntimeConfigErrorCode::InvalidValue, "{value}");
         }
         assert_eq!(
-            Driver::expect_f64(RuntimeConfigValue::Float(1.5), "k").unwrap(),
+            expect_f64(RuntimeConfigValue::Float(1.5), "k").unwrap(),
             1.5
         );
     }
