@@ -43,24 +43,24 @@ pub(crate) fn map_hashes_with_data(
     };
     let mut hashes = Vec::with_capacity(encrypted.len().div_ceil(sdu));
     let mut tagged_from = 0;
-    if let Some(mut mac) = mac {
-        let signed = encrypted.len() - 32;
+    if let (Some(mut mac), Some((signed, tag_slot))) = (mac, encrypted.split_last_chunk_mut::<32>())
+    {
         // Parts wholly before the tag: part, MAC and data together.
-        tagged_from = signed / sdu * sdu;
-        for part in encrypted[..tagged_from].chunks(sdu) {
+        let (untagged, unsigned) = signed.split_at_mut(signed.len() / sdu * sdu);
+        for part in untagged.chunks(sdu) {
             let mut hasher = Sha256::new();
             hasher.update(part);
             mac.update(part);
             data_state.update(take(part.len()));
             hashes.push(finish(hasher));
         }
-        let unsigned = &encrypted[tagged_from..signed];
         mac.update(unsigned);
         data_state.update(take(unsigned.len()));
-        let tag = mac.finalize();
-        encrypted[signed..].copy_from_slice(&tag);
+        *tag_slot = mac.finalize();
+        tagged_from = untagged.len();
     }
-    for part in encrypted[tagged_from..].chunks(sdu) {
+    // tagged_from is at most the length less the tag.
+    for part in encrypted.get(tagged_from..).unwrap_or_default().chunks(sdu) {
         let mut hasher = Sha256::new();
         hasher.update(part);
         data_state.update(take(part.len()));
@@ -85,10 +85,8 @@ pub fn split_into_parts(
     let mut parts = Vec::with_capacity(num_parts);
     let mut hashes = Vec::with_capacity(num_parts);
 
-    for i in 0..num_parts {
-        let start = i * sdu;
-        let end = core::cmp::min(start + sdu, encrypted_data.len());
-        let part = encrypted_data[start..end].to_vec();
+    for part in encrypted_data.chunks(sdu) {
+        let part = part.to_vec();
         let hash = map_hash(&part, random_hash);
         parts.push(part);
         hashes.push(hash);
@@ -112,7 +110,7 @@ pub fn has_collision(hashes: &[[u8; RESOURCE_MAPHASH_LEN]]) -> bool {
     // Use a sliding window of COLLISION_GUARD_SIZE
     for (i, hash) in hashes.iter().enumerate() {
         let guard_start = i.saturating_sub(RESOURCE_COLLISION_GUARD_SIZE);
-        for prev in &hashes[guard_start..i] {
+        for prev in hashes.iter().take(i).skip(guard_start) {
             if prev == hash {
                 return true;
             }
@@ -158,25 +156,18 @@ pub fn prepend_metadata(data: &[u8], metadata: &[u8]) -> Vec<u8> {
 /// Extract metadata from assembled data.
 /// Returns (metadata_bytes, remaining_data).
 pub fn extract_metadata(assembled: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-    if assembled.len() < 3 {
-        return None;
-    }
-    let size =
-        ((assembled[0] as usize) << 16) | ((assembled[1] as usize) << 8) | (assembled[2] as usize);
-    if assembled.len() < 3 + size {
-        return None;
-    }
-    let metadata = assembled[3..3 + size].to_vec();
-    let data = assembled[3 + size..].to_vec();
-    Some((metadata, data))
+    let (&[high, middle, low], rest) = assembled.split_first_chunk::<3>()?;
+    let size = u32::from_be_bytes([0, high, middle, low]) as usize;
+    let (metadata, data) = rest.split_at_checked(size)?;
+    Some((metadata.to_vec(), data.to_vec()))
 }
 
 /// Extract metadata while retaining the owned payload allocation.
 pub(crate) fn extract_metadata_owned(mut assembled: Vec<u8>) -> Option<(Vec<u8>, Vec<u8>)> {
-    let header = assembled.get(..3)?;
-    let size = ((header[0] as usize) << 16) | ((header[1] as usize) << 8) | header[2] as usize;
+    let (&[high, middle, low], rest) = assembled.split_first_chunk::<3>()?;
+    let size = u32::from_be_bytes([0, high, middle, low]) as usize;
+    let metadata = rest.get(..size)?.to_vec();
     let end = 3 + size;
-    let metadata = assembled.get(3..end)?.to_vec();
     let payload_len = assembled.len() - end;
     assembled.copy_within(end.., 0);
     assembled.truncate(payload_len);

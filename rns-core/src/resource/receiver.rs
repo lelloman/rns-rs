@@ -246,7 +246,9 @@ impl ResourceReceiver {
             let wanted = remaining.min(PART_RESERVE_PARTS).saturating_mul(self.sdu);
             self.part_data.reserve(wanted.max(data.len()));
         }
-        self.part_spans[index] = Some((self.part_data.len(), data.len()));
+        if let Some(span) = self.part_spans.get_mut(index) {
+            *span = Some((self.part_data.len(), data.len()));
+        }
         self.part_data.extend_from_slice(data);
     }
 
@@ -258,7 +260,9 @@ impl ResourceReceiver {
         if self.hashmap.len() <= index {
             self.hashmap.resize(index + 1, None);
         }
-        self.hashmap[index] = Some(hash);
+        if let Some(slot) = self.hashmap.get_mut(index) {
+            *slot = Some(hash);
+        }
     }
 
     /// Accept the advertised resource. Begins transfer.
@@ -353,7 +357,8 @@ impl ResourceReceiver {
         let Some(Some((at, len))) = self.part_spans.get(self.decrypted_parts).copied() else {
             return false;
         };
-        stream.update(&self.part_data[at..at + len]);
+        // Spans are recorded as their parts are appended to part_data.
+        stream.update(self.part_data.get(at..at + len).unwrap_or_default());
         self.decrypted_parts += 1;
         self.has_parts_to_decrypt()
     }
@@ -382,7 +387,10 @@ impl ResourceReceiver {
             .get(from..end.max(from))
             .unwrap_or(&[])
             .iter()
-            .map_while(|span| span.map(|(at, len)| &self.part_data[at..at + len]))
+            .map_while(|span| {
+                // Spans are recorded as their parts are appended to part_data.
+                span.map(|(at, len)| self.part_data.get(at..at + len).unwrap_or_default())
+            })
     }
 
     /// Hand back a decryption fed the first `parts` held parts elsewhere
@@ -543,25 +551,26 @@ impl ResourceReceiver {
             return vec![];
         }
 
-        if hmu_data.len() < 32 || hmu_data[..32] != self.resource_hash {
+        let Some((resource_hash, payload)) = hmu_data.split_first_chunk::<32>() else {
+            return vec![];
+        };
+        if resource_hash.as_slice() != self.resource_hash {
             return vec![];
         }
-        if hmu_data.len() == 32 {
+        if payload.is_empty() {
             return self.cancel();
         }
 
-        let payload = &hmu_data[32..];
         let value = match crate::msgpack::unpack_exact(payload) {
             Ok(v) => v,
             Err(_) => return self.cancel(),
         };
 
-        let arr = match value.as_array() {
-            Some(a) if a.len() == 2 => a,
-            _ => return self.cancel(),
+        let Some([segment, hashmap_bytes]) = value.as_array() else {
+            return self.cancel();
         };
 
-        let segment = match arr[0].as_uint() {
+        let segment = match segment.as_uint() {
             Some(s) => match usize::try_from(s) {
                 Ok(segment) => segment,
                 Err(_) => return self.cancel(),
@@ -569,7 +578,7 @@ impl ResourceReceiver {
             None => return self.cancel(),
         };
 
-        let hashmap_bytes = match arr[1].as_bin() {
+        let hashmap_bytes = match hashmap_bytes.as_bin() {
             Some(b) => b,
             None => return self.cancel(),
         };
@@ -593,16 +602,12 @@ impl ResourceReceiver {
         self.status = ResourceStatus::Transferring;
 
         // Populate hashmap slots
-        for i in 0..num_hashes {
-            let idx = segment_start + i;
-            let start = i * RESOURCE_MAPHASH_LEN;
-            let end = start + RESOURCE_MAPHASH_LEN;
+        let (hashes, _) = hashmap_bytes.as_chunks::<RESOURCE_MAPHASH_LEN>();
+        for (idx, hash) in (segment_start..).zip(hashes) {
             if self.hash_at(idx).is_none() {
                 self.hashmap_height += 1;
             }
-            let mut h = [0u8; RESOURCE_MAPHASH_LEN];
-            h.copy_from_slice(&hashmap_bytes[start..end]);
-            self.store_hash(idx, h);
+            self.store_hash(idx, *hash);
         }
 
         self.waiting_for_hmu = false;
@@ -666,11 +671,12 @@ impl ResourceReceiver {
             }
         }
 
-        request_data[0] = hashmap_exhausted;
+        if let Some(flag) = request_data.first_mut() {
+            *flag = hashmap_exhausted;
+        }
         // The requested hashes were written first; the fields that precede
         // them on the wire go in front.
-        let mut prefix = [0u8; RESOURCE_MAPHASH_LEN + 32];
-        let mut prefix_len = 0;
+        let mut last_map_hash = None;
         if hashmap_exhausted == RESOURCE_HASHMAP_IS_EXHAUSTED {
             // Append last known map hash
             let last_hash = if self.hashmap_height > 0 {
@@ -678,9 +684,7 @@ impl ResourceReceiver {
             } else {
                 None
             };
-            prefix[..RESOURCE_MAPHASH_LEN]
-                .copy_from_slice(&last_hash.unwrap_or([0u8; RESOURCE_MAPHASH_LEN]));
-            prefix_len = RESOURCE_MAPHASH_LEN;
+            last_map_hash = Some(last_hash.unwrap_or([0u8; RESOURCE_MAPHASH_LEN]));
             self.waiting_for_hmu = true;
         }
         if hashmap_exhausted == RESOURCE_HASHMAP_IS_EMPTY {
@@ -688,8 +692,9 @@ impl ResourceReceiver {
         }
         request_data.splice(
             hashes_at..hashes_at,
-            prefix[..prefix_len]
+            last_map_hash
                 .iter()
+                .flatten()
                 .chain(self.resource_hash.iter())
                 .copied(),
         );
@@ -810,7 +815,7 @@ impl ResourceReceiver {
             part_spans
                 .iter()
                 .flatten()
-                .map(|&(start, len)| &part_data[start..start + len])
+                .map(|&(start, len)| part_data.get(start..start + len).unwrap_or_default())
         };
         self.hashmap = Vec::new();
         let mut data_state = None;
@@ -854,7 +859,7 @@ impl ResourceReceiver {
             let mut skip = RESOURCE_RANDOM_HASH_SIZE;
             for data in parts() {
                 let from = skip.min(data.len());
-                plaintext.extend_from_slice(&data[from..]);
+                plaintext.extend_from_slice(data.get(from..).unwrap_or_default());
                 skip -= from;
             }
             plaintext
