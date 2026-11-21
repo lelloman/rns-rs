@@ -17,16 +17,8 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("rssi", rssi)
                 .field("snr", snr)
                 .finish(),
-            Event::AnnounceVerified { key, .. } => f
-                .debug_struct("AnnounceVerified")
-                .field("destination_hash", &key.destination_hash)
-                .field("received_from", &key.received_from)
-                .finish(),
-            Event::AnnounceVerifyFailed { key, .. } => f
-                .debug_struct("AnnounceVerifyFailed")
-                .field("destination_hash", &key.destination_hash)
-                .field("received_from", &key.received_from)
-                .finish(),
+            Event::AnnounceVerified { key, .. } => announce_key(f, "AnnounceVerified", key),
+            Event::AnnounceVerifyFailed { key, .. } => announce_key(f, "AnnounceVerifyFailed", key),
             Event::InterfaceUp(id, writer, info) => f
                 .debug_tuple("InterfaceUp")
                 .field(id)
@@ -61,15 +53,11 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .finish(),
             Event::InterfaceDown(id) => f.debug_tuple("InterfaceDown").field(id).finish(),
             Event::Tick => write!(f, "Tick"),
-            Event::BeginDrain { timeout } => f
-                .debug_struct("BeginDrain")
-                .field("timeout", timeout)
-                .finish(),
+            Event::BeginDrain { timeout } => one_field(f, "BeginDrain", "timeout", timeout),
             Event::Shutdown => write!(f, "Shutdown"),
-            Event::DeliverDecrypted { dest_hash, .. } => f
-                .debug_struct("DeliverDecrypted")
-                .field("dest_hash", dest_hash)
-                .finish(),
+            Event::DeliverDecrypted { dest_hash, .. } => {
+                one_field(f, "DeliverDecrypted", "dest_hash", dest_hash)
+            }
             Event::SendDeferred(encryption) => f
                 .debug_struct("SendDeferred")
                 .field("ticket", &encryption.ticket)
@@ -100,43 +88,34 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("name_hash", name_hash)
                 .field("app_data_len", &app_data.as_ref().map(|d| d.len()))
                 .finish(),
-            Event::RegisterPathResponder { destination, .. } => f
-                .debug_struct("RegisterPathResponder")
-                .field("dest_hash", &destination.hash.0)
-                .finish(),
-            Event::AnnounceRegisteredDestination { dest_hash } => f
-                .debug_struct("AnnounceRegisteredDestination")
-                .field("dest_hash", dest_hash)
-                .finish(),
-            Event::DeregisterDestination { dest_hash } => f
-                .debug_struct("DeregisterDestination")
-                .field("dest_hash", dest_hash)
-                .finish(),
-            Event::DeregisterLinkDestination { dest_hash } => f
-                .debug_struct("DeregisterLinkDestination")
-                .field("dest_hash", dest_hash)
-                .finish(),
+            Event::RegisterPathResponder { destination, .. } => {
+                one_field(f, "RegisterPathResponder", "dest_hash", &destination.hash.0)
+            }
+            Event::AnnounceRegisteredDestination { dest_hash } => {
+                one_field(f, "AnnounceRegisteredDestination", "dest_hash", dest_hash)
+            }
+            Event::DeregisterDestination { dest_hash } => {
+                one_field(f, "DeregisterDestination", "dest_hash", dest_hash)
+            }
+            Event::DeregisterLinkDestination { dest_hash } => {
+                one_field(f, "DeregisterLinkDestination", "dest_hash", dest_hash)
+            }
             Event::Query(req, _) => f.debug_tuple("Query").field(req).finish(),
-            Event::RegisterLinkDestination { dest_hash, .. } => f
-                .debug_struct("RegisterLinkDestination")
-                .field("dest_hash", dest_hash)
-                .finish(),
-            Event::RegisterRequestHandler { path, .. } => f
-                .debug_struct("RegisterRequestHandler")
-                .field("path", path)
-                .finish(),
-            Event::RegisterRequestHandlerResponse { path, .. } => f
-                .debug_struct("RegisterRequestHandlerResponse")
-                .field("path", path)
-                .finish(),
-            Event::RegisterDeferredRequestHandler { path, .. } => f
-                .debug_struct("RegisterDeferredRequestHandler")
-                .field("path", path)
-                .finish(),
-            Event::CreateLink { dest_hash, .. } => f
-                .debug_struct("CreateLink")
-                .field("dest_hash", dest_hash)
-                .finish(),
+            Event::RegisterLinkDestination { dest_hash, .. } => {
+                one_field(f, "RegisterLinkDestination", "dest_hash", dest_hash)
+            }
+            Event::RegisterRequestHandler { path, .. } => {
+                one_field(f, "RegisterRequestHandler", "path", path)
+            }
+            Event::RegisterRequestHandlerResponse { path, .. } => {
+                one_field(f, "RegisterRequestHandlerResponse", "path", path)
+            }
+            Event::RegisterDeferredRequestHandler { path, .. } => {
+                one_field(f, "RegisterDeferredRequestHandler", "path", path)
+            }
+            Event::CreateLink { dest_hash, .. } => {
+                one_field(f, "CreateLink", "dest_hash", dest_hash)
+            }
             Event::CompleteStampedLink(keys) => f
                 .debug_struct("CompleteStampedLink")
                 .field("dest_hash", &keys.dest_hash)
@@ -157,14 +136,10 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("request_id", request_id)
                 .field("data_len", &data.len())
                 .finish(),
-            Event::IdentifyOnLink { link_id, .. } => f
-                .debug_struct("IdentifyOnLink")
-                .field("link_id", link_id)
-                .finish(),
-            Event::TeardownLink { link_id } => f
-                .debug_struct("TeardownLink")
-                .field("link_id", link_id)
-                .finish(),
+            Event::IdentifyOnLink { link_id, .. } => {
+                one_field(f, "IdentifyOnLink", "link_id", link_id)
+            }
+            Event::TeardownLink { link_id } => one_field(f, "TeardownLink", "link_id", link_id),
             Event::ResourcePreparationReady => f.write_str("ResourcePreparationReady"),
             Event::ResourceAssemblyReady => f.write_str("ResourceAssemblyReady"),
             Event::LinkProofsVerified => f.write_str("LinkProofsVerified"),
@@ -235,19 +210,15 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("data_len", &data.len())
                 .field("context", context)
                 .finish(),
-            Event::RequestPath { dest_hash } => f
-                .debug_struct("RequestPath")
-                .field("dest_hash", dest_hash)
-                .finish(),
+            Event::RequestPath { dest_hash } => one_field(f, "RequestPath", "dest_hash", dest_hash),
             Event::SendStampedPathRequest(request) => f
                 .debug_struct("SendStampedPathRequest")
                 .field("dest_hash", &request.destination_hash)
                 .field("target", &request.target)
                 .finish(),
-            Event::DestinationStampReady { dest_hash } => f
-                .debug_struct("DestinationStampReady")
-                .field("dest_hash", dest_hash)
-                .finish(),
+            Event::DestinationStampReady { dest_hash } => {
+                one_field(f, "DestinationStampReady", "dest_hash", dest_hash)
+            }
             Event::RegisterProofStrategy {
                 dest_hash,
                 strategy,
@@ -257,14 +228,12 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .field("dest_hash", dest_hash)
                 .field("strategy", strategy)
                 .finish(),
-            Event::BlackholeDirectPath { link_id } => f
-                .debug_struct("BlackholeDirectPath")
-                .field("link_id", link_id)
-                .finish(),
-            Event::ProposeDirectConnect { link_id } => f
-                .debug_struct("ProposeDirectConnect")
-                .field("link_id", link_id)
-                .finish(),
+            Event::BlackholeDirectPath { link_id } => {
+                one_field(f, "BlackholeDirectPath", "link_id", link_id)
+            }
+            Event::ProposeDirectConnect { link_id } => {
+                one_field(f, "ProposeDirectConnect", "link_id", link_id)
+            }
             Event::SetDirectConnectPolicy { .. } => {
                 write!(f, "SetDirectConnectPolicy")
             }
@@ -302,13 +271,15 @@ impl<W: Send> fmt::Debug for Event<W> {
                 peer_interface_id,
                 peer_ip,
                 peer_port,
-            } => f
-                .debug_struct("BackbonePeerConnected")
-                .field("server_interface_id", server_interface_id)
-                .field("peer_interface_id", peer_interface_id)
-                .field("peer_ip", peer_ip)
-                .field("peer_port", peer_port)
-                .finish(),
+            } => backbone_peer(
+                f,
+                "BackbonePeerConnected",
+                server_interface_id,
+                peer_interface_id,
+                peer_ip,
+                peer_port,
+            )
+            .finish(),
             Event::BackbonePeerDisconnected {
                 server_interface_id,
                 peer_interface_id,
@@ -316,43 +287,49 @@ impl<W: Send> fmt::Debug for Event<W> {
                 peer_port,
                 connected_for,
                 had_received_data,
-            } => f
-                .debug_struct("BackbonePeerDisconnected")
-                .field("server_interface_id", server_interface_id)
-                .field("peer_interface_id", peer_interface_id)
-                .field("peer_ip", peer_ip)
-                .field("peer_port", peer_port)
-                .field("connected_for", connected_for)
-                .field("had_received_data", had_received_data)
-                .finish(),
+            } => backbone_peer(
+                f,
+                "BackbonePeerDisconnected",
+                server_interface_id,
+                peer_interface_id,
+                peer_ip,
+                peer_port,
+            )
+            .field("connected_for", connected_for)
+            .field("had_received_data", had_received_data)
+            .finish(),
             Event::BackbonePeerIdleTimeout {
                 server_interface_id,
                 peer_interface_id,
                 peer_ip,
                 peer_port,
                 connected_for,
-            } => f
-                .debug_struct("BackbonePeerIdleTimeout")
-                .field("server_interface_id", server_interface_id)
-                .field("peer_interface_id", peer_interface_id)
-                .field("peer_ip", peer_ip)
-                .field("peer_port", peer_port)
-                .field("connected_for", connected_for)
-                .finish(),
+            } => backbone_peer(
+                f,
+                "BackbonePeerIdleTimeout",
+                server_interface_id,
+                peer_interface_id,
+                peer_ip,
+                peer_port,
+            )
+            .field("connected_for", connected_for)
+            .finish(),
             Event::BackbonePeerWriteStall {
                 server_interface_id,
                 peer_interface_id,
                 peer_ip,
                 peer_port,
                 connected_for,
-            } => f
-                .debug_struct("BackbonePeerWriteStall")
-                .field("server_interface_id", server_interface_id)
-                .field("peer_interface_id", peer_interface_id)
-                .field("peer_ip", peer_ip)
-                .field("peer_port", peer_port)
-                .field("connected_for", connected_for)
-                .finish(),
+            } => backbone_peer(
+                f,
+                "BackbonePeerWriteStall",
+                server_interface_id,
+                peer_interface_id,
+                peer_ip,
+                peer_port,
+            )
+            .field("connected_for", connected_for)
+            .finish(),
             Event::BackbonePeerPenalty {
                 server_interface_id,
                 peer_ip,
@@ -370,10 +347,7 @@ impl<W: Send> fmt::Debug for Event<W> {
                 attach_point,
                 priority,
                 ..
-            } => f
-                .debug_struct("LoadHook")
-                .field("name", name)
-                .field("attach_point", attach_point)
+            } => hook(f, "LoadHook", name, attach_point)
                 .field("priority", priority)
                 .finish(),
             Event::LoadHookFile {
@@ -406,28 +380,17 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .finish(),
             Event::UnloadHook {
                 name, attach_point, ..
-            } => f
-                .debug_struct("UnloadHook")
-                .field("name", name)
-                .field("attach_point", attach_point)
-                .finish(),
+            } => hook(f, "UnloadHook", name, attach_point).finish(),
             Event::ReloadHook {
                 name, attach_point, ..
-            } => f
-                .debug_struct("ReloadHook")
-                .field("name", name)
-                .field("attach_point", attach_point)
-                .finish(),
+            } => hook(f, "ReloadHook", name, attach_point).finish(),
             Event::ReloadHookFile {
                 name,
                 attach_point,
                 path,
                 hook_type,
                 ..
-            } => f
-                .debug_struct("ReloadHookFile")
-                .field("name", name)
-                .field("attach_point", attach_point)
+            } => hook(f, "ReloadHookFile", name, attach_point)
                 .field("path", path)
                 .field("hook_type", hook_type)
                 .finish(),
@@ -436,10 +399,7 @@ impl<W: Send> fmt::Debug for Event<W> {
                 attach_point,
                 builtin_id,
                 ..
-            } => f
-                .debug_struct("ReloadBuiltinHook")
-                .field("name", name)
-                .field("attach_point", attach_point)
+            } => hook(f, "ReloadBuiltinHook", name, attach_point)
                 .field("builtin_id", builtin_id)
                 .finish(),
             Event::SetHookEnabled {
@@ -447,10 +407,7 @@ impl<W: Send> fmt::Debug for Event<W> {
                 attach_point,
                 enabled,
                 ..
-            } => f
-                .debug_struct("SetHookEnabled")
-                .field("name", name)
-                .field("attach_point", attach_point)
+            } => hook(f, "SetHookEnabled", name, attach_point)
                 .field("enabled", enabled)
                 .finish(),
             Event::SetHookPriority {
@@ -458,13 +415,58 @@ impl<W: Send> fmt::Debug for Event<W> {
                 attach_point,
                 priority,
                 ..
-            } => f
-                .debug_struct("SetHookPriority")
-                .field("name", name)
-                .field("attach_point", attach_point)
+            } => hook(f, "SetHookPriority", name, attach_point)
                 .field("priority", priority)
                 .finish(),
             Event::ListHooks { .. } => write!(f, "ListHooks"),
         }
     }
+}
+
+/// `name { field: value }`, the shape of most single-key events.
+fn one_field(
+    f: &mut fmt::Formatter<'_>,
+    name: &str,
+    field: &str,
+    value: &dyn fmt::Debug,
+) -> fmt::Result {
+    f.debug_struct(name).field(field, value).finish()
+}
+
+/// An announce verification outcome, by the announce it is for.
+fn announce_key(f: &mut fmt::Formatter<'_>, name: &str, key: &AnnounceVerifyKey) -> fmt::Result {
+    f.debug_struct(name)
+        .field("destination_hash", &key.destination_hash)
+        .field("received_from", &key.received_from)
+        .finish()
+}
+
+/// A hook operation, opened with the hook's name and attach point.
+fn hook<'a, 'b>(
+    f: &'a mut fmt::Formatter<'b>,
+    event: &str,
+    name: &str,
+    attach_point: &str,
+) -> fmt::DebugStruct<'a, 'b> {
+    let mut s = f.debug_struct(event);
+    s.field("name", &name).field("attach_point", &attach_point);
+    s
+}
+
+/// A backbone peer connection event, opened with the fields that name the
+/// connection.
+fn backbone_peer<'a, 'b>(
+    f: &'a mut fmt::Formatter<'b>,
+    event: &str,
+    server_interface_id: &InterfaceId,
+    peer_interface_id: &InterfaceId,
+    peer_ip: &IpAddr,
+    peer_port: &u16,
+) -> fmt::DebugStruct<'a, 'b> {
+    let mut s = f.debug_struct(event);
+    s.field("server_interface_id", server_interface_id)
+        .field("peer_interface_id", peer_interface_id)
+        .field("peer_ip", peer_ip)
+        .field("peer_port", peer_port);
+    s
 }
