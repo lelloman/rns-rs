@@ -568,7 +568,6 @@ impl RnsNode {
             &config_dir,
             &rns_config.filter,
         );
-        log::info!("Configuration loaded from {}", config_file.display());
         let shared_config = SharedClientConfig::from_reticulum(&rns_config.reticulum);
         let mut node = Self::connect_shared_with_reconnect_wait(
             shared_config,
@@ -580,6 +579,9 @@ impl RnsNode {
             rns_config.reticulum.static_transport_identity,
             destination_type_names,
         )?;
+        // Upstream logs it once `__apply_config` has created the transport
+        // identities (25cce0a8) and started the local interface.
+        log::info!("Configuration loaded from {}", config_file.display());
         node.use_shared_instance_rpc(&config_dir, &rns_config.reticulum);
         // After the RPC is set up, which the split mode fallback needs
         // (upstream 48c77061 moved the load after `rpc_key` for this).

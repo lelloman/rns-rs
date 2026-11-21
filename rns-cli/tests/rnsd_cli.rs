@@ -717,6 +717,15 @@ fn shared_clients_log_their_identities_as_upstream() {
             .map(|msg| msg.split('<').next().unwrap_or_default().to_string())
             .collect()
     };
+    // As upstream 1.6.1 (25cce0a8), the transport identities come before
+    // "Configuration loaded".
+    let order = verbose(&rust.stdout);
+    let position = |prefix: &str| order.iter().position(|msg| msg.starts_with(prefix));
+    assert!(
+        position("Initialized ephemeral transport identity")
+            < position("Configuration loaded from"),
+        "{order:?}"
+    );
     assert!(
         !verbose(&rust.stdout)
             .iter()
