@@ -1,6 +1,25 @@
 //! Announcing destinations, with their stamps.
 
 use super::*;
+use std::fmt;
+
+/// Why a destination stamp could not be made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DestinationStampError {
+    /// The identity has no public key to bind the stamp to.
+    NoPublicKey,
+    /// The target cost is above what the protocol allows.
+    CostAboveCap,
+}
+
+impl fmt::Display for DestinationStampError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NoPublicKey => "identity has no public key",
+            Self::CostAboveCap => "stamp cost is above the protocol cap",
+        })
+    }
+}
 
 /// Make sure a destination stamp reaching the destination's target value is
 /// persisted for `dest`, grinding one at that target when none is. This is
@@ -17,10 +36,10 @@ pub(crate) fn ensure_destination_stamp(
     targets: crate::stamper::StampTargets,
     dest: &crate::destination::Destination,
     identity: &Identity,
-) -> Result<(), String> {
+) -> Result<(), DestinationStampError> {
     let public_key = identity
         .get_public_key()
-        .ok_or_else(|| "identity has no public key".to_string())?;
+        .ok_or(DestinationStampError::NoPublicKey)?;
     let name_hash = rns_core::destination::name_hash(
         &dest.app_name,
         &dest.aspects.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
@@ -34,7 +53,7 @@ pub(crate) fn ensure_destination_stamp(
     let started = std::time::Instant::now();
     let (stamp, value) =
         crate::stamps::generate_stamp(&material, target, rns_core::constants::STAMP_LENGTH, 0)
-            .ok_or_else(|| "stamp cost is above the protocol cap".to_string())?;
+            .ok_or(DestinationStampError::CostAboveCap)?;
     if let Err(error) = store.store(&dest.hash.0, &stamp, value) {
         log::warn!("failed to persist destination stamp: {error}");
     }
