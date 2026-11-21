@@ -14,8 +14,8 @@ use rns_core::types::{DestHash, IdentityHash, LinkId, PacketHash};
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 use rns_net::{
-    AnnouncedIdentity, Callbacks, Destination, InterfaceConfig, NodeConfig, RnsNode,
-    TcpClientConfig, MODE_FULL,
+    interface::TcpClientConfig, AnnouncedIdentity, Callbacks, Destination, InterfaceConfig,
+    NodeConfig, RnsNode, MODE_FULL,
 };
 
 const KNOWN_DESTINATIONS_TTL: Duration = Duration::from_secs(48 * 60 * 60);
@@ -465,11 +465,11 @@ fn tcp_client_interface(port: u16) -> InterfaceConfig {
 fn tcp_server_interface(port: u16) -> InterfaceConfig {
     let mut interface = tcp_client_interface(port);
     interface.type_name = "TCPServerInterface".to_string();
-    interface.config_data = Box::new(rns_net::TcpServerConfig {
+    interface.config_data = Box::new(rns_net::interface::TcpServerConfig {
         name: "interop-tcp-server".into(),
         listen_ip: "127.0.0.1".into(),
         listen_port: port,
-        ..rns_net::TcpServerConfig::default()
+        ..rns_net::interface::TcpServerConfig::default()
     });
     interface
 }
@@ -1006,7 +1006,7 @@ fn python_rns_bidirectional_tcp_interop() {
         link_id,
         rust_resource.clone(),
         None,
-        rns_net::resource::ResourceSendOptions {
+        rns_net::ResourceSendOptions {
             auto_compress: true,
             app_flag: true,
         },
@@ -1489,7 +1489,7 @@ fn python_rns_link_cost_announced_by_rust_interop() {
         Some(cache_dir.path().into()),
         Default::default(),
     );
-    node.set_destination_stamping(true, rns_net::stamper::StampTargets::default());
+    node.set_destination_stamping(true, rns_net::testing::StampTargets::default());
     node.set_link_request_stamps_enforced(true);
 
     let rust_identity = Identity::new(&mut OsRng);

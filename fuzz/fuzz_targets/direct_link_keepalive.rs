@@ -2,7 +2,7 @@
 //! address, which anyone can spoof.
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use rns_net::holepunch::fuzz;
+use rns_net::fuzz::holepunch as fuzz;
 
 fuzz_target!(|data: &[u8]| {
     fuzz::keepalive(data);

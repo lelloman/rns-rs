@@ -2,7 +2,7 @@
 
 use std::io;
 use std::sync::Arc;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "iface-tcp"))]
 use std::time::Duration;
 
 /// Host callback used where every Reticulum underlay socket must be explicitly
@@ -76,7 +76,7 @@ fn protect_underlay_socket(fd: std::os::unix::io::RawFd) -> io::Result<()> {
 ///
 /// Requires `CAP_NET_RAW` or root on Linux.
 #[cfg(target_os = "linux")]
-pub fn bind_to_device(fd: std::os::fd::BorrowedFd<'_>, device: &str) -> io::Result<()> {
+pub(crate) fn bind_to_device(fd: std::os::fd::BorrowedFd<'_>, device: &str) -> io::Result<()> {
     let dev_bytes = device.as_bytes();
     if dev_bytes.len() >= libc::IFNAMSIZ {
         return Err(io::Error::new(
@@ -94,7 +94,10 @@ pub fn bind_to_device(fd: std::os::fd::BorrowedFd<'_>, device: &str) -> io::Resu
 /// is fail-closed: callers must not silently create an unmarked socket when the
 /// operation is not permitted.
 #[cfg(target_os = "linux")]
-pub fn apply_underlay_mark(fd: std::os::fd::BorrowedFd<'_>, mark: Option<u32>) -> io::Result<()> {
+pub(crate) fn apply_underlay_mark(
+    fd: std::os::fd::BorrowedFd<'_>,
+    mark: Option<u32>,
+) -> io::Result<()> {
     use std::os::fd::AsRawFd;
     protect_underlay_socket(fd.as_raw_fd())?;
     let Some(mark) = mark else {
@@ -117,8 +120,8 @@ pub fn apply_underlay_mark(fd: std::os::fd::BorrowedFd<'_>, mark: Option<u32>) -
 }
 
 /// Connect a TCP socket after applying underlay routing options.
-#[cfg(target_os = "linux")]
-pub fn connect_tcp_with_options(
+#[cfg(all(target_os = "linux", feature = "iface-tcp"))]
+pub(crate) fn connect_tcp_with_options(
     addr: &std::net::SocketAddr,
     device: Option<&str>,
     underlay_mark: Option<u32>,
@@ -140,7 +143,7 @@ pub fn connect_tcp_with_options(
 }
 
 /// Validate at node startup that the configured mark can actually be applied.
-pub fn validate_underlay_mark(mark: Option<u32>) -> io::Result<()> {
+pub(crate) fn validate_underlay_mark(mark: Option<u32>) -> io::Result<()> {
     let Some(_) = mark else {
         return Ok(());
     };

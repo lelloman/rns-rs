@@ -1434,7 +1434,7 @@ mod tests {
         let envelope = ProviderEnvelope {
             version: 1,
             seq: 1,
-            message: ProviderMessage::Event(rns_net::HookProviderEventEnvelope {
+            message: ProviderMessage::Event(rns_net::provider_bridge::HookProviderEventEnvelope {
                 ts_unix_ms: 1,
                 node_instance: "node".into(),
                 hook_name: "stats".into(),
@@ -1471,7 +1471,7 @@ mod tests {
         let envelope = ProviderEnvelope {
             version: 1,
             seq: 2,
-            message: ProviderMessage::Event(rns_net::HookProviderEventEnvelope {
+            message: ProviderMessage::Event(rns_net::provider_bridge::HookProviderEventEnvelope {
                 ts_unix_ms: 1,
                 node_instance: "node".into(),
                 hook_name: "stats".into(),
@@ -1578,7 +1578,7 @@ mod tests {
         let envelope = ProviderEnvelope {
             version: 1,
             seq: 10,
-            message: ProviderMessage::Event(rns_net::HookProviderEventEnvelope {
+            message: ProviderMessage::Event(rns_net::provider_bridge::HookProviderEventEnvelope {
                 ts_unix_ms: 1,
                 node_instance: "node".into(),
                 hook_name: "stats".into(),
@@ -1719,7 +1719,7 @@ mod tests {
         let envelope = ProviderEnvelope {
             version: 1,
             seq: 11,
-            message: ProviderMessage::Event(rns_net::HookProviderEventEnvelope {
+            message: ProviderMessage::Event(rns_net::provider_bridge::HookProviderEventEnvelope {
                 ts_unix_ms: 1,
                 node_instance: "node".into(),
                 hook_name: "stats".into(),
@@ -1754,7 +1754,7 @@ mod tests {
         let envelope = ProviderEnvelope {
             version: 1,
             seq: 12,
-            message: ProviderMessage::Event(rns_net::HookProviderEventEnvelope {
+            message: ProviderMessage::Event(rns_net::provider_bridge::HookProviderEventEnvelope {
                 ts_unix_ms: 1,
                 node_instance: "node".into(),
                 hook_name: "stats".into(),
@@ -1781,7 +1781,7 @@ mod tests {
         let envelope = ProviderEnvelope {
             version: 1,
             seq: 13,
-            message: ProviderMessage::Event(rns_net::HookProviderEventEnvelope {
+            message: ProviderMessage::Event(rns_net::provider_bridge::HookProviderEventEnvelope {
                 ts_unix_ms: 1,
                 node_instance: "node".into(),
                 hook_name: "stats".into(),

@@ -31,7 +31,7 @@ impl BackboneServerRuntime {
 
 /// Handle the driver keeps to read and change a listener's runtime settings.
 #[derive(Debug, Clone)]
-pub struct BackboneRuntimeConfigHandle {
+pub(crate) struct BackboneRuntimeConfigHandle {
     /// Interface name.
     pub interface_name: String,
     /// Live settings.
@@ -42,7 +42,7 @@ pub struct BackboneRuntimeConfigHandle {
 
 /// Handle the driver keeps to a listener's peer and fast-flap state.
 #[derive(Debug, Clone)]
-pub struct BackbonePeerStateHandle {
+pub(crate) struct BackbonePeerStateHandle {
     /// ID of the listener interface.
     pub interface_id: InterfaceId,
     /// Interface name.
@@ -87,7 +87,7 @@ impl BackboneClientRuntime {
 
 /// Handle the driver keeps to read and change a client's runtime settings.
 #[derive(Debug, Clone)]
-pub struct BackboneClientRuntimeConfigHandle {
+pub(crate) struct BackboneClientRuntimeConfigHandle {
     /// Interface name.
     pub interface_name: String,
     /// Live settings.

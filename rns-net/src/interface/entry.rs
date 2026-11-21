@@ -7,7 +7,7 @@ use crate::ifac::IfacState;
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
 /// Everything the driver tracks per interface.
-pub struct InterfaceEntry {
+pub(crate) struct InterfaceEntry {
     /// Interface ID.
     pub id: InterfaceId,
     /// Transport-level description of the interface.

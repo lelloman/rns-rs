@@ -23,8 +23,8 @@ pub use packet::{PacketError, Reassembler, ValidatedIpv4};
 pub use platform::{AppliedTunnelConfig, PacketDevice, TunnelConfig, TunnelConfigurator};
 pub use policy::{Cidr, ClientGrant, GatewayPolicy, PolicyError};
 pub use protocol::{ControlMessage, PacketFragment, ProtocolError};
-pub use rns_net::node::SendError as RnsSendError;
-pub use rns_net::{install_socket_protector, SocketProtector, SocketProtectorGuard};
+pub use rns_net::interface::{install_socket_protector, SocketProtector, SocketProtectorGuard};
+pub use rns_net::SendError as RnsSendError;
 pub use session::{ClientSession, ClientState, GatewaySession, GatewayState, SessionError};
 pub use transport::{PacketDirection, PacketTransport, TransportError};
 

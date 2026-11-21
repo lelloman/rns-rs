@@ -24,58 +24,50 @@ use crate::interface::device_writer::DeviceWriter;
 use crate::serial::{Parity, SerialConfig, SerialPort};
 
 /// WDCL frame type: device discovery, signed by the switch.
-pub const WDCL_T_DISCOVER: u8 = 0x00;
+pub(crate) const WDCL_T_DISCOVER: u8 = 0x00;
 /// WDCL frame type: host connect request.
-pub const WDCL_T_CONNECT: u8 = 0x01;
+pub(crate) const WDCL_T_CONNECT: u8 = 0x01;
 /// WDCL frame type: command.
-pub const WDCL_T_CMD: u8 = 0x02;
+pub(crate) const WDCL_T_CMD: u8 = 0x02;
 /// WDCL frame type: device log event.
-pub const WDCL_T_LOG: u8 = 0x03;
+pub(crate) const WDCL_T_LOG: u8 = 0x03;
 /// WDCL frame type: remote display data.
-pub const WDCL_T_DISP: u8 = 0x04;
+pub(crate) const WDCL_T_DISP: u8 = 0x04;
 /// WDCL frame type: packet from a Weave endpoint.
-pub const WDCL_T_ENDPOINT_PKT: u8 = 0x05;
-/// WDCL frame type: encapsulated protocol (upstream `WDCL_T_ENCAP_PROTO`); not handled.
-pub const WDCL_T_ENCAP_PROTO: u8 = 0x06;
+pub(crate) const WDCL_T_ENDPOINT_PKT: u8 = 0x05;
 /// WDCL broadcast destination address.
-pub const WDCL_BROADCAST: [u8; 4] = [0xff; 4];
+pub(crate) const WDCL_BROADCAST: [u8; 4] = [0xff; 4];
 
 /// WDCL command: send a packet to an endpoint.
-pub const WDCL_CMD_ENDPOINT_PKT: u16 = 0x0001;
-/// WDCL command: list endpoints (upstream `WDCL_CMD_ENDPOINTS_LIST`); not sent.
-pub const WDCL_CMD_ENDPOINTS_LIST: u16 = 0x0100;
-/// WDCL command: remote display control (upstream `WDCL_CMD_REMOTE_DISPLAY`); not sent.
-pub const WDCL_CMD_REMOTE_DISPLAY: u16 = 0x0a00;
-/// WDCL command: remote input (upstream `WDCL_CMD_REMOTE_INPUT`); not sent.
-pub const WDCL_CMD_REMOTE_INPUT: u16 = 0x0a01;
+pub(crate) const WDCL_CMD_ENDPOINT_PKT: u16 = 0x0001;
 
 /// Log event: the board initialised.
-pub const ET_BOARD_INIT: u16 = 0x0003;
+pub(crate) const ET_BOARD_INIT: u16 = 0x0003;
 /// Log event: the host connection is established.
-pub const ET_PROTO_WDCL_CONNECTION: u16 = 0x3002;
+pub(crate) const ET_PROTO_WDCL_CONNECTION: u16 = 0x3002;
 /// Log event: the endpoint id assigned to the host.
-pub const ET_PROTO_WDCL_HOST_ENDPOINT: u16 = 0x3003;
+pub(crate) const ET_PROTO_WDCL_HOST_ENDPOINT: u16 = 0x3003;
 /// Log event: an endpoint was heard.
-pub const ET_PROTO_WEAVE_EP_ALIVE: u16 = 0x3102;
+pub(crate) const ET_PROTO_WEAVE_EP_ALIVE: u16 = 0x3102;
 /// Log event: an endpoint timed out.
-pub const ET_PROTO_WEAVE_EP_TIMEOUT: u16 = 0x3103;
+pub(crate) const ET_PROTO_WEAVE_EP_TIMEOUT: u16 = 0x3103;
 /// Log event: the switch an endpoint is reached through.
-pub const ET_PROTO_WEAVE_EP_VIA: u16 = 0x3104;
+pub(crate) const ET_PROTO_WEAVE_EP_VIA: u16 = 0x3104;
 /// Log event: CPU load, in percent.
-pub const ET_STAT_CPU: u16 = 0xe003;
+pub(crate) const ET_STAT_CPU: u16 = 0xe003;
 /// Log event: free and total memory, in bytes.
-pub const ET_STAT_MEMORY: u16 = 0xe005;
+pub(crate) const ET_STAT_MEMORY: u16 = 0xe005;
 
 /// Hardware MTU of a Weave interface, in bytes (upstream `HW_MTU`).
-pub const WEAVE_HW_MTU: u32 = 1024;
+pub(crate) const WEAVE_HW_MTU: u32 = 1024;
 /// Bitrate assumed when none is configured, in bits per second (upstream `BITRATE_GUESS`).
-pub const WEAVE_DEFAULT_BITRATE: u64 = 250_000;
+pub(crate) const WEAVE_DEFAULT_BITRATE: u64 = 250_000;
 /// Seconds without hearing from a peer before it is dropped (upstream `PEERING_TIMEOUT`).
-pub const WEAVE_PEERING_TIMEOUT: f64 = 20.0;
+pub(crate) const WEAVE_PEERING_TIMEOUT: f64 = 20.0;
 /// Seconds a received packet hash is remembered for duplicate detection.
-pub const WEAVE_DUPLICATE_TTL: f64 = 0.75;
+pub(crate) const WEAVE_DUPLICATE_TTL: f64 = 0.75;
 /// Most packet hashes remembered for duplicate detection.
-pub const WEAVE_DUPLICATE_CAPACITY: usize = 48;
+pub(crate) const WEAVE_DUPLICATE_CAPACITY: usize = 48;
 
 /// A WDCL frame: destination, type and payload.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -17,11 +17,13 @@ mod server;
 #[cfg(test)]
 mod tests;
 
-pub use abuse::*;
-pub use client::*;
-pub use factory::*;
-pub use runtime::*;
-pub use server::*;
+pub(crate) use abuse::*;
+pub use client::BackboneClientConfig;
+pub(crate) use client::*;
+pub(crate) use factory::*;
+pub use factory::{BackboneClientInterfaceFactory, BackboneInterfaceFactory};
+pub(crate) use runtime::*;
+pub(crate) use server::*;
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hasher};
@@ -40,6 +42,7 @@ use socket2::{SockRef, TcpKeepalive};
 use rns_core::constants;
 use rns_core::transport::types::{IngressControlConfig, InterfaceId, InterfaceInfo};
 
+use crate::event::BackbonePeerStateEntry;
 use crate::event::{Event, EventSender};
 use crate::event::{LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
@@ -53,7 +56,6 @@ use crate::interface::{
     EgressControl, InterfaceConfigData, InterfaceFactory, ListenerControl, StartContext,
     StartResult, Writer,
 };
-use crate::BackbonePeerStateEntry;
 
 /// Upstream listener bitrate estimate used for accepted peers.
 pub(crate) const SERVER_BITRATE_GUESS: u64 = 100_000_000;

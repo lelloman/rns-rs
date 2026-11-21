@@ -15,10 +15,10 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use crate::storage::{KnownDestination, RatchetCleanupStats, RatchetEntry, RatchetStore};
 
 /// Default database filename inside the Reticulum storage directory.
-pub const KNOWN_DESTINATIONS_DB: &str = "known_destinations.db";
+pub(crate) const KNOWN_DESTINATIONS_DB: &str = "known_destinations.db";
 
 /// `<storage_dir>/known_destinations.db`.
-pub fn default_path(storage_dir: &Path) -> PathBuf {
+pub(crate) fn default_path(storage_dir: &Path) -> PathBuf {
     storage_dir.join(KNOWN_DESTINATIONS_DB)
 }
 
@@ -37,7 +37,7 @@ pub struct KnownDestinationsStore {
 impl KnownDestinationsStore {
     /// Open the database at `path` read-write, creating it, its parent
     /// directory and the schema if missing.
-    pub fn open(path: &Path) -> io::Result<Self> {
+    pub(crate) fn open(path: &Path) -> io::Result<Self> {
         Self::open_inner(path, false)
     }
 
@@ -75,11 +75,6 @@ impl KnownDestinationsStore {
             read_only,
             rejected: Mutex::new(HashSet::new()),
         })
-    }
-
-    /// Whether the store was opened with [`open_read_only`](Self::open_read_only).
-    pub fn is_read_only(&self) -> bool {
-        self.read_only
     }
 
     fn lock(&self) -> MutexGuard<'_, Connection> {
@@ -201,7 +196,7 @@ impl KnownDestinationsStore {
     /// rest of the snapshot is still saved; the next save retries it, so a
     /// later valid update heals it (upstream `1d9067c3`). Other errors abort
     /// the whole save.
-    pub fn save_all(
+    pub(crate) fn save_all(
         &self,
         destinations: &HashMap<[u8; 16], KnownDestination>,
     ) -> io::Result<usize> {
@@ -246,7 +241,7 @@ impl KnownDestinationsStore {
 
     /// Write what changed since the last save: rows to insert or update,
     /// and rows to delete, as upstream's periodic flush of dirty entries.
-    pub fn save_changes(
+    pub(crate) fn save_changes(
         &self,
         upserts: &[([u8; 16], &KnownDestination)],
         deletes: &[[u8; 16]],
@@ -288,7 +283,7 @@ impl KnownDestinationsStore {
 
     /// Import a legacy msgpack known-destinations file from Python or older
     /// rns-rs releases. Existing rows are replaced.
-    pub fn import_legacy(&self, path: &Path) -> io::Result<usize> {
+    pub(crate) fn import_legacy(&self, path: &Path) -> io::Result<usize> {
         if self.read_only {
             return Ok(0);
         }
@@ -310,7 +305,7 @@ impl KnownDestinationsStore {
     }
 
     /// Import legacy ratchet files, skipping expired or unknown destinations.
-    pub fn import_legacy_ratchets(
+    pub(crate) fn import_legacy_ratchets(
         &self,
         dir_path: &Path,
         expiry_cutoff: f64,
@@ -370,38 +365,6 @@ impl KnownDestinationsStore {
         }
         tx.commit().map_err(sql_error)?;
         Ok(imported)
-    }
-
-    /// Delete ratchets older than `cutoff` and return their destinations.
-    pub fn expire_ratchets(&self, cutoff: f64) -> io::Result<Vec<[u8; 16]>> {
-        if self.read_only {
-            return Ok(Vec::new());
-        }
-        let mut conn = self.lock();
-        let tx = conn.transaction().map_err(sql_error)?;
-        let mut expired = Vec::new();
-        {
-            let mut statement = tx
-                .prepare("SELECT destination_hash FROM ratchets WHERE received < ?1")
-                .map_err(sql_error)?;
-            let rows = statement
-                .query_map(params![cutoff], |row| row.get::<_, Vec<u8>>(0))
-                .map_err(sql_error)?;
-            for row in rows {
-                if let Ok(hash) = fixed_16(&row.map_err(sql_error)?) {
-                    expired.push(hash);
-                }
-            }
-        }
-        for destination_hash in &expired {
-            tx.execute(
-                "DELETE FROM ratchets WHERE destination_hash = ?1",
-                params![destination_hash.to_vec()],
-            )
-            .map_err(sql_error)?;
-        }
-        tx.commit().map_err(sql_error)?;
-        Ok(expired)
     }
 }
 

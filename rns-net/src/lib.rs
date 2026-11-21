@@ -11,27 +11,41 @@
 extern crate rns_hooks_crate as rns_hooks;
 
 mod action_pool;
-/// Node logic shared by the driver and the interfaces: configuration,
-/// callbacks, destinations, links, discovery and statistics.
-pub mod common;
+mod announce_cache;
+mod blackhole_store;
+mod common;
+mod destination_types;
+mod driver;
+mod engine;
+mod holepunch;
+mod link_send;
+mod listen;
+mod local_ratchet;
+mod node;
+mod poll;
+mod resource;
+#[cfg(feature = "iface-local")]
+mod shared_client;
+mod stamper;
+mod stamps;
+mod state_snapshot;
+mod storage_sqlite;
+mod sync;
+#[cfg(unix)]
+mod sys;
+
+// Internal paths the crate's modules use; these modules are not public.
+use common::{destination, link_manager};
+
+pub use common::{config, time};
+pub mod discovery;
 pub mod event;
 pub mod hdlc;
-pub mod kiss;
-pub mod link_send;
-pub(crate) mod listen;
-pub mod logging;
-pub(crate) mod poll;
-pub mod rnode_kiss;
-pub use common::time;
-pub mod driver;
-pub mod interface;
-pub mod node;
-pub use common::config;
-pub mod announce_cache;
-pub(crate) mod blackhole_store;
-pub mod destination_types;
 pub mod ifac;
-pub mod local_ratchet;
+pub mod interface;
+pub mod kiss;
+pub mod logging;
+pub mod management;
 pub mod pickle;
 /// Process-global live profiling.
 ///
@@ -40,123 +54,38 @@ pub mod pickle;
 /// stay in the normal crate module graph without a late-import workaround for
 /// circular initialization.
 pub mod profiling;
-#[cfg(feature = "iface-local")]
-pub mod remote_management;
-pub mod resource;
-pub mod rpc;
-pub mod serial;
-pub mod stamper;
-pub mod stamps;
-pub mod state_snapshot;
-pub mod storage;
-pub mod storage_sqlite;
-pub(crate) mod sync;
-#[cfg(unix)]
-pub(crate) mod sys;
-pub use common::compressor;
-pub use common::link_manager;
-pub mod engine;
-pub use common::link_manager::ProofVerifyThreads;
-pub use local_ratchet::{FileRatchetStore, LocalRatchetStore, LocalRatchets, MemoryRatchetStore};
-pub mod management;
-#[cfg(feature = "iface-local")]
-pub mod shared_client;
-pub use common::destination;
-pub mod discovery;
-/// UDP hole punching for direct links: endpoint probing, punching, and the
-/// point-to-point interface over the punched socket.
-pub mod holepunch;
 /// Hook events for consumers on a Unix socket.
 #[cfg(feature = "hooks")]
 pub mod provider_bridge;
+#[cfg(feature = "iface-local")]
+pub mod remote_management;
+pub mod rnode_kiss;
+pub mod rpc;
+pub mod serial;
+pub mod storage;
 
-pub use common::callbacks::SendTicket;
-pub use config::RnsConfig;
-pub use destination::{AnnouncedIdentity, Destination, GroupKeyError};
+pub use common::callbacks::{Callbacks, SendTicket};
+pub use common::compressor::Bzip2Compressor;
+pub use common::destination::{AnnouncedIdentity, Destination, GroupKeyError, MaxRequestSizeError};
+pub use common::link_manager::{
+    ProofVerifyThreads, RequestFailure, RequestResponse, ResourceStrategy,
+};
+pub use driver::AnnounceRateDefaults;
 #[cfg(feature = "iface-backbone")]
 pub use driver::BackbonePeerPoolSettings;
-pub use driver::{AnnounceRateDefaults, Callbacks};
-pub use event::{
-    BackbonePeerHookEvent, BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus,
-    BackbonePeerStateEntry, BlackholeInfo, DestinationStampInfo, Event, HookInfo, HookOpError,
-    InterfaceStatsResponse, LinkDatagramError, LinkInfoEntry, LinkTraffic, LocalDestinationEntry,
-    NextHopResponse, PacketSignal, PathTableEntry, Query, QueryRequest, QueryResponse,
-    RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
-    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
-    SingleInterfaceStat, TrafficDetail,
-};
-pub use ifac::IfacState;
-#[cfg(feature = "iface-auto")]
-pub use interface::auto::{AutoConfig, AutoFactory};
-#[cfg(feature = "iface-ax25-kiss")]
-pub use interface::ax25_kiss::{
-    decode_ui_frame as decode_ax25_ui_frame, encode_ui_frame as encode_ax25_ui_frame,
-    validate_address as validate_ax25_address, Ax25AddressError, Ax25KissFactory,
-};
-#[cfg(feature = "iface-backbone")]
-pub use interface::backbone::{
-    BackboneClientConfig, BackboneClientInterfaceFactory, BackboneConfig, BackboneInterfaceFactory,
-};
-#[cfg(feature = "iface-i2p")]
-pub use interface::i2p::{I2pConfig, I2pFactory};
-#[cfg(feature = "iface-ax25-kiss")]
-pub use interface::kiss_iface::Ax25Address;
-#[cfg(feature = "iface-kiss")]
-pub use interface::kiss_iface::{KissFactory, KissIfaceConfig};
-#[cfg(feature = "iface-local")]
-pub use interface::local::{
-    LocalClientConfig, LocalClientFactory, LocalServerConfig, LocalServerFactory,
-};
-#[cfg(feature = "iface-pipe")]
-pub use interface::pipe::{PipeConfig, PipeFactory};
-pub use interface::registry::InterfaceRegistry;
-#[cfg(feature = "iface-rnode")]
-pub use interface::rnode::{RNodeConfig, RNodeFactory, RNodeMultiFactory, RNodeSubConfig};
-#[cfg(feature = "iface-serial")]
-pub use interface::serial_iface::{SerialFactory, SerialIfaceConfig};
-#[cfg(feature = "iface-tcp")]
-pub use interface::tcp::{TcpClientConfig, TcpClientFactory};
-#[cfg(feature = "iface-tcp")]
-pub use interface::tcp_server::{TcpServerConfig, TcpServerFactory};
-#[cfg(feature = "iface-udp")]
-pub use interface::udp::{UdpConfig, UdpFactory};
-#[cfg(all(feature = "iface-weave", target_os = "linux"))]
-pub use interface::weave::{
-    parse_device_frame as parse_weave_device_frame, WdclFrame, WeaveConfig, WeaveFactory,
-    WeaveInput, WeaveLogFrame, WeavePeerState, WeaveState,
-};
-pub use interface::{install_socket_protector, SocketProtector, SocketProtectorGuard};
-pub use interface::{
-    InterfaceConfigData, InterfaceConfigError, InterfaceFactory, StartContext, StartResult,
-    SubInterface,
-};
-pub use link_manager::{LinkManager, LinkManagerAction, RequestFailure, RequestResponse};
-pub use link_send::{LinkSendError, LinkSendReceipt};
-pub use link_send::{
-    LinkSendError as TransmissionError, LinkSendReceipt as TransmissionReceipt, PacketSendReceipt,
-};
-pub use management::ManagementConfig;
+pub use link_send::{LinkSendError, LinkSendReceipt, PacketSendReceipt};
+pub use local_ratchet::{FileRatchetStore, LocalRatchetStore, LocalRatchets, MemoryRatchetStore};
 pub use node::{
-    ChannelSendError, DiscoverySettings, IfacConfig, InterfaceConfig, NodeConfig, RnsNode,
-    SendError,
-};
-#[cfg(feature = "hooks")]
-pub use provider_bridge::{
-    HookProviderEventEnvelope, OverflowPolicy, ProviderBridge, ProviderBridgeConfig,
-    ProviderEnvelope, ProviderMessage,
+    ChannelSendError, DiscoverySettings, IfacConfig, InterfaceAnnounceLimits, InterfaceConfig,
+    NodeConfig, RnsNode, SendError, SharedInstanceSettings,
 };
 pub use resource::{
-    ReceivedResourceFile, ReceivedResourceStream, ResourceReceiveMode, ResourceTransferError,
-    ResourceTransferId,
+    ReceivedResourceFile, ReceivedResourceStream, ResourceReceiveMode, ResourceSendOptions,
+    ResourceTransferError, ResourceTransferId,
 };
-pub use rpc::{RpcAddr, RpcClient, RpcServer, SharedInstanceRpc};
-pub use serial::Parity;
 #[cfg(feature = "iface-local")]
 pub use shared_client::SharedClientConfig;
 pub use state_snapshot::StateSnapshot;
-pub use storage::{
-    FsRatchetStore, KnownDestination, RatchetCleanupStats, RatchetEntry, RatchetStore, StoragePaths,
-};
 
 // Re-export commonly used types from rns-core
 pub use rns_core::constants::{
@@ -168,6 +97,26 @@ pub use rns_core::transport::types::InterfaceId;
 pub use rns_core::types::{
     DestHash, DestinationType, Direction, IdentityHash, LinkId, PacketHash, ProofStrategy,
 };
+
+/// Internals that benchmarks (`benches/`, `tools/rns-bench`) and the
+/// integration tests drive directly. Not a stable API.
+#[doc(hidden)]
+pub mod testing {
+    pub use crate::driver::Driver;
+    #[cfg(feature = "iface-local")]
+    pub use crate::interface::local::start_client as start_local_client;
+    pub use crate::link_manager::{LinkManager, LinkManagerAction};
+    #[cfg(feature = "iface-local")]
+    pub use crate::shared_client::bench_shared_client_replay_once;
+    pub use crate::stamper::{StampTargets, Stamper};
+}
+
+/// Entry points for the fuzz targets in `fuzz/` (the RPC ones are
+/// `rpc::fuzz`). Not a stable API.
+#[doc(hidden)]
+pub mod fuzz {
+    pub use crate::holepunch::fuzz as holepunch;
+}
 
 #[cfg(test)]
 mod test_support;

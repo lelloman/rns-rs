@@ -80,7 +80,7 @@ pub struct WatchCheck {
 }
 
 /// One watchdog check, given how long ago the peer last read and wrote.
-pub fn check(since_read: Duration, since_write: Duration) -> WatchCheck {
+pub(crate) fn check(since_read: Duration, since_write: Duration) -> WatchCheck {
     WatchCheck {
         state: if since_read > STALE_AFTER {
             TunnelState::Stale

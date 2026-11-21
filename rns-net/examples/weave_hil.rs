@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 use rns_net::event::query;
-use rns_net::interface::weave::{WeaveConfig, WeaveState};
+use rns_net::interface::{WeaveConfig, WeaveState};
 use rns_net::{
     Callbacks, Destination, IdentityHash, InterfaceConfig, InterfaceId, NodeConfig, RnsNode,
     MODE_FULL,

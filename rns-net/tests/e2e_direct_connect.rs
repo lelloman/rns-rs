@@ -12,8 +12,9 @@ use rns_crypto::OsRng;
 
 use rns_net::event::HolePunchPolicy;
 use rns_net::{
+    interface::{TcpClientConfig, TcpServerConfig},
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig,
-    InterfaceId, NodeConfig, ProofStrategy, RnsNode, TcpClientConfig, TcpServerConfig, MODE_FULL,
+    InterfaceId, NodeConfig, ProofStrategy, RnsNode, MODE_FULL,
 };
 
 /// `REJECT_POLICY` and `REJECT_UNSUPPORTED` from `rns_core::holepunch`.
@@ -135,7 +136,10 @@ fn free_port() -> u16 {
     }
 }
 
-fn interface(type_name: &str, config: Box<dyn rns_net::InterfaceConfigData>) -> InterfaceConfig {
+fn interface(
+    type_name: &str,
+    config: Box<dyn rns_net::interface::InterfaceConfigData>,
+) -> InterfaceConfig {
     InterfaceConfig {
         stamp_costs: Default::default(),
         announce_limits: Default::default(),

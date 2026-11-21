@@ -10,11 +10,9 @@ fn bench_shared_replay(c: &mut Criterion) {
         b.iter_batched(
             || (),
             |_| {
-                let replayed = rns_net::shared_client::bench_shared_client_replay_once(
-                    8,
-                    Duration::from_millis(10),
-                )
-                .unwrap();
+                let replayed =
+                    rns_net::testing::bench_shared_client_replay_once(8, Duration::from_millis(10))
+                        .unwrap();
                 assert_eq!(replayed, 8);
                 black_box(replayed);
             },

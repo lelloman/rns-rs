@@ -12,7 +12,7 @@ impl HolePunchManager {
 
     /// An upgrade on `link_id` failed with `reason` (reported to the
     /// application as `on_direct_connect_failed`).
-    pub fn note_failed(&mut self, link_id: [u8; 16], reason: u8) {
+    pub(crate) fn note_failed(&mut self, link_id: [u8; 16], reason: u8) {
         self.count(link_id, |c| *c.failed.entry(reason).or_default() += 1);
         if let Some(history) = self.history.get_mut(&link_id) {
             history.last_failure = Some((reason, time::now()));
@@ -20,7 +20,7 @@ impl HolePunchManager {
     }
 
     /// The direct interface `interface_id` found its path MTU.
-    pub fn note_direct_mtu(
+    pub(crate) fn note_direct_mtu(
         &mut self,
         interface_id: rns_core::transport::types::InterfaceId,
         mtu: u32,
@@ -36,7 +36,7 @@ impl HolePunchManager {
     }
 
     /// The state of Direct Link on this node, for status reports.
-    pub fn status(&self) -> DirectLinkStatus {
+    pub(crate) fn status(&self) -> DirectLinkStatus {
         let mut link_ids: Vec<[u8; 16]> = self
             .history
             .keys()

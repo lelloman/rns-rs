@@ -8,7 +8,9 @@
 use std::env;
 use std::sync::mpsc;
 
-use rns_net::{Callbacks, InterfaceConfig, NodeConfig, RnsNode, TcpClientConfig, MODE_FULL};
+use rns_net::{
+    interface::TcpClientConfig, Callbacks, InterfaceConfig, NodeConfig, RnsNode, MODE_FULL,
+};
 
 struct LoggingCallbacks;
 

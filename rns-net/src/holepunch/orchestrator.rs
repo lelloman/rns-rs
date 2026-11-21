@@ -21,7 +21,7 @@ mod tests;
 mod tick;
 
 use punch::*;
-pub use signals::*;
+pub(crate) use signals::*;
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
@@ -48,7 +48,7 @@ use super::probe;
 use super::puncher::{self, PunchHandle};
 use super::udp_direct;
 
-pub use crate::common::event::{DirectReupgradeConfig, HolePunchPolicy};
+pub(crate) use crate::common::event::{DirectReupgradeConfig, HolePunchPolicy};
 
 /// Seconds a closed link's direct interface is kept, so that the link's
 /// closing packets still leave on it.
@@ -220,7 +220,7 @@ fn random_unit() -> f64 {
 }
 
 /// Manages all hole-punch sessions.
-pub struct HolePunchManager {
+pub(crate) struct HolePunchManager {
     sessions: HashMap<[u8; 16], HolePunchSession>, // session_id -> session
     link_to_session: HashMap<[u8; 16], [u8; 16]>,  // link_id -> session_id
     /// Link peers known to implement Direct Link, or being asked.
@@ -270,7 +270,7 @@ pub struct HolePunchManager {
 }
 
 /// Actions produced by HolePunchManager for the driver to dispatch.
-pub enum HolePunchManagerAction {
+pub(crate) enum HolePunchManagerAction {
     /// Send a Direct Link signalling message (kind and body) to the link
     /// peer, in a link packet with `CONTEXT_DIRECT_LINK`.
     SendSignal {
@@ -333,7 +333,7 @@ impl HolePunchManager {
 
 impl HolePunchManager {
     /// Number of active sessions.
-    pub fn session_count(&self) -> usize {
+    pub(crate) fn session_count(&self) -> usize {
         self.sessions.len()
     }
 }

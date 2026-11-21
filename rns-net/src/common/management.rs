@@ -17,22 +17,23 @@ use rns_core::msgpack::{self, Value};
 use rns_core::transport::TransportEngine;
 
 /// Get the path hash for "/status".
-pub fn status_path_hash() -> [u8; 16] {
+pub(crate) fn status_path_hash() -> [u8; 16] {
     truncated_hash(b"/status")
 }
 
 /// Get the path hash for "/path".
-pub fn path_path_hash() -> [u8; 16] {
+pub(crate) fn path_path_hash() -> [u8; 16] {
     truncated_hash(b"/path")
 }
 
 /// Get the path hash for "/list".
-pub fn list_path_hash() -> [u8; 16] {
+pub(crate) fn list_path_hash() -> [u8; 16] {
     truncated_hash(b"/list")
 }
 
 /// Check if a path hash matches a known management path.
-pub fn is_management_path(path_hash: &[u8; 16]) -> bool {
+#[cfg(test)]
+pub(crate) fn is_management_path(path_hash: &[u8; 16]) -> bool {
     *path_hash == status_path_hash()
         || *path_hash == path_path_hash()
         || *path_hash == list_path_hash()
@@ -41,7 +42,7 @@ pub fn is_management_path(path_hash: &[u8; 16]) -> bool {
 /// Compute the remote management destination hash.
 ///
 /// Destination: `rnstransport.remote.management` with transport identity.
-pub fn management_dest_hash(transport_identity_hash: &[u8; 16]) -> [u8; 16] {
+pub(crate) fn management_dest_hash(transport_identity_hash: &[u8; 16]) -> [u8; 16] {
     destination_hash(
         "rnstransport",
         &["remote", "management"],
@@ -63,7 +64,7 @@ pub fn blackhole_dest_hash(transport_identity_hash: &[u8; 16]) -> [u8; 16] {
 /// Compute the probe responder destination hash.
 ///
 /// Destination: `rnstransport.probe` with transport identity.
-pub fn probe_dest_hash(transport_identity_hash: &[u8; 16]) -> [u8; 16] {
+pub(crate) fn probe_dest_hash(transport_identity_hash: &[u8; 16]) -> [u8; 16] {
     destination_hash("rnstransport", &["probe"], Some(transport_identity_hash))
 }
 
@@ -72,7 +73,7 @@ pub fn probe_dest_hash(transport_identity_hash: &[u8; 16]) -> [u8; 16] {
 /// Matches Python `Destination.announce()`: 5 random bytes followed by the
 /// emission time in whole seconds, big-endian, truncated to 5 bytes. Path
 /// update rules compare this emission time, so it must be a real timestamp.
-pub fn announce_random_blob(rng: &mut dyn rns_crypto::Rng, now: f64) -> [u8; 10] {
+pub(crate) fn announce_random_blob(rng: &mut dyn rns_crypto::Rng, now: f64) -> [u8; 10] {
     let mut random_hash = [0u8; 10];
     rng.fill_bytes(&mut random_hash[..5]);
     let now_secs = if now.is_finite() && now > 0.0 {
@@ -98,7 +99,7 @@ fn announce_context(path_response: bool) -> u8 {
 /// (`Transport.mgmt_destinations`): the management destinations of the
 /// transport identity, and those of the network identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BuiltinDestination {
+pub(crate) enum BuiltinDestination {
     /// `rnstransport.remote.management`
     RemoteManagement,
     /// `rnstransport.info.blackhole`
@@ -114,7 +115,7 @@ pub enum BuiltinDestination {
 
 impl BuiltinDestination {
     /// In the order upstream announces them.
-    pub const ALL: [BuiltinDestination; 5] = [
+    pub(crate) const ALL: [BuiltinDestination; 5] = [
         BuiltinDestination::RemoteManagement,
         BuiltinDestination::Blackhole,
         BuiltinDestination::NetworkInstance,
@@ -124,7 +125,7 @@ impl BuiltinDestination {
 
     /// Whether the destination belongs to the network identity rather than
     /// the transport identity.
-    pub fn uses_network_identity(self) -> bool {
+    pub(crate) fn uses_network_identity(self) -> bool {
         matches!(
             self,
             BuiltinDestination::NetworkInstance | BuiltinDestination::Network
@@ -133,7 +134,7 @@ impl BuiltinDestination {
 
     /// The destination's aspects under the identity it belongs to.
     /// `NetworkInstance` names that identity's hash, as undelimited hex.
-    pub fn aspects(self, identity_hash: &[u8; 16]) -> Vec<String> {
+    pub(crate) fn aspects(self, identity_hash: &[u8; 16]) -> Vec<String> {
         let fixed: &[&str] = match self {
             BuiltinDestination::RemoteManagement => &["remote", "management"],
             BuiltinDestination::Blackhole => &["info", "blackhole"],
@@ -155,21 +156,21 @@ impl BuiltinDestination {
     }
 
     /// The destination hash under the identity with `identity_hash`.
-    pub fn dest_hash(self, identity_hash: &[u8; 16]) -> [u8; 16] {
+    pub(crate) fn dest_hash(self, identity_hash: &[u8; 16]) -> [u8; 16] {
         self.with_aspects(identity_hash, |aspects| {
             destination_hash("rnstransport", aspects, Some(identity_hash))
         })
     }
 
     /// The name hash of the destination's full name.
-    pub fn name_hash(self, identity_hash: &[u8; 16]) -> [u8; 10] {
+    pub(crate) fn name_hash(self, identity_hash: &[u8; 16]) -> [u8; 10] {
         self.with_aspects(identity_hash, |aspects| {
             rns_core::destination::name_hash("rnstransport", aspects)
         })
     }
 
     /// The destination as the stamper sees it, for grinding its stamp.
-    pub fn destination(self, identity_hash: [u8; 16]) -> crate::destination::Destination {
+    pub(crate) fn destination(self, identity_hash: [u8; 16]) -> crate::destination::Destination {
         self.with_aspects(&identity_hash, |aspects| {
             crate::destination::Destination::single_in(
                 "rnstransport",
@@ -180,7 +181,7 @@ impl BuiltinDestination {
     }
 
     /// Short name used in log lines.
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             BuiltinDestination::RemoteManagement => "management destination",
             BuiltinDestination::Blackhole => "blackhole info",
@@ -195,7 +196,7 @@ impl BuiltinDestination {
 /// (the stamp extension, when destinations are stamped) appended.
 ///
 /// Returns raw packet bytes ready for `engine.handle_outbound()`.
-pub fn build_builtin_announce(
+pub(crate) fn build_builtin_announce(
     destination: BuiltinDestination,
     identity: &rns_crypto::identity::Identity,
     rng: &mut dyn rns_crypto::Rng,
@@ -239,7 +240,8 @@ pub fn build_builtin_announce(
 }
 
 /// Build an unstamped announce packet for the probe responder destination.
-pub fn build_probe_announce(
+#[cfg(test)]
+pub(crate) fn build_probe_announce(
     identity: &rns_crypto::identity::Identity,
     rng: &mut dyn rns_crypto::Rng,
     now: f64,
@@ -275,7 +277,7 @@ pub struct ManagementConfig {
 /// `[interface_stats, link_count?, profiling_results?]`, where
 /// `interface_stats` is the dict the shared-instance RPC returns for
 /// `interface_stats`. Anything but a non-empty list gets no answer.
-pub fn handle_status_request(
+pub(crate) fn handle_status_request(
     data: &[u8],
     interface_stats: Value,
     link_count: usize,
@@ -309,7 +311,7 @@ pub fn handle_status_request(
 /// is nil. The tables come from `path_table` and `rate_table`, as the
 /// local RPC's entries. Anything else is not answered: upstream's handler
 /// returns None, which sends no response.
-pub fn handle_path_request(
+pub(crate) fn handle_path_request(
     data: &[u8],
     path_table: impl FnOnce() -> Vec<Value>,
     rate_table: impl FnOnce() -> Vec<Value>,
@@ -366,7 +368,7 @@ pub fn handle_path_request(
 /// "until", "reason"}`, with this node's transport identity as the source
 /// of its own entries. `created` is kept as an extra field, which upstream
 /// readers ignore.
-pub fn handle_blackhole_list_request(engine: &TransportEngine) -> Option<Vec<u8>> {
+pub(crate) fn handle_blackhole_list_request(engine: &TransportEngine) -> Option<Vec<u8>> {
     let local = engine.identity_hash();
     let mut map_entries = Vec::new();
     for (hash, entry) in engine.blackholed_entries() {
@@ -380,7 +382,8 @@ pub fn handle_blackhole_list_request(engine: &TransportEngine) -> Option<Vec<u8>
 }
 
 /// Build an unstamped announce packet for the management destination.
-pub fn build_management_announce(
+#[cfg(test)]
+pub(crate) fn build_management_announce(
     identity: &rns_crypto::identity::Identity,
     rng: &mut dyn rns_crypto::Rng,
     now: f64,
@@ -397,7 +400,8 @@ pub fn build_management_announce(
 }
 
 /// Build an unstamped announce packet for the blackhole info destination.
-pub fn build_blackhole_announce(
+#[cfg(test)]
+pub(crate) fn build_blackhole_announce(
     identity: &rns_crypto::identity::Identity,
     rng: &mut dyn rns_crypto::Rng,
     now: f64,

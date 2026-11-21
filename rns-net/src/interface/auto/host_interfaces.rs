@@ -4,7 +4,7 @@ use super::*;
 
 /// Information about a local network interface with an IPv6 link-local address.
 #[derive(Debug, Clone)]
-pub struct LocalInterface {
+pub(crate) struct LocalInterface {
     /// OS interface name, e.g. `eth0`.
     pub name: String,
     /// IPv6 link-local address, without scope ID.
@@ -50,7 +50,7 @@ pub(super) fn should_adopt_interface_name(
 /// Enumerate network interfaces that have IPv6 link-local addresses (fe80::/10).
 ///
 /// Uses `libc::getifaddrs()`. Filters by allowed/ignored interface lists.
-pub fn enumerate_interfaces(allowed: &[String], ignored: &[String]) -> Vec<LocalInterface> {
+pub(crate) fn enumerate_interfaces(allowed: &[String], ignored: &[String]) -> Vec<LocalInterface> {
     let mut result: Vec<LocalInterface> = Vec::new();
     let platform_ignored = platform_ignored_interfaces();
     for ifa in crate::sys::interface_addresses() {

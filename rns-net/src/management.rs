@@ -1,6 +1,7 @@
-//! Remote management — re-exports from common, tests kept here.
+//! The node's built-in management destinations.
 
-pub use crate::common::management::*;
+pub(crate) use crate::common::management::*;
+pub use crate::common::management::{blackhole_dest_hash, ManagementConfig};
 
 #[cfg(test)]
 mod tests {

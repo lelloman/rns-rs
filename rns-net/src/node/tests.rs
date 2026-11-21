@@ -3725,7 +3725,7 @@ fn published_blackhole_destination_requires_its_link_cost() {
             // On a transport instance the blackhole destination
             // belongs to this identity, not an ephemeral one.
             transport_enabled: true,
-            management: crate::ManagementConfig {
+            management: crate::management::ManagementConfig {
                 publish_blackhole: true,
                 ..Default::default()
             },

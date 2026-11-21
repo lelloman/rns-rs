@@ -6,7 +6,7 @@ impl HolePunchManager {
     /// Create a manager with the given probe servers, their protocol and the
     /// device probes and punches are bound to. Probe servers at NAT64
     /// addresses are dropped; every other setting starts at its default.
-    pub fn new(
+    pub(crate) fn new(
         probe_addrs: Vec<SocketAddr>,
         probe_protocol: ProbeProtocol,
         device: Option<String>,
@@ -42,7 +42,7 @@ impl HolePunchManager {
 
     /// Replace the probe servers, their protocol and the device probes and
     /// punches are bound to, keeping every other setting.
-    pub fn set_probe_config(
+    pub(crate) fn set_probe_config(
         &mut self,
         probe_addrs: Vec<SocketAddr>,
         probe_protocol: ProbeProtocol,
@@ -60,57 +60,53 @@ impl HolePunchManager {
     }
 
     /// Set the policy for proposals from link peers.
-    pub fn set_policy(&mut self, policy: HolePunchPolicy) {
+    pub(crate) fn set_policy(&mut self, policy: HolePunchPolicy) {
         self.policy = policy;
     }
 
     /// Policy for proposals from link peers.
-    pub fn policy(&self) -> HolePunchPolicy {
+    pub(crate) fn policy(&self) -> HolePunchPolicy {
         self.policy
     }
 
     /// Set the Linux `SO_MARK` applied to probe and punch sockets.
-    pub fn set_underlay_mark(&mut self, underlay_mark: Option<u32>) {
+    pub(crate) fn set_underlay_mark(&mut self, underlay_mark: Option<u32>) {
         self.underlay_mark = underlay_mark;
     }
 
     /// Identities whose proposals are accepted whatever the policy, once
     /// they have identified on the link.
-    pub fn set_allowed_identities(&mut self, identities: Vec<[u8; 16]>) {
+    pub(crate) fn set_allowed_identities(&mut self, identities: Vec<[u8; 16]>) {
         self.allowed_identities = identities;
     }
 
     /// Whether `identity` is on the allowlist.
-    pub fn identity_allowed(&self, identity: &[u8; 16]) -> bool {
+    pub(crate) fn identity_allowed(&self, identity: &[u8; 16]) -> bool {
         self.allowed_identities.contains(identity)
     }
 
     /// Accept peer-supplied endpoints in private, shared, link-local,
     /// and unique-local ranges (for LAN-only deployments).
-    pub fn set_allow_private_endpoints(&mut self, allow: bool) {
+    pub(crate) fn set_allow_private_endpoints(&mut self, allow: bool) {
         self.allow_private_endpoints = allow;
     }
 
     /// Whether peer-supplied endpoints in private ranges are accepted.
-    pub fn allow_private_endpoints(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn allow_private_endpoints(&self) -> bool {
         self.allow_private_endpoints
     }
 
     /// Set the re-upgrade settings; disabling them drops pending re-upgrades.
-    pub fn set_reupgrade_config(&mut self, config: DirectReupgradeConfig) {
+    pub(crate) fn set_reupgrade_config(&mut self, config: DirectReupgradeConfig) {
         self.reupgrade_config = config;
         if !config.enabled {
             self.reupgrades.clear();
         }
     }
 
-    /// Re-upgrade settings.
-    pub fn reupgrade_config(&self) -> DirectReupgradeConfig {
-        self.reupgrade_config
-    }
-
     /// Report the counters of this node's own probe server.
-    pub fn set_probe_server_counters(
+    pub(crate) fn set_probe_server_counters(
         &mut self,
         counters: std::sync::Arc<crate::holepunch::probe::ProbeServerCounters>,
     ) {
@@ -119,13 +115,8 @@ impl HolePunchManager {
 
     /// UDP ports this node listens on, which it never punches toward at
     /// its own public address.
-    pub fn set_own_listen_ports(&mut self, ports: Vec<u16>) {
+    pub(crate) fn set_own_listen_ports(&mut self, ports: Vec<u16>) {
         self.own_ports = ports;
-    }
-
-    /// UDP ports set by [`Self::set_own_listen_ports`].
-    pub fn own_listen_ports(&self) -> &[u16] {
-        &self.own_ports
     }
 
     /// The networks of this host's interfaces.
@@ -147,14 +138,15 @@ impl HolePunchManager {
     /// (a probe server is configured) or may accept proposals. A node that
     /// does neither ignores all signalling, as a node without Direct Link
     /// support does.
-    pub fn enabled(&self) -> bool {
+    pub(crate) fn enabled(&self) -> bool {
         !self.probe_addrs.is_empty()
             || self.policy != HolePunchPolicy::Reject
             || !self.allowed_identities.is_empty()
     }
 
     /// Whether the link peer is known to implement Direct Link.
-    pub fn peer_supported(&self, link_id: &[u8; 16]) -> bool {
+    #[cfg(test)]
+    pub(crate) fn peer_supported(&self, link_id: &[u8; 16]) -> bool {
         self.peer_support.get(link_id) == Some(&PeerSupport::Supported)
     }
 }

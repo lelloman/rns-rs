@@ -24,15 +24,15 @@ mod startup;
 mod tests;
 mod workers;
 
-pub use addresses::*;
+pub(crate) use addresses::*;
 use data::*;
 use discovery::*;
-pub use factory::*;
-pub use host_interfaces::*;
+pub use factory::AutoFactory;
+pub(crate) use host_interfaces::*;
 use peers::*;
-pub use runtime::*;
+pub(crate) use runtime::*;
 use sockets::*;
-pub use startup::*;
+use startup::*;
 use workers::*;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -51,80 +51,79 @@ use crate::interface::{lock_or_recover, Writer};
 // ── Constants (matching Python AutoInterface) ──────────────────────────────
 
 /// Default UDP port for multicast discovery.
-pub const DEFAULT_DISCOVERY_PORT: u16 = 29716;
+pub(crate) const DEFAULT_DISCOVERY_PORT: u16 = 29716;
 
 /// Default UDP port for unicast data exchange.
-pub const DEFAULT_DATA_PORT: u16 = 42671;
+pub(crate) const DEFAULT_DATA_PORT: u16 = 42671;
 
 /// Default group identifier.
-pub const DEFAULT_GROUP_ID: &[u8] = b"reticulum";
-
-/// Default IFAC size for AutoInterface (bytes).
-pub const DEFAULT_IFAC_SIZE: usize = 16;
+pub(crate) const DEFAULT_GROUP_ID: &[u8] = b"reticulum";
 
 /// Hardware MTU for AutoInterface packets.
-pub const HW_MTU: usize = 1196;
+pub(crate) const HW_MTU: usize = 1196;
 
 /// Multicast scope: link-local.
-pub const SCOPE_LINK: &str = "2";
+pub(crate) const SCOPE_LINK: &str = "2";
 /// Multicast scope: admin-local.
-pub const SCOPE_ADMIN: &str = "4";
+pub(crate) const SCOPE_ADMIN: &str = "4";
 /// Multicast scope: site-local.
-pub const SCOPE_SITE: &str = "5";
+pub(crate) const SCOPE_SITE: &str = "5";
 /// Multicast scope: organization-local.
-pub const SCOPE_ORGANISATION: &str = "8";
+pub(crate) const SCOPE_ORGANISATION: &str = "8";
 /// Multicast scope: global.
-pub const SCOPE_GLOBAL: &str = "e";
+pub(crate) const SCOPE_GLOBAL: &str = "e";
 
 /// Permanent multicast address type.
-pub const MULTICAST_PERMANENT_ADDRESS_TYPE: &str = "0";
+pub(crate) const MULTICAST_PERMANENT_ADDRESS_TYPE: &str = "0";
 /// Temporary multicast address type.
-pub const MULTICAST_TEMPORARY_ADDRESS_TYPE: &str = "1";
+pub(crate) const MULTICAST_TEMPORARY_ADDRESS_TYPE: &str = "1";
 
 /// How long before a peer is considered timed out (seconds).
-pub const PEERING_TIMEOUT: f64 = 22.0;
+pub(crate) const PEERING_TIMEOUT: f64 = 22.0;
 
 /// How often to send multicast discovery announcements (seconds).
-pub const ANNOUNCE_INTERVAL: f64 = 1.6;
+pub(crate) const ANNOUNCE_INTERVAL: f64 = 1.6;
 
 /// How often to run peer maintenance jobs (seconds).
-pub const PEER_JOB_INTERVAL: f64 = 4.0;
+pub(crate) const PEER_JOB_INTERVAL: f64 = 4.0;
 
 /// Multicast echo timeout (seconds). Used for carrier detection.
-pub const MCAST_ECHO_TIMEOUT: f64 = 6.5;
+#[cfg(test)]
+pub(crate) const MCAST_ECHO_TIMEOUT: f64 = 6.5;
 
 /// Default bitrate guess for AutoInterface (10 Mbps).
-pub const BITRATE_GUESS: u64 = 10_000_000;
+pub(crate) const BITRATE_GUESS: u64 = 10_000_000;
 
 /// Deduplication deque size.
-pub const MULTI_IF_DEQUE_LEN: usize = 48;
+pub(crate) const MULTI_IF_DEQUE_LEN: usize = 48;
 
 /// Deduplication deque entry TTL (seconds).
-pub const MULTI_IF_DEQUE_TTL: f64 = 0.75;
+pub(crate) const MULTI_IF_DEQUE_TTL: f64 = 0.75;
 
 /// Reverse peering interval multiplier (announce_interval * 3.25).
-pub const REVERSE_PEERING_MULTIPLIER: f64 = 3.25;
+#[cfg(test)]
+pub(crate) const REVERSE_PEERING_MULTIPLIER: f64 = 3.25;
 
 /// How often AutoInterface rescans local link-local interfaces.
-pub const AUTO_RESCAN_INTERVAL: f64 = 1.25;
+pub(crate) const AUTO_RESCAN_INTERVAL: f64 = 1.25;
 
 /// Default cap on active peers per discovery worker (one adopted network
 /// interface). Discovery tokens from further sources are ignored until an
 /// existing peer times out. Configurable with `max_peers`.
-pub const DEFAULT_MAX_PEERS: usize = 128;
+pub(crate) const DEFAULT_MAX_PEERS: usize = 128;
 
 /// New peers each discovery worker admits within one
 /// [`PEER_ADMISSION_WINDOW`].
-pub const MAX_NEW_PEERS_PER_WINDOW: usize = 32;
+pub(crate) const MAX_NEW_PEERS_PER_WINDOW: usize = 32;
 
 /// Length of the window over which [`MAX_NEW_PEERS_PER_WINDOW`] applies.
-pub const PEER_ADMISSION_WINDOW: Duration = Duration::from_secs(10);
+pub(crate) const PEER_ADMISSION_WINDOW: Duration = Duration::from_secs(10);
 
 /// Minimum spacing between warnings about ignored discovery sources, per worker.
 const PEER_REFUSAL_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Interfaces always ignored.
-pub const ALL_IGNORE_IFS: &[&str] = &["lo0"];
+pub(crate) const ALL_IGNORE_IFS: &[&str] = &["lo0"];
 
 #[cfg(any(target_os = "android", test))]
 const ANDROID_IGNORE_IFS: &[&str] = &[

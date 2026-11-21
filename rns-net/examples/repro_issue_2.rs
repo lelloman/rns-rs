@@ -4,8 +4,8 @@
 use std::time::Duration;
 
 use rns_net::event;
-use rns_net::interface::local::start_client;
-use rns_net::{Event, InterfaceId, LocalClientConfig};
+use rns_net::testing::start_local_client;
+use rns_net::{event::Event, interface::LocalClientConfig, InterfaceId};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = env_logger::try_init();
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         use_af_unix: true,
     };
 
-    let _writer = start_client(config, tx)?;
+    let _writer = start_local_client(config, tx)?;
 
     match rx.recv_timeout(Duration::from_secs(2))? {
         Event::InterfaceUp(id, _, _) => {

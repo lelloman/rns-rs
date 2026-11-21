@@ -24,7 +24,7 @@ use std::path::Path;
 use rns_cli::exit::Exit;
 use rns_cli::shared_instance::LocalInstance;
 use rns_net::pickle::PickleValue;
-use rns_net::RpcClient;
+use rns_net::rpc::RpcClient;
 
 /// A client of the shared instance's RPC server in the config directory at
 /// `config_path`; on a failure, the error printed and status 1.

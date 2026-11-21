@@ -58,7 +58,7 @@ impl UdpRuntime {
 
 /// Driver-side handle to a running UDP interface's runtime settings.
 #[derive(Debug, Clone)]
-pub struct UdpRuntimeConfigHandle {
+pub(crate) struct UdpRuntimeConfigHandle {
     /// Name of the UDP interface.
     pub interface_name: String,
     /// Live settings shared with the interface.
@@ -161,7 +161,8 @@ impl Writer for UdpWriter {
 
 /// Start a UDP interface. Spawns a reader thread if listen_ip/port are set.
 /// Returns a writer if forward_ip/port are set.
-pub fn start(config: UdpConfig, tx: EventSender) -> io::Result<Option<Box<dyn Writer>>> {
+#[cfg(test)]
+pub(crate) fn start(config: UdpConfig, tx: EventSender) -> io::Result<Option<Box<dyn Writer>>> {
     start_with_mark(config, tx, None).map(|(writer, _)| writer)
 }
 

@@ -2,7 +2,7 @@ use super::{connect_rpc, rpc_call};
 use crate::args::Args;
 use rns_cli::exit::{Exit, Status};
 use rns_net::pickle::PickleValue;
-use rns_net::RpcClient;
+use rns_net::rpc::RpcClient;
 use serde_json::{json, Value};
 
 /// Run `rns-ctl backbone`: list or clear the backbone blacklist, or show

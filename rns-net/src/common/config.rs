@@ -13,9 +13,12 @@ mod sections;
 #[cfg(test)]
 mod tests;
 
-pub use hooks::*;
+use hooks::*;
+#[cfg(feature = "hooks")]
+pub(crate) use hooks::{parse_hook_backend, parse_hook_point};
 use interfaces::*;
-pub use parse::*;
+pub(crate) use parse::*;
+pub use parse::{parse, parse_file};
 use reticulum::*;
 use sections::*;
 
@@ -55,7 +58,8 @@ pub struct ParsedHook {
     pub hook_type: String,
     /// `builtin` (or `builtin_id`, `id`): the built-in hook to use.
     pub builtin_id: Option<String>,
-    /// `attach_point`: the hook point name, as [`parse_hook_point`] reads it.
+    /// `attach_point`: the name of the hook point it attaches to, such as
+    /// `PreIngress` or `Tick`.
     pub attach_point: String,
     /// `priority`; 0 when missing or not an integer.
     pub priority: i32,

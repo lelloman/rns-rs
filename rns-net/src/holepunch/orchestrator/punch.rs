@@ -342,7 +342,7 @@ impl HolePunchManager {
     }
 
     /// Called when a probe result arrives from the worker thread.
-    pub fn handle_probe_result(
+    pub(crate) fn handle_probe_result(
         &mut self,
         link_id: [u8; 16],
         session_id: [u8; 16],
@@ -448,7 +448,7 @@ impl HolePunchManager {
     }
 
     /// Called when a probe fails.
-    pub fn handle_probe_failed(
+    pub(crate) fn handle_probe_failed(
         &mut self,
         link_id: [u8; 16],
         session_id: [u8; 16],

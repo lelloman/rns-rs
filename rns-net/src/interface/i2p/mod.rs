@@ -8,9 +8,9 @@
 //! Matches Python `I2PInterface` from `I2PInterface.py`.
 
 mod folded;
-pub mod sam;
+pub(crate) mod sam;
 mod session;
-pub mod tunnel;
+pub(crate) mod tunnel;
 
 use session::{ControlLines, Session, ACCEPT_RETRY_WAIT};
 
@@ -145,7 +145,7 @@ impl I2pRuntime {
 /// Handle the driver keeps to read and change an I2P interface's runtime
 /// settings.
 #[derive(Debug, Clone)]
-pub struct I2pRuntimeConfigHandle {
+pub(crate) struct I2pRuntimeConfigHandle {
     /// Interface name.
     pub interface_name: String,
     /// Live settings.
@@ -504,12 +504,6 @@ fn open_session_retrying(
             }
         }
     }
-}
-
-/// Start the I2P interface coordinator. All peer connections are registered
-/// as dynamic interfaces via InterfaceUp events.
-pub fn start(config: I2pConfig, tx: EventSender, next_id: Arc<AtomicU64>) -> io::Result<()> {
-    start_with_template(config, tx, next_id, None)
 }
 
 fn start_with_template(

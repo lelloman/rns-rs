@@ -3,17 +3,17 @@
 //! per-interface discovery configuration, and wrappers reading the wall
 //! clock.
 
-pub use rns_core::discovery::*;
+pub(crate) use rns_core::discovery::*;
 
 use rns_core::stamp::StampCost;
 
 use super::time;
 
 /// Short, implementation-specific identity advertised by this transport.
-pub const TRANSPORT_IMPLEMENTATION_NAME: &str = "rns-rs";
+pub(crate) const TRANSPORT_IMPLEMENTATION_NAME: &str = "rns-rs";
 
 /// Version of the native transport implementation in this build.
-pub const TRANSPORT_IMPLEMENTATION_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const TRANSPORT_IMPLEMENTATION_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // ============================================================================
 // Per-interface discovery configuration

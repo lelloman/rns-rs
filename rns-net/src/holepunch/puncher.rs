@@ -36,27 +36,27 @@ const PUNCH_PACKET_LEN: usize = 4 + 16 + NONCE_LEN + TAG_LEN;
 const PUNCH_INTERVAL: Duration = Duration::from_millis(100);
 const PUNCH_DURATION: Duration = Duration::from_secs(10);
 /// Upper bound on punch packets sent per session (over all endpoints).
-pub const MAX_PUNCH_PACKETS: u32 = 128;
+pub(crate) const MAX_PUNCH_PACKETS: u32 = 128;
 /// Upper bound on ACK packets sent per session.
-pub const MAX_ACK_PACKETS: u32 = 128;
+pub(crate) const MAX_ACK_PACKETS: u32 = 128;
 /// Most candidate endpoints one punch session sends to; any beyond are
 /// dropped.
-pub const MAX_PUNCH_CANDIDATES: usize = 4;
+pub(crate) const MAX_PUNCH_CANDIDATES: usize = 4;
 /// Punch packets sent at the full rate to an endpoint that has not shown
 /// it is the peer (by sending a valid punch or acknowledgement).
-pub const UNVERIFIED_BURST: u32 = 16;
+pub(crate) const UNVERIFIED_BURST: u32 = 16;
 /// After its burst, an endpoint that has not answered gets one punch
 /// packet per this interval, enough to keep a NAT mapping toward it open.
 const UNVERIFIED_INTERVAL: Duration = Duration::from_secs(1);
 /// Most peer-reflexive candidates one punch session learns.
-pub const MAX_PEER_REFLEXIVE: usize = 2;
+pub(crate) const MAX_PEER_REFLEXIVE: usize = 2;
 /// Punch nonces remembered per session, so that a replayed punch does not
 /// teach a peer-reflexive candidate.
 const MAX_SEEN_NONCES: usize = 256;
 /// How long a punch that succeeded over its public endpoint waits for a
 /// host candidate to answer as well, so that peers on the same network use
 /// it.
-pub const HOST_GRACE: Duration = Duration::from_millis(500);
+pub(crate) const HOST_GRACE: Duration = Duration::from_millis(500);
 
 /// Timing and packet budget for one punch session.
 #[derive(Debug, Clone, Copy)]
@@ -126,7 +126,7 @@ fn punch_candidates(
 }
 
 /// Result of a completed hole punch.
-pub struct PunchResult {
+pub(crate) struct PunchResult {
     /// The socket used for punching (same NAT mapping as the probe).
     pub socket: UdpSocket,
     /// The peer address that responded.
@@ -144,7 +144,7 @@ const STATUS_FAILED: u8 = 2;
 const STATUS_CANCELLED: u8 = 3;
 
 /// Handle to a running punch operation.
-pub struct PunchHandle {
+pub(crate) struct PunchHandle {
     status: Arc<AtomicU8>,
     cancel: Arc<AtomicBool>,
     outcome: Outcome,
@@ -160,22 +160,22 @@ enum Outcome {
 
 impl PunchHandle {
     /// Check if the punch is still running.
-    pub fn is_running(&self) -> bool {
+    pub(crate) fn is_running(&self) -> bool {
         self.status.load(Ordering::Relaxed) == STATUS_RUNNING
     }
 
     /// Check if the punch succeeded.
-    pub fn succeeded(&self) -> bool {
+    pub(crate) fn succeeded(&self) -> bool {
         self.status.load(Ordering::Relaxed) == STATUS_SUCCEEDED
     }
 
     /// Cancel the punch.
-    pub fn cancel(&self) {
+    pub(crate) fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
     }
 
     /// Wait for the punch to complete and return the result.
-    pub fn join(self) -> Option<PunchResult> {
+    pub(crate) fn join(self) -> Option<PunchResult> {
         match self.outcome {
             Outcome::Thread(mut thread) => thread.take().and_then(|h| h.join().ok().flatten()),
             Outcome::Loop(slot) => crate::sync::lock_or_recover(&slot, "puncher slot").take(),
@@ -199,7 +199,7 @@ impl PunchHandle {
 /// only [`UNVERIFIED_BURST`] packets, then one a second, until a valid punch
 /// or acknowledgement from its IP shows the peer is there. Unspecified,
 /// multicast and broadcast endpoints are never sent to.
-pub fn start_udp_punch(
+pub(crate) fn start_udp_punch(
     socket: UdpSocket,
     peer_endpoints: Vec<SocketAddr>,
     local_endpoints: Vec<SocketAddr>,

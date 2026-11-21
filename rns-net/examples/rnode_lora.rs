@@ -9,8 +9,8 @@ use std::env;
 use std::sync::mpsc;
 
 use rns_net::{
-    Callbacks, InterfaceConfig, InterfaceId, NodeConfig, RNodeConfig, RNodeSubConfig, RnsNode,
-    MODE_FULL,
+    interface::{RNodeConfig, RNodeSubConfig},
+    Callbacks, InterfaceConfig, InterfaceId, NodeConfig, RnsNode, MODE_FULL,
 };
 
 struct LoggingCallbacks;
@@ -82,29 +82,27 @@ fn main() {
         id_callsign: None,
         pre_opened_fd: None,
         underlay_mark: None,
-        runtime: std::sync::Arc::new(std::sync::Mutex::new(
-            rns_net::interface::rnode::RNodeRuntime {
-                sub: RNodeSubConfig {
-                    name: String::new(),
-                    vport: 0,
-                    outgoing: true,
-                    frequency: 868_000_000,
-                    bandwidth: 125_000,
-                    txpower: 7,
-                    spreading_factor: 8,
-                    coding_rate: 5,
-                    flow_control: false,
-                    st_alock: None,
-                    lt_alock: None,
-                },
-                writer: None,
+        runtime: std::sync::Arc::new(std::sync::Mutex::new(rns_net::interface::RNodeRuntime {
+            sub: RNodeSubConfig {
+                name: String::new(),
+                vport: 0,
+                outgoing: true,
+                frequency: 868_000_000,
+                bandwidth: 125_000,
+                txpower: 7,
+                spreading_factor: 8,
+                coding_rate: 5,
+                flow_control: false,
+                st_alock: None,
+                lt_alock: None,
             },
-        )),
+            writer: None,
+        })),
         ble: Default::default(),
         reported_phy: Default::default(),
     };
     rnode.runtime = std::sync::Arc::new(std::sync::Mutex::new(
-        rns_net::interface::rnode::RNodeRuntime::from_config(&rnode),
+        rns_net::interface::RNodeRuntime::from_config(&rnode),
     ));
 
     let node = RnsNode::start(

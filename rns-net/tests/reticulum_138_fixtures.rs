@@ -1,6 +1,6 @@
 use rns_core::packet::{PacketError, RawPacket};
 use rns_crypto::token::Token;
-use rns_net::{encode_ax25_ui_frame, validate_ax25_address, WdclFrame};
+use rns_net::interface::{encode_ax25_ui_frame, validate_ax25_address, WdclFrame};
 use serde_json::Value;
 
 fn fixture() -> Value {

@@ -39,7 +39,7 @@ impl RNodeRuntime {
 
 /// The driver's handle on an RNode's runtime settings.
 #[derive(Debug, Clone)]
-pub struct RNodeRuntimeConfigHandle {
+pub(crate) struct RNodeRuntimeConfigHandle {
     /// Name of the interface.
     pub interface_name: String,
     /// Current settings, shared with the interface.

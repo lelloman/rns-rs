@@ -231,7 +231,7 @@ impl RnsNode {
         dest: &crate::destination::Destination,
         identity: &Identity,
         app_data: Option<&[u8]>,
-    ) -> Result<(), crate::TransmissionError> {
+    ) -> Result<(), crate::LinkSendError> {
         let permit = self.tx.link_send_pool().acquire().await?;
         if self.announce_needs_stamp(dest, identity) {
             // Destination.announce with STAMP_DESTINATIONS and no stamp yet:
@@ -239,12 +239,12 @@ impl RnsNode {
             // resolves when that announce has been written.
             let (completion, receipt) = crate::link_send::Completion::new(permit);
             self.enqueue_stamped_announce(dest, identity, app_data, Some(completion))
-                .map_err(|_| crate::TransmissionError::QueueFull)?;
+                .map_err(|_| crate::LinkSendError::QueueFull)?;
             return receipt.await;
         }
         let (packet, replay) = self
             .build_announce(dest, identity, app_data)
-            .map_err(|_| crate::TransmissionError::PacketBuildFailed)?;
+            .map_err(|_| crate::LinkSendError::PacketBuildFailed)?;
         let (completion, receipt) = crate::link_send::Completion::new(permit);
         self.tx
             .send_async(Event::SendOutboundTracked {
@@ -265,7 +265,7 @@ impl RnsNode {
         dest: &crate::destination::Destination,
         identity: &Identity,
         app_data: Option<&[u8]>,
-    ) -> Result<crate::TransmissionReceipt, crate::TransmissionError> {
+    ) -> Result<crate::LinkSendReceipt, crate::LinkSendError> {
         let permit = self.tx.link_send_pool().try_acquire()?;
         if self.announce_needs_stamp(dest, identity) {
             // Deferred to the stamper; the receipt resolves once the stamped
@@ -274,12 +274,12 @@ impl RnsNode {
             // queue.
             let (completion, receipt) = crate::link_send::Completion::new(permit);
             self.enqueue_stamped_announce(dest, identity, app_data, Some(completion))
-                .map_err(|_| crate::TransmissionError::QueueFull)?;
+                .map_err(|_| crate::LinkSendError::QueueFull)?;
             return Ok(receipt);
         }
         let (packet, replay) = self
             .build_announce(dest, identity, app_data)
-            .map_err(|_| crate::TransmissionError::PacketBuildFailed)?;
+            .map_err(|_| crate::LinkSendError::PacketBuildFailed)?;
         let (completion, receipt) = crate::link_send::Completion::new(permit);
         self.try_confirmed_event(Event::SendOutboundTracked {
             raw: packet.raw,

@@ -3,7 +3,7 @@
 use libfuzzer_sys::fuzz_target;
 use rns_core::buffer::{BufferReader, StreamDataMessage};
 use rns_core::channel::{Channel, ChannelAction};
-use rns_net::common::compressor::Bzip2Compressor;
+use rns_net::Bzip2Compressor;
 
 /// Upper bound on one decompressed stream chunk, as the stream readers set.
 const MAX_CHUNK: usize = 64 * 1024;

@@ -21,7 +21,9 @@ pub(crate) use hook_host::{
 pub(crate) use interface_state::*;
 pub(crate) use path_responses::*;
 #[cfg(feature = "iface-backbone")]
-pub use peer_pool::*;
+pub use peer_pool::BackbonePeerPoolSettings;
+#[cfg(feature = "iface-backbone")]
+pub(crate) use peer_pool::*;
 pub(crate) use settings::InterfaceSettings;
 
 use std::collections::{HashMap, HashSet};
@@ -257,7 +259,7 @@ fn extract_dest_hash(raw: &[u8]) -> [u8; 16] {
         .unwrap_or_default()
 }
 
-pub use crate::common::callbacks::Callbacks;
+pub(crate) use crate::common::callbacks::Callbacks;
 
 #[derive(Debug, Clone)]
 pub(crate) struct KnownDestinationState {

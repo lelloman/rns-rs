@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 
 use rns_net::provider_bridge::{decode_provider_envelope, ProviderEnvelope};
 use rns_net::storage;
-use rns_net::{HookInfo, RpcClient, SharedInstanceRpc};
+use rns_net::{
+    event::HookInfo,
+    rpc::{RpcClient, SharedInstanceRpc},
+};
 
 use crate::readiness::ReadyFileError;
 use crate::shared_instance::LocalInstance;

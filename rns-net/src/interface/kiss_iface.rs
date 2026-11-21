@@ -135,11 +135,6 @@ impl Writer for KissWriter {
     }
 }
 
-/// Start the KISS interface. Opens the port, configures TNC, spawns reader thread.
-pub fn start(config: KissIfaceConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
-    start_with_control(config, tx).map(|(writer, _)| writer)
-}
-
 fn start_with_control(
     config: KissIfaceConfig,
     tx: EventSender,

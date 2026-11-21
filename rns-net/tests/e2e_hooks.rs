@@ -26,8 +26,9 @@ use rns_crypto::OsRng;
 use rns_hooks_crate::{BuiltinHookCall, BuiltinHookHost, HookError, HookResult};
 
 use rns_net::{
+    interface::{TcpClientConfig, TcpServerConfig},
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig, NodeConfig,
-    PacketHash, ProofStrategy, RnsNode, TcpClientConfig, TcpServerConfig, MODE_FULL,
+    PacketHash, ProofStrategy, RnsNode, MODE_FULL,
 };
 
 // ─── WASM helpers ────────────────────────────────────────────────────────────

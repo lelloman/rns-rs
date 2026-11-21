@@ -12,11 +12,11 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 /// Minimum spacing between two inbound upgrade requests on the same link.
-pub const INBOUND_REQUEST_WINDOW: Duration = Duration::from_secs(60);
+pub(crate) const INBOUND_REQUEST_WINDOW: Duration = Duration::from_secs(60);
 
 /// Maximum number of inbound (responder) sessions, and of running punch
 /// threads, active at once node-wide.
-pub const MAX_CONCURRENT_SESSIONS: usize = 4;
+pub(crate) const MAX_CONCURRENT_SESSIONS: usize = 4;
 
 /// Upper bound on the number of links tracked by the inbound request limiter.
 const MAX_TRACKED_LINKS: usize = 1024;
@@ -32,7 +32,7 @@ const MAX_TRACKED_LINKS: usize = 1024;
 /// and Teredo (2001::/32, RFC 4380). Traffic to them is relayed over IPv4
 /// by third-party gateways, whose embedded IPv4 address and port a peer
 /// chooses freely, so they are no more a direct path than a NAT64 address.
-pub fn is_synthesized_ipv6(ip: &Ipv6Addr) -> bool {
+pub(crate) fn is_synthesized_ipv6(ip: &Ipv6Addr) -> bool {
     let s = ip.segments();
     let nat64_wkp = s[..6] == [0x64, 0xff9b, 0, 0, 0, 0];
     let nat64_local = s[..3] == [0x64, 0xff9b, 1];
@@ -44,7 +44,7 @@ pub fn is_synthesized_ipv6(ip: &Ipv6Addr) -> bool {
 }
 
 /// Whether `ip` is a synthesized IPv6 address (see [`is_synthesized_ipv6`]).
-pub fn is_synthesized(ip: &IpAddr) -> bool {
+pub(crate) fn is_synthesized(ip: &IpAddr) -> bool {
     matches!(ip, IpAddr::V6(v6) if is_synthesized_ipv6(v6))
 }
 
@@ -59,7 +59,7 @@ pub fn is_synthesized(ip: &IpAddr) -> bool {
 /// (fc00::/7). IPv4-mapped IPv6 addresses are checked as their IPv4 form;
 /// other IPv6 addresses synthesized from IPv4 ones (NAT64 and the like, see
 /// [`is_synthesized_ipv6`]) are always rejected.
-pub fn endpoint_is_acceptable(addr: &SocketAddr, allow_private: bool) -> bool {
+pub(crate) fn endpoint_is_acceptable(addr: &SocketAddr, allow_private: bool) -> bool {
     if addr.port() == 0 {
         return false;
     }

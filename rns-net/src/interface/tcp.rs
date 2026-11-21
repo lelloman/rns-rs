@@ -74,7 +74,7 @@ impl TcpClientRuntime {
 
 /// Driver-side handle to a running TCP client's runtime settings.
 #[derive(Debug, Clone)]
-pub struct TcpClientRuntimeConfigHandle {
+pub(crate) struct TcpClientRuntimeConfigHandle {
     /// Name of the TCP client interface.
     pub interface_name: String,
     /// Live settings shared with the interface.
@@ -187,10 +187,12 @@ fn try_connect(config: &TcpClientConfig, underlay_mark: Option<u32>) -> io::Resu
 }
 
 /// Connect and start the reader thread. Returns the writer for the driver.
-pub fn start(config: TcpClientConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
+#[cfg(test)]
+pub(crate) fn start(config: TcpClientConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
     start_with_ifac(config, tx, 0, None)
 }
 
+#[cfg(test)]
 fn start_with_ifac(
     config: TcpClientConfig,
     tx: EventSender,

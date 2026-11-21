@@ -330,7 +330,7 @@ impl std::error::Error for DecodeError {}
 /// that store a container and fetch it back into itself again and again
 /// would otherwise grow without bound. The RPC's largest real messages
 /// copy a small fraction of this.
-pub const MAX_MEMO_COPY: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_MEMO_COPY: usize = 16 * 1024 * 1024;
 
 /// Charge `item`'s weight against the memo copy `budget`.
 fn charge_copy(budget: &mut usize, item: &Item) -> Result<(), DecodeError> {

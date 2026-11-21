@@ -27,7 +27,7 @@ impl Default for AutoRuntime {
 
 /// Driver-side handle to a running AutoInterface's runtime settings.
 #[derive(Debug, Clone)]
-pub struct AutoRuntimeConfigHandle {
+pub(crate) struct AutoRuntimeConfigHandle {
     /// Name of the AutoInterface.
     pub interface_name: String,
     /// Live settings shared with the interface.

@@ -2,21 +2,21 @@
 pub const ANNOUNCE_SAMPLE_MAX: usize = 48;
 
 /// Maximum number of path request timestamps to keep per direction.
-pub const PATH_REQUEST_SAMPLE_MAX: usize = 48;
+pub(crate) const PATH_REQUEST_SAMPLE_MAX: usize = 48;
 
 /// Minimum number of incoming announce samples before ingress-control frequency is meaningful.
-pub const INCOMING_ANNOUNCE_MIN_SAMPLE: usize = 2;
+pub(crate) const INCOMING_ANNOUNCE_MIN_SAMPLE: usize = 2;
 
 /// Minimum number of incoming path request samples before frequency is meaningful.
-pub const INCOMING_PATH_REQUEST_MIN_SAMPLE: usize = 2;
+pub(crate) const INCOMING_PATH_REQUEST_MIN_SAMPLE: usize = 2;
 
 /// Age (seconds) past which the oldest announce sample decays, upstream's
 /// `AR_FREQ_DECAY` (1 / `AR_MINFREQ_HZ`).
-pub const AR_FREQ_DECAY: f64 = 10.0;
+pub(crate) const AR_FREQ_DECAY: f64 = 10.0;
 
 /// Age (seconds) past which the oldest path request sample decays,
 /// upstream's `PR_FREQ_DECAY` (1 / `PR_MINFREQ_HZ`).
-pub const PR_FREQ_DECAY: f64 = 10.0;
+pub(crate) const PR_FREQ_DECAY: f64 = 10.0;
 
 /// What an RNode reports about its channel and itself (upstream
 /// `RNodeInterface`'s `r_airtime_*`, `r_channel_load_*`, `r_noise_floor`,

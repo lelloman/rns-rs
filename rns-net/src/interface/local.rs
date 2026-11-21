@@ -294,7 +294,7 @@ mod unix_socket {
 /// endpoint cannot be bound: the abstract Unix socket on Linux unless
 /// `use_af_unix` is off, the localhost TCP port otherwise. The probe binds
 /// and immediately releases, so it never shows up as a client connection.
-pub fn shared_instance_running(instance_name: &str, port: u16, use_af_unix: bool) -> bool {
+pub(crate) fn shared_instance_running(instance_name: &str, port: u16, use_af_unix: bool) -> bool {
     #[cfg(target_os = "linux")]
     if use_af_unix {
         return matches!(
@@ -312,7 +312,8 @@ pub fn shared_instance_running(instance_name: &str, port: u16, use_af_unix: bool
 /// Start a local server (shared instance).
 /// Tries Unix abstract socket first on Linux, falls back to TCP.
 /// Spawns an acceptor thread. Each client gets a dynamically allocated InterfaceId.
-pub fn start_server(
+#[cfg(test)]
+pub(crate) fn start_server(
     config: LocalServerConfig,
     tx: EventSender,
     next_id: Arc<AtomicU64>,

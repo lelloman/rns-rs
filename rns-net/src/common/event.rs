@@ -7,11 +7,30 @@ mod reports;
 mod runtime;
 mod stats;
 
-pub use direct::*;
-pub use queries::*;
-pub use reports::*;
-pub use runtime::*;
-pub use stats::*;
+pub use direct::{
+    direct_link_reason_name, DirectCandidateKind, DirectLinkCounters, DirectLinkEntry,
+    DirectLinkStatus, DirectLossCause, DirectPathStatus, DirectReupgradeConfig, HolePunchPolicy,
+    ProbeRateLimit, ProbeServerReport,
+};
+pub use queries::{
+    query, InterfaceManagementOperation, Query, QueryRequest, QueryResponse, SendProbeError,
+    MAX_PROBE_PAYLOAD_SIZE,
+};
+pub(crate) use reports::StampedLinkKeys;
+pub use reports::{
+    BackboneInterfaceEntry, BackbonePeerHookEvent, BackbonePeerStateEntry, BlackholeInfo,
+    DestinationStampInfo, HookInfo, KnownDestinationEntry, LinkDistributionEntry, LinkInfoEntry,
+    LocalDestinationEntry, NextHopResponse, PacketSignal, PathTableEntry,
+    ProviderBridgeConsumerStats, ProviderBridgeStats, RateTableEntry, ResourceInfoEntry,
+};
+pub use runtime::{
+    DrainStatus, LifecycleState, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
+    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
+};
+pub use stats::{
+    BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus, I2pEndpointStat, InterfaceStatsResponse,
+    LinkTraffic, SingleInterfaceStat, TrafficDetail,
+};
 
 use std::fmt;
 use std::io::Read;
@@ -26,15 +45,15 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo, PacketBytes};
 use crate::common::link_manager::RequestResponse;
 
 /// Identity hash and public key supplied to request callbacks.
-pub type RequestRemoteIdentity = ([u8; 16], [u8; 64]);
+pub(crate) type RequestRemoteIdentity = ([u8; 16], [u8; 64]);
 /// Callback for an immediate byte response.
-pub type ByteRequestHandler =
+pub(crate) type ByteRequestHandler =
     dyn Fn([u8; 16], &str, &[u8], Option<&RequestRemoteIdentity>) -> Option<Vec<u8>> + Send;
 /// Callback for an immediate packet or resource response.
-pub type ResponseRequestHandler =
+pub(crate) type ResponseRequestHandler =
     dyn Fn([u8; 16], &str, &[u8], Option<&RequestRemoteIdentity>) -> Option<RequestResponse> + Send;
 /// Callback for an application-managed deferred response.
-pub type DeferredRequestHandler =
+pub(crate) type DeferredRequestHandler =
     dyn Fn([u8; 16], &str, [u8; 16], &[u8], Option<&RequestRemoteIdentity>) + Send;
 
 /// Why loading, reloading, unloading or configuring a hook failed. It

@@ -206,7 +206,8 @@ impl AsRawFd for SerialPort {
 /// Duplicate a file descriptor the caller keeps owning, such as one the
 /// process inherited. The duplicate is owned by the result; an fd that is
 /// not open is reported as an error.
-pub fn dup_fd(fd: RawFd) -> io::Result<OwnedFd> {
+#[cfg(any(test, feature = "iface-rnode"))]
+pub(crate) fn dup_fd(fd: RawFd) -> io::Result<OwnedFd> {
     // SAFETY: F_DUPFD_CLOEXEC takes an integer argument and does not consume `fd`;
     // a closed `fd` only makes the call fail with EBADF, reported below.
     let new_fd = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };

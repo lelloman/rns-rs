@@ -35,15 +35,15 @@ use crate::interface::Writer;
 /// open: NATs commonly forget an idle UDP mapping after 30 seconds, the
 /// shortest seen, so a keepalive every 15 seconds refreshes it even when
 /// one is lost.
-pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+pub(crate) const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Without a valid keepalive for this long (three missed) the direct path
 /// is dead. A link with traffic notices sooner, by going stale.
-pub const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(45);
+pub(crate) const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// MTU a direct interface starts with, until its path MTU discovery (see
 /// [`super::path_mtu`]) finds a larger one.
-pub const DIRECT_MTU: u32 = super::path_mtu::MTU_FLOOR;
+pub(crate) const DIRECT_MTU: u32 = super::path_mtu::MTU_FLOOR;
 
 const KEEPALIVE_MAGIC: &[u8; 4] = b"RNSK";
 const KEEPALIVE_TAG_LEN: usize = 16;
@@ -142,7 +142,7 @@ pub(crate) fn carries_link(frame: &[u8], link_id: &[u8; 16]) -> bool {
 }
 
 /// What a direct interface needs to know about its upgrade.
-pub struct DirectPathParams {
+pub(crate) struct DirectPathParams {
     /// Link the path carries; only frames of this link pass.
     pub link_id: [u8; 16],
     /// Hole punching session, carried in keepalives.
@@ -157,7 +157,7 @@ pub struct DirectPathParams {
 /// Writer for a direct UDP peer-to-peer connection.
 ///
 /// When dropped, signals the reader thread to stop.
-pub struct UdpDirectWriter {
+pub(crate) struct UdpDirectWriter {
     socket: Arc<UdpSocket>,
     peer_addr: SocketAddr,
     /// The link this interface belongs to; other frames are not sent.
@@ -237,7 +237,7 @@ impl Drop for UdpDirectWriter {
 /// interface I/O folded, registers a source on the driver loop). The reader
 /// sends `Event::Frame` for the link's packets and `Event::InterfaceDown`
 /// when the keepalives stop.
-pub fn start_direct_interface(
+pub(crate) fn start_direct_interface(
     socket: UdpSocket,
     peer_addr: SocketAddr,
     interface_id: InterfaceId,

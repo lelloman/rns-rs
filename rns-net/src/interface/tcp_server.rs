@@ -70,7 +70,7 @@ impl TcpServerRuntime {
 
 /// Driver-side handle to a running TCP server's runtime settings.
 #[derive(Debug, Clone)]
-pub struct TcpServerRuntimeConfigHandle {
+pub(crate) struct TcpServerRuntimeConfigHandle {
     /// Name of the TCP server interface.
     pub interface_name: String,
     /// Live settings shared with the interface.
@@ -136,7 +136,8 @@ impl Writer for TcpServerWriter {
 ///
 /// `next_id` is shared with the node for allocating unique InterfaceIds
 /// for each connected client.
-pub fn start(
+#[cfg(test)]
+pub(crate) fn start(
     config: TcpServerConfig,
     tx: EventSender,
     next_id: Arc<AtomicU64>,

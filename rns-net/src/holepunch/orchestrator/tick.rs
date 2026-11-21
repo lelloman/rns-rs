@@ -4,7 +4,7 @@ use super::*;
 
 impl HolePunchManager {
     /// Tick all sessions for timeout checks.
-    pub fn tick(&mut self, tx: &EventSender) -> Vec<HolePunchManagerAction> {
+    pub(crate) fn tick(&mut self, tx: &EventSender) -> Vec<HolePunchManagerAction> {
         let now = time::now();
         let mut all_actions = Vec::new();
 

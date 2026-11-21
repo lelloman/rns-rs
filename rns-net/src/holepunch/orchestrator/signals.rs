@@ -76,7 +76,7 @@ pub(super) fn convert_engine_actions(
 }
 
 /// Convert an Endpoint (from rns-core) to a SocketAddr.
-pub fn endpoint_to_socket_addr(ep: &Endpoint) -> Option<SocketAddr> {
+pub(crate) fn endpoint_to_socket_addr(ep: &Endpoint) -> Option<SocketAddr> {
     match ep.addr.len() {
         4 => {
             let ip = std::net::Ipv4Addr::from(<[u8; 4]>::try_from(ep.addr.as_slice()).ok()?);
@@ -94,7 +94,7 @@ impl HolePunchManager {
     /// Handle an incoming hole-punch signaling message.
     ///
     /// Returns true if the message was handled (caller should not forward to app).
-    pub fn handle_signal(
+    pub(crate) fn handle_signal(
         &mut self,
         link_id: [u8; 16],
         msgtype: u8,
@@ -284,7 +284,7 @@ impl HolePunchManager {
     }
 
     /// Check if a signalling kind is an upgrade negotiation message.
-    pub fn is_holepunch_message(msgtype: u8) -> bool {
+    pub(crate) fn is_holepunch_message(msgtype: u8) -> bool {
         is_holepunch_msgtype(msgtype)
     }
 }

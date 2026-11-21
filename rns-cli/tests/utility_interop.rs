@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use rns_net::pickle::PickleValue;
 use rns_net::rpc::derive_auth_key;
-use rns_net::{RpcAddr, RpcClient};
+use rns_net::rpc::{RpcAddr, RpcClient};
 
 /// Every instance here, Python or Rust, stamps the announces and path
 /// requests it emits (upstream 51fa8413, 1.6.1); the config file cannot turn
