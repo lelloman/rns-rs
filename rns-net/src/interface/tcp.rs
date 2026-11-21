@@ -504,18 +504,38 @@ impl InterfaceFactory for TcpClientFactory {
             .unwrap_or(4242);
         let (bitrate, fixed_mtu) = super::parse_tcp_rate_params(params)?;
         let flush_after = super::parse_flush_after(params)?;
+        let defaults = TcpClientConfig::default();
+        // As upstream, retry forever unless max_reconnect_tries is set.
+        let max_reconnect_tries = match params.get("max_reconnect_tries") {
+            Some(value) => Some(parse_int_param::<u32>(
+                "max_reconnect_tries",
+                value,
+                0,
+                "a non-negative integer",
+            )?),
+            None => defaults.max_reconnect_tries,
+        };
+        // As upstream, connect_timeout must be an integer but every attempt
+        // uses the 5 s INITIAL_CONNECT_TIMEOUT: upstream stores the value and
+        // never applies it.
+        if let Some(value) = params.get("connect_timeout") {
+            parse_int_param::<i64>("connect_timeout", value, i64::MIN, "an integer")?;
+        }
 
-        Ok(Box::new(TcpClientConfig {
+        let config = TcpClientConfig {
             name: name.to_string(),
             target_host,
             target_port,
             interface_id: id,
+            max_reconnect_tries,
             device: params.get("device").cloned(),
             bitrate,
             fixed_mtu,
             flush_after,
-            ..TcpClientConfig::default()
-        }))
+            ..defaults
+        };
+        config.sync_runtime();
+        Ok(Box::new(config))
     }
 
     fn start(
@@ -577,6 +597,28 @@ impl InterfaceFactory for TcpClientFactory {
             interface_type_name: "TCPClientInterface".to_string(),
         })
     }
+}
+
+/// Parse the integer config value `value` of `key`, which must be at least
+/// `min`. Upstream fails to create an interface whose integer option does
+/// not parse.
+fn parse_int_param<T: std::str::FromStr + PartialOrd>(
+    key: &'static str,
+    value: &str,
+    min: T,
+    expected: &str,
+) -> Result<T, InterfaceConfigError> {
+    value
+        .trim()
+        .parse::<T>()
+        .ok()
+        .filter(|parsed| *parsed >= min)
+        .ok_or_else(|| {
+            InterfaceConfigError::invalid_value(
+                key,
+                format!("invalid TCP client {key} '{value}' (expected {expected})"),
+            )
+        })
 }
 
 pub(crate) fn tcp_client_runtime_handle_from_config(
@@ -723,6 +765,60 @@ mod tests {
             rx.recv_timeout(Duration::from_secs(2)).unwrap(),
             Event::InterfaceDown(InterfaceId(78))
         ));
+    }
+
+    #[test]
+    fn parse_config_reads_the_reconnect_settings() {
+        let parse = |pairs: &[(&str, &str)]| {
+            let params: HashMap<String, String> = pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect();
+            TcpClientFactory
+                .parse_config("uplink", InterfaceId(5), &params)
+                .map(|config| *config.into_any().downcast::<TcpClientConfig>().unwrap())
+                .map_err(|error| error.to_string())
+        };
+
+        let config = parse(&[]).unwrap();
+        assert_eq!(config.max_reconnect_tries, None);
+        assert_eq!(config.connect_timeout, Duration::from_secs(5));
+
+        let config = parse(&[("max_reconnect_tries", "3"), ("connect_timeout", " 12 ")]).unwrap();
+        assert_eq!(config.max_reconnect_tries, Some(3));
+        // As upstream, a valid connect_timeout is not applied.
+        assert_eq!(config.connect_timeout, Duration::from_secs(5));
+        // The runtime state and the runtime-config defaults follow them.
+        let handle = tcp_client_runtime_handle_from_config(&config);
+        for runtime in [handle.runtime.lock().unwrap().clone(), handle.startup] {
+            assert_eq!(runtime.max_reconnect_tries, Some(3));
+            assert_eq!(runtime.connect_timeout, Duration::from_secs(5));
+            assert_eq!(runtime.reconnect_wait, Duration::from_secs(5));
+        }
+        assert_eq!(
+            parse(&[("max_reconnect_tries", "0")])
+                .unwrap()
+                .max_reconnect_tries,
+            Some(0)
+        );
+
+        for value in ["fish", "-1", "2.5", ""] {
+            assert_eq!(
+                parse(&[("max_reconnect_tries", value)]).unwrap_err(),
+                format!(
+                    "invalid TCP client max_reconnect_tries '{value}' (expected a non-negative integer)"
+                )
+            );
+        }
+        for value in ["-1", "0"] {
+            assert!(parse(&[("connect_timeout", value)]).is_ok(), "{value}");
+        }
+        for value in ["fish", "2.5"] {
+            assert_eq!(
+                parse(&[("connect_timeout", value)]).unwrap_err(),
+                format!("invalid TCP client connect_timeout '{value}' (expected an integer)")
+            );
+        }
     }
 
     use std::net::TcpListener;
