@@ -6,6 +6,7 @@
 //! - bin8, bin16, bin32
 //! - fixarray, array16
 //! - fixmap, map16
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -410,12 +411,9 @@ pub fn unpack_exact_ref(data: &[u8]) -> Result<ValueRef<'_>, Error> {
     Ok(value)
 }
 
-fn ensure_len(data: &[u8], needed: usize) -> Result<(), Error> {
-    if data.len() < needed {
-        Err(Error::UnexpectedEof)
-    } else {
-        Ok(())
-    }
+/// The `N` bytes at the start of `rest` (the bytes after a format byte).
+fn arg<const N: usize>(rest: &[u8]) -> Result<[u8; N], Error> {
+    rest.first_chunk().copied().ok_or(Error::UnexpectedEof)
 }
 
 /// A decoded msgpack value borrowing from its input. Arrays and maps are
@@ -568,7 +566,7 @@ impl<'a> Iterator for Items<'a> {
         self.remaining -= 1;
         // Validated when the container was decoded, so this cannot fail.
         let (value, consumed) = unpack_ref(self.rest, self.depth).ok()?;
-        self.rest = &self.rest[consumed..];
+        self.rest = self.rest.get(consumed..)?;
         Some(value)
     }
 }
@@ -588,13 +586,12 @@ impl<'a> Iterator for Entries<'a> {
 /// Decode one value from the start of `data` without copying, returning it
 /// and the bytes consumed. Nested arrays and maps are validated in full.
 pub fn unpack_ref(data: &[u8], depth: usize) -> Result<(ValueRef<'_>, usize), Error> {
-    if data.is_empty() {
+    let Some((&b, rest)) = data.split_first() else {
         return Err(Error::UnexpectedEof);
-    }
+    };
     if depth > MAX_DEPTH {
         return Err(Error::MaxDepthExceeded);
     }
-    let b = data[0];
     match b {
         // positive fixint: 0x00..0x7f
         0x00..=0x7f => Ok((ValueRef::UInt(b as u64), 1)),
@@ -620,129 +617,103 @@ pub fn unpack_ref(data: &[u8], depth: usize) -> Result<(ValueRef<'_>, usize), Er
 
         // float32
         0xca => {
-            ensure_len(data, 5)?;
-            let bits = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
+            let bits = u32::from_be_bytes(arg(rest)?);
             Ok((ValueRef::Float(f32::from_bits(bits) as f64), 5))
         }
 
         // float64
         0xcb => {
-            ensure_len(data, 9)?;
-            let bits = u64::from_be_bytes([
-                data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
-            ]);
+            let bits = u64::from_be_bytes(arg(rest)?);
             Ok((ValueRef::Float(f64::from_bits(bits)), 9))
         }
 
         // bin8, bin16, bin32
         0xc4 => {
-            ensure_len(data, 2)?;
-            unpack_bin_ref(data, 2, data[1] as usize)
+            unpack_bin_ref(data, 2, u8::from_be_bytes(arg(rest)?) as usize)
         }
         0xc5 => {
-            ensure_len(data, 3)?;
-            unpack_bin_ref(data, 3, u16::from_be_bytes([data[1], data[2]]) as usize)
+            unpack_bin_ref(data, 3, u16::from_be_bytes(arg(rest)?) as usize)
         }
         0xc6 => {
-            ensure_len(data, 5)?;
-            let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
+            let len = u32::from_be_bytes(arg(rest)?) as usize;
             unpack_bin_ref(data, 5, len)
         }
 
         // uint8
         0xcc => {
-            ensure_len(data, 2)?;
-            Ok((ValueRef::UInt(data[1] as u64), 2))
+            Ok((ValueRef::UInt(u8::from_be_bytes(arg(rest)?) as u64), 2))
         }
 
         // uint16
         0xcd => {
-            ensure_len(data, 3)?;
-            let v = u16::from_be_bytes([data[1], data[2]]);
+            let v = u16::from_be_bytes(arg(rest)?);
             Ok((ValueRef::UInt(v as u64), 3))
         }
 
         // uint32
         0xce => {
-            ensure_len(data, 5)?;
-            let v = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
+            let v = u32::from_be_bytes(arg(rest)?);
             Ok((ValueRef::UInt(v as u64), 5))
         }
 
         // uint64
         0xcf => {
-            ensure_len(data, 9)?;
-            let v = u64::from_be_bytes([
-                data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
-            ]);
+            let v = u64::from_be_bytes(arg(rest)?);
             Ok((ValueRef::UInt(v), 9))
         }
 
         // int8
         0xd0 => {
-            ensure_len(data, 2)?;
-            Ok((ValueRef::Int(data[1] as i8 as i64), 2))
+            Ok((ValueRef::Int(i8::from_be_bytes(arg(rest)?) as i64), 2))
         }
 
         // int16
         0xd1 => {
-            ensure_len(data, 3)?;
-            let v = i16::from_be_bytes([data[1], data[2]]);
+            let v = i16::from_be_bytes(arg(rest)?);
             Ok((ValueRef::Int(v as i64), 3))
         }
 
         // int32
         0xd2 => {
-            ensure_len(data, 5)?;
-            let v = i32::from_be_bytes([data[1], data[2], data[3], data[4]]);
+            let v = i32::from_be_bytes(arg(rest)?);
             Ok((ValueRef::Int(v as i64), 5))
         }
 
         // int64
         0xd3 => {
-            ensure_len(data, 9)?;
-            let v = i64::from_be_bytes([
-                data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
-            ]);
+            let v = i64::from_be_bytes(arg(rest)?);
             Ok((ValueRef::Int(v), 9))
         }
 
         // str8, str16, str32
         0xd9 => {
-            ensure_len(data, 2)?;
-            unpack_str_ref(data, 2, data[1] as usize)
+            unpack_str_ref(data, 2, u8::from_be_bytes(arg(rest)?) as usize)
         }
         0xda => {
-            ensure_len(data, 3)?;
-            unpack_str_ref(data, 3, u16::from_be_bytes([data[1], data[2]]) as usize)
+            unpack_str_ref(data, 3, u16::from_be_bytes(arg(rest)?) as usize)
         }
         0xdb => {
-            ensure_len(data, 5)?;
-            let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
+            let len = u32::from_be_bytes(arg(rest)?) as usize;
             unpack_str_ref(data, 5, len)
         }
 
         // array16, array32
         0xdc => {
-            ensure_len(data, 3)?;
-            let len = u16::from_be_bytes([data[1], data[2]]) as usize;
+            let len = u16::from_be_bytes(arg(rest)?) as usize;
             unpack_array_ref(data, 3, len, depth)
         }
         0xdd => {
-            ensure_len(data, 5)?;
-            let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
+            let len = u32::from_be_bytes(arg(rest)?) as usize;
             unpack_array_ref(data, 5, len, depth)
         }
 
         // map16, map32
         0xde => {
-            ensure_len(data, 3)?;
-            let len = u16::from_be_bytes([data[1], data[2]]) as usize;
+            let len = u16::from_be_bytes(arg(rest)?) as usize;
             unpack_map_ref(data, 3, len, depth)
         }
         0xdf => {
-            ensure_len(data, 5)?;
-            let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
+            let len = u32::from_be_bytes(arg(rest)?) as usize;
             unpack_map_ref(data, 5, len, depth)
         }
 
@@ -755,14 +726,14 @@ pub fn unpack_ref(data: &[u8], depth: usize) -> Result<(ValueRef<'_>, usize), Er
 
 fn unpack_bin_ref(data: &[u8], offset: usize, len: usize) -> Result<(ValueRef<'_>, usize), Error> {
     let end = offset.checked_add(len).ok_or(Error::UnexpectedEof)?;
-    ensure_len(data, end)?;
-    Ok((ValueRef::Bin(&data[offset..end]), end))
+    let bin = data.get(offset..end).ok_or(Error::UnexpectedEof)?;
+    Ok((ValueRef::Bin(bin), end))
 }
 
 fn unpack_str_ref(data: &[u8], offset: usize, len: usize) -> Result<(ValueRef<'_>, usize), Error> {
     let end = offset.checked_add(len).ok_or(Error::UnexpectedEof)?;
-    ensure_len(data, end)?;
-    let s = core::str::from_utf8(&data[offset..end]).map_err(|_| Error::InvalidUtf8)?;
+    let bytes = data.get(offset..end).ok_or(Error::UnexpectedEof)?;
+    let s = core::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)?;
     Ok((ValueRef::Str(s), end))
 }
 
@@ -771,7 +742,7 @@ fn unpack_str_ref(data: &[u8], offset: usize, len: usize) -> Result<(ValueRef<'_
 fn skip_items(data: &[u8], start: usize, count: usize, depth: usize) -> Result<usize, Error> {
     let mut offset = start;
     for _ in 0..count {
-        let (_, consumed) = unpack_ref(&data[offset..], depth + 1)?;
+        let (_, consumed) = unpack_ref(data.get(offset..).unwrap_or_default(), depth + 1)?;
         offset += consumed;
     }
     Ok(offset)
@@ -787,10 +758,11 @@ fn unpack_array_ref(
         return Err(Error::UnexpectedEof);
     }
     let end = skip_items(data, start, count, depth)?;
+    let items = data.get(start..end).ok_or(Error::UnexpectedEof)?;
     Ok((
         ValueRef::Array {
             len: count,
-            items: &data[start..end],
+            items,
             depth,
         },
         end,
@@ -808,10 +780,11 @@ fn unpack_map_ref(
         .filter(|items| *items <= data.len().saturating_sub(start))
         .ok_or(Error::UnexpectedEof)?;
     let end = skip_items(data, start, items, depth)?;
+    let entries = data.get(start..end).ok_or(Error::UnexpectedEof)?;
     Ok((
         ValueRef::Map {
             len: count,
-            entries: &data[start..end],
+            entries,
             depth,
         },
         end,
