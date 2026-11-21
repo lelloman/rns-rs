@@ -80,7 +80,7 @@ pub(super) fn show_public_keys() {
             }
             Err(e) => {
                 log("Could not deserialize signing key");
-                log(&e);
+                log(&e.to_string());
             }
         },
     }
@@ -267,13 +267,13 @@ pub(super) fn bootstrap_eeprom(
         graceful_exit(0);
     }
     let signature = match std::fs::read(&signing_key)
-        .map_err(|e| e.to_string())
+        .map_err(keys::SigningKeyError::Read)
         .and_then(|private| keys::sign_checksum(&private, &checksum))
     {
         Ok(signature) => signature,
         Err(e) => {
             log("Error while signing EEPROM");
-            log(&e);
+            log(&e.to_string());
             log("An error occurred while writing EEPROM. The contained exception was:");
             log("no signature");
             graceful_exit(1);
