@@ -183,19 +183,51 @@ predates this commit and applies to every per-interface log line.
 ## Integration Plan
 
 The commit has its final disposition and one mapping commit; no
-implementation work remains. The promotion gates are next.
+implementation work remains. The gates are recorded below.
 
 ## Promotion Gates
 
-- [ ] Every upstream commit has a final disposition.
-- [ ] Focused regressions pass for every applicable behavior change.
-- [ ] Fixture provenance and byte stability are checked where applicable.
-- [ ] Exact-target live Python/Rust interop passes.
-- [ ] Workspace tests, feature suites, formatting, and lint pass.
-- [ ] Required build, Docker, hardware, and manual gates are recorded honestly.
-- [ ] Native documentation is updated for user-visible behavior.
+- [x] Every upstream commit has a final disposition.
+- [x] Focused regressions pass for every applicable behavior change.
+- [x] Fixture provenance and byte stability are checked where applicable.
+- [x] Exact-target live Python/Rust interop passes.
+- [x] Workspace tests, feature suites, formatting, and lint pass.
+- [x] Required build, Docker, hardware, and manual gates are recorded honestly.
+- [x] Native documentation is updated for user-visible behavior.
 - [ ] A final parity record is created from `PARITY-TEMPLATE.md`.
 
 ## Acceptance Record
 
-Not yet run.
+Gates were run on 2026-11-21 on `upstream/606a1691` at `55f988d2`
+(`dev@71725ccd` plus the audit opening, the mapping commit and the audit
+update), against a disposable worktree of the Reticulum checkout at
+`606a1691` (`HEAD:RNS` `4c52b059`, `import RNS` from it reports 1.6.1). The
+configured checkout stayed at `f55c0c6e`.
+
+- No conformance fixture is affected: the commit changes how an interface
+  section is applied, nothing on the wire. The warning text, the interface
+  state and the transport identity were compared with a Python instance at
+  `606a1691` (see the per-commit analysis).
+- Exact-target interop with CI's commands, `PYTHONPATH` and
+  `RETICULUM_UPSTREAM_DIR` at the `606a1691` worktree: `python_interop`
+  6 passed (1 ignored) under the default engine, `compact-threads` and
+  `engine-parallel`; `utility_interop -- --ignored` 34 passed;
+  `placeholders -- --ignored` 1 passed; `rnodeconf -- --ignored` 32 passed;
+  `rns-git --lib` 231 passed (2 ignored). 0 failures.
+- `cargo test --workspace`: 3,861 passed, 0 failed, 76 ignored (the known
+  flaky direct-link test passed in this run).
+- `cargo fmt --all --check` and `bash scripts/lint-host.sh` clean (lint run
+  on the mapping commit's code; the later commits change only Markdown).
+- `scripts/check_upstream_drift.py` (2026-11-21 08:50 UTC, both remotes
+  fresh, one attempt each) reports drift from `f55c0c6e`: GitHub tip at the
+  baseline, rgit tip `606a1691`, the one audited commit and nothing else.
+  It names `reticulum-next-audit.md` as the active audit to create; this
+  audit carries the qualified name instead, as the rgit-2 audit did, and
+  the drift clears once `606a1691` is accepted.
+- Not run: `--features rns-hooks` and the other feature suites besides the
+  two interop engines, ARMv7 and ESP32 builds (`rns-esp32` has no
+  interface discovery), Docker E2E, the dual-VPS Backbone smoke and
+  hardware validation. CI's interop pin stays at the signed `1.6.1` tag
+  commit `cff4d03f`, as it did for the earlier same-version rgit
+  advancements, so the promotion pull request's CI does not exercise
+  `606a1691`; the exact-target run above does.
