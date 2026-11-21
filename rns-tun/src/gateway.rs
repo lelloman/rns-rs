@@ -136,7 +136,10 @@ fn spawn_tun_reader(
         while !reader_stop.load(Ordering::Relaxed) {
             match reader.read_packet(&mut buffer) {
                 Ok(size) => {
-                    if packet_tx.send(Ok(buffer[..size].to_vec())).is_err() {
+                    if packet_tx
+                        .send(Ok(buffer.get(..size).unwrap_or_default().to_vec()))
+                        .is_err()
+                    {
                         break;
                     }
                 }
