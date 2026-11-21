@@ -163,7 +163,7 @@ pub(super) fn format_size(size: u64) -> String {
     if unit == 0 {
         format!("{size} B")
     } else {
-        format!("{value:.1} {}", UNITS[unit])
+        format!("{value:.1} {}", UNITS.get(unit).unwrap_or(&"B"))
     }
 }
 

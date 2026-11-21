@@ -12,8 +12,7 @@ pub(super) fn markdown_to_micron_scoped(input: &str, url_scope: Option<&str>) ->
     let mut code_block: Option<(Option<String>, String)> = None;
     let mut index = 0;
 
-    while index < lines.len() {
-        let line = lines[index];
+    while let Some(&line) = lines.get(index) {
         let trimmed = line.trim();
         if trimmed.starts_with("```") {
             if let Some((language, content)) = code_block.take() {
@@ -36,13 +35,9 @@ pub(super) fn markdown_to_micron_scoped(input: &str, url_scope: Option<&str>) ->
         if let Some(quote) = markdown_quote(line) {
             let mut parts = vec![quote.to_string()];
             index += 1;
-            while index < lines.len() {
-                if let Some(quote) = markdown_quote(lines[index]) {
-                    parts.push(quote.to_string());
-                    index += 1;
-                } else {
-                    break;
-                }
+            while let Some(quote) = lines.get(index).and_then(|line| markdown_quote(line)) {
+                parts.push(quote.to_string());
+                index += 1;
             }
             let formatted = format_markdown_inline_scoped(&parts.join(" "), url_scope);
             for wrapped in markdown_wrap_text(&formatted, 77) {
@@ -54,8 +49,8 @@ pub(super) fn markdown_to_micron_scoped(input: &str, url_scope: Option<&str>) ->
         }
         if is_table_start(&lines, index) {
             let mut table = Vec::new();
-            while index < lines.len() && lines[index].contains('|') {
-                table.push(lines[index]);
+            while let Some(&line) = lines.get(index).filter(|line| line.contains('|')) {
+                table.push(line);
                 index += 1;
             }
             out.push_str(&format_markdown_table(&table, url_scope));
@@ -164,10 +159,12 @@ pub(super) fn format_markdown_line(line: &str, url_scope: Option<&str>) -> Strin
 }
 
 pub(super) fn is_table_start(lines: &[&str], index: usize) -> bool {
-    index + 1 < lines.len()
-        && lines[index].contains('|')
-        && lines[index + 1].contains('|')
-        && is_table_separator(lines[index + 1])
+    match lines.get(index..) {
+        Some([line, next, ..]) => {
+            line.contains('|') && next.contains('|') && is_table_separator(next)
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn is_table_separator(line: &str) -> bool {
@@ -184,10 +181,10 @@ pub(super) enum TableAlign {
 }
 
 pub(super) fn format_markdown_table(lines: &[&str], url_scope: Option<&str>) -> String {
-    if lines.len() < 2 {
+    let [header_line, alignment_line, ..] = lines else {
         return String::new();
-    }
-    let header: Vec<String> = parse_table_row(lines[0])
+    };
+    let header: Vec<String> = parse_table_row(header_line)
         .into_iter()
         .map(|cell| format_markdown_inline_scoped(cell.trim(), url_scope))
         .collect();
@@ -195,7 +192,7 @@ pub(super) fn format_markdown_table(lines: &[&str], url_scope: Option<&str>) -> 
         return String::new();
     }
     let columns = header.len();
-    let mut alignments = parse_table_alignments(lines[1]);
+    let mut alignments = parse_table_alignments(alignment_line);
     while alignments.len() < columns {
         alignments.push(TableAlign::Left);
     }
@@ -218,12 +215,9 @@ pub(super) fn format_markdown_table(lines: &[&str], url_scope: Option<&str>) -> 
         .collect();
 
     let mut widths = vec![3; columns];
-    for (index, cell) in header.iter().enumerate() {
-        widths[index] = widths[index].max(markdown_visible_width(cell));
-    }
-    for row in &rows {
-        for (index, cell) in row.iter().enumerate().take(columns) {
-            widths[index] = widths[index].max(markdown_visible_width(cell));
+    for row in std::iter::once(&header).chain(&rows) {
+        for (width, cell) in widths.iter_mut().zip(row) {
+            *width = (*width).max(markdown_visible_width(cell));
         }
     }
 

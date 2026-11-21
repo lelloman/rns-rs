@@ -261,24 +261,26 @@ pub(super) fn render_combined_chart(
                 continue;
             }
 
-            let upper_cat = stacked_pixel_category(&categories, index, total, upper_min, upper_max);
-            let lower_cat = stacked_pixel_category(&categories, index, total, lower_min, lower_max);
-            match (upper_cat, lower_cat) {
-                (Some(upper), Some(lower)) if upper == lower => {
-                    let color = &categories[upper].1;
+            // A category index and its color.
+            let category = |pixel_min, pixel_max| {
+                let found =
+                    stacked_pixel_category(&categories, index, total, pixel_min, pixel_max)?;
+                Some((found, &categories.get(found)?.1))
+            };
+            match (
+                category(upper_min, upper_max),
+                category(lower_min, lower_max),
+            ) {
+                (Some((upper, color)), Some((lower, _))) if upper == lower => {
                     out.push_str(&format!("`FT{color}`BT{color}█`f`b"));
                 }
-                (Some(upper), Some(lower)) => {
-                    let upper_color = &categories[upper].1;
-                    let lower_color = &categories[lower].1;
+                (Some((_, upper_color)), Some((_, lower_color))) => {
                     out.push_str(&format!("`FT{upper_color}`BT{lower_color}▀`f`b"));
                 }
-                (Some(upper), None) => {
-                    let color = &categories[upper].1;
+                (Some((_, color)), None) => {
                     out.push_str(&format!("`FT{color}▀`f"));
                 }
-                (None, Some(lower)) => {
-                    let color = &categories[lower].1;
+                (None, Some((_, color))) => {
                     out.push_str(&format!("`FT{color}▄`f"));
                 }
                 (None, None) => out.push(' '),

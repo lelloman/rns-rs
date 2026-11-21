@@ -81,28 +81,26 @@ pub(super) fn required_var<'a>(vars: &'a BTreeMap<String, String>, key: &str) ->
 }
 
 pub(super) fn decode_url_component(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => {
+    let mut rest = value.as_bytes();
+    let mut out = Vec::with_capacity(rest.len());
+    while let Some((&byte, tail)) = rest.split_first() {
+        match (byte, tail) {
+            (b'+', _) => {
                 out.push(b' ');
-                i += 1;
+                rest = tail;
             }
-            b'%' if i + 2 < bytes.len() => {
-                if let (Some(high), Some(low)) = (hex_digit(bytes[i + 1]), hex_digit(bytes[i + 2]))
-                {
+            (b'%', [high, low, after @ ..]) => {
+                if let (Some(high), Some(low)) = (hex_digit(*high), hex_digit(*low)) {
                     out.push((high << 4) | low);
-                    i += 3;
+                    rest = after;
                 } else {
-                    out.push(bytes[i]);
-                    i += 1;
+                    out.push(byte);
+                    rest = tail;
                 }
             }
-            byte => {
+            _ => {
                 out.push(byte);
-                i += 1;
+                rest = tail;
             }
         }
     }

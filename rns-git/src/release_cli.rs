@@ -246,13 +246,13 @@ impl ReleaseOptions {
             }
         }
 
-        if positional.len() < 2 {
+        let [remote, command, targets @ ..] = positional.as_slice() else {
             return Err(Error::msg(usage()));
-        }
-        let remote = positional[0].clone();
-        let command = match positional[1].as_str() {
+        };
+        let remote = remote.clone();
+        let command = match command.as_str() {
             "list" => {
-                if positional.len() != 2 {
+                if !targets.is_empty() {
                     return Err(Error::msg("release list does not take a target"));
                 }
                 ReleaseCommand::List
@@ -279,13 +279,7 @@ impl ReleaseOptions {
                 required_signer: signer_path.map(|path| path.to_string_lossy().into_owned()),
                 offline: true,
             },
-            "create" => parse_create_target(
-                &positional[2..],
-                notes_path,
-                signer_path,
-                package_name,
-                local,
-            )?,
+            "create" => parse_create_target(targets, notes_path, signer_path, package_name, local)?,
             "delete" => ReleaseCommand::Delete {
                 tag: positional
                     .get(2)
@@ -923,11 +917,11 @@ fn validate_rsg_parts(
 
 fn rsg_envelope(rsg: &[u8]) -> Result<Value> {
     const SIG_LEN: usize = 64;
-    if rsg.len() <= SIG_LEN {
-        return Err(Error::msg("invalid RSG"));
-    }
-    msgpack::unpack_exact(&rsg[SIG_LEN..])
-        .map_err(|e| Error::msg(format!("invalid RSG envelope: {e}")))
+    let envelope = match rsg.get(SIG_LEN..) {
+        Some(envelope) if !envelope.is_empty() => envelope,
+        _ => return Err(Error::msg("invalid RSG")),
+    };
+    msgpack::unpack_exact(envelope).map_err(|e| Error::msg(format!("invalid RSG envelope: {e}")))
 }
 
 fn rsg_embedded_message(value: &Value) -> Option<Vec<u8>> {
@@ -1054,67 +1048,67 @@ fn artifact_pattern_matches(pattern: &str, name: &str) -> bool {
 }
 
 fn wildcard_match(pattern: &[char], pi: usize, name: &[char], ni: usize) -> bool {
-    if pi == pattern.len() {
+    let Some(&current) = pattern.get(pi) else {
         return ni == name.len();
-    }
-    match pattern[pi] {
+    };
+    match current {
         '*' => {
-            let mut next = pi + 1;
-            while next < pattern.len() && pattern[next] == '*' {
-                next += 1;
-            }
+            let stars = pattern
+                .iter()
+                .skip(pi + 1)
+                .take_while(|&&ch| ch == '*')
+                .count();
+            let next = pi + 1 + stars;
             (ni..=name.len()).any(|candidate| wildcard_match(pattern, next, name, candidate))
         }
         '?' => ni < name.len() && wildcard_match(pattern, pi + 1, name, ni + 1),
         '[' => {
             let Some((matches_class, next)) = match_char_class(pattern, pi, name.get(ni).copied())
             else {
-                return ni < name.len()
-                    && name[ni] == '['
-                    && wildcard_match(pattern, pi + 1, name, ni + 1);
+                return name.get(ni) == Some(&'[') && wildcard_match(pattern, pi + 1, name, ni + 1);
             };
             matches_class && wildcard_match(pattern, next, name, ni + 1)
         }
-        literal => {
-            ni < name.len() && name[ni] == literal && wildcard_match(pattern, pi + 1, name, ni + 1)
-        }
+        literal => name.get(ni) == Some(&literal) && wildcard_match(pattern, pi + 1, name, ni + 1),
     }
 }
 
 fn match_char_class(pattern: &[char], start: usize, value: Option<char>) -> Option<(bool, usize)> {
     let value = value?;
-    let mut end = start + 1;
-    while end < pattern.len() && pattern[end] != ']' {
-        end += 1;
-    }
-    if end == pattern.len() || end == start + 1 {
+    // The class body runs from after the '[' to the first ']', which must
+    // close a nonempty body.
+    let body = pattern.get(start + 1..)?;
+    let len = body.iter().position(|&ch| ch == ']')?;
+    if len == 0 {
         return None;
     }
-
-    let mut i = start + 1;
-    let negated = matches!(pattern.get(i), Some('!' | '^'));
+    let end = start + 1 + len;
+    let mut class = body.get(..len)?;
+    let negated = matches!(class.first(), Some('!' | '^'));
     if negated {
-        i += 1;
+        class = class.get(1..)?;
     }
-    if i >= end {
+    if class.is_empty() {
         return None;
     }
 
     let mut matched = false;
-    while i < end {
-        if i + 2 < end && pattern[i + 1] == '-' {
-            let lo = pattern[i];
-            let hi = pattern[i + 2];
-            if lo <= value && value <= hi {
-                matched = true;
+    loop {
+        class = match class {
+            [lo, '-', hi, rest @ ..] => {
+                if *lo <= value && value <= *hi {
+                    matched = true;
+                }
+                rest
             }
-            i += 3;
-        } else {
-            if pattern[i] == value {
-                matched = true;
+            [ch, rest @ ..] => {
+                if *ch == value {
+                    matched = true;
+                }
+                rest
             }
-            i += 1;
-        }
+            [] => break,
+        };
     }
 
     Some((if negated { !matched } else { matched }, end + 1))

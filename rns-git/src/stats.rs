@@ -249,7 +249,11 @@ fn aggregate_repository_stats(
 
     RepositoryStats {
         repository: repo.to_string(),
-        date_range: format!("{} - {}", day_labels[0], day_labels[lookback_days - 1]),
+        date_range: format!(
+            "{} - {}",
+            day_labels.first().map_or("", String::as_str),
+            day_labels.last().map_or("", String::as_str)
+        ),
         timeline_labels: [format!("{lookback_days} days ago"), "Today".to_string()],
         views,
         fetches,
@@ -549,9 +553,14 @@ fn format_day(day_index: i64) -> String {
 
 fn format_day_label(day_index: i64) -> String {
     let (_, month, day) = civil_from_days(day_index);
-    let name = [
+    const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ][month as usize - 1];
+    ];
+    // civil_from_days gives a month in 1..=12.
+    let name = MONTHS
+        .get((month as usize).wrapping_sub(1))
+        .copied()
+        .unwrap_or_default();
     format!("{name} {day:02}")
 }
 

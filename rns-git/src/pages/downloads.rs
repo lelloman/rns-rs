@@ -56,21 +56,18 @@ pub fn serve_media(
         .trim_start_matches('/')
         .splitn(4, '/')
         .collect();
-    if components.len() != 4 {
+    let [group, repo, reference, path] = components.as_slice() else {
         return Ok(rejected());
-    }
-    let vars = BTreeMap::from([
-        ("g".into(), components[0].into()),
-        ("r".into(), components[1].into()),
-    ]);
+    };
+    let vars = BTreeMap::from([("g".into(), (*group).into()), ("r".into(), (*repo).into())]);
     let Ok((_, _, repository)) = accessible_repository(config, access, remote, &vars) else {
         return Ok(rejected());
     };
-    let path = decode_url_component(components[3]);
+    let path = decode_url_component(path);
     if path.is_empty() || validate_git_path(&path).is_err() {
         return Ok(rejected());
     }
-    let Ok(resolved) = resolve_ref(&repository, components[2]) else {
+    let Ok(resolved) = resolve_ref(&repository, reference) else {
         return Ok(rejected());
     };
     if !matches!(

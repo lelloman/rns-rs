@@ -184,11 +184,11 @@ impl WorkOptions {
                 other => positional.push(other.to_string()),
             }
         }
-        if positional.len() < 2 {
+        let [remote, command, ..] = positional.as_slice() else {
             return Err(Error::msg(usage()));
-        }
-        let remote = positional[0].clone();
-        let command = match positional[1].as_str() {
+        };
+        let remote = remote.clone();
+        let command = match command.as_str() {
             "list" => WorkCommand::List { scope },
             "view" => WorkCommand::View {
                 scope,

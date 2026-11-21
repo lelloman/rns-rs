@@ -64,10 +64,13 @@ pub const CONV_SIZE_MAX: usize = 32 * 1024 * 1024;
 const SNIFF_BYTES: usize = 64;
 
 fn is_bmp_header(data: &[u8]) -> bool {
-    if data.len() < 18 || &data[..2] != b"BM" {
+    let Some(header) = data.first_chunk::<18>() else {
+        return false;
+    };
+    if &header[..2] != b"BM" {
         return false;
     }
-    let dib_size = u32::from_le_bytes([data[14], data[15], data[16], data[17]]);
+    let dib_size = u32::from_le_bytes([header[14], header[15], header[16], header[17]]);
     matches!(dib_size, 12 | 40 | 52 | 56 | 64 | 108 | 124)
 }
 
@@ -243,7 +246,7 @@ fn configured_args(
 /// leading bytes, refuse oversized input, then encode with the detected coder.
 fn convert_bytes(input: &[u8], options: ConversionOptions, backend: Backend) -> Option<Vec<u8>> {
     let deadline = Instant::now() + options.timeout;
-    let Some(format) = detect_image_format(&input[..input.len().min(SNIFF_BYTES)]) else {
+    let Some(format) = detect_image_format(input.get(..SNIFF_BYTES).unwrap_or(input)) else {
         log::debug!("Media conversion failed: Input format is not supported");
         return None;
     };
@@ -521,7 +524,8 @@ fn prettytime(time: f64, integral: bool) -> String {
 }
 
 fn webp_dimensions(data: &[u8]) -> Option<(u32, u32)> {
-    if data.len() < 30 || &data[..4] != b"RIFF" || &data[8..12] != b"WEBP" {
+    let data = data.first_chunk::<30>()?;
+    if &data[..4] != b"RIFF" || &data[8..12] != b"WEBP" {
         return None;
     }
     let (width, height) = match &data[12..16] {
@@ -534,7 +538,7 @@ fn webp_dimensions(data: &[u8]) -> Option<(u32, u32)> {
             (u16::from_le_bytes([data[28], data[29]]) & 0x3fff) as u32,
         ),
         b"VP8L" => {
-            let bits = u32::from_le_bytes(data[21..25].try_into().ok()?);
+            let bits = u32::from_le_bytes([data[21], data[22], data[23], data[24]]);
             ((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1)
         }
         _ => return None,
