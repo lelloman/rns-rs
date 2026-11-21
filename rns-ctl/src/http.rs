@@ -201,15 +201,13 @@ pub fn parse_request_head(reader: &mut dyn BufRead) -> io::Result<HttpRequest> {
     }
 
     let parts: Vec<&str> = request_line.splitn(3, ' ').collect();
-    if parts.len() < 2 {
+    let [method, full_path, ..] = parts.as_slice() else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "Invalid request line",
         ));
-    }
-
-    let method = parts[0].to_string();
-    let full_path = parts[1];
+    };
+    let method = method.to_string();
 
     let (path, query) = if let Some(pos) = full_path.find('?') {
         (
@@ -278,7 +276,7 @@ pub fn read_body(reader: &mut dyn Read, len: usize) -> io::Result<Vec<u8>> {
     let mut chunk = [0u8; BODY_READ_CHUNK_BYTES];
     while body.len() < len {
         let want = (len - body.len()).min(BODY_READ_CHUNK_BYTES);
-        let n = match reader.read(&mut chunk[..want]) {
+        let n = match reader.read(chunk.get_mut(..want).unwrap_or_default()) {
             Ok(0) => {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -289,7 +287,7 @@ pub fn read_body(reader: &mut dyn Read, len: usize) -> io::Result<Vec<u8>> {
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),
         };
-        body.extend_from_slice(&chunk[..n]);
+        body.extend_from_slice(chunk.get(..n).unwrap_or_default());
     }
     Ok(body)
 }

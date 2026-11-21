@@ -12,8 +12,7 @@ fn main() -> ExitCode {
     // everything from the command on is the command's. `-c/--config PATH`
     // takes a value, so it is skipped over to find the command.
     let mut at = 0;
-    while at < argv.len() {
-        let arg = &argv[at];
+    while let Some(arg) = argv.get(at) {
         if arg == "-c" || arg == "--config" {
             at += 2;
         } else if arg.starts_with('-') && arg != "-" {
