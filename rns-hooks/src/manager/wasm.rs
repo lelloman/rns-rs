@@ -86,6 +86,41 @@ impl HookManager {
         let engine_access_ptr: *const dyn EngineAccess =
             unsafe { std::mem::transmute(engine_access as *const dyn EngineAccess) };
 
+        let (mut store, instance) =
+            self.wasm_instance(program, engine_access_ptr, now, provider_events_enabled)?;
+        let Some((memory, func)) =
+            Self::prepare_guest_call(program, &mut store, &instance, ctx, data_override)
+        else {
+            self.cache_wasm_instance(program, store, instance);
+            return None;
+        };
+        let result_offset = match Self::call_hook_export(program, &mut store, &func) {
+            GuestCall::Returned(offset) => offset,
+            // The store may hold partial state, so it is dropped instead of
+            // cached; the next call instantiates a fresh one.
+            GuestCall::HostPanicked => return None,
+            GuestCall::Trapped => {
+                self.cache_wasm_instance(program, store, instance);
+                return None;
+            }
+        };
+        let ret = Self::read_hook_result(program, &memory, &mut store, result_offset);
+
+        // Put the store+instance back for next call
+        self.cache_wasm_instance(program, store, instance);
+        ret
+    }
+
+    /// Take the program's cached store and instance, reset for this call, or
+    /// instantiate the module afresh.
+    #[inline]
+    fn wasm_instance(
+        &self,
+        program: &mut LoadedProgram,
+        engine_access_ptr: *const dyn EngineAccess,
+        now: f64,
+        provider_events_enabled: bool,
+    ) -> Option<(Store<StoreData>, wasmtime::Instance)> {
         // Take the cached store+instance out of program (or create fresh).
         // We take ownership to avoid borrow-checker conflicts with program.record_*().
         let cached = match &mut program.backend {
@@ -94,7 +129,7 @@ impl HookManager {
             #[cfg(feature = "native")]
             ProgramBackend::Native(_) => unreachable!(),
         };
-        let (mut store, instance) = if let Some(cached) = cached {
+        if let Some(cached) = cached {
             let (mut s, i) = cached;
             // Reset per-call state: fuel, engine_access, injected_actions, log_messages
             s.data_mut()
@@ -104,63 +139,72 @@ impl HookManager {
                 self.cache_wasm_instance(program, s, i);
                 return None;
             }
-            (s, i)
-        } else {
-            let store_data = StoreData::new(
-                program.name.clone(),
-                engine_access_ptr,
-                now,
-                provider_events_enabled,
-                self.runtime.max_memory(),
-            );
+            return Some((s, i));
+        }
 
-            let mut store = match self.runtime.new_store(store_data) {
-                Ok(store) => store,
-                Err(e) => {
-                    log::warn!("failed to set fuel for hook '{}': {}", program.name, e);
-                    return None;
-                }
-            };
+        let store_data = StoreData::new(
+            program.name.clone(),
+            engine_access_ptr,
+            now,
+            provider_events_enabled,
+            self.runtime.max_memory(),
+        );
 
-            let module = match &program.backend {
-                ProgramBackend::Builtin(_) => unreachable!(),
-                ProgramBackend::Wasm(wasm) => wasm.module.clone(),
-                #[cfg(feature = "native")]
-                ProgramBackend::Native(_) => unreachable!(),
-            };
-            let instance = match guard_guest_call(|| self.linker.instantiate(&mut store, &module)) {
-                Ok(inst) => inst,
-                Err(e) => {
-                    log::warn!("failed to instantiate hook '{}': {}", program.name, e);
-                    program.record_trap();
-                    return None;
-                }
-            };
-
-            (store, instance)
-        };
-
-        // Write context into guest memory
-        let memory = match instance.get_memory(&mut store, "memory") {
-            Some(mem) => mem,
-            None => {
-                log::warn!("hook '{}' has no exported memory", program.name);
-                program.record_trap();
-                self.cache_wasm_instance(program, store, instance);
+        let mut store = match self.runtime.new_store(store_data) {
+            Ok(store) => store,
+            Err(e) => {
+                log::warn!("failed to set fuel for hook '{}': {}", program.name, e);
                 return None;
             }
         };
 
-        if let Err(e) = arena::write_context(&memory, &mut store, ctx) {
+        let module = match &program.backend {
+            ProgramBackend::Builtin(_) => unreachable!(),
+            ProgramBackend::Wasm(wasm) => wasm.module.clone(),
+            #[cfg(feature = "native")]
+            ProgramBackend::Native(_) => unreachable!(),
+        };
+        let instance = match guard_guest_call(|| self.linker.instantiate(&mut store, &module)) {
+            Ok(inst) => inst,
+            Err(e) => {
+                log::warn!("failed to instantiate hook '{}': {}", program.name, e);
+                program.record_trap();
+                return None;
+            }
+        };
+
+        Some((store, instance))
+    }
+
+    /// Write the context (and any data override) into guest memory and look
+    /// up the hook's export. A failure is logged and counted as a trap.
+    #[inline]
+    fn prepare_guest_call(
+        program: &mut LoadedProgram,
+        store: &mut Store<StoreData>,
+        instance: &wasmtime::Instance,
+        ctx: &HookContext,
+        data_override: Option<&[u8]>,
+    ) -> Option<(wasmtime::Memory, wasmtime::TypedFunc<i32, i32>)> {
+        // Write context into guest memory
+        let memory = match instance.get_memory(&mut *store, "memory") {
+            Some(mem) => mem,
+            None => {
+                log::warn!("hook '{}' has no exported memory", program.name);
+                program.record_trap();
+                return None;
+            }
+        };
+
+        if let Err(e) = arena::write_context(&memory, &mut *store, ctx) {
             log::warn!("failed to write context for hook '{}': {}", program.name, e);
             program.record_trap();
-            self.cache_wasm_instance(program, store, instance);
             return None;
         }
 
         // If a previous hook in the chain returned Modify, override the packet data
         if let Some(override_data) = data_override {
-            if let Err(e) = arena::write_data_override(&memory, &mut store, override_data) {
+            if let Err(e) = arena::write_data_override(&memory, &mut *store, override_data) {
                 log::warn!(
                     "failed to write data override for hook '{}': {}",
                     program.name,
@@ -177,8 +221,8 @@ impl HookManager {
             #[cfg(feature = "native")]
             ProgramBackend::Native(_) => unreachable!(),
         };
-        let func = match instance.get_typed_func::<i32, i32>(&mut store, &export_name) {
-            Ok(f) => f,
+        match instance.get_typed_func::<i32, i32>(&mut *store, &export_name) {
+            Ok(f) => Some((memory, f)),
             Err(e) => {
                 log::warn!(
                     "hook '{}' missing export '{}': {}",
@@ -187,20 +231,26 @@ impl HookManager {
                     e
                 );
                 program.record_trap();
-                self.cache_wasm_instance(program, store, instance);
-                return None;
+                None
             }
-        };
+        }
+    }
 
+    /// Call the hook's export, counting a trap or a host panic against the
+    /// program.
+    #[inline]
+    fn call_hook_export(
+        program: &mut LoadedProgram,
+        store: &mut Store<StoreData>,
+        func: &wasmtime::TypedFunc<i32, i32>,
+    ) -> GuestCall {
         let call = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            func.call(&mut store, arena::ARENA_BASE as i32)
+            func.call(&mut *store, arena::ARENA_BASE as i32)
         }));
-        let result_offset = match call {
-            Ok(Ok(offset)) => offset,
+        match call {
+            Ok(Ok(offset)) => GuestCall::Returned(offset),
             Err(panic) => {
-                // A host function panicked while serving this program. The
-                // store may hold partial state, so drop it instead of caching
-                // it; the next call instantiates a fresh one.
+                // A host function panicked while serving this program.
                 let auto_disabled = program.record_trap();
                 log::warn!(
                     "hook '{}' aborted: host panic: {}",
@@ -214,7 +264,7 @@ impl HookManager {
                         program.consecutive_traps
                     );
                 }
-                return None;
+                GuestCall::HostPanicked
             }
             Ok(Err(e)) => {
                 // Fail-open: trap or fuel exhaustion → continue
@@ -228,20 +278,29 @@ impl HookManager {
                 } else {
                     log::warn!("hook '{}' trapped: {}", program.name, e);
                 }
-                self.cache_wasm_instance(program, store, instance);
-                return None;
+                GuestCall::Trapped
             }
-        };
+        }
+    }
 
+    /// Read the hook's result from guest memory, with any modified data,
+    /// and the actions and provider events it emitted.
+    #[inline]
+    fn read_hook_result(
+        program: &mut LoadedProgram,
+        memory: &wasmtime::Memory,
+        store: &mut Store<StoreData>,
+        result_offset: i32,
+    ) -> Option<ExecuteResult> {
         // Read result from guest memory
         // Guest pointers are unsigned 32-bit offsets.
-        let ret = match arena::read_result(&memory, &store, result_offset as u32 as usize) {
+        match arena::read_result(memory, &*store, result_offset as u32 as usize) {
             Ok(result) => {
                 program.record_success();
 
                 // Extract modified data from WASM memory
                 let modified_data = if Verdict::from_u32(result.verdict) == Some(Verdict::Modify) {
-                    arena::read_modified_data(&memory, &store, &result)
+                    arena::read_modified_data(memory, &*store, &result)
                 } else {
                     None
                 };
@@ -269,11 +328,7 @@ impl HookManager {
                 program.record_trap();
                 None
             }
-        };
-
-        // Put the store+instance back for next call
-        self.cache_wasm_instance(program, store, instance);
-        ret
+        }
     }
 
     pub(super) fn cache_wasm_instance(
@@ -289,6 +344,16 @@ impl HookManager {
             ProgramBackend::Native(_) => unreachable!(),
         }
     }
+}
+
+/// How a call into a hook's export ended.
+enum GuestCall {
+    /// The export returned the offset of its result.
+    Returned(i32),
+    /// The guest trapped or ran out of fuel; the store stays usable.
+    Trapped,
+    /// A host function panicked while serving the program.
+    HostPanicked,
 }
 
 /// Run a call into guest code, converting a panic raised by a host function
