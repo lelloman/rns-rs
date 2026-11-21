@@ -260,30 +260,22 @@ fn long_to_bytes(n: i64) -> Vec<u8> {
         return vec![];
     }
     let bytes = n.to_le_bytes();
-    // Trim trailing 0x00 (positive) or 0xFF (negative) bytes
-    let mut len = 8;
-    if n > 0 {
-        while len > 1 && bytes[len - 1] == 0x00 {
-            len -= 1;
-        }
-        // If high bit is set, add a 0x00 byte
-        if bytes[len - 1] & 0x80 != 0 {
-            let mut result = bytes[..len].to_vec();
-            result.push(0x00);
-            return result;
-        }
-    } else {
-        while len > 1 && bytes[len - 1] == 0xFF {
-            len -= 1;
-        }
-        // If high bit is not set, add a 0xFF byte
-        if bytes[len - 1] & 0x80 == 0 {
-            let mut result = bytes[..len].to_vec();
-            result.push(0xFF);
-            return result;
-        }
+    // Trim trailing 0x00 (positive) or 0xFF (negative) bytes, keeping one.
+    let sign = if n > 0 { 0x00 } else { 0xFF };
+    let len = bytes
+        .iter()
+        .rposition(|&b| b != sign)
+        .map_or(1, |top| top + 1);
+    let top = bytes.get(len - 1).copied().unwrap_or(sign);
+    // A sign byte goes back when the top byte's high bit reads as the
+    // wrong sign.
+    let extend = (top & 0x80 != 0) != (n < 0);
+    let mut result = Vec::with_capacity(len + usize::from(extend));
+    result.extend(bytes.iter().take(len));
+    if extend {
+        result.push(sign);
     }
-    bytes[..len].to_vec()
+    result
 }
 
 /// Decode error.
@@ -399,13 +391,12 @@ impl<'a> Input<'a> {
     /// The next `len` bytes.
     #[inline]
     fn take(&mut self, len: usize) -> Result<&'a [u8], DecodeError> {
-        let end = self
-            .pos
-            .checked_add(len)
-            .filter(|&end| end <= self.data.len())
+        let bytes = self
+            .data
+            .get(self.pos..)
+            .and_then(|rest| rest.get(..len))
             .ok_or(DecodeError::UnexpectedEnd)?;
-        let bytes = &self.data[self.pos..end];
-        self.pos = end;
+        self.pos += len;
         Ok(bytes)
     }
 
@@ -423,7 +414,8 @@ impl<'a> Input<'a> {
             .iter()
             .position(|&b| b == b'\n')
             .ok_or(DecodeError::UnexpectedEnd)?;
-        let line = std::str::from_utf8(&rest[..len]).map_err(|_| DecodeError::InvalidUtf8)?;
+        let line = rest.get(..len).ok_or(DecodeError::UnexpectedEnd)?;
+        let line = std::str::from_utf8(line).map_err(|_| DecodeError::InvalidUtf8)?;
         self.pos += len + 1;
         Ok(line)
     }
@@ -634,8 +626,8 @@ impl Machine {
             return Err(DecodeError::StackUnderflow);
         }
         if let Some(PickleValue::Dict(ref mut dict)) = top_mut(&mut self.stack, &self.marks) {
-            for pair in items.chunks_exact(2) {
-                dict.push((pair[0].clone(), pair[1].clone()));
+            for [key, value] in items.as_chunks::<2>().0 {
+                dict.push((key.clone(), value.clone()));
             }
             Ok(())
         } else {
@@ -689,17 +681,19 @@ fn codecs_encode(args: &PickleValue) -> PickleValue {
 /// when it does not fit an `i64`: bytes past the eighth may only repeat the
 /// sign.
 fn bytes_to_long(bytes: &[u8]) -> Option<i64> {
-    if bytes.is_empty() {
+    let Some(&top) = bytes.last() else {
         return Some(0);
-    }
-    let negative = bytes[bytes.len() - 1] & 0x80 != 0;
+    };
+    let negative = top & 0x80 != 0;
     let (low, high) = bytes.split_at(bytes.len().min(8));
     let sign_byte = if negative { 0xff } else { 0x00 };
     if high.iter().any(|&b| b != sign_byte) {
         return None;
     }
     let mut buf = [sign_byte; 8];
-    buf[..low.len()].copy_from_slice(low);
+    for (slot, byte) in buf.iter_mut().zip(low) {
+        *slot = *byte;
+    }
     let value = i64::from_le_bytes(buf);
     // With more than eight bytes, the eighth must carry the same sign.
     if !high.is_empty() && (value < 0) != negative {

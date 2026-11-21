@@ -659,13 +659,13 @@ pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], Know
             .as_array()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Expected array value"))?;
 
-        if arr.len() < 3 {
+        let [received_at, pub_key_bytes, app_data, rest @ ..] = arr else {
             continue;
-        }
+        };
 
-        let received_at = arr[0].as_uint().unwrap_or(0) as f64;
+        let received_at = received_at.as_uint().unwrap_or(0) as f64;
 
-        let pub_key_bytes = arr[1]
+        let pub_key_bytes = pub_key_bytes
             .as_bin()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Expected bin public_key"))?;
         if pub_key_bytes.len() != 64 {
@@ -674,14 +674,10 @@ pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], Know
         let mut public_key = [0u8; 64];
         public_key.copy_from_slice(pub_key_bytes);
 
-        let app_data = if arr.len() > 2 {
-            arr[2].as_bin().map(|b| b.to_vec())
-        } else {
-            None
-        };
+        let app_data = app_data.as_bin().map(|b| b.to_vec());
 
-        let identity_hash = if arr.len() > 3 {
-            let hash_bytes = arr[3]
+        let identity_hash = if let Some(hash_bytes) = rest.first() {
+            let hash_bytes = hash_bytes
                 .as_bin()
                 .filter(|bytes| bytes.len() == 16)
                 .map(|bytes| {
@@ -874,7 +870,9 @@ fn encode_announce_rate_table(
         blob.extend_from_slice(&violations.to_le_bytes());
     }
     fn ring(timestamps: &[f64], max_ts: usize) -> &[f64] {
-        &timestamps[timestamps.len().saturating_sub(max_ts)..]
+        timestamps
+            .get(timestamps.len().saturating_sub(max_ts)..)
+            .unwrap_or_default()
     }
     for rate in rates {
         blob.push(ring(&rate.timestamps, max_ts).len() as u8);
@@ -902,21 +900,23 @@ fn decode_announce_rate_table(
     use rns_core::transport::persistence::PersistedAnnounceRate;
 
     let bad = invalid_transport_data;
-    if blob.len() < ANNOUNCE_RATE_HEADER_LEN {
+    let Some((header, columns)) = blob.split_first_chunk::<ANNOUNCE_RATE_HEADER_LEN>() else {
         return Err(bad("announce rate table header is truncated"));
-    }
-    if &blob[0..6] != ANNOUNCE_RATE_MAGIC {
+    };
+    let [m0, m1, m2, m3, m4, m5, version, flags, file_max_ts, keylen, _, _, c0, c1, c2, c3] =
+        *header;
+    if [m0, m1, m2, m3, m4, m5] != *ANNOUNCE_RATE_MAGIC {
         return Err(bad("announce rate table magic mismatch"));
     }
-    if blob[6] != ANNOUNCE_RATE_VERSION {
+    if version != ANNOUNCE_RATE_VERSION {
         return Err(bad("unsupported announce rate table version"));
     }
-    if blob[7] != 0 {
+    if flags != 0 {
         return Err(bad("announce rate table flags must be zero"));
     }
-    let file_max_ts = blob[8] as usize;
-    let keylen = blob[9] as usize;
-    let count = u32::from_le_bytes([blob[12], blob[13], blob[14], blob[15]]) as usize;
+    let file_max_ts = file_max_ts as usize;
+    let keylen = keylen as usize;
+    let count = u32::from_le_bytes([c0, c1, c2, c3]) as usize;
     if file_max_ts == 0 {
         return Err(bad("announce rate table ring size must be positive"));
     }
@@ -933,40 +933,45 @@ fn decode_announce_rate_table(
         ));
     }
 
-    let mut offset = ANNOUNCE_RATE_HEADER_LEN;
+    // The columns, each `count` entries long, fill the rest exactly.
+    let mut rest = columns;
     let mut take = |len: usize| {
-        let column = &blob[offset..offset + len];
-        offset += len;
+        let (column, after) = rest.split_at_checked(len).unwrap_or((rest, &[]));
+        rest = after;
         column
     };
-    let keys = take(count * keylen);
-    let last = take(count * 8);
-    let blocked = take(count * 8);
-    let violations = take(count * 4);
+    let (keys, _) = take(count * keylen).as_chunks::<ANNOUNCE_RATE_KEY_LEN>();
+    let (last, _) = take(count * 8).as_chunks::<8>();
+    let (blocked, _) = take(count * 8).as_chunks::<8>();
+    let (violations, _) = take(count * 4).as_chunks::<4>();
     let ts_len = take(count);
     let ts_head = take(count);
-    let ts = take(count * file_max_ts * 8);
-    let f64_at = |column: &[u8], index: usize| {
-        let mut bytes = [0u8; 8];
-        bytes.copy_from_slice(&column[index * 8..index * 8 + 8]);
-        f64::from_le_bytes(bytes)
-    };
+    let rings = take(count * file_max_ts * 8).chunks_exact(file_max_ts * 8);
+    let entries = keys
+        .iter()
+        .zip(last)
+        .zip(blocked)
+        .zip(violations)
+        .zip(ts_len.iter().zip(ts_head))
+        .zip(rings);
 
     let mut seen = HashSet::with_capacity(count);
     let mut rates = Vec::with_capacity(count);
-    for slot in 0..count {
-        let mut destination_hash = [0u8; 16];
-        destination_hash.copy_from_slice(&keys[slot * keylen..(slot + 1) * keylen]);
+    for (((((destination_hash, last), blocked), violations), (&len, &head)), ring) in entries {
+        let destination_hash = *destination_hash;
         if !seen.insert(destination_hash) {
             return Err(bad("announce rate table has a duplicate destination"));
         }
-        let len = ts_len[slot] as usize;
-        let head = ts_head[slot] as usize;
+        let len = len as usize;
+        let head = head as usize;
         if len > file_max_ts || head >= file_max_ts {
             return Err(bad("announce rate table ring cursor is out of range"));
         }
-        let base = slot * file_max_ts;
-        let ring = |index: usize| f64_at(ts, base + index);
+        let (ring, _) = ring.as_chunks::<8>();
+        let ring = |index: usize| {
+            ring.get(index)
+                .map_or(0.0, |bytes| f64::from_le_bytes(*bytes))
+        };
         let mut timestamps: Vec<f64> = if len < file_max_ts {
             (0..len).map(ring).collect()
         } else {
@@ -976,13 +981,11 @@ fn decode_announce_rate_table(
             .len()
             .saturating_sub(rns_core::constants::MAX_RATE_TIMESTAMPS);
         timestamps.drain(..excess);
-        let mut violation_bytes = [0u8; 4];
-        violation_bytes.copy_from_slice(&violations[slot * 4..slot * 4 + 4]);
         rates.push(PersistedAnnounceRate {
             destination_hash,
-            last: f64_at(last, slot),
-            rate_violations: i32::from_le_bytes(violation_bytes).max(0) as u32,
-            blocked_until: f64_at(blocked, slot),
+            last: f64::from_le_bytes(*last),
+            rate_violations: i32::from_le_bytes(*violations).max(0) as u32,
+            blocked_until: f64::from_le_bytes(*blocked),
             timestamps,
         });
     }
@@ -1106,19 +1109,18 @@ fn load_tunnel_table(
         .ok_or_else(|| invalid_transport_data("tunnel table must be an array"))?
         .iter()
         .map(|value| {
-            let fields = value
-                .as_array()
-                .filter(|fields| fields.len() == 4)
-                .ok_or_else(|| invalid_transport_data("tunnel entry must contain 4 fields"))?;
-            let tunnel_id = fixed_bin::<32>(&fields[0], "tunnel id")?;
-            let interface_hash = optional_fixed_bin::<32>(&fields[1], "tunnel interface hash")?;
-            let paths = fields[2]
+            let Some([tunnel_id, interface_hash, paths, expires]) = value.as_array() else {
+                return Err(invalid_transport_data("tunnel entry must contain 4 fields"));
+            };
+            let tunnel_id = fixed_bin::<32>(tunnel_id, "tunnel id")?;
+            let interface_hash = optional_fixed_bin::<32>(interface_hash, "tunnel interface hash")?;
+            let paths = paths
                 .as_array()
                 .ok_or_else(|| invalid_transport_data("tunnel paths must be an array"))?
                 .iter()
                 .map(|value| decode_persisted_path(value, now))
                 .collect::<io::Result<Vec<_>>>()?;
-            let expires = fields[3]
+            let expires = expires
                 .as_number()
                 .ok_or_else(|| invalid_transport_data("tunnel expiry must be numeric"))?;
             Ok(PersistedTunnel {
@@ -1140,35 +1142,41 @@ fn decode_persisted_path(
 ) -> io::Result<rns_core::transport::persistence::PersistedPath> {
     use rns_core::transport::persistence::PersistedPath;
 
-    let fields = value
+    let Some(
+        [destination_hash, timestamp, received_from, hops, expires, random_blobs, interface_hash, packet_hash, used @ ..],
+    ) = value
         .as_array()
         .filter(|fields| fields.len() == 8 || fields.len() == 9)
-        .ok_or_else(|| invalid_transport_data("path entry must contain 8 or 9 fields"))?;
-    let random_blobs = fields[5]
+    else {
+        return Err(invalid_transport_data(
+            "path entry must contain 8 or 9 fields",
+        ));
+    };
+    let random_blobs = random_blobs
         .as_array()
         .ok_or_else(|| invalid_transport_data("random blobs must be an array"))?
         .iter()
         .map(|value| fixed_bin::<10>(value, "random blob"))
         .collect::<io::Result<Vec<_>>>()?;
-    let hops = fields[3]
+    let hops = hops
         .as_uint()
         .and_then(|value| u8::try_from(value).ok())
         .ok_or_else(|| invalid_transport_data("hop count must fit in a byte"))?;
     Ok(PersistedPath {
-        destination_hash: fixed_bin::<16>(&fields[0], "destination hash")?,
-        timestamp: fields[1]
+        destination_hash: fixed_bin::<16>(destination_hash, "destination hash")?,
+        timestamp: timestamp
             .as_number()
             .ok_or_else(|| invalid_transport_data("path timestamp must be numeric"))?,
-        received_from: fixed_bin::<16>(&fields[2], "received-from hash")?,
+        received_from: fixed_bin::<16>(received_from, "received-from hash")?,
         hops,
-        expires: fields[4]
+        expires: expires
             .as_number()
             .ok_or_else(|| invalid_transport_data("path expiry must be numeric"))?,
         random_blobs,
-        interface_hash: optional_fixed_bin::<32>(&fields[6], "interface hash")?,
-        packet_hash: fixed_bin::<32>(&fields[7], "packet hash")?,
-        used: fields
-            .get(8)
+        interface_hash: optional_fixed_bin::<32>(interface_hash, "interface hash")?,
+        packet_hash: fixed_bin::<32>(packet_hash, "packet hash")?,
+        used: used
+            .first()
             .map_or(Some(now), |value| value.as_number())
             .unwrap_or(0.0),
     })
