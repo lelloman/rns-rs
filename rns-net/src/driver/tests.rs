@@ -393,7 +393,7 @@ fn the_known_destinations_flush_gets_only_what_changed() {
     assert_eq!(changes(&mut driver), (Vec::new(), Vec::new()));
 
     // A use changes one entry; a removal shows as removed.
-    assert!(driver.mark_known_destination_used(&a));
+    assert!(driver.known.mark_used(&a));
     driver.known.entries.remove(&b);
     let (changed, removed) = changes(&mut driver);
     assert_eq!(
@@ -9801,7 +9801,8 @@ fn announce_stamp_is_stored_and_recalled() {
     ))]);
 
     let entry = driver
-        .known_destination_entries()
+        .known
+        .list()
         .into_iter()
         .find(|entry| entry.dest_hash == dest)
         .expect("announce stored");
@@ -9812,11 +9813,11 @@ fn announce_stamp_is_stored_and_recalled() {
     );
     assert_eq!(entry.lr_cost, Some(StampCost::from_f64(12.5)));
     assert_eq!(
-        driver.recall_stamp_value(&dest),
+        driver.known.stamp_value(&dest),
         Some(rns_core::stamp::StampValue::from_whole(19))
     );
     assert_eq!(
-        driver.recall_link_cost(&dest),
+        driver.known.link_cost(&dest),
         Some(StampCost::from_f64(12.5))
     );
 }
@@ -9890,10 +9891,7 @@ fn announce_received_populates_known_destinations() {
     assert_eq!(recalled.announced.snr, Some(10.5));
     // Upstream's `Identity.remember` keeps the announce's packet hash.
     assert_eq!(recalled.packet_hash, Some(announce_hash));
-    assert_eq!(
-        Driver::known_destination_entry(dest_hash, recalled).packet_hash,
-        Some(announce_hash)
-    );
+    assert_eq!(recalled.entry(dest_hash).packet_hash, Some(announce_hash));
 }
 
 #[test]
@@ -10332,7 +10330,7 @@ fn retained_known_destination_survives_cleanup() {
         dest,
         make_announced_identity(dest, time::now() - 30.0, InterfaceId(1)),
     );
-    assert!(driver.retain_known_destination(&dest));
+    assert!(driver.known.retain(&dest));
 
     tx.send(Event::Tick).unwrap();
     tx.send(Event::Shutdown).unwrap();
@@ -10361,7 +10359,7 @@ fn retain_identity_marks_all_matching_known_destinations() {
     driver.upsert_known_destination(dest_b, announced_b);
     driver.upsert_known_destination(dest_c, announced_c);
 
-    assert!(driver.retain_identity(&identity_hash));
+    assert!(driver.known.retain_identity(&identity_hash));
 
     assert!(driver.known.entries[&dest_a].retained);
     assert!(driver.known.entries[&dest_b].retained);
@@ -10374,7 +10372,7 @@ fn retain_identity_returns_false_when_no_known_destination_matches() {
     let dest = [0xB1; 16];
     driver.upsert_known_destination(dest, make_announced_identity(dest, 10.0, InterfaceId(1)));
 
-    assert!(!driver.retain_identity(&[0xFE; 16]));
+    assert!(!driver.known.retain_identity(&[0xFE; 16]));
     assert!(!driver.known.entries[&dest].retained);
 }
 

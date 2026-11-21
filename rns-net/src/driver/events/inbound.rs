@@ -363,7 +363,7 @@ impl Driver {
             .engine
             .decoded_lrproof_rebalance_candidate(&decoded_packet, interface_id)
         {
-            if let Some(announced) = self.known_destination_announced(&destination_hash) {
+            if let Some(announced) = self.known.announced(&destination_hash) {
                 let mut sig_pub = [0u8; 32];
                 sig_pub.copy_from_slice(&announced.public_key[32..64]);
                 if self.engine.rebalance_link_path_from_lrproof(
@@ -391,7 +391,8 @@ impl Driver {
             .decoded_transported_lrproof(&decoded_packet, interface_id)
         {
             let valid = self
-                .known_destination_announced(&destination_hash)
+                .known
+                .announced(&destination_hash)
                 .is_some_and(|announced| {
                     let mut sig_pub = [0u8; 32];
                     sig_pub.copy_from_slice(&announced.public_key[32..64]);
@@ -403,7 +404,7 @@ impl Driver {
                 });
             self.engine.set_lrproof_verdict(link_id, valid);
             if valid && !self.connected_to_shared_instance {
-                self.mark_known_destination_used(&destination_hash);
+                self.known.mark_used(&destination_hash);
             }
         }
 

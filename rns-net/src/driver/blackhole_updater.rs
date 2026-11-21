@@ -99,7 +99,7 @@ impl Driver {
     fn start_blackhole_update(&mut self, source: [u8; 16], now: f64) {
         let dest_hash = crate::management::blackhole_dest_hash(&source);
         let announced = if self.engine.has_path(&dest_hash) {
-            self.known_destination_announced(&dest_hash)
+            self.known.announced(&dest_hash)
         } else {
             None
         };

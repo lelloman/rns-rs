@@ -1,5 +1,5 @@
-//! The node's lifecycle (draining, shutdown) and the driver-side
-//! bookkeeping of known destinations and shared-instance announces.
+//! The node's lifecycle (draining, shutdown) and the shared-instance
+//! announces.
 
 use super::*;
 
@@ -25,218 +25,15 @@ impl Lifecycle {
 }
 
 impl Driver {
+    /// Remember the identity a destination announced, evicting the least
+    /// relevant known destination first when the cache is full.
     pub(crate) fn upsert_known_destination(
         &mut self,
         dest_hash: [u8; 16],
         announced: crate::destination::AnnouncedIdentity,
     ) {
-        if let Some(existing) = self.known.entries.get_mut(&dest_hash) {
-            existing.announced = announced;
-            return;
-        }
-
-        self.enforce_known_destination_cap(true);
-        self.known.entries.insert(
-            dest_hash,
-            KnownDestinationState {
-                packet_hash: None,
-                announced,
-                was_used: false,
-                last_used_at: None,
-                retained: false,
-                stamp: None,
-                stamp_value: rns_core::stamp::StampValue::ZERO,
-                lr_cost: None,
-            },
-        );
-    }
-
-    /// Keep the hash of the announce a known destination was last heard
-    /// in, as upstream's `Identity.remember` does.
-    pub(crate) fn record_known_destination_packet_hash(
-        &mut self,
-        dest_hash: [u8; 16],
-        packet_hash: [u8; 32],
-    ) {
-        if let Some(state) = self.known.entries.get_mut(&dest_hash) {
-            state.packet_hash = Some(packet_hash);
-        }
-    }
-
-    pub(crate) fn record_known_destination_stamp(
-        &mut self,
-        dest_hash: [u8; 16],
-        stamp: Option<[u8; rns_core::constants::STAMP_LENGTH]>,
-        stamp_value: rns_core::stamp::StampValue,
-        lr_cost: Option<rns_core::stamp::StampCost>,
-    ) {
-        if let Some(state) = self.known.entries.get_mut(&dest_hash) {
-            state.stamp = stamp;
-            state.stamp_value = stamp_value;
-            state.lr_cost = lr_cost;
-        }
-    }
-
-    /// Recall the link request stamp cost announced by a destination.
-    pub fn recall_link_cost(&self, dest_hash: &[u8; 16]) -> Option<rns_core::stamp::StampCost> {
         self.known
-            .entries
-            .get(dest_hash)
-            .and_then(|state| state.lr_cost)
-    }
-
-    pub(crate) fn recall_stamp_value(
-        &self,
-        dest_hash: &[u8; 16],
-    ) -> Option<rns_core::stamp::StampValue> {
-        self.known
-            .entries
-            .get(dest_hash)
-            .map(|state| state.stamp_value)
-    }
-
-    pub(crate) fn known_destination_entry(
-        dest_hash: [u8; 16],
-        state: &KnownDestinationState,
-    ) -> KnownDestinationEntry {
-        KnownDestinationEntry {
-            packet_hash: state.packet_hash,
-            dest_hash,
-            identity_hash: state.announced.identity_hash.0,
-            public_key: state.announced.public_key,
-            app_data: state.announced.app_data.clone(),
-            hops: state.announced.hops,
-            received_at: state.announced.received_at,
-            receiving_interface: state.announced.receiving_interface,
-            was_used: state.was_used,
-            last_used_at: state.last_used_at,
-            retained: state.retained,
-            stamp: state.stamp,
-            stamp_value: state.stamp_value,
-            lr_cost: state.lr_cost,
-        }
-    }
-
-    /// Fingerprint of a known destination as storage persists it.
-    pub(crate) fn known_destination_fingerprint(state: &KnownDestinationState) -> u64 {
-        crate::storage::known_destination_fingerprint(
-            &state.announced.identity_hash.0,
-            &state.announced.public_key,
-            state.announced.app_data.as_deref(),
-            state.announced.hops,
-            state.announced.received_at,
-            state.announced.receiving_interface.0,
-            state.was_used,
-            state.last_used_at,
-            state.retained,
-            state.stamp.as_ref().map(|stamp| &stamp[..]),
-            state.stamp_value,
-            state.lr_cost,
-            state.packet_hash.as_ref(),
-        )
-    }
-
-    /// The known destinations that differ from their last flushed
-    /// fingerprint, and the flushed ones that are gone. Only those are
-    /// copied: the flush runs every ten seconds, and copying the whole table
-    /// each time made a busy transport node's memory grow.
-    pub(crate) fn known_destination_changes(
-        &self,
-    ) -> (Vec<(KnownDestinationEntry, u64)>, Vec<[u8; 16]>) {
-        let changed = self
-            .known
-            .entries
-            .iter()
-            .filter_map(|(dest_hash, state)| {
-                let fingerprint = Self::known_destination_fingerprint(state);
-                (self.known.flushed.get(dest_hash) != Some(&fingerprint)).then(|| {
-                    (
-                        Self::known_destination_entry(*dest_hash, state),
-                        fingerprint,
-                    )
-                })
-            })
-            .collect();
-        let removed = self
-            .known
-            .flushed
-            .keys()
-            .filter(|dest_hash| !self.known.entries.contains_key(*dest_hash))
-            .copied()
-            .collect();
-        (changed, removed)
-    }
-
-    pub(crate) fn known_destination_entries(&self) -> Vec<KnownDestinationEntry> {
-        let mut entries: Vec<_> = self
-            .known
-            .entries
-            .iter()
-            .map(|(dest_hash, state)| Self::known_destination_entry(*dest_hash, state))
-            .collect();
-        entries.sort_by_key(|a| a.dest_hash);
-        entries
-    }
-
-    /// `Identity._used_destination_data`: record that a destination was
-    /// used now. A retained destination is left as it is, and like upstream
-    /// this then returns `false`.
-    pub(crate) fn mark_known_destination_used(&mut self, dest_hash: &[u8; 16]) -> bool {
-        let Some(state) = self.known.entries.get_mut(dest_hash) else {
-            return false;
-        };
-        if state.retained {
-            return false;
-        }
-        state.was_used = true;
-        state.last_used_at = Some(time::now());
-        true
-    }
-
-    pub(crate) fn retain_known_destination(&mut self, dest_hash: &[u8; 16]) -> bool {
-        let Some(state) = self.known.entries.get_mut(dest_hash) else {
-            return false;
-        };
-        state.retained = true;
-        true
-    }
-
-    pub(crate) fn retain_identity(&mut self, identity_hash: &[u8; 16]) -> bool {
-        let mut retained = false;
-        for state in self.known.entries.values_mut() {
-            if &state.announced.identity_hash.0 == identity_hash {
-                state.retained = true;
-                retained = true;
-            }
-        }
-        retained
-    }
-
-    /// `Identity._unretain_destination_data`: stop retaining a destination.
-    /// Like upstream, it counts as used now, so it is not cleaned up before
-    /// it has gone unused for the usual time.
-    pub(crate) fn unretain_known_destination(&mut self, dest_hash: &[u8; 16]) -> bool {
-        let Some(state) = self.known.entries.get_mut(dest_hash) else {
-            return false;
-        };
-        state.retained = false;
-        state.was_used = true;
-        state.last_used_at = Some(time::now());
-        true
-    }
-
-    pub(crate) fn known_destination_announced(
-        &self,
-        dest_hash: &[u8; 16],
-    ) -> Option<crate::destination::AnnouncedIdentity> {
-        self.known
-            .entries
-            .get(dest_hash)
-            .map(|state| state.announced.clone())
-    }
-
-    pub(crate) fn known_destination_relevance_time(state: &KnownDestinationState) -> f64 {
-        state.last_used_at.unwrap_or(state.announced.received_at)
+            .upsert(dest_hash, announced, &self.engine, &self.local_destinations);
     }
 
     pub(crate) fn begin_drain(&mut self, timeout: Duration) {
@@ -545,57 +342,6 @@ impl Driver {
         self.dispatch_link_actions(cleanup_actions);
         self.link_manager.stop_receive_worker();
         self.holepunch_manager.abort_all_sessions();
-    }
-
-    pub(crate) fn enforce_known_destination_cap(&mut self, for_insert: bool) -> usize {
-        if self.known.max_entries == usize::MAX {
-            return 0;
-        }
-
-        let mut evicted = 0usize;
-        while if for_insert {
-            self.known.entries.len() >= self.known.max_entries
-        } else {
-            self.known.entries.len() > self.known.max_entries
-        } {
-            let active_dests = self.engine.active_destination_hashes();
-            let candidate = self
-                .oldest_known_destination(false, &active_dests)
-                .or_else(|| self.oldest_known_destination(true, &active_dests));
-            let Some(dest_hash) = candidate else {
-                break;
-            };
-            if self.known.entries.remove(&dest_hash).is_some() {
-                evicted += 1;
-                self.known.cap_evict_count += 1;
-            } else {
-                break;
-            }
-        }
-        evicted
-    }
-
-    pub(crate) fn oldest_known_destination(
-        &self,
-        include_protected: bool,
-        active_dests: &std::collections::BTreeSet<[u8; 16]>,
-    ) -> Option<[u8; 16]> {
-        self.known
-            .entries
-            .iter()
-            .filter(|(dest_hash, state)| {
-                include_protected
-                    || (!active_dests.contains(*dest_hash)
-                        && !self.local_destinations.contains_key(*dest_hash)
-                        && !state.retained)
-            })
-            .min_by(|a, b| {
-                Self::known_destination_relevance_time(a.1)
-                    .partial_cmp(&Self::known_destination_relevance_time(b.1))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| a.0.cmp(b.0))
-            })
-            .map(|(dest_hash, _)| *dest_hash)
     }
 
     pub(super) fn build_shared_announce_raw(
