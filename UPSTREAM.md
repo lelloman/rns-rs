@@ -12,16 +12,33 @@ The current upstream reference baseline is:
 - Version metadata commit: `fd36a97220a40383ce7f0a1d0f40bc7043f4494f`
 - Release tag: none at this commit; the signed `1.6.1` tag stays on
   `cff4d03fdbd6bfb63b765280cd944756ac5cce8d` (tag object
-  `bde4cd790a78b5ed285243fcc17f6439bb582288`), two commits earlier
-- Normative commit: `f55c0c6ea618ebae33e7d3ab2e37b200ce0b0d81`
-- Commit date: `2026-11-20 13:50:26 +0100`
-- Subject: `Added security notice`
+  `bde4cd790a78b5ed285243fcc17f6439bb582288`), three commits earlier
+- Normative commit: `606a16911d64cdbcef8ea8babb85aa8fa2f78e79`
+- Commit date: `2026-11-20 21:45:00 +0100`
+- Subject: `Require explicit static_transport_identity configuration to allow discoverable interfaces on non-transport instances`
 
-The normative baseline is the GitHub `master` tip `f55c0c6e`, upstream's
+The normative baseline is the canonical `rgit/master` tip `606a1691`,
+accepted on 2026-11-21 as a same-version Reticulum 1.6.1 advancement from
+`f55c0c6e`. It is not on the GitHub mirror yet, whose tip is still
+`f55c0c6e`. The range has one commit:
+
+- An instance with transport disabled makes an interface configured
+  `discoverable` discoverable only with `static_transport_identity = yes`;
+  otherwise the interface is set up without discovery, keeping its
+  configured mode, and a warning naming it says to add that option. A
+  discoverable interface no longer turns on the static transport
+  identity.
+
+Acceptance evidence is in
+[`docs/upstream-parity/reticulum-1.6.1-rgit-3-parity.md`](docs/upstream-parity/reticulum-1.6.1-rgit-3-parity.md)
+and the detailed audit is
+[`docs/upstream-parity/reticulum-1.6.1-rgit-3-audit.md`](docs/upstream-parity/reticulum-1.6.1-rgit-3-audit.md).
+
+The previous baseline was the GitHub `master` tip `f55c0c6e`, upstream's
 security hot-patch of the 1.6.1 release, accepted on 2026-11-20 as a
-same-version Reticulum 1.6.1 advancement from `cff4d03f`. It is an ancestor
+same-version Reticulum 1.6.1 advancement from `cff4d03f`. It was an ancestor
 of the canonical `rgit/master` tip, which had already moved to `606a1691`;
-that commit is left for the next audit. The range has two commits:
+that commit was left for the next audit. The range has two commits:
 
 - rngit's media conversion hands an encoder only input whose first 64 bytes
   carry a PNG, JPEG, GIF, TIFF, WebP or BMP signature, names that format to
