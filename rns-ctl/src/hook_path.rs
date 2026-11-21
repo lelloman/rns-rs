@@ -4,11 +4,29 @@
 //! configured hooks directory. Startup hooks declared in the node's config
 //! file do not go through this check.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
-/// Error returned when a requested native hook path is not accepted.
+/// Message of [`NativeHookPathError`].
 pub const NATIVE_HOOK_PATH_ERROR: &str =
     "native hook path must be inside the configured hooks directory";
+
+/// A requested native hook path was not accepted.
+///
+/// It deliberately does not say which check failed, so that an API client
+/// cannot probe the server's filesystem; its `Display` text is
+/// [`NATIVE_HOOK_PATH_ERROR`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct NativeHookPathError;
+
+impl fmt::Display for NativeHookPathError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(NATIVE_HOOK_PATH_ERROR)
+    }
+}
+
+impl std::error::Error for NativeHookPathError {}
 
 /// Name of the hooks subdirectory used when no hooks directory is configured.
 pub const DEFAULT_HOOKS_SUBDIR: &str = "hooks";
@@ -32,23 +50,22 @@ pub fn resolve_hooks_dir(hooks_dir: Option<&str>, config_path: Option<&str>) -> 
 /// that the dynamic loader's search path is never consulted), must resolve to a
 /// regular file, and its canonical form must lie inside the canonical hooks
 /// directory. Returns the canonical path to load.
-pub fn resolve_native_hook_path(hooks_dir: &Path, requested: &str) -> Result<PathBuf, String> {
+pub fn resolve_native_hook_path(
+    hooks_dir: &Path,
+    requested: &str,
+) -> Result<PathBuf, NativeHookPathError> {
     let requested = Path::new(requested);
     if requested.as_os_str().is_empty() || !requested.is_absolute() {
-        return Err(NATIVE_HOOK_PATH_ERROR.into());
+        return Err(NativeHookPathError);
     }
-    let dir = hooks_dir
-        .canonicalize()
-        .map_err(|_| NATIVE_HOOK_PATH_ERROR.to_string())?;
-    let file = requested
-        .canonicalize()
-        .map_err(|_| NATIVE_HOOK_PATH_ERROR.to_string())?;
+    let dir = hooks_dir.canonicalize().map_err(|_| NativeHookPathError)?;
+    let file = requested.canonicalize().map_err(|_| NativeHookPathError)?;
     if file == dir || !file.starts_with(&dir) {
-        return Err(NATIVE_HOOK_PATH_ERROR.into());
+        return Err(NativeHookPathError);
     }
-    let meta = std::fs::metadata(&file).map_err(|_| NATIVE_HOOK_PATH_ERROR.to_string())?;
+    let meta = std::fs::metadata(&file).map_err(|_| NativeHookPathError)?;
     if !meta.is_file() {
-        return Err(NATIVE_HOOK_PATH_ERROR.into());
+        return Err(NativeHookPathError);
     }
     Ok(file)
 }
@@ -112,7 +129,7 @@ mod tests {
         let lib = root.0.join("libother.so");
         std::fs::write(&lib, b"x").unwrap();
         let err = resolve_native_hook_path(&hooks, lib.to_str().unwrap()).unwrap_err();
-        assert_eq!(err, NATIVE_HOOK_PATH_ERROR);
+        assert_eq!(err.to_string(), NATIVE_HOOK_PATH_ERROR);
     }
 
     #[test]
