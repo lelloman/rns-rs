@@ -184,12 +184,9 @@ pub(super) fn build_interface_configs(
             .get("ignore_config_warnings")
             .and_then(|value| config::parse_bool_pub(value))
             .unwrap_or(false);
-        let normalized_mode = normalize_discovery_mode(
-            &iface.interface_type,
-            iface_mode,
-            discoverable,
-            ignore_config_warnings,
-        );
+        let kind = iface.kind();
+        let normalized_mode =
+            normalize_discovery_mode(kind, iface_mode, discoverable, ignore_config_warnings);
         if normalized_mode != iface_mode {
             log::info!(
                 "Interface '{}' has discovery enabled, auto-configuring mode to {}",
@@ -208,24 +205,23 @@ pub(super) fn build_interface_configs(
         let discovery_config = discoverable
             .then(|| extract_discovery_config(&iface.name, &iface.interface_type, &iface.params))
             .flatten();
-        let ingress_control =
-            match parse_ingress_control_config(&iface.interface_type, &iface.params) {
-                Ok(config) => config,
-                Err(e) => {
-                    if private {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("invalid ingress control for '{}': {e}", iface.name),
-                        ));
-                    }
-                    log::warn!(
-                        "Failed to parse ingress control config for '{}': {}",
-                        iface.name,
-                        e
-                    );
-                    continue;
+        let ingress_control = match parse_ingress_control_config(kind, &iface.params) {
+            Ok(config) => config,
+            Err(e) => {
+                if private {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("invalid ingress control for '{}': {e}", iface.name),
+                    ));
                 }
-            };
+                log::warn!(
+                    "Failed to parse ingress control config for '{}': {}",
+                    iface.name,
+                    e
+                );
+                continue;
+            }
+        };
         let stamp_costs = match parse_interface_stamp_costs(&iface.params) {
             Ok(costs) => costs,
             Err(e) => {

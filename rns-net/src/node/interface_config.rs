@@ -2,6 +2,7 @@
 //! ingress control, discovery and announce settings.
 
 use super::*;
+use crate::interface::InterfaceKind;
 
 /// Parse an interface mode string to the corresponding constant.
 /// Matches Python's `_synthesize_interface()` in `RNS/Reticulum.py`.
@@ -80,7 +81,7 @@ pub(super) fn discoverable_on_instance(
 
 /// Apply Reticulum's mode normalization for discoverable interfaces.
 pub(super) fn normalize_discovery_mode(
-    interface_type: &str,
+    kind: Option<InterfaceKind>,
     configured_mode: u8,
     discoverable: bool,
     ignore_config_warnings: bool,
@@ -97,7 +98,7 @@ pub(super) fn normalize_discovery_mode(
         return configured_mode;
     }
 
-    if matches!(interface_type, "RNodeInterface" | "RNodeMultiInterface") {
+    if matches!(kind, Some(InterfaceKind::RNode | InterfaceKind::RNodeMulti)) {
         rns_core::constants::MODE_ACCESS_POINT
     } else {
         rns_core::constants::MODE_GATEWAY
@@ -105,22 +106,20 @@ pub(super) fn normalize_discovery_mode(
 }
 
 pub(super) fn default_ingress_control_for_type(
-    iface_type: &str,
+    kind: Option<InterfaceKind>,
 ) -> rns_core::transport::types::IngressControlConfig {
-    match iface_type {
-        "AutoInterface" | "BackboneInterface" | "TCPClientInterface" | "TCPServerInterface"
-        | "UDPInterface" | "I2PInterface" => {
-            rns_core::transport::types::IngressControlConfig::enabled()
-        }
-        _ => rns_core::transport::types::IngressControlConfig::disabled(),
+    if kind.is_some_and(InterfaceKind::ingress_control_by_default) {
+        rns_core::transport::types::IngressControlConfig::enabled()
+    } else {
+        rns_core::transport::types::IngressControlConfig::disabled()
     }
 }
 
 pub(super) fn parse_ingress_control_config(
-    iface_type: &str,
+    kind: Option<InterfaceKind>,
     params: &std::collections::HashMap<String, String>,
 ) -> Result<rns_core::transport::types::IngressControlConfig, String> {
-    let mut config = default_ingress_control_for_type(iface_type);
+    let mut config = default_ingress_control_for_type(kind);
 
     if let Some(v) = params.get("ingress_control") {
         config.enabled = config::parse_bool_pub(v)
@@ -245,7 +244,8 @@ pub(super) fn extract_discovery_config(
         return None;
     }
 
-    if iface_type == "TCPClientInterface" {
+    let kind = InterfaceKind::from_type_name(iface_type);
+    if kind == Some(InterfaceKind::TcpClient) {
         log::error!(
             "Invalid interface discovery configuration for {}, aborting discovery announce",
             iface_name
@@ -317,15 +317,15 @@ pub(super) fn extract_discovery_config(
     };
     // An RNode announces its own radio settings; a KISS or Weave interface
     // announces the ones given for discovery.
-    let radio = match iface_type {
-        "RNodeInterface" => crate::discovery::DiscoveryRadio {
+    let radio = match kind {
+        Some(InterfaceKind::RNode) => crate::discovery::DiscoveryRadio {
             frequency: number(&["frequency"]),
             bandwidth: number(&["bandwidth"]),
             spreading_factor: number(&["spreadingfactor", "spreading_factor"]),
             coding_rate: number(&["codingrate", "coding_rate"]),
             modulation: None,
         },
-        "KISSInterface" | "WeaveInterface" => crate::discovery::DiscoveryRadio {
+        Some(InterfaceKind::Kiss | InterfaceKind::Weave) => crate::discovery::DiscoveryRadio {
             frequency: number(&["discovery_frequency"]),
             bandwidth: number(&["discovery_bandwidth"]),
             spreading_factor: None,
@@ -412,7 +412,7 @@ pub(crate) fn backbone_discovery_runtime_from_interface(
     let startup_config = discovery.cloned().unwrap_or_else(|| {
         default_discovery_runtime_config(
             interface_name,
-            "BackboneInterface",
+            InterfaceKind::Backbone.type_name(),
             Some(config.listen_port),
         )
     });
@@ -439,7 +439,7 @@ pub(crate) fn tcp_server_discovery_runtime_from_interface(
     let startup_config = discovery.cloned().unwrap_or_else(|| {
         default_discovery_runtime_config(
             interface_name,
-            "TCPServerInterface",
+            InterfaceKind::TcpServer.type_name(),
             Some(config.listen_port),
         )
     });
@@ -613,8 +613,9 @@ pub(crate) fn parse_managed_interface(
         .get("ignore_config_warnings")
         .and_then(|value| config::parse_bool_pub(value))
         .unwrap_or(false);
+    let kind = iface.kind();
     let mode = normalize_discovery_mode(
-        &iface.interface_type,
+        kind,
         parse_interface_mode(&iface.mode),
         discoverable,
         ignore_warnings,
@@ -623,7 +624,7 @@ pub(crate) fn parse_managed_interface(
     let discovery = discoverable
         .then(|| extract_discovery_config(&iface.name, &iface.interface_type, &iface.params))
         .flatten();
-    let ingress_control = parse_ingress_control_config(&iface.interface_type, &iface.params)
+    let ingress_control = parse_ingress_control_config(kind, &iface.params)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     let stamp_costs = parse_interface_stamp_costs(&iface.params)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;

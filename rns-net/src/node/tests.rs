@@ -863,7 +863,11 @@ fn discovery_config_ignores_invalid_operator_lxmf_addresses() {
 fn ingress_control_config_defaults_by_interface_type() {
     let params = std::collections::HashMap::new();
 
-    let tcp = super::parse_ingress_control_config("TCPServerInterface", &params).unwrap();
+    let tcp = super::parse_ingress_control_config(
+        crate::interface::InterfaceKind::from_type_name("TCPServerInterface"),
+        &params,
+    )
+    .unwrap();
     assert!(tcp.enabled);
     assert_eq!(
         tcp.max_held_announces,
@@ -871,7 +875,11 @@ fn ingress_control_config_defaults_by_interface_type() {
     );
     assert_eq!(tcp.burst_hold, rns_core::constants::IC_BURST_HOLD);
 
-    let pipe = super::parse_ingress_control_config("PipeInterface", &params).unwrap();
+    let pipe = super::parse_ingress_control_config(
+        crate::interface::InterfaceKind::from_type_name("PipeInterface"),
+        &params,
+    )
+    .unwrap();
     assert!(!pipe.enabled);
     assert_eq!(
         pipe.held_release_interval,
@@ -895,7 +903,11 @@ fn ingress_control_config_parses_python_ic_keys() {
     params.insert("ic_burst_penalty".to_string(), "5.5".to_string());
     params.insert("ic_held_release_interval".to_string(), "6.5".to_string());
 
-    let config = super::parse_ingress_control_config("TCPServerInterface", &params).unwrap();
+    let config = super::parse_ingress_control_config(
+        crate::interface::InterfaceKind::from_type_name("TCPServerInterface"),
+        &params,
+    )
+    .unwrap();
 
     assert!(!config.enabled);
     assert_eq!(config.max_held_announces, 17);
@@ -916,7 +928,11 @@ fn ingress_control_config_rejects_invalid_values() {
     let mut params = std::collections::HashMap::new();
     params.insert("ic_burst_hold".to_string(), "-1".to_string());
 
-    let err = super::parse_ingress_control_config("TCPServerInterface", &params).unwrap_err();
+    let err = super::parse_ingress_control_config(
+        crate::interface::InterfaceKind::from_type_name("TCPServerInterface"),
+        &params,
+    )
+    .unwrap_err();
 
     assert!(err.contains("ic_burst_hold"));
 }
@@ -1853,7 +1869,7 @@ fn discovery_mode_normalization_matrix() {
                     };
                     assert_eq!(
                             normalize_discovery_mode(
-                                interface_type,
+                                crate::interface::InterfaceKind::from_type_name(interface_type),
                                 configured_mode,
                                 discoverable,
                                 ignore_warnings,
