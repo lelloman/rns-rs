@@ -32,47 +32,6 @@ pub(super) fn log_restored_tables(
     }
 }
 
-/// Register the runtime settings of a configured interface with the driver,
-/// for the interface types that have them. At startup only an interface
-/// whose type is its config's own type registers them, so a
-/// `BackboneClientInterface` or an `RNodeMultiInterface` does not.
-#[cfg(runtime_config_ifaces)]
-pub(super) fn register_interface_runtime(
-    driver: &mut Driver,
-    iface_config: &InterfaceConfig,
-    kind: Option<crate::interface::InterfaceKind>,
-    #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))] transport_enabled: bool,
-) {
-    use crate::interface::{InterfaceKind, KnownConfig};
-
-    let own_type = match (kind, iface_config.config_data.known()) {
-        #[cfg(feature = "iface-backbone")]
-        (Some(InterfaceKind::Backbone), KnownConfig::Backbone(_)) => true,
-        #[cfg(feature = "iface-tcp")]
-        (Some(InterfaceKind::TcpClient), KnownConfig::TcpClient(_)) => true,
-        #[cfg(feature = "iface-tcp")]
-        (Some(InterfaceKind::TcpServer), KnownConfig::TcpServer(_)) => true,
-        #[cfg(feature = "iface-udp")]
-        (Some(InterfaceKind::Udp), KnownConfig::Udp(_)) => true,
-        #[cfg(feature = "iface-auto")]
-        (Some(InterfaceKind::Auto), KnownConfig::Auto(_)) => true,
-        #[cfg(feature = "iface-i2p")]
-        (Some(InterfaceKind::I2p), KnownConfig::I2p(_)) => true,
-        #[cfg(feature = "iface-pipe")]
-        (Some(InterfaceKind::Pipe), KnownConfig::Pipe(_)) => true,
-        #[cfg(feature = "iface-rnode")]
-        (Some(InterfaceKind::RNode), KnownConfig::RNode(_)) => true,
-        _ => false,
-    };
-    if own_type {
-        driver.runtime_config.register_configured(
-            iface_config,
-            #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
-            transport_enabled,
-        );
-    }
-}
-
 /// The host and port a configured TCP or Backbone client connects to, which
 /// an auto-connect must not duplicate.
 #[cfg(feature = "iface-backbone")]
