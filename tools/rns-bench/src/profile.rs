@@ -479,7 +479,8 @@ pub(crate) fn report(dir: &Path) -> Result<()> {
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.join("manifest.json"))?)?;
     ensure!(
-        manifest["schema_version"] == 1 && manifest["profile_version"] == 1,
+        crate::json_field(&manifest, "schema_version") == 1
+            && crate::json_field(&manifest, "profile_version") == 1,
         "unsupported profile evidence"
     );
     let status: serde_json::Value =
@@ -492,7 +493,7 @@ pub(crate) fn report(dir: &Path) -> Result<()> {
         ) && matches!(r.sdu, 464 | 16348)),
         "unknown profile cell"
     );
-    let mut text=format!("Resource stage profile\nRecorded status: {}\nVerified samples retained: {}\nTimes below are per-configuration medians in milliseconds.\nCompression/encryption are INCLUDED in preparation; decompression/decryption are INCLUDED in assembly.\nCore state-machine cycles; not live-link latency. No call-stack or allocation sampling.\n\nfamily | SDU | compression | n | total | prepare | compress | encrypt | serve | ingest | assemble | decompress | decrypt | verify\n",status["status"],samples.len());
+    let mut text=format!("Resource stage profile\nRecorded status: {}\nVerified samples retained: {}\nTimes below are per-configuration medians in milliseconds.\nCompression/encryption are INCLUDED in preparation; decompression/decryption are INCLUDED in assembly.\nCore state-machine cycles; not live-link latency. No call-stack or allocation sampling.\n\nfamily | SDU | compression | n | total | prepare | compress | encrypt | serve | ingest | assemble | decompress | decrypt | verify\n",crate::json_field(&status, "status"),samples.len());
     for family in ["repeated", "seeded", "sha256-counter"] {
         for sdu in [464, 16348] {
             for compression in [false, true] {
@@ -515,15 +516,17 @@ pub(crate) fn report(dir: &Path) -> Result<()> {
                 let med = |f: fn(&Sample) -> u64| {
                     let mut v: Vec<_> = rows.iter().map(|r| f(r)).collect();
                     v.sort_unstable();
-                    v[v.len() / 2] as f64 / 1e6
+                    v.get(v.len() / 2).copied().unwrap_or_default() as f64 / 1e6
                 };
                 text.push_str(&format!("{family} | {sdu} | {compression} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3}\n",rows.len(),med(|r|r.total_ns),med(|r|r.sender_prepare_ns),med(|r|r.compression_ns),med(|r|r.encryption_ns),med(|r|r.sender_serve_ns),med(|r|r.receiver_ingest_ns),med(|r|r.receiver_assemble_ns),med(|r|r.decompression_ns),med(|r|r.decryption_ns),med(|r|r.application_verify_ns)));
-                let first = rows[0];
+                let Some(&first) = rows.first() else {
+                    continue;
+                };
                 text.push_str(&format!("  compression accepted: {}; candidate bytes: {:?} / {}; encrypted Resource bytes: {}; parts: {}; total range: {:.3}..{:.3} ms\n",first.compression_used,first.compressed_output_bytes,first.compressed_input_bytes,first.encrypted_transfer_bytes,first.parts,rows.iter().map(|r|r.total_ns).min().unwrap() as f64/1e6,rows.iter().map(|r|r.total_ns).max().unwrap() as f64/1e6));
             }
         }
     }
-    if status["status"] != "complete" || samples.len() != 60 {
+    if crate::json_field(&status, "status") != "complete" || samples.len() != 60 {
         text.push_str("INCOMPLETE RUN: do not treat this as the full configured matrix.\n");
     }
     let tmp = dir.join("report.txt.tmp");

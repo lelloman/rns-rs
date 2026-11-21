@@ -47,11 +47,13 @@ fn capture(
     let mut index = 0;
     let result =
         profile::cycle_observed(data, family, compression, sdu, repetition, &mut |phase| {
-            assert_eq!(phase, PHASES[index]);
+            assert_eq!(Some(&phase), PHASES.get(index));
             if index == 0 {
                 COUNTERS.reset_peak();
             }
-            points[index] = COUNTERS.snapshot();
+            if let Some(point) = points.get_mut(index) {
+                *point = COUNTERS.snapshot();
+            }
             index += 1;
         })?;
     ensure!(index == PHASES.len(), "incomplete allocation checkpoints");
@@ -85,8 +87,7 @@ fn validate(s: &Sample) -> Result<()> {
         base.peak_live_bytes == base.live_bytes,
         "peak not reset at measurement start"
     );
-    for pair in s.points.windows(2) {
-        let (a, b) = (pair[0], pair[1]);
+    for (&a, &b) in s.points.iter().zip(s.points.iter().skip(1)) {
         ensure!(
             b.allocation_calls >= a.allocation_calls
                 && b.reallocation_calls >= a.reallocation_calls
@@ -188,13 +189,18 @@ pub(crate) fn run(root: &Path, requested: Option<PathBuf>) -> Result<()> {
     report(&dir)
 }
 
+/// Checkpoint `i` of a sample; the phases index its checkpoints.
+fn point(sample: &Sample, i: usize) -> Snapshot {
+    sample.points.get(i).copied().unwrap_or_default()
+}
+
 pub(crate) fn report(dir: &Path) -> Result<()> {
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.join("manifest.json"))?)?;
     ensure!(
-        manifest["schema_version"] == 1
-            && manifest["allocation_profile_version"] == 1
-            && manifest["expected_samples"] == EXPECTED,
+        crate::json_field(&manifest, "schema_version") == 1
+            && crate::json_field(&manifest, "allocation_profile_version") == 1
+            && crate::json_field(&manifest, "expected_samples") == EXPECTED,
         "unsupported allocation profile"
     );
     let status: serde_json::Value =
@@ -214,11 +220,11 @@ pub(crate) fn report(dir: &Path) -> Result<()> {
             "duplicate allocation sample"
         );
     }
-    let complete = status["status"] == "complete"
-        && status["verified_samples"] == samples.len()
+    let complete = crate::json_field(&status, "status") == "complete"
+        && crate::json_field(&status, "verified_samples") == samples.len()
         && samples.len() == EXPECTED;
-    let mut text = format!("Resource Rust-heap allocation profile\nStatus: {} (recorded: {})\nVerified samples: {}/{}\nRust requested bytes ONLY; native bzip2 malloc and allocator overhead excluded. No timing measurements.\nPeak/live deltas relative to prepared-fixture baseline; retained delta is not a leak verdict.\n\nfamily | payload B | SDU | compression | n | alloc calls | realloc calls | allocated B | peak growth B | retained delta B\n", if complete {"complete"} else {"INCOMPLETE OR FAILED"}, status["status"], samples.len(), EXPECTED);
-    if let Some(error) = status["error"].as_str() {
+    let mut text = format!("Resource Rust-heap allocation profile\nStatus: {} (recorded: {})\nVerified samples: {}/{}\nRust requested bytes ONLY; native bzip2 malloc and allocator overhead excluded. No timing measurements.\nPeak/live deltas relative to prepared-fixture baseline; retained delta is not a leak verdict.\n\nfamily | payload B | SDU | compression | n | alloc calls | realloc calls | allocated B | peak growth B | retained delta B\n", if complete {"complete"} else {"INCOMPLETE OR FAILED"}, crate::json_field(&status, "status"), samples.len(), EXPECTED);
+    if let Some(error) = crate::json_field(&status, "error").as_str() {
         text.push_str(&format!("Failure: {error}\n"));
     }
     for family in FAMILIES {
@@ -243,7 +249,7 @@ pub(crate) fn report(dir: &Path) -> Result<()> {
                     let median = |metric: fn(&Sample) -> i128| {
                         let mut values: Vec<_> = rows.iter().map(|s| metric(s)).collect();
                         values.sort_unstable();
-                        values[values.len() / 2]
+                        values.get(values.len() / 2).copied().unwrap_or_default()
                     };
                     text.push_str(&format!("{family} | {bytes} | {sdu} | {compression} | {} | {} | {} | {} | {} | {}\n", rows.len(),
             median(|s| (s.points[5].allocation_calls-s.points[0].allocation_calls) as i128),
@@ -254,21 +260,21 @@ pub(crate) fn report(dir: &Path) -> Result<()> {
                     for (i, phase) in PHASES.iter().enumerate().skip(1) {
                         let mut volumes: Vec<_> = rows
                             .iter()
-                            .map(|s| s.points[i].allocated_bytes - s.points[i - 1].allocated_bytes)
+                            .map(|s| point(s, i).allocated_bytes - point(s, i - 1).allocated_bytes)
                             .collect();
                         volumes.sort_unstable();
                         let mut lives: Vec<_> = rows
                             .iter()
                             .map(|s| {
-                                s.points[i].live_bytes as i128 - s.points[0].live_bytes as i128
+                                point(s, i).live_bytes as i128 - s.points[0].live_bytes as i128
                             })
                             .collect();
                         lives.sort_unstable();
                         text.push_str(&format!(
                             "  {}: allocated={} B; live delta={} B (medians)\n",
                             phase,
-                            volumes[volumes.len() / 2],
-                            lives[lives.len() / 2]
+                            volumes.get(volumes.len() / 2).copied().unwrap_or_default(),
+                            lives.get(lives.len() / 2).copied().unwrap_or_default()
                         ));
                     }
                 }

@@ -290,7 +290,9 @@ fn framed_payload() -> Vec<u8> {
     let mut data = bytes(500, 0xf4a3);
     for (i, special) in [0x7e, 0x7d, 0xc0, 0xdb].into_iter().enumerate() {
         for j in 0..4 {
-            data[17 + i * 113 + j * 7] = special;
+            if let Some(byte) = data.get_mut(17 + i * 113 + j * 7) {
+                *byte = special;
+            }
         }
     }
     data
@@ -595,6 +597,11 @@ fn path_lookup() -> Result<Op> {
     }
     let mut next = 0usize;
     Ok(Box::new(move || {
+        // The measured loop, kept as recorded in the baseline.
+        #[allow(
+            clippy::indexing_slicing,
+            reason = "next stays below dests.len(); the hotpath baseline measures this loop as written"
+        )]
         let dest = &dests[next];
         next = (next + 97) % dests.len();
         black_box(engine.next_hop_interface(black_box(dest))).expect("known path");

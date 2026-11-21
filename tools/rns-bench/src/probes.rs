@@ -4,17 +4,18 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
 pub(crate) fn packet(id: u64) -> Vec<u8> {
-    let mut data = vec![0x6d; 64];
-    data[..8].copy_from_slice(b"RNSPROBE");
-    data[8..16].copy_from_slice(&id.to_le_bytes());
+    let mut data = Vec::with_capacity(64);
+    data.extend_from_slice(b"RNSPROBE");
+    data.extend_from_slice(&id.to_le_bytes());
+    data.resize(64, 0x6d);
     data
 }
 pub(crate) fn decode(data: &[u8]) -> Result<u64> {
     ensure!(
-        data.len() == 64 && &data[..8] == b"RNSPROBE",
+        data.len() == 64 && data.starts_with(b"RNSPROBE"),
         "invalid probe frame"
     );
-    let id = u64::from_le_bytes(data[8..16].try_into()?);
+    let id = u64::from_le_bytes(data.get(8..16).unwrap_or_default().try_into()?);
     ensure!(data == packet(id), "probe payload corruption");
     Ok(id)
 }
@@ -81,8 +82,14 @@ impl Train {
         );
         let due = self.next_due().unwrap();
         ensure!(when >= due, "probe submitted early");
-        self.submitted[self.issued] = Some(when);
-        self.summary.send_lateness_ns[self.issued] = ns(when - due);
+        let (Some(submitted), Some(lateness)) = (
+            self.submitted.get_mut(self.issued),
+            self.summary.send_lateness_ns.get_mut(self.issued),
+        ) else {
+            anyhow::bail!("too many probe submissions");
+        };
+        *submitted = Some(when);
+        *lateness = ns(when - due);
         self.issued += 1;
         Ok(())
     }
@@ -91,13 +98,22 @@ impl Train {
             .checked_sub(self.round * self.config.count as u64)
             .ok_or_else(|| anyhow::anyhow!("stale probe"))? as usize;
         ensure!(i < self.config.count, "wrong probe round/index");
-        let sent = self.submitted[i]
-            .take()
+        let sent = self
+            .submitted
+            .get_mut(i)
+            .and_then(Option::take)
             .ok_or_else(|| anyhow::anyhow!("duplicate or unsubmitted probe"))?;
         ensure!(when >= sent, "probe clock ordering");
-        self.summary.rtt_ns[i] = ns(when - sent);
-        self.summary.scheduled_latency_ns[i] =
+        let scheduled =
             ns(when - (self.started + Duration::from_micros(i as u64 * self.config.interval_us)));
+        let (Some(rtt), Some(latency)) = (
+            self.summary.rtt_ns.get_mut(i),
+            self.summary.scheduled_latency_ns.get_mut(i),
+        ) else {
+            anyhow::bail!("wrong probe round/index");
+        };
+        *rtt = ns(when - sent);
+        *latency = scheduled;
         self.received += 1;
         Ok(())
     }

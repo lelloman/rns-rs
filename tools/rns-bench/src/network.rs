@@ -268,7 +268,9 @@ fn pump(
             thread::sleep(remaining.min(Duration::from_millis(10)));
         }
         let lateness = deadline.elapsed().as_nanos().min(u64::MAX as u128) as u64;
-        output.write_all(&buffer[..size]).context("relay write")?;
+        output
+            .write_all(buffer.get(..size).unwrap_or_default())
+            .context("relay write")?;
         let mut state = state.lock().unwrap();
         let counters = if forward {
             &mut state.counters.sender_to_receiver
