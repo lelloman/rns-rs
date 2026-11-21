@@ -39,7 +39,7 @@ const WATCH_INTERVAL: Duration = Duration::from_secs(1);
 /// Upstream's `TUNNEL_STATE_*`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum TunnelState {
+pub(crate) enum TunnelState {
     /// Not connected yet (`TUNNEL_STATE_INIT`).
     Init = 0x00,
     /// Something was read within the last 20 seconds (`TUNNEL_STATE_ACTIVE`).
@@ -59,7 +59,7 @@ impl TunnelState {
 
     /// How upstream's interface statistics report the state
     /// (`tunnelstate`).
-    pub fn description(self) -> &'static str {
+    pub(crate) fn description(self) -> &'static str {
         match self {
             TunnelState::Init => "Creating Tunnel",
             TunnelState::Active => "Tunnel Active",
@@ -70,7 +70,7 @@ impl TunnelState {
 
 /// What one watchdog check found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WatchCheck {
+pub(crate) struct WatchCheck {
     /// The tunnel's state.
     pub state: TunnelState,
     /// Send a keepalive.
@@ -103,7 +103,7 @@ struct Watch {
 
 /// A connected peer's tunnel.
 #[derive(Debug)]
-pub struct PeerTunnel {
+pub(crate) struct PeerTunnel {
     created: Instant,
     /// Milliseconds after `created` of the last read.
     last_read: AtomicU64,
@@ -115,7 +115,7 @@ pub struct PeerTunnel {
 
 impl PeerTunnel {
     /// A tunnel connected now over `stream`.
-    pub fn new(stream: Option<TcpStream>) -> Self {
+    pub(crate) fn new(stream: Option<TcpStream>) -> Self {
         Self::at(Instant::now(), stream)
     }
 
@@ -135,19 +135,19 @@ impl PeerTunnel {
     }
 
     /// The tunnel's current state.
-    pub fn state(&self) -> TunnelState {
+    pub(crate) fn state(&self) -> TunnelState {
         TunnelState::from_u8(self.state.load(Ordering::Relaxed))
     }
 
     /// Continue in `state`: an outbound peer that reconnects keeps the
     /// state its tunnel was in, as upstream's peer does until its watchdog
     /// checks the new connection.
-    pub fn resume(&self, state: TunnelState) {
+    pub(crate) fn resume(&self, state: TunnelState) {
         self.state.store(state as u8, Ordering::Relaxed);
     }
 
     /// Record that the peer's stream delivered bytes.
-    pub fn note_read(&self) {
+    pub(crate) fn note_read(&self) {
         self.note_read_at(Instant::now());
     }
 
@@ -164,7 +164,7 @@ impl PeerTunnel {
     /// has transmitted so far. Returns `None` between checks. On a check
     /// that finds the tunnel unresponsive for too long, the stream is shut
     /// down.
-    pub fn watch(&self, txb: u64) -> Option<WatchCheck> {
+    pub(crate) fn watch(&self, txb: u64) -> Option<WatchCheck> {
         self.watch_at(Instant::now(), txb)
     }
 
@@ -192,7 +192,7 @@ impl PeerTunnel {
     }
 
     /// Shut the stream down, so its reader sees it closed.
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         if let Some(stream) = &self.stream {
             let _ = stream.shutdown(Shutdown::Both);
         }

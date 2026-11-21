@@ -18,6 +18,7 @@ mod server;
 mod tests;
 
 pub(crate) use abuse::*;
+pub use abuse::{BackboneAbuseConfig, BackboneFastFlapConfig};
 pub use client::BackboneClientConfig;
 pub(crate) use client::*;
 pub(crate) use factory::*;
@@ -82,6 +83,9 @@ const DP_IC_IF_HEADROOM: usize = 32;
 const DP_IC_PENALTY: f64 = 1.5;
 
 /// Configuration for a backbone interface.
+///
+/// Start from `default()`: the config also carries crate-private state it
+/// shares with the running interface and the driver.
 #[derive(Debug, Clone)]
 pub struct BackboneConfig {
     /// Interface name.
@@ -118,13 +122,13 @@ pub struct BackboneConfig {
     /// Blocking of addresses whose connections keep closing quickly.
     pub fast_flap: BackboneFastFlapConfig,
     /// Fast-flap history; by default the table shared by every listener in the process.
-    pub fast_flap_state: Arc<Mutex<BackboneFastFlapMonitor>>,
+    pub(crate) fast_flap_state: Arc<Mutex<BackboneFastFlapMonitor>>,
     /// Ingress control of accepted peers; set from the interface's config at start.
     pub ingress_control: IngressControlConfig,
     /// Live settings the listener reads, which can be changed while it runs.
-    pub runtime: Arc<Mutex<BackboneServerRuntime>>,
+    pub(crate) runtime: Arc<Mutex<BackboneServerRuntime>>,
     /// Per-address peer state, shared with the driver.
-    pub peer_state: Arc<Mutex<BackbonePeerMonitor>>,
+    pub(crate) peer_state: Arc<Mutex<BackbonePeerMonitor>>,
 }
 
 impl Default for BackboneConfig {
