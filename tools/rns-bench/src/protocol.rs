@@ -126,7 +126,7 @@ pub(crate) fn read_line(reader: &mut impl BufRead) -> Result<Option<String>> {
             bytes.len() + n <= MAX_CONTROL_BYTES,
             "control message exceeds limit"
         );
-        bytes.extend_from_slice(&available[..n]);
+        bytes.extend_from_slice(available.get(..n).unwrap_or(available));
         reader.consume(n);
         if bytes.last() == Some(&b'\n') {
             return Ok(Some(String::from_utf8(bytes)?));

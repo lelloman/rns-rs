@@ -28,6 +28,13 @@ mod scenario;
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
+/// `value[key]`, as serde_json's indexing reads it: the field, or null when
+/// it is missing or `value` is not an object.
+pub(crate) fn json_field<'a>(value: &'a serde_json::Value, key: &str) -> &'a serde_json::Value {
+    static NULL: serde_json::Value = serde_json::Value::Null;
+    value.get(key).unwrap_or(&NULL)
+}
+
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -52,12 +59,14 @@ fn main_result() -> Result<()> {
                 return Ok(());
             }
             if args.get(1).map(String::as_str) == Some("report") {
-                anyhow::ensure!(args.len() == 3, "allocations report RUN_DIR");
-                return allocations::report(Path::new(&args[2]));
+                let [_, _, dir] = args.as_slice() else {
+                    bail!("allocations report RUN_DIR");
+                };
+                return allocations::report(Path::new(dir));
             }
-            let output = match args.len() {
-                1 => None,
-                3 if args[1] == "--output" => Some(PathBuf::from(&args[2])),
+            let output = match args.as_slice() {
+                [_] => None,
+                [_, flag, dir] if flag == "--output" => Some(PathBuf::from(dir)),
                 _ => bail!("allocations [--output DIR] | allocations report RUN_DIR"),
             };
             return allocations::run(&root(), output);
@@ -67,59 +76,56 @@ fn main_result() -> Result<()> {
     }
     if command == "hotpath" {
         #[cfg(feature = "allocation-profiler")]
-        return hotpath::main(&args[1..]);
+        return hotpath::main(args.get(1..).unwrap_or_default());
         #[cfg(not(feature = "allocation-profiler"))]
         bail!("use ./scripts/hotpath to build the hot-path gate");
     }
     anyhow::ensure!(!cfg!(feature = "allocation-profiler") || matches!(command, "help" | "--help" | "doctor"),
         "allocation-instrumented executable cannot run timing workloads; rebuild with ./scripts/bench");
     if command == "native-workload" {
-        anyhow::ensure!(
-            args.len() == 5,
-            "native-workload FAMILY COMPRESSION SDU CYCLES"
-        );
+        let [_, family, compression, sdu, cycles] = args.as_slice() else {
+            bail!("native-workload FAMILY COMPRESSION SDU CYCLES");
+        };
         return profile::native_workload(
-            &args[1],
-            args[2].parse()?,
-            args[3].parse()?,
-            args[4].parse()?,
+            family,
+            compression.parse()?,
+            sdu.parse()?,
+            cycles.parse()?,
         );
     }
     if command == "cpu-workload" {
-        anyhow::ensure!(
-            args.len() == 5,
-            "cpu-workload FAMILY COMPRESSION SDU SECONDS"
-        );
-        return profile::cpu_workload(
-            &args[1],
-            args[2].parse()?,
-            args[3].parse()?,
-            args[4].parse()?,
-        );
+        let [_, family, compression, sdu, seconds] = args.as_slice() else {
+            bail!("cpu-workload FAMILY COMPRESSION SDU SECONDS");
+        };
+        return profile::cpu_workload(family, compression.parse()?, sdu.parse()?, seconds.parse()?);
     }
     if command == "profile" {
         if args.get(1).map(String::as_str) == Some("report") {
-            anyhow::ensure!(args.len() == 3, "profile report RUN_DIR");
-            return profile::report(Path::new(&args[2]));
+            let [_, _, dir] = args.as_slice() else {
+                bail!("profile report RUN_DIR");
+            };
+            return profile::report(Path::new(dir));
         }
         anyhow::ensure!(
             args.get(1).map(String::as_str) == Some("resources"),
             "profile resources [--output DIR]"
         );
-        let output = match args.len() {
-            2 => None,
-            4 if args[2] == "--output" => Some(PathBuf::from(&args[3])),
+        let output = match args.as_slice() {
+            [_, _] => None,
+            [_, _, flag, dir] if flag == "--output" => Some(PathBuf::from(dir)),
             _ => bail!("profile resources [--output DIR]"),
         };
         return profile::run(&root(), output);
     }
     if command == "participant" {
-        anyhow::ensure!(args.len() == 4, "participant ROLE PORT CASE_FILE");
-        let c = serde_json::from_slice(&std::fs::read(&args[3])?)?;
-        let result = if args[1] == "relay" {
-            relay::run(args[2].parse()?)
+        let [_, role, port, case_file] = args.as_slice() else {
+            bail!("participant ROLE PORT CASE_FILE");
+        };
+        let c = serde_json::from_slice(&std::fs::read(case_file)?)?;
+        let result = if role == "relay" {
+            relay::run(port.parse()?)
         } else {
-            participant::run(&args[1], args[2].parse()?, c)
+            participant::run(role, port.parse()?, c)
         };
         if let Err(ref e) = result {
             let _ = protocol::write_json(
@@ -144,8 +150,10 @@ fn main_result() -> Result<()> {
         return Ok(());
     }
     if command == "report" {
-        anyhow::ensure!(args.len() == 2, "report RUN_DIR");
-        return runner::report(Path::new(&args[1]));
+        let [_, dir] = args.as_slice() else {
+            bail!("report RUN_DIR");
+        };
+        return runner::report(Path::new(dir));
     }
     if !matches!(command, "list" | "plan" | "run") {
         bail!("unknown command {command}");
@@ -161,14 +169,14 @@ fn main_result() -> Result<()> {
     let mut transport_relay = false;
     let mut relay_executable = None;
     let mut i = 1;
-    while i < args.len() {
-        if args[i] == "--relay" && matches!(command, "plan" | "run") {
+    while let Some(arg) = args.get(i) {
+        if arg == "--relay" && matches!(command, "plan" | "run") {
             transport_relay = true;
             i += 1;
             continue;
         }
         let value = args.get(i + 1).context("option requires a value")?;
-        match args[i].as_str() {
+        match arg.as_str() {
             "--profile" if command != "list" => profile = value,
             "--suite" => suite = value,
             "--rate-bps" if command != "list" => rate_bps = Some(value.parse::<u64>()?),

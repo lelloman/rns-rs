@@ -39,11 +39,14 @@ pub(crate) fn environment(root: &Path) -> Result<serde_json::Value> {
     let source = if let Ok(path) = std::env::var("RNS_BENCH_SOURCE_RECORD") {
         let value: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
         ensure!(
-            value["source_sha"].as_str().is_some_and(|v| v.len() == 40),
+            crate::json_field(&value, "source_sha")
+                .as_str()
+                .is_some_and(|v| v.len() == 40),
             "invalid baked source revision"
         );
         ensure!(
-            value["lockfile_sha256"] == digest(&fs::read(root.join("Cargo.lock"))?),
+            *crate::json_field(&value, "lockfile_sha256")
+                == digest(&fs::read(root.join("Cargo.lock"))?),
             "baked lockfile differs"
         );
         value
@@ -51,9 +54,9 @@ pub(crate) fn environment(root: &Path) -> Result<serde_json::Value> {
         source_identity(root)?
     };
     Ok(serde_json::json!({
-        "schema_version":1,"source_sha":source["source_sha"],
-        "tracked_diff_sha256":source["tracked_diff_sha256"],"dirty":source["dirty"],
-        "untracked_source":source["untracked_source"],"lockfile_sha256":source["lockfile_sha256"],
+        "schema_version":1,"source_sha":crate::json_field(&source, "source_sha"),
+        "tracked_diff_sha256":crate::json_field(&source, "tracked_diff_sha256"),"dirty":crate::json_field(&source, "dirty"),
+        "untracked_source":crate::json_field(&source, "untracked_source"),"lockfile_sha256":crate::json_field(&source, "lockfile_sha256"),
         "rustc":String::from_utf8(output(root,"rustc",&["-Vv"])?)?,
         "executable_sha256":digest(&fs::read(std::env::current_exe()?)?),
         "os":std::env::consts::OS,"arch":std::env::consts::ARCH,
@@ -538,10 +541,13 @@ pub(crate) fn run_with_relay(
     )?;
     let mut env = environment(root)?;
     if let Some(rate) = cases.first().and_then(|c| c.rate_bps) {
-        env["network"] = serde_json::json!({"kind":"userspace-paced-tcp-v1", "rate_bps_per_direction":rate,
+        // environment() returns an object.
+        if let Some(env) = env.as_object_mut() {
+            env.insert("network".into(), serde_json::json!({"kind":"userspace-paced-tcp-v1", "rate_bps_per_direction":rate,
             "chunk_max_bytes":4096,"chunk_max_serialization_ms":10,"idle_credit":false,
             "byte_boundary":"TCP stream bytes including RNS framing; excludes IP/TCP headers",
-            "limitations":"synthetic byte pacing; socket queues remain; not a kernel link model; relay CPU is outside endpoint metrics"});
+            "limitations":"synthetic byte pacing; socket queues remain; not a kernel link model; relay CPU is outside endpoint metrics"}));
+        }
     }
     // Every case uses the same executable even if a developer rebuilds meanwhile.
     let executable = dir.join("participant.bin");
@@ -645,10 +651,10 @@ pub(crate) fn report(dir: &Path) -> Result<()> {
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(dir.join("manifest.json"))?)?;
     ensure!(
-        manifest["schema_version"] == 1,
+        crate::json_field(&manifest, "schema_version") == 1,
         "unsupported manifest version"
     );
-    let cases: Vec<Case> = serde_json::from_value(manifest["cases"].clone())?;
+    let cases: Vec<Case> = serde_json::from_value(crate::json_field(&manifest, "cases").clone())?;
     let status: serde_json::Value = serde_json::from_slice(&fs::read(dir.join("status.json"))?)?;
     ensure!(!cases.is_empty(), "empty run matrix");
     let mut results = Vec::new();
@@ -666,7 +672,7 @@ pub(crate) fn report(dir: &Path) -> Result<()> {
         };
         results.push(result);
     }
-    let complete = status["status"] == "complete"
+    let complete = crate::json_field(&status, "status") == "complete"
         && results
             .iter()
             .all(|r| r.as_ref().is_some_and(|r| r.status == "valid"));
@@ -675,8 +681,8 @@ pub(crate) fn report(dir: &Path) -> Result<()> {
     } else {
         "incomplete or failed"
     };
-    let mut text=format!("rns-rs benchmark report\nStatus: {effective} (recorded: {})\nExploratory measurements; not a saturation or release qualification result.\nGoodput includes controller gaps and drain. Latency includes application acknowledgement.\nRSS high-water marks are full-process peaks, not measurement-window peaks.\n\n",status["status"]);
-    if let Some(error) = status["infrastructure_error"].as_str() {
+    let mut text=format!("rns-rs benchmark report\nStatus: {effective} (recorded: {})\nExploratory measurements; not a saturation or release qualification result.\nGoodput includes controller gaps and drain. Latency includes application acknowledgement.\nRSS high-water marks are full-process peaks, not measurement-window peaks.\n\n",crate::json_field(&status, "status"));
+    if let Some(error) = crate::json_field(&status, "infrastructure_error").as_str() {
         text.push_str(&format!("Infrastructure failure: {error}\n\n"));
     }
     if let Some(rate) = cases.first().and_then(|c| c.rate_bps) {
@@ -762,7 +768,7 @@ pub(crate) fn report(dir: &Path) -> Result<()> {
             }
             let mut samples = r.latency_ns;
             samples.sort_unstable();
-            text.push_str(&format!("; verified={} B; elapsed={elapsed:.6} s; goodput={:.2} B/s; latency n={} median={:.3} ms",r.verified_bytes,r.verified_bytes as f64/elapsed,samples.len(),samples[samples.len()/2] as f64/1e6));
+            text.push_str(&format!("; verified={} B; elapsed={elapsed:.6} s; goodput={:.2} B/s; latency n={} median={:.3} ms",r.verified_bytes,r.verified_bytes as f64/elapsed,samples.len(),samples.get(samples.len()/2).copied().unwrap_or_default() as f64/1e6));
             if let Some(q) = &c.probes {
                 ensure!(
                     r.probe_rounds.len() == c.operations
@@ -775,7 +781,10 @@ pub(crate) fn report(dir: &Path) -> Result<()> {
                 }
                 let quantile = |mut ns: Vec<u64>, percent: usize| {
                     ns.sort_unstable();
-                    ns[(ns.len() * percent).div_ceil(100).saturating_sub(1)] as f64 / 1e6
+                    ns.get((ns.len() * percent).div_ceil(100).saturating_sub(1))
+                        .copied()
+                        .unwrap_or_default() as f64
+                        / 1e6
                 };
                 let rtts: Vec<_> = r
                     .probe_rounds
@@ -813,10 +822,14 @@ pub(crate) fn report(dir: &Path) -> Result<()> {
             if samples.len() >= 100 {
                 text.push_str(&format!(
                     "; p99={:.3} ms",
-                    samples[(samples.len() * 99).div_ceil(100) - 1] as f64 / 1e6
+                    samples
+                        .get((samples.len() * 99).div_ceil(100) - 1)
+                        .copied()
+                        .unwrap_or_default() as f64
+                        / 1e6
                 ));
             }
-            let relay_mode = !manifest["relay"].is_null();
+            let relay_mode = !crate::json_field(&manifest, "relay").is_null();
             ensure!(
                 r.relay_before.is_some() == relay_mode && r.relay_after.is_some() == relay_mode,
                 "missing or unexpected relay metrics"
