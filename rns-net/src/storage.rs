@@ -16,6 +16,8 @@ use rns_core::encoding::{hex, hex_decode_array};
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 
+pub use crate::storage_sqlite::KnownDestinationsStore;
+
 /// Paths for storage directories.
 #[derive(Debug, Clone)]
 pub struct StoragePaths {
@@ -354,16 +356,18 @@ impl RatchetStore for FsRatchetStore {
 /// clients do (`Identity.get_ratchet`): its `known_destinations.db` read-only,
 /// then the legacy `ratchets/` files of instances without that database.
 #[derive(Debug)]
-pub struct SharedClientRatchetStore {
+#[cfg(any(test, feature = "iface-local"))]
+pub(crate) struct SharedClientRatchetStore {
     memory: Mutex<HashMap<[u8; 16], RatchetEntry>>,
     /// The shared instance's storage directory, when known.
     instance_storage: Option<PathBuf>,
 }
 
+#[cfg(any(test, feature = "iface-local"))]
 impl SharedClientRatchetStore {
     /// A store reading misses from the shared instance's `instance_storage`
     /// directory; with `None`, from memory only.
-    pub fn new(instance_storage: Option<PathBuf>) -> Self {
+    pub(crate) fn new(instance_storage: Option<PathBuf>) -> Self {
         Self {
             memory: Mutex::new(HashMap::new()),
             instance_storage,
@@ -406,6 +410,7 @@ impl SharedClientRatchetStore {
     }
 }
 
+#[cfg(any(test, feature = "iface-local"))]
 impl RatchetStore for SharedClientRatchetStore {
     fn remember(&self, dest_hash: [u8; 16], entry: RatchetEntry) -> io::Result<()> {
         if let Ok(mut memory) = self.memory.lock() {
@@ -455,7 +460,7 @@ pub const DEFAULT_CONFIG: &[u8] = include_bytes!("common/default_config");
 /// Create `<config_dir>/config` with [`DEFAULT_CONFIG`] when it does not
 /// exist, as upstream does on starting any instance. Returns whether it
 /// was created.
-pub fn ensure_config_file(config_dir: &Path) -> io::Result<bool> {
+pub(crate) fn ensure_config_file(config_dir: &Path) -> io::Result<bool> {
     let config_file = config_dir.join("config");
     if config_file.exists() {
         return Ok(false);
@@ -503,14 +508,14 @@ pub fn ensure_storage_dirs(config_dir: &Path) -> io::Result<StoragePaths> {
 /// integers from earlier versions reading as whole bits. Costs outside
 /// `0..=STAMP_COST_CAP` are dropped, as an announce carrying one is not
 /// interpreted.
-pub fn stored_link_cost(cost: f64) -> Option<rns_core::stamp::StampCost> {
+pub(crate) fn stored_link_cost(cost: f64) -> Option<rns_core::stamp::StampCost> {
     (0.0..=f64::from(rns_core::constants::STAMP_COST_CAP))
         .contains(&cost)
         .then(|| rns_core::stamp::StampCost::from_f64(cost))
 }
 
 /// First 16 bytes of the full SHA-256 hash of a public key.
-pub fn full_hash_prefix(public_key: &[u8; 64]) -> [u8; 16] {
+pub(crate) fn full_hash_prefix(public_key: &[u8; 64]) -> [u8; 16] {
     let full = rns_core::hash::full_hash(public_key);
     let mut hash = [0u8; 16];
     hash.copy_from_slice(&full[..16]);
@@ -552,7 +557,7 @@ pub fn load_identity(path: &Path) -> io::Result<Identity> {
 /// receiving_interface, was_used, last_used_at, retained], ...}`
 ///
 /// Legacy 4-element arrays are still accepted on load.
-pub fn save_known_destinations(
+pub(crate) fn save_known_destinations(
     destinations: &HashMap<[u8; 16], KnownDestination>,
     path: &Path,
 ) -> io::Result<()> {
@@ -626,7 +631,9 @@ fn replace_file(temp_path: &Path, path: &Path) -> io::Result<()> {
 }
 
 /// Load known destinations from a msgpack file.
-pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], KnownDestination>> {
+pub(crate) fn load_known_destinations(
+    path: &Path,
+) -> io::Result<HashMap<[u8; 16], KnownDestination>> {
     use rns_core::msgpack;
 
     let data = fs::read(path)?;
@@ -746,7 +753,7 @@ pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], Know
 
 /// Persist packet de-duplication, route, and tunnel state using the upstream
 /// Reticulum filenames and wire layouts.
-pub fn save_transport_state(
+pub(crate) fn save_transport_state(
     snapshot: &rns_core::transport::persistence::TransportStateSnapshot,
     storage_dir: &Path,
     low_priority: bool,
@@ -1034,7 +1041,7 @@ fn optional_hash_value(hash: Option<[u8; 32]>) -> rns_core::msgpack::Value {
 
 /// Load transport state. Missing files are treated as empty state; malformed
 /// existing files are surfaced so callers can log and continue deliberately.
-pub fn load_transport_state(
+pub(crate) fn load_transport_state(
     storage_dir: &Path,
 ) -> io::Result<rns_core::transport::persistence::TransportStateSnapshot> {
     use rns_core::transport::persistence::TransportStateSnapshot;

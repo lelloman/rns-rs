@@ -83,7 +83,7 @@ fn wait_for_rpc(port: u16) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         // Where the daemon serves RPC: its abstract socket on Linux.
-        let addr = rns_net::RpcAddr::local(format!("rnid-test-{port}"), port);
+        let addr = rns_net::rpc::RpcAddr::local(format!("rnid-test-{port}"), port);
         if addr.accepts_connections().is_ok() {
             return;
         }
@@ -116,7 +116,7 @@ fn wait_for_flush(dir: &Path, dest_hash: [u8; 16]) {
     let db = dir.join("storage").join("known_destinations.db");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let flushed = rns_net::storage_sqlite::KnownDestinationsStore::open_read_only(&db)
+        let flushed = rns_net::storage::KnownDestinationsStore::open_read_only(&db)
             .and_then(|store| store.load_all())
             .is_ok_and(|entries| entries.iter().any(|(hash, _)| *hash == dest_hash));
         if flushed {

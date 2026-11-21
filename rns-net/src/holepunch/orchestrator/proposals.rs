@@ -43,7 +43,7 @@ impl HolePunchManager {
     /// `REJECT_UNSUPPORTED`.
     ///
     /// `derived_key` is the link's derived session key (from LinkEngine).
-    pub fn propose(
+    pub(crate) fn propose(
         &mut self,
         link_id: [u8; 16],
         derived_key: &[u8],
@@ -80,7 +80,7 @@ impl HolePunchManager {
 
     /// Handle a `HELLO` from a link peer: note that it implements Direct
     /// Link, answer it when it asks, and start a proposal that waited for it.
-    pub fn handle_hello(
+    pub(crate) fn handle_hello(
         &mut self,
         link_id: [u8; 16],
         body: &[u8],
@@ -187,7 +187,7 @@ impl HolePunchManager {
     /// Whether this node is itself proposing on `link_id`: asking the peer
     /// about Direct Link for a proposal, or running an initiator session
     /// that has not finished.
-    pub fn proposing(&self, link_id: &[u8; 16]) -> bool {
+    pub(crate) fn proposing(&self, link_id: &[u8; 16]) -> bool {
         if matches!(
             self.peer_support.get(link_id),
             Some(PeerSupport::Querying { .. })
@@ -213,7 +213,7 @@ impl HolePunchManager {
     /// proposal wins (the link initiator's does): drop ours without
     /// reporting a failure, since the upgrade goes ahead with us as the
     /// responder.
-    pub fn yield_proposal(&mut self, link_id: &[u8; 16]) {
+    pub(crate) fn yield_proposal(&mut self, link_id: &[u8; 16]) {
         if matches!(
             self.peer_support.get(link_id),
             Some(PeerSupport::Querying { .. })
@@ -234,7 +234,7 @@ impl HolePunchManager {
     /// Responder: replies to resend when `payload` repeats the request of
     /// the session running on `link_id` (its earlier replies may have been
     /// lost). `None` for a new request.
-    pub fn replay_for_repeated_request(
+    pub(crate) fn replay_for_repeated_request(
         &self,
         link_id: [u8; 16],
         payload: &[u8],
@@ -274,7 +274,7 @@ impl HolePunchManager {
     }
 
     /// Abort and remove all active hole-punch sessions.
-    pub fn abort_all_sessions(&mut self) {
+    pub(crate) fn abort_all_sessions(&mut self) {
         for (_, mut session) in self.sessions.drain() {
             if let Some(handle) = session.punch_handle.take() {
                 handle.cancel();

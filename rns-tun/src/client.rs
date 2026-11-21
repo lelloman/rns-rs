@@ -623,7 +623,7 @@ fn send_control(
         )
         .map_err(node_error)
 }
-fn node_error(error: rns_net::node::SendError) -> io::Error {
+fn node_error(error: rns_net::SendError) -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, error)
 }
 fn session_error(error: crate::SessionError) -> io::Error {

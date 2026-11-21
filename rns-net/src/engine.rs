@@ -2,7 +2,7 @@
 //! compact engine folds into the driver loop. See `docs/engines.md`.
 
 /// `"parallel"` with the `engine-parallel` feature, `"compact"` otherwise.
-pub const ENGINE: &str = if cfg!(feature = "engine-parallel") {
+pub(crate) const ENGINE: &str = if cfg!(feature = "engine-parallel") {
     "parallel"
 } else {
     "compact"

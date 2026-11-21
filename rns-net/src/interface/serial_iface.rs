@@ -76,12 +76,6 @@ impl Writer for SerialWriter {
     }
 }
 
-/// Start the serial interface. Opens the port, spawns reader thread.
-/// Returns the writer for the driver.
-pub fn start(config: SerialIfaceConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
-    start_with_control(config, tx, 0).map(|(writer, _)| writer)
-}
-
 fn start_with_control(
     config: SerialIfaceConfig,
     tx: EventSender,

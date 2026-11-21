@@ -34,8 +34,8 @@ use std::time::{Duration, Instant};
 use rns_core::buffer::StreamDataMessage;
 use rns_core::types::{DestHash, IdentityHash};
 use rns_crypto::identity::Identity;
-use rns_net::compressor::Bzip2Compressor;
-use rns_net::destination::Destination;
+use rns_net::Bzip2Compressor;
+use rns_net::Destination;
 use rns_net::{Callbacks, ChannelSendError, RnsNode, SendError};
 
 use crate::args::{Args, OptionSpec};

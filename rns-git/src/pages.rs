@@ -35,7 +35,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use rns_core::msgpack::{self, Value};
 use rns_core::types::IdentityHash;
 use rns_crypto::identity::Identity;
-use rns_net::link_manager::ResourceStrategy;
+use rns_net::ResourceStrategy;
 use rns_net::{Destination, RequestResponse, RnsNode};
 
 use crate::acl::{Access, Operation};

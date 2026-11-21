@@ -20,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rns_core::msgpack::{self, Value};
 use rns_core::types::{DestHash, IdentityHash, LinkId};
-use rns_net::destination::Destination;
+use rns_net::Destination;
 use rns_net::{Callbacks, RnsNode};
 
 use crate::app;
@@ -203,7 +203,7 @@ impl Callbacks for RnxCallbacks {
         &mut self,
         _link_id: LinkId,
         _request_id: [u8; 16],
-        _reason: rns_net::link_manager::RequestFailure,
+        _reason: rns_net::RequestFailure,
     ) {
         let _ = self.tx.send(RnxEvent::RequestFailed);
     }

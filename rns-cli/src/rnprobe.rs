@@ -16,7 +16,7 @@ use crate::pyfmt::{prettyhexrep, round_float, str_of};
 use rns_core::types::{DestHash, PacketHash};
 use rns_net::event::{query, MAX_PROBE_PAYLOAD_SIZE};
 use rns_net::pickle::PickleValue;
-use rns_net::{config, storage, Callbacks, Destination, RnsNode, SharedInstanceRpc};
+use rns_net::{config, rpc::SharedInstanceRpc, storage, Callbacks, Destination, RnsNode};
 
 const VERSION: &str = env!("FULL_VERSION");
 const DEFAULT_PROBE_SIZE: usize = 16;

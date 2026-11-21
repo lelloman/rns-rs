@@ -2,19 +2,6 @@
 
 use super::*;
 
-/// Start an AutoInterface. Discovers local IPv6 link-local interfaces,
-/// sets up multicast discovery, and creates UDP data servers.
-///
-/// Returns a vec of (InterfaceId, Writer) for each initial peer (typically empty
-/// since peers are discovered dynamically via InterfaceUp events).
-pub fn start(
-    config: AutoConfig,
-    tx: EventSender,
-    next_dynamic_id: Arc<AtomicU64>,
-) -> io::Result<()> {
-    start_with_template(config, tx, next_dynamic_id, None, None).map(|_| ())
-}
-
 pub(super) fn start_with_template(
     config: AutoConfig,
     tx: EventSender,

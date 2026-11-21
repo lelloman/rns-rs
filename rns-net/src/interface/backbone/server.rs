@@ -11,7 +11,7 @@ use std::os::fd::AsFd;
 
 /// Concurrent clients a Backbone listener accepts unless configured
 /// otherwise (upstream `BackboneInterface.CLIENT_LIMIT`, rgit `3c4b271f`).
-pub const BACKBONE_CLIENT_LIMIT: usize = 500;
+pub(crate) const BACKBONE_CLIENT_LIMIT: usize = 500;
 
 /// Writer that sends HDLC-framed data over a cloned TCP stream (server mode).
 ///
@@ -191,7 +191,12 @@ impl BackboneWriter {
 
 /// Start a backbone interface. Binds the TCP listener, which is served
 /// with its peers on the receiving (driver) thread.
-pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -> io::Result<()> {
+#[cfg(test)]
+pub(crate) fn start(
+    config: BackboneConfig,
+    tx: EventSender,
+    next_id: Arc<AtomicU64>,
+) -> io::Result<()> {
     start_with_template(config, tx, next_id, None, None)
 }
 

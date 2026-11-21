@@ -38,11 +38,11 @@ impl BackboneClientConfig {
 
 /// Upstream's `RECONNECT_WAIT`: the wait between connection attempts, and
 /// the base of the backoff after a lost connection. Not configurable.
-pub const RECONNECT_WAIT: Duration = Duration::from_secs(5);
+pub(crate) const RECONNECT_WAIT: Duration = Duration::from_secs(5);
 
 /// Upstream's `INITIAL_CONNECT_TIMEOUT`, the TCP connect timeout. Upstream
 /// parses a `connect_timeout` option but connects with this constant.
-pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl Default for BackboneClientConfig {
     fn default() -> Self {
@@ -181,7 +181,11 @@ pub(super) fn try_connect_client(
 }
 
 /// Connect and start the reader thread. Returns the writer for the driver.
-pub fn start_client(config: BackboneClientConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
+#[cfg(test)]
+pub(crate) fn start_client(
+    config: BackboneClientConfig,
+    tx: EventSender,
+) -> io::Result<Box<dyn Writer>> {
     start_client_with_ifac(config, tx, 0, None, ListenerControl::new())
 }
 

@@ -42,7 +42,8 @@ pub(super) fn default_hook_type() -> &'static str {
 }
 
 /// Map a hook point name string to its index. Returns None for unknown names.
-pub fn parse_hook_point(s: &str) -> Option<usize> {
+#[cfg(any(test, feature = "hooks"))]
+pub(crate) fn parse_hook_point(s: &str) -> Option<usize> {
     match s {
         "PreIngress" => Some(0),
         "PreDispatch" => Some(1),
@@ -71,7 +72,7 @@ pub fn parse_hook_point(s: &str) -> Option<usize> {
 
 /// The hook backend a hook's `type` names.
 #[cfg(feature = "hooks")]
-pub fn parse_hook_backend(
+pub(crate) fn parse_hook_backend(
     s: &str,
 ) -> Result<rns_hooks::HookBackend, rns_hooks::UnknownHookBackend> {
     s.parse()

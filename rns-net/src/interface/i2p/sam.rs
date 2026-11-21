@@ -22,13 +22,13 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 // --- I2P Base64 ---
 
 /// Encode binary data to I2P base64 (`-` and `~` for `+` and `/`).
-pub fn i2p_base64_encode(data: &[u8]) -> String {
+pub(crate) fn i2p_base64_encode(data: &[u8]) -> String {
     BASE64_I2P.encode(data)
 }
 
 /// Decode I2P base64, which must be padded to a multiple of four
 /// characters.
-pub fn i2p_base64_decode(s: &str) -> Result<Vec<u8>, SamError> {
+pub(crate) fn i2p_base64_decode(s: &str) -> Result<Vec<u8>, SamError> {
     if !s.len().is_multiple_of(4) {
         return Err(SamError::InvalidResponse(format!(
             "invalid I2P base64 length: {}",
@@ -51,7 +51,7 @@ pub fn i2p_base64_decode(s: &str) -> Result<Vec<u8>, SamError> {
 
 /// Errors from SAM protocol operations.
 #[derive(Debug)]
-pub enum SamError {
+pub(crate) enum SamError {
     /// Underlying I/O error.
     Io(io::Error),
     /// SAM router returned an error result (e.g., CANT_REACH_PEER).
@@ -80,26 +80,26 @@ impl From<io::Error> for SamError {
 
 /// An I2P destination (public key, typically ~387 bytes raw).
 #[derive(Clone, Debug)]
-pub struct Destination {
+pub(crate) struct Destination {
     /// Raw binary destination bytes.
     pub data: Vec<u8>,
 }
 
 impl Destination {
     /// Encode destination to I2P base64.
-    pub fn to_i2p_base64(&self) -> String {
+    pub(crate) fn to_i2p_base64(&self) -> String {
         i2p_base64_encode(&self.data)
     }
 
     /// Decode destination from I2P base64.
-    pub fn from_i2p_base64(s: &str) -> Result<Self, SamError> {
+    pub(crate) fn from_i2p_base64(s: &str) -> Result<Self, SamError> {
         let data = i2p_base64_decode(s)?;
         Ok(Destination { data })
     }
 
     /// Compute the .b32.i2p address from this destination.
     /// SHA-256 of raw destination bytes, base32-encoded, lowercase + ".b32.i2p".
-    pub fn base32_address(&self) -> String {
+    pub(crate) fn base32_address(&self) -> String {
         let hash = rns_crypto::sha256::sha256(&self.data);
         let encoded = base32_encode(&hash);
         format!("{}.b32.i2p", encoded)
@@ -108,11 +108,15 @@ impl Destination {
 
 /// A generated keypair (destination + private key material).
 #[derive(Clone, Debug)]
-pub struct KeyPair {
+pub(crate) struct KeyPair {
     /// The public destination.
-    pub destination: Destination,
+    #[allow(
+        dead_code,
+        reason = "SAM's reply, kept with its private key; nothing reads it yet"
+    )]
+    pub(crate) destination: Destination,
     /// Raw binary private key bytes.
-    pub private_key: Vec<u8>,
+    pub(crate) private_key: Vec<u8>,
 }
 
 // --- Base32 encoding (RFC 4648, lowercase, no padding) ---
@@ -275,12 +279,6 @@ fn check_result(resp: &SamResponse) -> Result<(), SamError> {
 
 // --- Public API ---
 
-/// Generate a new I2P destination keypair via SAM.
-/// Uses Ed25519 (SIGNATURE_TYPE=7).
-pub fn dest_generate(sam_addr: &SocketAddr) -> Result<KeyPair, SamError> {
-    dest_generate_with_mark(sam_addr, None)
-}
-
 pub(crate) fn dest_generate_with_mark(
     sam_addr: &SocketAddr,
     underlay_mark: Option<u32>,
@@ -318,7 +316,8 @@ pub(crate) fn dest_generate_with_mark(
 
 /// Create a STREAM session. Returns the control socket which must remain open
 /// for the session's lifetime.
-pub fn session_create(
+#[cfg(test)]
+pub(crate) fn session_create(
     sam_addr: &SocketAddr,
     session_id: &str,
     private_key_b64: &str,
@@ -358,7 +357,8 @@ pub(crate) fn session_create_with_mark(
 
 /// Connect to a remote I2P destination via STREAM CONNECT.
 /// Returns a bidirectional data stream.
-pub fn stream_connect(
+#[cfg(test)]
+pub(crate) fn stream_connect(
     sam_addr: &SocketAddr,
     session_id: &str,
     destination: &str,
@@ -402,7 +402,8 @@ pub(crate) fn stream_connect_with_mark(
 
 /// Accept an incoming connection on a session via STREAM ACCEPT.
 /// Returns the data stream and the remote peer's destination.
-pub fn stream_accept(
+#[cfg(test)]
+pub(crate) fn stream_accept(
     sam_addr: &SocketAddr,
     session_id: &str,
 ) -> Result<(TcpStream, Destination), SamError> {
@@ -455,12 +456,6 @@ pub(crate) fn stream_accept_begin(
     Ok(stream)
 }
 
-/// Look up a .b32.i2p name (or other I2P name) to a full destination.
-/// Opens a fresh SAM connection for the lookup.
-pub fn naming_lookup(sam_addr: &SocketAddr, name: &str) -> Result<Destination, SamError> {
-    naming_lookup_with_mark(sam_addr, name, None)
-}
-
 pub(crate) fn naming_lookup_with_mark(
     sam_addr: &SocketAddr,
     name: &str,
@@ -473,7 +468,10 @@ pub(crate) fn naming_lookup_with_mark(
 /// Perform a NAMING LOOKUP on an existing SAM socket.
 /// Use this for `NAME=ME` on a session control socket, since the `ME`
 /// name requires a session context on the same connection.
-pub fn naming_lookup_on(stream: &mut TcpStream, name: &str) -> Result<Destination, SamError> {
+pub(crate) fn naming_lookup_on(
+    stream: &mut TcpStream,
+    name: &str,
+) -> Result<Destination, SamError> {
     writeln!(stream, "NAMING LOOKUP NAME={}", name)?;
     stream.flush()?;
 

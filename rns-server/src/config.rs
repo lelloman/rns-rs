@@ -14,7 +14,7 @@ use crate::supervisor::{
     ProcessCommand, ProcessReadiness, ProcessSpec, ReadinessTarget, RnsdDrainConfig, Role,
     SupervisorConfig,
 };
-use rns_net::RpcAddr;
+use rns_net::rpc::RpcAddr;
 
 mod error;
 pub use error::{BootstrapError, ServerConfigError};
@@ -708,7 +708,7 @@ impl ServerConfig {
 
     fn rnsd_drain_config(&self) -> Option<RnsdDrainConfig> {
         let paths = rns_net::storage::ensure_storage_dirs(&self.resolved_config_dir).ok()?;
-        let rpc = rns_net::SharedInstanceRpc::with_key(
+        let rpc = rns_net::rpc::SharedInstanceRpc::with_key(
             self.rnsd_rpc_addr.clone(),
             self.rnsd_rpc_key,
             || rns_net::storage::load_rpc_identity(&paths),
@@ -1284,7 +1284,7 @@ mod tests {
                 disable_auth: false,
                 daemon_mode: true,
             },
-            rnsd_rpc_addr: rns_net::RpcAddr::local("default", 37429),
+            rnsd_rpc_addr: rns_net::rpc::RpcAddr::local("default", 37429),
             rnsd_rpc_key: None,
         }
     }
@@ -1876,7 +1876,7 @@ mod tests {
         assert_eq!(readiness.len(), 1);
         assert_eq!(readiness[0].role, Role::Rnsd);
         match &readiness[0].target {
-            ReadinessTarget::Rpc(rns_net::RpcAddr::Local {
+            ReadinessTarget::Rpc(rns_net::rpc::RpcAddr::Local {
                 instance_name,
                 port,
             }) => {
@@ -1933,7 +1933,7 @@ mod tests {
                 disable_auth: false,
                 daemon_mode: true,
             },
-            rnsd_rpc_addr: rns_net::RpcAddr::local("default", 37429),
+            rnsd_rpc_addr: rns_net::rpc::RpcAddr::local("default", 37429),
             rnsd_rpc_key: None,
         };
 

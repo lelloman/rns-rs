@@ -19,15 +19,15 @@ use rns_core::transport::destination_filter::{
 use crate::config::FilterSection;
 
 /// The file of known destination type names, in the config directory.
-pub const KNOWN_DESTINATION_TYPES_FILE: &str = "known_destination_types";
+pub(crate) const KNOWN_DESTINATION_TYPES_FILE: &str = "known_destination_types";
 /// The file of flagged destination type names, in the config directory.
-pub const FLAGGED_DESTINATION_TYPES_FILE: &str = "flagged_destination_types";
+pub(crate) const FLAGGED_DESTINATION_TYPES_FILE: &str = "flagged_destination_types";
 
 /// Upstream's `Transport.destination_type_map`, a name for each destination
 /// type hash it has seen one for, and `Transport.flagged_type_map`, a name
 /// for each flagged one.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct DestinationTypeNames {
+pub(crate) struct DestinationTypeNames {
     names: BTreeMap<DestinationType, String>,
     flagged: BTreeMap<DestinationType, String>,
 }
@@ -37,7 +37,7 @@ impl DestinationTypeNames {
     /// the `[filter]` section blocks and allows, then the
     /// `known_destination_types` file of `config_dir`, read as
     /// [`DestinationTypeNames::load_files`] reads it.
-    pub fn from_config(config_dir: &Path, filter: &FilterSection) -> Self {
+    pub(crate) fn from_config(config_dir: &Path, filter: &FilterSection) -> Self {
         let (mut names, lines) = Self::from_filter(filter);
         for line in lines {
             log::debug!("{line}");
@@ -62,7 +62,7 @@ impl DestinationTypeNames {
     /// list` and `… to allowed list` errors. Their `try` blocks cannot fail
     /// for a config value, which ConfigObj always decodes to a `str`, so
     /// there is nothing here to log them for.
-    pub fn from_filter(filter: &FilterSection) -> (Self, Vec<String>) {
+    pub(crate) fn from_filter(filter: &FilterSection) -> (Self, Vec<String>) {
         let mut names = Self::default();
         let mut lines = Vec::new();
         let mut required_only = false;
@@ -102,23 +102,23 @@ impl DestinationTypeNames {
     }
 
     /// Record `name` for `destination_type`, replacing any earlier name.
-    pub fn insert(&mut self, destination_type: DestinationType, name: String) {
+    pub(crate) fn insert(&mut self, destination_type: DestinationType, name: String) {
         self.names.insert(destination_type, name);
     }
 
     /// The name recorded for `destination_type`, if any.
-    pub fn get(&self, destination_type: &DestinationType) -> Option<&str> {
+    pub(crate) fn get(&self, destination_type: &DestinationType) -> Option<&str> {
         self.names.get(destination_type).map(String::as_str)
     }
 
     /// The flagged name recorded for `destination_type`, if any.
-    pub fn flagged(&self, destination_type: &DestinationType) -> Option<&str> {
+    pub(crate) fn flagged(&self, destination_type: &DestinationType) -> Option<&str> {
         self.flagged.get(destination_type).map(String::as_str)
     }
 
     /// `Transport.destination_type_name` since 3f55e9eb: the name, else the
     /// flagged name, else the hash in bare hex.
-    pub fn type_name(&self, destination_type: &DestinationType) -> String {
+    pub(crate) fn type_name(&self, destination_type: &DestinationType) -> String {
         self.get(destination_type)
             .or_else(|| self.flagged(destination_type))
             .map_or_else(|| hex(destination_type), str::to_string)
@@ -126,7 +126,7 @@ impl DestinationTypeNames {
 
     /// How upstream's log lines show a destination type: its name, then its
     /// hash (`lxmf.delivery <hash>`).
-    pub fn describe(&self, destination_type: &DestinationType) -> String {
+    pub(crate) fn describe(&self, destination_type: &DestinationType) -> String {
         format!(
             "{} <{}>",
             self.type_name(destination_type),
@@ -141,7 +141,7 @@ impl DestinationTypeNames {
     /// line, an empty one included, recorded under its name hash, the
     /// flagged ones in the flagged map (which upstream has since 3f55e9eb).
     /// A file that cannot be read is logged as an error and adds nothing.
-    pub fn load_files(&mut self, config_dir: &Path) {
+    pub(crate) fn load_files(&mut self, config_dir: &Path) {
         if let Some(lines) = read_type_file(
             &config_dir.join(KNOWN_DESTINATION_TYPES_FILE),
             "known destination types list",

@@ -21,7 +21,11 @@ pub(crate) use announce::*;
 pub(crate) use identity::*;
 pub(crate) use interface_config::*;
 pub(crate) use interface_display::*;
-pub use settings::*;
+pub(crate) use settings::*;
+pub use settings::{
+    DiscoverySettings, IfacConfig, InterfaceAnnounceLimits, InterfaceConfig, NodeConfig,
+    SharedInstanceSettings,
+};
 
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read};

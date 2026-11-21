@@ -8,9 +8,11 @@
 //!
 //! Python reference: RNS/Discovery.py
 
-// Re-export common::discovery (and through it rns_core::discovery) so
-// `crate::discovery::X` paths work.
-pub use crate::common::discovery::*;
+pub use crate::common::discovery::{filter_and_sort_interfaces, DiscoveryConfig, DiscoveryRadio};
+pub use rns_core::discovery::{DiscoveredInterface, DiscoveredStatus};
+// The crate's own code reaches common::discovery (and through it
+// rns_core::discovery) as `crate::discovery::X`.
+pub(crate) use crate::common::discovery::*;
 
 use std::fs;
 use std::io::{self, Read};
@@ -27,7 +29,7 @@ use rns_crypto::sha256::sha256;
 use crate::time;
 
 mod error;
-pub use error::{AnnounceError, LocationError};
+pub(crate) use error::{AnnounceError, LocationError};
 
 // ============================================================================
 // Storage
@@ -526,7 +528,7 @@ fn discovery_storage_guard() -> MutexGuard<'static, ()> {
 /// its deadline behind it.
 ///
 /// Returns `(stamp, value)` on success. This is a blocking, CPU-intensive operation.
-pub fn generate_discovery_stamp(
+pub(crate) fn generate_discovery_stamp(
     packed_data: &[u8],
     stamp_cost: StampCost,
 ) -> ([u8; STAMP_SIZE], StampValue) {
@@ -571,7 +573,7 @@ pub fn generate_discovery_stamp(
 
 /// Info about a single discoverable interface, ready for announcing.
 #[derive(Debug, Clone)]
-pub struct DiscoverableInterface {
+pub(crate) struct DiscoverableInterface {
     /// Configured interface name used for runtime targeting.
     pub interface_name: String,
     /// The interface's discovery settings.
@@ -585,7 +587,7 @@ pub struct DiscoverableInterface {
 }
 
 /// Result of a completed background announce generation.
-pub struct AnnounceResult {
+pub(crate) struct AnnounceResult {
     /// Configured interface name this stamp was generated for.
     pub interface_name: String,
     /// The complete app_data (`[flags][packed][stamp]`), or the reason this
@@ -598,7 +600,7 @@ pub struct AnnounceResult {
 /// Stamp generation (PoW) runs on a background thread so it never blocks the
 /// driver event loop.  The driver calls `poll_ready()` each tick to collect
 /// finished results.
-pub struct InterfaceAnnouncer {
+pub(crate) struct InterfaceAnnouncer {
     /// Transport identity hash (16 bytes).
     transport_id: [u8; 16],
     /// Discoverable interfaces with their configs.
@@ -777,7 +779,7 @@ fn prepare_interface_info(
 
 impl InterfaceAnnouncer {
     /// Create a new announcer.
-    pub fn new(transport_id: [u8; 16], interfaces: Vec<DiscoverableInterface>) -> Self {
+    pub(crate) fn new(transport_id: [u8; 16], interfaces: Vec<DiscoverableInterface>) -> Self {
         let n = interfaces.len();
         let (stamp_tx, stamp_rx) = std::sync::mpsc::channel();
         InterfaceAnnouncer {
@@ -794,13 +796,13 @@ impl InterfaceAnnouncer {
 
     /// Encrypt the announces of interfaces with `discovery_encrypt` to the
     /// network identity with this public key.
-    pub fn set_network_public_key(&mut self, public_key: Option<[u8; 64]>) {
+    pub(crate) fn set_network_public_key(&mut self, public_key: Option<[u8; 64]>) {
         self.network_public_key = public_key;
     }
 
     /// Track the node-wide stamp costs (`[stamps] destination_cost` and
     /// `pr_cost`) that interfaces without their own announce.
-    pub fn set_stamp_requirements(
+    pub(crate) fn set_stamp_requirements(
         &mut self,
         requirements: rns_core::transport::types::StampRequirements,
     ) {
@@ -810,7 +812,7 @@ impl InterfaceAnnouncer {
     /// If any interface is due for an announce and no stamp job is already
     /// running, spawns a background thread for PoW.  The result will be
     /// available via `poll_ready()`.
-    pub fn maybe_start(&mut self, now: f64) {
+    pub(crate) fn maybe_start(&mut self, now: f64) {
         if self.stamp_pending {
             return;
         }
@@ -899,7 +901,7 @@ impl InterfaceAnnouncer {
 
     /// Non-blocking poll: returns completed app_data if a background stamp
     /// job has finished.
-    pub fn poll_ready(&mut self) -> Option<AnnounceResult> {
+    pub(crate) fn poll_ready(&mut self) -> Option<AnnounceResult> {
         match self.stamp_rx.try_recv() {
             Ok(result) => {
                 self.stamp_pending = false;
@@ -910,14 +912,14 @@ impl InterfaceAnnouncer {
     }
 
     /// Returns true if the announcer currently tracks a discoverable interface by name.
-    pub fn contains_interface(&self, interface_name: &str) -> bool {
+    pub(crate) fn contains_interface(&self, interface_name: &str) -> bool {
         self.interfaces
             .iter()
             .any(|iface| iface.interface_name == interface_name)
     }
 
     /// Insert or update a discoverable interface by configured name.
-    pub fn upsert_interface(&mut self, iface: DiscoverableInterface) {
+    pub(crate) fn upsert_interface(&mut self, iface: DiscoverableInterface) {
         if let Some(index) = self
             .interfaces
             .iter()
@@ -933,7 +935,7 @@ impl InterfaceAnnouncer {
     }
 
     /// Remove a discoverable interface by configured name.
-    pub fn remove_interface(&mut self, interface_name: &str) -> bool {
+    pub(crate) fn remove_interface(&mut self, interface_name: &str) -> bool {
         if let Some(index) = self
             .interfaces
             .iter()
@@ -948,7 +950,8 @@ impl InterfaceAnnouncer {
     }
 
     /// Returns true if no discoverable interfaces remain.
-    pub fn is_empty(&self) -> bool {
+    #[cfg(any(feature = "iface-backbone", feature = "iface-tcp"))]
+    pub(crate) fn is_empty(&self) -> bool {
         self.interfaces.is_empty()
     }
 

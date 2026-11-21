@@ -1,16 +1,16 @@
-pub mod callbacks;
-pub mod compressor;
+pub(crate) mod callbacks;
+pub(crate) mod compressor;
 pub mod config;
-pub mod destination;
-pub mod discovery;
-pub mod event;
+pub(crate) mod destination;
+pub(crate) mod discovery;
+pub(crate) mod event;
 /// Per-interface statistics: traffic counters, announce and path request
 /// rate samples, and RNode radio reports.
-pub mod interface_stats;
-pub mod link_manager;
-pub mod management;
+pub(crate) mod interface_stats;
+pub(crate) mod link_manager;
+pub(crate) mod management;
 pub mod time;
-pub mod tunnel_extension;
+pub(crate) mod tunnel_extension;
 
 /// Hash map for hot per-packet lookups keyed by link ids and hashes. std's
 /// SipHash dominated these lookups; foldhash is several times cheaper and

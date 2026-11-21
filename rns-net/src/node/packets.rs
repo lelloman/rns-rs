@@ -13,11 +13,11 @@ impl RnsNode {
         &self,
         dest: &crate::destination::Destination,
         data: &[u8],
-    ) -> Result<rns_core::types::PacketHash, crate::TransmissionError> {
+    ) -> Result<rns_core::types::PacketHash, crate::LinkSendError> {
         let permit = self.tx.link_send_pool().acquire().await?;
         let packet = self
             .build_packet(dest, data)
-            .map_err(|_| crate::TransmissionError::PacketBuildFailed)?;
+            .map_err(|_| crate::LinkSendError::PacketBuildFailed)?;
         let hash = rns_core::types::PacketHash(packet.packet_hash);
         let (completion, receipt) = crate::link_send::Completion::new(permit);
         self.tx
@@ -40,11 +40,11 @@ impl RnsNode {
         &self,
         dest: &crate::destination::Destination,
         data: &[u8],
-    ) -> Result<crate::PacketSendReceipt, crate::TransmissionError> {
+    ) -> Result<crate::PacketSendReceipt, crate::LinkSendError> {
         let permit = self.tx.link_send_pool().try_acquire()?;
         let packet = self
             .build_packet(dest, data)
-            .map_err(|_| crate::TransmissionError::PacketBuildFailed)?;
+            .map_err(|_| crate::LinkSendError::PacketBuildFailed)?;
         let hash = rns_core::types::PacketHash(packet.packet_hash);
         let (completion, receipt) = crate::link_send::Completion::new(permit);
         self.try_confirmed_event(Event::SendOutboundTracked {
@@ -60,12 +60,10 @@ impl RnsNode {
         })
     }
 
-    pub(super) fn try_confirmed_event(&self, event: Event) -> Result<(), crate::TransmissionError> {
+    pub(super) fn try_confirmed_event(&self, event: Event) -> Result<(), crate::LinkSendError> {
         self.tx.try_send(event).map_err(|error| match error {
-            std::sync::mpsc::TrySendError::Full(_) => crate::TransmissionError::QueueFull,
-            std::sync::mpsc::TrySendError::Disconnected(_) => {
-                crate::TransmissionError::DriverStopped
-            }
+            std::sync::mpsc::TrySendError::Full(_) => crate::LinkSendError::QueueFull,
+            std::sync::mpsc::TrySendError::Disconnected(_) => crate::LinkSendError::DriverStopped,
         })
     }
 

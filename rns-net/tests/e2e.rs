@@ -23,9 +23,10 @@ use rns_crypto::{OsRng, Rng};
 
 use rns_net::event::query;
 use rns_net::{
+    event::RuntimeConfigValue,
+    interface::{TcpClientConfig, TcpServerConfig, UdpConfig},
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig,
-    InterfaceId, NodeConfig, PacketHash, ProofStrategy, RnsNode, RuntimeConfigValue,
-    TcpClientConfig, TcpServerConfig, UdpConfig, MODE_FULL,
+    InterfaceId, NodeConfig, PacketHash, ProofStrategy, RnsNode, MODE_FULL,
 };
 
 // ─── TestEvent ───────────────────────────────────────────────────────────────
@@ -561,7 +562,7 @@ fn wait_for_backbone_pool_member(
     expected_source: &str,
     expected_remote: &str,
     timeout: Duration,
-) -> Option<rns_net::BackbonePeerPoolMemberStatus> {
+) -> Option<rns_net::event::BackbonePeerPoolMemberStatus> {
     wait_for_backbone_pool_member_state(
         node,
         expected_source,
@@ -578,7 +579,7 @@ fn wait_for_backbone_pool_member_state(
     expected_remote: &str,
     expected_states: &[&str],
     timeout: Duration,
-) -> Option<rns_net::BackbonePeerPoolMemberStatus> {
+) -> Option<rns_net::event::BackbonePeerPoolMemberStatus> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if let Ok(stats) = node.query(query::InterfaceStats) {
@@ -4642,7 +4643,7 @@ fn backbone_peer_pool_seeds_from_cached_discovered_peer() {
     std::fs::create_dir_all(&storage_dir).unwrap();
 
     let transport_id = [0x42; 16];
-    let discovery_hash = rns_net::discovery::compute_discovery_hash(&transport_id, "CachedTarget");
+    let discovery_hash = rns_core::discovery::compute_discovery_hash(&transport_id, "CachedTarget");
     let now = rns_net::time::now();
     let cached = rns_net::discovery::DiscoveredInterface {
         dst_cost: None,
@@ -4656,7 +4657,7 @@ fn backbone_peer_pool_seeds_from_cached_discovered_peer() {
         last_heard: now,
         heard_count: 1,
         status: rns_net::discovery::DiscoveredStatus::Available,
-        stamp: vec![0; rns_net::discovery::STAMP_SIZE],
+        stamp: vec![0; rns_core::discovery::STAMP_SIZE],
         stamp_value: rns_core::stamp::StampValue::from_whole(8),
         transport_id,
         network_id: [0x24; 16],
@@ -4790,7 +4791,7 @@ fn backbone_peer_pool_cached_discovered_priority_beats_low_configured_peer() {
 
     let transport_id = [0x51; 16];
     let discovery_hash =
-        rns_net::discovery::compute_discovery_hash(&transport_id, "CachedPriorityTarget");
+        rns_core::discovery::compute_discovery_hash(&transport_id, "CachedPriorityTarget");
     let now = rns_net::time::now();
     let cached = rns_net::discovery::DiscoveredInterface {
         dst_cost: None,
@@ -4804,7 +4805,7 @@ fn backbone_peer_pool_cached_discovered_priority_beats_low_configured_peer() {
         last_heard: now,
         heard_count: 1,
         status: rns_net::discovery::DiscoveredStatus::Available,
-        stamp: vec![0; rns_net::discovery::STAMP_SIZE],
+        stamp: vec![0; rns_core::discovery::STAMP_SIZE],
         stamp_value: rns_core::stamp::StampValue::from_whole(8),
         transport_id,
         network_id: [0x25; 16],
@@ -5621,7 +5622,7 @@ fn start_managed_transport_client(
     identity: &Identity,
     allowed_identity: [u8; 16],
 ) -> RnsNode {
-    let mut management = rns_net::ManagementConfig {
+    let mut management = rns_net::management::ManagementConfig {
         enable_remote_management: true,
         remote_management_allowed: vec![allowed_identity],
         publish_blackhole: true,

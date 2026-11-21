@@ -1,11 +1,11 @@
-pub mod admission;
+pub(crate) mod admission;
 mod candidates;
 mod folded_probe;
-pub mod orchestrator;
-pub mod path_mtu;
-pub mod probe;
-pub mod puncher;
-pub mod udp_direct;
+pub(crate) mod orchestrator;
+pub(crate) mod path_mtu;
+pub(crate) mod probe;
+pub(crate) mod puncher;
+pub(crate) mod udp_direct;
 
 /// A poller key for a hole-punch probe or punch served on the driver loop
 /// (see [`crate::engine::FOLD_SERVICES`]).

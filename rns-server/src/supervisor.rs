@@ -16,7 +16,10 @@ use rns_ctl::state::{
     mark_process_stopped, push_process_log, record_process_termination_observation,
     set_process_log_path, set_process_readiness, ProcessControlCommand, SharedState,
 };
-use rns_net::{event::DrainStatus, HookInfo, RpcAddr, RpcClient};
+use rns_net::{
+    event::{DrainStatus, HookInfo},
+    rpc::{RpcAddr, RpcClient},
+};
 
 mod drain;
 mod error;
@@ -533,9 +536,10 @@ mod tests {
     };
     use rns_ctl::state::{ensure_process, mark_process_running, CtlState, SharedState};
     use rns_net::{
-        event::EventSender,
-        event::{DrainStatus, Event, LifecycleState, QueryRequest, QueryResponse},
-        HookInfo, RpcAddr, RpcServer,
+        event::{
+            DrainStatus, Event, EventSender, HookInfo, LifecycleState, QueryRequest, QueryResponse,
+        },
+        rpc::{RpcAddr, RpcServer},
     };
     use std::net::TcpListener;
     use std::path::PathBuf;

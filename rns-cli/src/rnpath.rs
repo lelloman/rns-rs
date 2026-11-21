@@ -16,8 +16,8 @@ use crate::format::{
 use crate::shared_instance;
 use rns_net::config;
 use rns_net::pickle::PickleValue;
+use rns_net::rpc::{RpcClient, SharedInstanceRpc};
 use rns_net::storage;
-use rns_net::{RpcClient, SharedInstanceRpc};
 
 const VERSION: &str = env!("FULL_VERSION");
 
@@ -1603,7 +1603,7 @@ fn print_usage(usage_name: &str) {
 mod tests {
     use super::*;
     use rns_net::rpc::derive_auth_key;
-    use rns_net::RpcAddr;
+    use rns_net::rpc::RpcAddr;
 
     const HASH: &str = "0123456789abcdef0123456789abcdef";
 

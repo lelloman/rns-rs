@@ -14,9 +14,12 @@ use rns_core::packet::RawPacket;
 use rns_core::transport::types::{InterfaceId, PacketBytes, TransportConfig};
 use rns_crypto::ed25519::Ed25519PrivateKey;
 use rns_crypto::FixedRng;
-use rns_net::driver::Driver;
 use rns_net::event::Event;
-use rns_net::link_manager::{LinkManager, LinkManagerAction, ResourceStrategy};
+use rns_net::testing::Driver;
+use rns_net::{
+    testing::{LinkManager, LinkManagerAction},
+    ResourceStrategy,
+};
 use std::hint::black_box;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};

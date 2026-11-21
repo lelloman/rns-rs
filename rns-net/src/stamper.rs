@@ -38,11 +38,11 @@ use crate::link_send::Completion;
 use crate::stamps::DestinationStampStore;
 
 /// `Transport.STAMPER_PR_QUEUE_LENGTH`.
-pub const PATH_REQUEST_QUEUE_LENGTH: usize = 32;
+pub(crate) const PATH_REQUEST_QUEUE_LENGTH: usize = 32;
 /// `Transport.STAMPER_AN_QUEUE_LENGTH`.
-pub const ANNOUNCE_QUEUE_LENGTH: usize = 32;
+pub(crate) const ANNOUNCE_QUEUE_LENGTH: usize = 32;
 /// `Transport.pr_stamp_cache_max`.
-pub const PATH_REQUEST_STAMP_CACHE_MAX: usize = 256;
+pub(crate) const PATH_REQUEST_STAMP_CACHE_MAX: usize = 256;
 
 const PRIORITY_PATH_REQUEST: usize = 0;
 const PRIORITY_ANNOUNCE: usize = 1;

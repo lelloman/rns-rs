@@ -21,7 +21,7 @@ enum Backend {
 }
 
 /// Announce cache with a SQLite backend and a filesystem fallback.
-pub struct AnnounceCache {
+pub(crate) struct AnnounceCache {
     backend: Backend,
 }
 
@@ -30,7 +30,7 @@ pub struct AnnounceCache {
 /// (`Reticulum.cachepath` is `<configdir>/storage/cache`), so the database
 /// is `storage/cache/announces.db`, as `Transport.init_announce_cache`
 /// opens it.
-pub fn announce_cache_base(storage_dir: &Path) -> PathBuf {
+pub(crate) fn announce_cache_base(storage_dir: &Path) -> PathBuf {
     storage_dir.join("cache").join("announces")
 }
 
@@ -57,7 +57,7 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 /// cache opens. The old directory, and its parent, are then removed when
 /// empty. Every step is logged; a failure is logged and leaves the cache to
 /// start empty at the new location.
-pub fn migrate_announce_cache(old_base: &Path, new_base: &Path) {
+pub(crate) fn migrate_announce_cache(old_base: &Path, new_base: &Path) {
     if old_base == new_base {
         return;
     }
@@ -176,7 +176,7 @@ impl AnnounceCache {
     /// `<base_path>.db` (for example `storage/cache/announces.db` for
     /// `storage/cache/announces`, see [`announce_cache_base`]). Legacy files
     /// already in `base_path` are imported and removed.
-    pub fn new(base_path: PathBuf) -> Self {
+    pub(crate) fn new(base_path: PathBuf) -> Self {
         match SqliteAnnounceCache::open(&base_path) {
             Ok(cache) => {
                 if let Err(error) = cache.import_legacy(&base_path) {
@@ -200,7 +200,7 @@ impl AnnounceCache {
 
     /// Store the raw announce `raw` under its packet hash, with the name of
     /// the interface it was received on, if any.
-    pub fn store(
+    pub(crate) fn store(
         &self,
         packet_hash: &[u8; 32],
         raw: &[u8],
@@ -213,7 +213,10 @@ impl AnnounceCache {
     }
 
     /// The raw announce stored under `packet_hash` and its interface name.
-    pub fn get(&self, packet_hash: &[u8; 32]) -> io::Result<Option<(Vec<u8>, Option<String>)>> {
+    pub(crate) fn get(
+        &self,
+        packet_hash: &[u8; 32],
+    ) -> io::Result<Option<(Vec<u8>, Option<String>)>> {
         match &self.backend {
             Backend::Sqlite(cache) => cache.get(packet_hash),
             Backend::Files(cache) => cache.get(packet_hash),
@@ -221,7 +224,7 @@ impl AnnounceCache {
     }
 
     /// Remove cached announces whose packet hashes are not in the active set.
-    pub fn clean(&self, active_hashes: &[[u8; 32]]) -> io::Result<usize> {
+    pub(crate) fn clean(&self, active_hashes: &[[u8; 32]]) -> io::Result<usize> {
         match &self.backend {
             Backend::Sqlite(cache) => cache.clean(active_hashes),
             Backend::Files(cache) => {

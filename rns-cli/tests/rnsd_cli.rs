@@ -468,12 +468,12 @@ fn enforcing_instance_name() -> String {
 fn instance_request_path(instance_dir: &std::path::Path, destination: &str) {
     let key = fs::read(instance_dir.join("storage/transport_identity")).unwrap();
     let auth_key = rns_net::rpc::derive_auth_key(&key);
-    let address = rns_net::RpcAddr::local(enforcing_instance_name(), 37429);
+    let address = rns_net::rpc::RpcAddr::local(enforcing_instance_name(), 37429);
     let hash: Vec<u8> = (0..destination.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&destination[i..i + 2], 16).unwrap())
         .collect();
-    let mut client = rns_net::RpcClient::connect(&address, &auth_key).expect("connect to RPC");
+    let mut client = rns_net::rpc::RpcClient::connect(&address, &auth_key).expect("connect to RPC");
     client
         .call(&rns_net::pickle::PickleValue::Dict(vec![(
             rns_net::pickle::PickleValue::String("request_path".into()),
