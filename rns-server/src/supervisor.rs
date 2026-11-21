@@ -648,6 +648,70 @@ mod tests {
     }
 
     #[test]
+    fn ready_file_and_rpc_errors_keep_their_messages() {
+        use super::error::{ReadyFileError, RpcCallError};
+        let path = || PathBuf::from("/run/x.ready");
+        let cases = [
+            (
+                ReadyFileError::Read {
+                    path: path(),
+                    source: std::io::Error::other("gone"),
+                }
+                .to_string(),
+                "waiting for readiness file /run/x.ready: gone",
+            ),
+            (
+                ReadyFileError::InvalidPid {
+                    value: "x".into(),
+                    source: "x".parse::<u32>().unwrap_err(),
+                }
+                .to_string(),
+                "invalid readiness pid 'x': invalid digit found in string",
+            ),
+            (
+                ReadyFileError::Missing("pid").to_string(),
+                "readiness file missing pid",
+            ),
+            (
+                ReadyFileError::WrongProcess {
+                    path: path(),
+                    process: "rnsd".into(),
+                }
+                .to_string(),
+                "readiness file /run/x.ready belongs to rnsd",
+            ),
+            (
+                ReadyFileError::Stale {
+                    path: path(),
+                    pid: 1,
+                    expected: 2,
+                }
+                .to_string(),
+                "readiness file /run/x.ready is stale for pid 1 (expected 2)",
+            ),
+            (
+                ReadyFileError::NotReady {
+                    path: path(),
+                    status: "draining".into(),
+                }
+                .to_string(),
+                "readiness file /run/x.ready reports status=draining",
+            ),
+            (
+                RpcCallError::Connect(std::io::Error::other("refused")).to_string(),
+                "rpc connect failed: refused",
+            ),
+            (
+                RpcCallError::call("list_hooks")(std::io::Error::other("eof")).to_string(),
+                "list_hooks failed: eof",
+            ),
+        ];
+        for (actual, expected) in cases {
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
     fn supervisor_holds_expected_specs() {
         let specs = vec![
             ProcessSpec {
@@ -815,7 +879,7 @@ mod tests {
         .unwrap();
 
         let err = probe_ready_file(&path, "rns-statsd", &state).unwrap_err();
-        assert!(err.contains("stale"));
+        assert!(err.to_string().contains("stale"));
         let _ = std::fs::remove_file(path);
     }
 

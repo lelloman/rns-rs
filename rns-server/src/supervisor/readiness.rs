@@ -1,4 +1,4 @@
-use super::error::RpcCallError;
+use super::error::{ReadyFileError, RpcCallError};
 use super::*;
 
 /// What a readiness probe checks.
@@ -68,7 +68,7 @@ impl ProcessReadiness {
             },
             ReadinessTarget::ReadyFile(path) => match probe_ready_file(path, self.name(), state) {
                 Ok(detail) => (true, "ready", Some(detail)),
-                Err(err) => (false, "waiting", Some(err)),
+                Err(err) => (false, "waiting", Some(err.to_string())),
             },
             ReadinessTarget::HookSet {
                 rpc_addr,
@@ -115,15 +115,14 @@ pub(crate) fn probe_ready_file(
     path: &PathBuf,
     process_name: &str,
     state: &SharedState,
-) -> Result<String, String> {
+) -> Result<String, ReadyFileError> {
     let contract = inspect_ready_file(path, process_name, state)?;
 
     if contract.status != "ready" {
-        return Err(format!(
-            "readiness file {} reports status={}",
-            path.display(),
-            contract.status
-        ));
+        return Err(ReadyFileError::NotReady {
+            path: path.clone(),
+            status: contract.status,
+        });
     }
 
     Ok(format!(
@@ -138,17 +137,18 @@ pub(crate) fn inspect_ready_file(
     path: &PathBuf,
     process_name: &str,
     state: &SharedState,
-) -> Result<ReadyFileContract, String> {
-    let body = std::fs::read_to_string(path)
-        .map_err(|err| format!("waiting for readiness file {}: {}", path.display(), err))?;
+) -> Result<ReadyFileContract, ReadyFileError> {
+    let body = std::fs::read_to_string(path).map_err(|source| ReadyFileError::Read {
+        path: path.clone(),
+        source,
+    })?;
     let contract = ReadyFileContract::parse(&body)?;
 
     if contract.process != process_name {
-        return Err(format!(
-            "readiness file {} belongs to {}",
-            path.display(),
-            contract.process
-        ));
+        return Err(ReadyFileError::WrongProcess {
+            path: path.clone(),
+            process: contract.process,
+        });
     }
 
     let expected_pid = {
@@ -159,12 +159,11 @@ pub(crate) fn inspect_ready_file(
     };
     if let Some(expected_pid) = expected_pid {
         if contract.pid != expected_pid {
-            return Err(format!(
-                "readiness file {} is stale for pid {} (expected {})",
-                path.display(),
-                contract.pid,
-                expected_pid
-            ));
+            return Err(ReadyFileError::Stale {
+                path: path.clone(),
+                pid: contract.pid,
+                expected: expected_pid,
+            });
         }
     }
 
@@ -179,7 +178,7 @@ pub(crate) struct ReadyFileContract {
 }
 
 impl ReadyFileContract {
-    fn parse(body: &str) -> Result<Self, String> {
+    fn parse(body: &str) -> Result<Self, ReadyFileError> {
         let mut status = None;
         let mut process = None;
         let mut pid = None;
@@ -194,11 +193,15 @@ impl ReadyFileContract {
                 "status" => status = Some(value),
                 "process" => process = Some(value),
                 "pid" => {
-                    pid = Some(
-                        value
-                            .parse::<u32>()
-                            .map_err(|err| format!("invalid readiness pid '{}': {}", value, err))?,
-                    )
+                    pid =
+                        Some(
+                            value
+                                .parse::<u32>()
+                                .map_err(|source| ReadyFileError::InvalidPid {
+                                    value: value.clone(),
+                                    source,
+                                })?,
+                        )
                 }
                 "detail" => detail = Some(value),
                 _ => {}
@@ -206,9 +209,9 @@ impl ReadyFileContract {
         }
 
         Ok(Self {
-            status: status.ok_or_else(|| "readiness file missing status".to_string())?,
-            process: process.ok_or_else(|| "readiness file missing process".to_string())?,
-            pid: pid.ok_or_else(|| "readiness file missing pid".to_string())?,
+            status: status.ok_or(ReadyFileError::Missing("status"))?,
+            process: process.ok_or(ReadyFileError::Missing("process"))?,
+            pid: pid.ok_or(ReadyFileError::Missing("pid"))?,
             detail: detail.unwrap_or_else(|| "ready".into()),
         })
     }
