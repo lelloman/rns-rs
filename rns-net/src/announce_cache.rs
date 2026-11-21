@@ -383,10 +383,7 @@ impl SqliteAnnounceCache {
 fn parse_legacy_announce(data: &[u8]) -> Option<(Vec<u8>, Option<String>)> {
     let (value, _) = msgpack::unpack(data).ok()?;
     let arr = value.as_array()?;
-    if arr.is_empty() {
-        return None;
-    }
-    let raw = arr[0].as_bin()?.to_vec();
+    let raw = arr.first()?.as_bin()?.to_vec();
     let interface_name = arr
         .get(1)
         .and_then(|value| value.as_str())
@@ -430,10 +427,10 @@ impl FileAnnounceCache {
         let arr = value
             .as_array()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Expected msgpack array"))?;
-        if arr.is_empty() {
+        let Some(raw) = arr.first() else {
             return Ok(None);
-        }
-        let raw = arr[0]
+        };
+        let raw = raw
             .as_bin()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Expected bin raw bytes"))?;
         let iface_name = arr

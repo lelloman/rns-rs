@@ -333,7 +333,7 @@ impl HarnessNode {
             if n == 0 {
                 break;
             }
-            let _ = self.decoder.feed(&buf[..n]);
+            let _ = self.decoder.feed(buf.get(..n).unwrap_or_default());
         }
         Ok(())
     }
@@ -351,7 +351,7 @@ impl HarnessNode {
                 format!("{}: serial port closed", self.label),
             ));
         }
-        Ok(self.decoder.feed(&buf[..n]))
+        Ok(self.decoder.feed(buf.get(..n).unwrap_or_default()))
     }
 
     fn wait_for<F>(&mut self, timeout: Duration, what: &str, mut predicate: F) -> io::Result<()>

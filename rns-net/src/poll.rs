@@ -307,7 +307,10 @@ mod epoll {
             };
             // SAFETY: `epoll_wait` initialised `count` entries after `start`.
             unsafe { events.list.set_len(start + count) };
-            if let Some(index) = events.list[start..]
+            if let Some(index) = events
+                .list
+                .get(start..)
+                .unwrap_or_default()
                 .iter()
                 .position(|ev| ev.u64 == NOTIFY_KEY)
             {

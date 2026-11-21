@@ -231,7 +231,10 @@ fn drive(
             consumer.out.extend_from_slice(&len.to_be_bytes());
             consumer.out.extend_from_slice(&frame);
         }
-        match consumer.stream.write(&consumer.out[consumer.sent..]) {
+        match consumer
+            .stream
+            .write(consumer.out.get(consumer.sent..).unwrap_or_default())
+        {
             Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
             Ok(written) => consumer.sent += written,
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
