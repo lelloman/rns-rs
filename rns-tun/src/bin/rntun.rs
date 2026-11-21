@@ -101,7 +101,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .clone()
                     .unwrap_or_else(|| parsed.state_dir.join("client_identity"))
             } else {
-                unreachable!("configuration validation requires a mode")
+                return Err("configuration has neither a gateway nor a client section".into());
             };
             let identity = rns_tun::identity::load_or_create(&identity_path)?;
             println!("{}", hex(identity.hash()));

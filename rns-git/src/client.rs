@@ -166,20 +166,19 @@ impl RemoteHelper {
     }
 
     fn request_with_ident_retry(&self, path: &str, data: Vec<u8>) -> Result<Response> {
-        for attempt in 0..=NOT_IDENTIFIED_RETRIES {
+        for _ in 0..NOT_IDENTIFIED_RETRIES {
             let response = self.client.request(path, data.clone())?;
-            if response.metadata.is_none() {
-                if let Ok(bytes) = protocol::response_bin(&response.data) {
-                    if is_not_identified_status(&bytes) && attempt < NOT_IDENTIFIED_RETRIES {
-                        self.client.identify()?;
-                        std::thread::sleep(NOT_IDENTIFIED_RETRY_DELAY);
-                        continue;
-                    }
-                }
+            let not_identified = response.metadata.is_none()
+                && protocol::response_bin(&response.data)
+                    .is_ok_and(|bytes| is_not_identified_status(&bytes));
+            if !not_identified {
+                return Ok(response);
             }
-            return Ok(response);
+            self.client.identify()?;
+            std::thread::sleep(NOT_IDENTIFIED_RETRY_DELAY);
         }
-        unreachable!("not-identified retry loop always returns")
+        // The last attempt's response is returned whatever it says.
+        self.client.request(path, data)
     }
 
     fn push(&self, repository: &str, spec: &PushSpec) -> Result<()> {
