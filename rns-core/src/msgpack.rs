@@ -628,21 +628,15 @@ pub fn unpack_ref(data: &[u8], depth: usize) -> Result<(ValueRef<'_>, usize), Er
         }
 
         // bin8, bin16, bin32
-        0xc4 => {
-            unpack_bin_ref(data, 2, u8::from_be_bytes(arg(rest)?) as usize)
-        }
-        0xc5 => {
-            unpack_bin_ref(data, 3, u16::from_be_bytes(arg(rest)?) as usize)
-        }
+        0xc4 => unpack_bin_ref(data, 2, u8::from_be_bytes(arg(rest)?) as usize),
+        0xc5 => unpack_bin_ref(data, 3, u16::from_be_bytes(arg(rest)?) as usize),
         0xc6 => {
             let len = u32::from_be_bytes(arg(rest)?) as usize;
             unpack_bin_ref(data, 5, len)
         }
 
         // uint8
-        0xcc => {
-            Ok((ValueRef::UInt(u8::from_be_bytes(arg(rest)?) as u64), 2))
-        }
+        0xcc => Ok((ValueRef::UInt(u8::from_be_bytes(arg(rest)?) as u64), 2)),
 
         // uint16
         0xcd => {
@@ -663,9 +657,7 @@ pub fn unpack_ref(data: &[u8], depth: usize) -> Result<(ValueRef<'_>, usize), Er
         }
 
         // int8
-        0xd0 => {
-            Ok((ValueRef::Int(i8::from_be_bytes(arg(rest)?) as i64), 2))
-        }
+        0xd0 => Ok((ValueRef::Int(i8::from_be_bytes(arg(rest)?) as i64), 2)),
 
         // int16
         0xd1 => {
@@ -686,12 +678,8 @@ pub fn unpack_ref(data: &[u8], depth: usize) -> Result<(ValueRef<'_>, usize), Er
         }
 
         // str8, str16, str32
-        0xd9 => {
-            unpack_str_ref(data, 2, u8::from_be_bytes(arg(rest)?) as usize)
-        }
-        0xda => {
-            unpack_str_ref(data, 3, u16::from_be_bytes(arg(rest)?) as usize)
-        }
+        0xd9 => unpack_str_ref(data, 2, u8::from_be_bytes(arg(rest)?) as usize),
+        0xda => unpack_str_ref(data, 3, u16::from_be_bytes(arg(rest)?) as usize),
         0xdb => {
             let len = u32::from_be_bytes(arg(rest)?) as usize;
             unpack_str_ref(data, 5, len)

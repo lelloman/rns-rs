@@ -1,3 +1,4 @@
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 #![allow(
     unsafe_code,
     reason = "packing into uninitialised buffers on the hot path"
@@ -336,6 +337,10 @@ impl RawPacket {
         clippy::too_many_arguments,
         reason = "one argument per packet header field, mirroring the other pack_raw constructors"
     )]
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "out is allocated header_len + payload_len bytes, and header_len counts the header fields written"
+    )]
     pub fn pack_raw_shared_filled_with_max_mtu(
         flags: PacketFlags,
         hops: u8,
@@ -398,6 +403,10 @@ impl RawPacket {
         let out = Arc::get_mut(&mut shared).expect("a new Arc is unique");
         let mut at = 0;
         let mut put = |bytes: &[u8]| {
+            #[allow(
+                clippy::indexing_slicing,
+                reason = "the copy below relies on this bounds check; len is the sum of the parts put"
+            )]
             let slots = &mut out[at..at + bytes.len()];
             // SAFETY: `slots` is in bounds and exactly `bytes.len()` long; u8
             // and MaybeUninit<u8> share a layout.
@@ -520,19 +529,26 @@ impl RawPacket {
         RawPacket::view_prehashed(raw, packet_hash).map(|packet| packet.map_raw(<[u8]>::to_vec))
     }
 
-    fn hashable_tail(header_type: u8, raw: &[u8]) -> &[u8] {
-        if header_type == constants::HEADER_2 {
-            // Skip transport_id: raw[2..18] is transport_id (16 bytes)
-            &raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..]
+    /// The parts of packed wire bytes the packet hash covers: the flags byte
+    /// with its upper four bits cleared, and the bytes after the hops byte
+    /// and any transport ID. Bytes shorter than a header yield empty parts.
+    fn hashable_parts(header_type: u8, raw: &[u8]) -> (u8, &[u8]) {
+        let skip = if header_type == constants::HEADER_2 {
+            // raw[2..18] is the transport ID.
+            constants::TRUNCATED_HASHLENGTH / 8 + 2
         } else {
-            &raw[2..]
-        }
+            2
+        };
+        (
+            raw.first().map_or(0, |flags| flags & 0b00001111),
+            raw.get(skip..).unwrap_or_default(),
+        )
     }
 
     fn compute_hashable_part(header_type: u8, raw: &[u8]) -> Vec<u8> {
-        let tail = Self::hashable_tail(header_type, raw);
+        let (flags, tail) = Self::hashable_parts(header_type, raw);
         let mut hashable = Vec::with_capacity(1 + tail.len());
-        hashable.push(raw[0] & 0b00001111);
+        hashable.push(flags);
         hashable.extend_from_slice(tail);
         hashable
     }
@@ -540,9 +556,10 @@ impl RawPacket {
     /// SHA-256 of the hashable part, fed from the wire bytes without building
     /// the concatenated buffer that [`RawPacket::get_hashable_part`] returns.
     fn compute_packet_hash(header_type: u8, raw: &[u8]) -> [u8; 32] {
+        let (flags, tail) = Self::hashable_parts(header_type, raw);
         let mut hasher = rns_crypto::sha256::Sha256::new();
-        hasher.update(&[raw[0] & 0b00001111]);
-        hasher.update(Self::hashable_tail(header_type, raw));
+        hasher.update(&[flags]);
+        hasher.update(tail);
         hasher.digest()
     }
 }
@@ -551,7 +568,11 @@ impl<B: AsRef<[u8]>> RawPacket<B> {
     /// The payload: the wire bytes after the header.
     #[inline]
     pub fn data(&self) -> &[u8] {
-        &self.raw.as_ref()[<RawPacket>::data_offset(self.flags.header_type)..]
+        // A parsed or packed packet is longer than its header.
+        self.raw
+            .as_ref()
+            .get(<RawPacket>::data_offset(self.flags.header_type)..)
+            .unwrap_or_default()
     }
 
     /// Whether this packet is link resource traffic whose hash nothing
@@ -664,85 +685,52 @@ impl<B: AsRef<[u8]>> RawPacket<B> {
         if raw.len() < constants::HEADER_MINSIZE {
             return Err(PacketError::TooShort);
         }
-
-        let flags = PacketFlags::unpack(raw[0]);
-        let hops = raw[1];
+        let [flags, hops, rest @ ..] = raw else {
+            return Err(PacketError::TooShort);
+        };
+        let flags = PacketFlags::unpack(*flags);
+        let hops = *hops;
         if hops >= constants::PATHFINDER_M {
             return Err(PacketError::InvalidHopCount(hops));
         }
 
-        let dst_len = constants::TRUNCATED_HASHLENGTH / 8; // 16
-
-        if flags.header_type == constants::HEADER_2 {
-            // HEADER_2: [flags:1][hops:1][transport_id:16][dest_hash:16][context:1][data:*]
-            let min_len = 2 + dst_len * 2 + 1;
-            if raw.len() < min_len {
-                return Err(PacketError::TooShort);
-            }
-
-            let mut transport_id = [0u8; 16];
-            transport_id.copy_from_slice(&raw[2..2 + dst_len]);
-
-            let mut destination_hash = [0u8; 16];
-            destination_hash.copy_from_slice(&raw[2 + dst_len..2 + 2 * dst_len]);
-
-            let context = raw[2 + 2 * dst_len];
-            if raw.len() == 2 + 2 * dst_len + 1 {
-                return Err(PacketError::ZeroLengthData);
-            }
-
-            let packet_hash = if HASH {
-                <RawPacket>::compute_packet_hash(flags.header_type, raw)
-            } else {
-                [0; 32]
-            };
-
-            Ok(RawPacket {
-                flags,
-                hops,
-                transport_id: Some(transport_id),
-                destination_hash,
-                context,
-                raw: input,
-                packet_hash,
-                rssi: None,
-                snr: None,
-            })
+        // HEADER_2: [flags:1][hops:1][transport_id:16][dest_hash:16][context:1][data:*]
+        // HEADER_1: [flags:1][hops:1][dest_hash:16][context:1][data:*]
+        let (transport_id, rest) = if flags.header_type == constants::HEADER_2 {
+            let (transport_id, rest) = rest
+                .split_first_chunk::<16>()
+                .ok_or(PacketError::TooShort)?;
+            (Some(*transport_id), rest)
         } else if flags.header_type == constants::HEADER_1 {
-            // HEADER_1: [flags:1][hops:1][dest_hash:16][context:1][data:*]
-            let min_len = 2 + dst_len + 1;
-            if raw.len() < min_len {
-                return Err(PacketError::TooShort);
-            }
-
-            let mut destination_hash = [0u8; 16];
-            destination_hash.copy_from_slice(&raw[2..2 + dst_len]);
-
-            let context = raw[2 + dst_len];
-            if raw.len() == 2 + dst_len + 1 {
-                return Err(PacketError::ZeroLengthData);
-            }
-
-            let packet_hash = if HASH {
-                <RawPacket>::compute_packet_hash(flags.header_type, raw)
-            } else {
-                [0; 32]
-            };
-
-            Ok(RawPacket {
-                flags,
-                hops,
-                transport_id: None,
-                destination_hash,
-                context,
-                raw: input,
-                packet_hash,
-                rssi: None,
-                snr: None,
-            })
+            (None, rest)
         } else {
-            Err(PacketError::InvalidHeaderType)
+            return Err(PacketError::InvalidHeaderType);
+        };
+        let (destination_hash, rest) = rest
+            .split_first_chunk::<16>()
+            .ok_or(PacketError::TooShort)?;
+        let (&context, data) = rest.split_first().ok_or(PacketError::TooShort)?;
+        if data.is_empty() {
+            return Err(PacketError::ZeroLengthData);
         }
+
+        let packet_hash = if HASH {
+            <RawPacket>::compute_packet_hash(flags.header_type, raw)
+        } else {
+            [0; 32]
+        };
+
+        Ok(RawPacket {
+            flags,
+            hops,
+            transport_id,
+            destination_hash: *destination_hash,
+            context,
+            raw: input,
+            packet_hash,
+            rssi: None,
+            snr: None,
+        })
     }
 }
 
