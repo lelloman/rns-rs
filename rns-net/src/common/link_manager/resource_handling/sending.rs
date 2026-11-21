@@ -84,7 +84,7 @@ impl LinkManager {
 
         let mut senders = Vec::new();
         let mut first = ResourceSender::new(
-            &data[..first_payload_len],
+            data.get(..first_payload_len).unwrap_or(data),
             metadata,
             resource_sdu,
             &encrypt_fn,
@@ -111,7 +111,7 @@ impl LinkManager {
         while offset < data.len() {
             let end = core::cmp::min(offset + constants::RESOURCE_MAX_EFFICIENT_SIZE, data.len());
             let mut sender = ResourceSender::new(
-                &data[offset..end],
+                data.get(offset..end).unwrap_or_default(),
                 None,
                 resource_sdu,
                 &encrypt_fn,

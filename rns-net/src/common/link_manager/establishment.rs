@@ -186,11 +186,14 @@ impl LinkManager {
         // `Link.validate_request` names the signalled mode (any of the
         // eight, reserved ones included) before it builds the link.
         let data = packet.data();
-        if data.len() == constants::LINK_ECPUBSIZE + constants::LINK_MTU_SIZE {
+        let signalling = data
+            .get(constants::LINK_ECPUBSIZE)
+            .filter(|_| data.len() == constants::LINK_ECPUBSIZE + constants::LINK_MTU_SIZE);
+        if let Some(signalling) = signalling {
             log::debug!(
                 "Incoming link request with mode {}",
                 rns_core::link::types::mode_description(
-                    (data[constants::LINK_ECPUBSIZE] & constants::LINK_MODE_BYTEMASK) >> 5
+                    (signalling & constants::LINK_MODE_BYTEMASK) >> 5
                 )
             );
         } else if data.len() == constants::LINK_ECPUBSIZE {
@@ -333,15 +336,14 @@ impl LinkManager {
         packet: &RawPacket<&[u8]>,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        if packet.data().len() != 96 {
+        // [tracked_hash:32][signature:64]
+        let Some((tracked_hash, signature)) = packet.data().split_first_chunk::<32>() else {
             return Vec::new();
-        }
-
-        let mut tracked_hash = [0u8; 32];
-        tracked_hash.copy_from_slice(&packet.data()[..32]);
-
-        let mut signature = [0u8; 64];
-        signature.copy_from_slice(&packet.data()[32..]);
+        };
+        let Ok(signature) = <[u8; 64]>::try_from(signature) else {
+            return Vec::new();
+        };
+        let tracked_hash = *tracked_hash;
 
         let Some(key) = self
             .links

@@ -170,7 +170,7 @@ impl LinkManager {
                             let (received, total) =
                                 Self::incoming_split_progress(split, resource_sdu);
                             // Progress is reported for the whole split.
-                            for action in &mut all_actions[before..] {
+                            for action in all_actions.iter_mut().skip(before) {
                                 if let ResourceAction::ProgressUpdate {
                                     received: r,
                                     total: t,
@@ -202,8 +202,9 @@ impl LinkManager {
         out: &mut Vec<LinkManagerAction>,
     ) -> Option<AssembledResource> {
         let link = self.links.get_mut(link_id)?;
-        let eligible = Self::receive_offload_eligible(link, &link.incoming_resources[idx]);
-        let resource_hash = Self::resource_hash_key(&link.incoming_resources[idx].resource_hash)?;
+        let receiver = link.incoming_resources.get(idx)?;
+        let eligible = Self::receive_offload_eligible(link, receiver);
+        let resource_hash = Self::resource_hash_key(&receiver.resource_hash)?;
         // Earlier application completions go first, with their final
         // action types.
         out.extend(self.wait_receive_for(link_id, rng));
@@ -262,7 +263,9 @@ impl LinkManager {
             rns_core::resource::ResourceAssembly,
         ) -> Result<(), rns_core::resource::ResourceAssembly>,
     ) -> Vec<ResourceAction> {
-        let receiver = &mut link.incoming_resources[idx];
+        let Some(receiver) = link.incoming_resources.get_mut(idx) else {
+            return Vec::new();
+        };
         match receiver.prepare_assembly(&|parts, skip| {
             link.engine.decrypt_chunks(parts, skip).map_err(|_| ())
         }) {
@@ -282,7 +285,9 @@ impl LinkManager {
         idx: usize,
         assembled: &mut AssembledResource,
     ) -> Vec<ResourceAction> {
-        let receiver = &link.incoming_resources[idx];
+        let Some(receiver) = link.incoming_resources.get_mut(idx) else {
+            return Vec::new();
+        };
         let split_key = if receiver.flags.split {
             Self::resource_hash_key(&receiver.original_hash)
         } else {
@@ -307,7 +312,7 @@ impl LinkManager {
         let decrypt_fn = |parts: &[&[u8]], skip: usize| -> Result<Vec<u8>, ()> {
             link.engine.decrypt_chunks(parts, skip).map_err(|_| ())
         };
-        let assemble_actions = link.incoming_resources[idx].assemble(&decrypt_fn, &Bzip2Compressor);
+        let assemble_actions = receiver.assemble(&decrypt_fn, &Bzip2Compressor);
         assembled.is_request = is_request;
         assembled.is_response = is_response;
 
@@ -327,7 +332,9 @@ impl LinkManager {
             Self::store_in_temporary_file(
                 directory,
                 resource_original_hash,
-                &link.incoming_resources[idx].resource_hash,
+                link.incoming_resources
+                    .get(idx)
+                    .map_or(&[][..], |receiver| &receiver.resource_hash),
                 assemble_actions,
                 assembled,
             )
@@ -390,9 +397,12 @@ impl LinkManager {
             if assembled.storage_failure.is_some() {
                 link.incoming_splits.remove(&key);
                 converted_actions.clear();
-                converted_actions.push(ResourceAction::SendCancelReceiver(
-                    link.incoming_resources[idx].resource_hash.clone(),
-                ));
+                let resource_hash = link
+                    .incoming_resources
+                    .get(idx)
+                    .map(|receiver| receiver.resource_hash.clone())
+                    .unwrap_or_default();
+                converted_actions.push(ResourceAction::SendCancelReceiver(resource_hash));
             }
         }
 
