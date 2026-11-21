@@ -51,7 +51,8 @@ pub struct TcpServerConfig {
     /// long instead of at the end of the driver's pass (`flush_after_us`;
     /// see [`super::DEFAULT_FLUSH_AFTER`]).
     pub flush_after: Option<Duration>,
-    /// Settings shared with the running interface, adjustable at runtime.
+    /// Settings shared with the running interface, adjustable at runtime;
+    /// loaded from the public fields when the server starts.
     pub(crate) runtime: Arc<Mutex<TcpServerRuntime>>,
 }
 
@@ -105,6 +106,13 @@ impl Default for TcpServerConfig {
 }
 
 impl TcpServerConfig {
+    /// Load the settings of the public fields into the runtime state
+    /// shared with the driver, so the server starts with them however the
+    /// config was built.
+    pub(crate) fn sync_runtime(&self) {
+        *lock_or_recover(&self.runtime, "tcp server runtime") = TcpServerRuntime::from_config(self);
+    }
+
     /// A server named `name` with id `interface_id` that listens on
     /// `listen_ip`:`listen_port`, with the defaults otherwise. Change the
     /// other public fields on the result.
@@ -196,6 +204,7 @@ fn serve_listener(
     dynamic_template: Option<super::DynamicInterfaceTemplate>,
     underlay_mark: Option<u32>,
 ) -> io::Result<ListenerControl> {
+    config.sync_runtime();
     super::apply_underlay_mark(listener.as_fd(), underlay_mark)?;
     listener.set_nonblocking(true)?;
 
@@ -1334,6 +1343,31 @@ mod tests {
         assert!(
             result.is_err(),
             "expected no InterfaceUp for rejected connection, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn max_connections_set_on_a_new_config_reaches_the_server() {
+        // Set on the public field after construction, as a library user
+        // does, the limit is the one the server enforces.
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let mut config = TcpServerConfig::new("lib-server", InterfaceId(73), "127.0.0.1", port);
+        config.max_connections = Some(1);
+        let runtime = Arc::clone(&config.runtime);
+
+        start(config, tx, Arc::new(AtomicU64::new(7300))).unwrap();
+        assert_eq!(runtime.lock().unwrap().max_connections, Some(1));
+
+        let _client1 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceUp(_, _, _)));
+        let _client2 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let result = rx.recv_timeout(Duration::from_millis(400));
+        assert!(
+            result.is_err(),
+            "expected no InterfaceUp beyond max_connections, got {:?}",
             result
         );
     }
