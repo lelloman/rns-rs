@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
+
 use alloc::string::String;
 
 const B256: [&str; 256] = [
@@ -19,7 +21,7 @@ const B256: [&str; 256] = [
 
 /// Return the upstream base256 display glyph for a byte.
 pub fn b256_rep(byte: u8) -> &'static str {
-    B256[byte as usize]
+    B256.get(usize::from(byte)).copied().unwrap_or_default()
 }
 
 /// Encode bytes with the upstream experimental base256 glyph table.

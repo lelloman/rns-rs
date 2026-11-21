@@ -16,20 +16,17 @@ pub fn pack_envelope(msgtype: u16, sequence: u16, payload: &[u8]) -> Vec<u8> {
 
 /// Unpack envelope header. Returns `(msgtype, sequence, payload)`.
 pub fn unpack_envelope(raw: &[u8]) -> Result<(u16, u16, &[u8]), ChannelError> {
-    if raw.len() < CHANNEL_ENVELOPE_OVERHEAD {
+    let Some((&[m0, m1, s0, s1, l0, l1], payload)) =
+        raw.split_first_chunk::<CHANNEL_ENVELOPE_OVERHEAD>()
+    else {
         return Err(ChannelError::InvalidEnvelope);
-    }
+    };
+    let msgtype = u16::from_be_bytes([m0, m1]);
+    let sequence = u16::from_be_bytes([s0, s1]);
+    let length = u16::from_be_bytes([l0, l1]) as usize;
+    let payload = payload.get(..length).ok_or(ChannelError::InvalidEnvelope)?;
 
-    let msgtype = u16::from_be_bytes([raw[0], raw[1]]);
-    let sequence = u16::from_be_bytes([raw[2], raw[3]]);
-    let length = u16::from_be_bytes([raw[4], raw[5]]) as usize;
-    let payload = &raw[CHANNEL_ENVELOPE_OVERHEAD..];
-
-    if payload.len() < length {
-        return Err(ChannelError::InvalidEnvelope);
-    }
-
-    Ok((msgtype, sequence, &payload[..length]))
+    Ok((msgtype, sequence, payload))
 }
 
 #[cfg(test)]

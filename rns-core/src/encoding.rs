@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
+
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -14,8 +16,10 @@ pub fn hex(data: &[u8]) -> String {
 /// Append `data` to `out` as lowercase hex digits, two per byte.
 pub fn push_hex(out: &mut String, data: &[u8]) {
     for &byte in data {
-        out.push(char::from(HEX_DIGITS[usize::from(byte >> 4)]));
-        out.push(char::from(HEX_DIGITS[usize::from(byte & 0x0f)]));
+        for nibble in [byte >> 4, byte & 0x0f] {
+            let digit = HEX_DIGITS.get(usize::from(nibble)).copied().unwrap_or(b'0');
+            out.push(char::from(digit));
+        }
     }
 }
 
@@ -50,8 +54,8 @@ pub fn hex_decode_into(text: &str, out: &mut [u8]) -> Option<()> {
     if text.len() != out.len() * 2 {
         return None;
     }
-    for (byte, pair) in out.iter_mut().zip(text.chunks_exact(2)) {
-        *byte = (hex_digit(pair[0])? << 4) | hex_digit(pair[1])?;
+    for (byte, [high, low]) in out.iter_mut().zip(text.as_chunks::<2>().0) {
+        *byte = (hex_digit(*high)? << 4) | hex_digit(*low)?;
     }
     Some(())
 }
@@ -95,6 +99,10 @@ pub struct Base64 {
 }
 
 impl Base64 {
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "const-evaluated for the static tables: i < 64, and a byte indexes 256 entries"
+    )]
     const fn new(alphabet: &[u8; 64]) -> Self {
         let mut decode = [INVALID; 256];
         let mut i = 0;
@@ -109,6 +117,10 @@ impl Base64 {
     }
 
     /// Also decode `alias` as the value `value`.
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "const-evaluated for the static tables; a byte indexes 256 entries"
+    )]
     const fn with_alias(mut self, alias: u8, value: u8) -> Self {
         self.decode[alias as usize] = value;
         self
@@ -116,7 +128,7 @@ impl Base64 {
 
     /// The 6-bit value of one character, or `None` outside the alphabet.
     pub fn sextet(&self, byte: u8) -> Option<u8> {
-        let value = self.decode[usize::from(byte)];
+        let value = self.decode.get(usize::from(byte)).copied()?;
         (value != INVALID).then_some(value)
     }
 
@@ -124,14 +136,16 @@ impl Base64 {
     pub fn encode(&self, data: &[u8]) -> String {
         let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
         for chunk in data.chunks(3) {
-            let mut group = [0u8; 3];
-            group[..chunk.len()].copy_from_slice(chunk);
-            let bits =
-                (u32::from(group[0]) << 16) | (u32::from(group[1]) << 8) | u32::from(group[2]);
+            let mut group = [0u8; 4];
+            for (slot, byte) in group.iter_mut().skip(1).zip(chunk) {
+                *slot = *byte;
+            }
+            let bits = u32::from_be_bytes(group);
             for i in 0..4 {
                 if i <= chunk.len() {
                     let sextet = (bits >> (18 - 6 * i)) & 0x3f;
-                    out.push(char::from(self.encode[sextet as usize]));
+                    let digit = self.encode.get(sextet as usize).copied().unwrap_or(b'=');
+                    out.push(char::from(digit));
                 } else {
                     out.push('=');
                 }
@@ -168,7 +182,9 @@ impl Base64 {
             if pad > 2 {
                 return Err(Base64Error::InvalidPadding);
             }
-            out.extend_from_slice(&bits.to_be_bytes()[1..4 - pad]);
+            // pad is at most 2, so the group decodes to at least one byte.
+            let [_, decoded @ ..] = bits.to_be_bytes();
+            out.extend_from_slice(decoded.get(..3 - pad).unwrap_or_default());
         }
         Ok(out)
     }

@@ -39,11 +39,11 @@ pub fn validate_identify_data(
         return Err(LinkError::InvalidData);
     }
 
-    let mut public_key = [0u8; 64];
-    public_key.copy_from_slice(&plaintext[..64]);
-
-    let mut signature = [0u8; 64];
-    signature.copy_from_slice(&plaintext[64..128]);
+    let Some((public_key, signature)) = plaintext.split_first_chunk::<64>() else {
+        return Err(LinkError::InvalidData);
+    };
+    let public_key = *public_key;
+    let signature: [u8; 64] = signature.try_into().map_err(|_| LinkError::InvalidData)?;
 
     let mut signed_data = Vec::with_capacity(16 + 64);
     signed_data.extend_from_slice(link_id);
