@@ -326,7 +326,8 @@ impl PersistedPath {
 }
 
 fn tail_random_blobs(blobs: &[[u8; 10]]) -> Vec<[u8; 10]> {
-    blobs[blobs.len().saturating_sub(PERSIST_RANDOM_BLOBS)..].to_vec()
+    let skip = blobs.len().saturating_sub(PERSIST_RANDOM_BLOBS);
+    blobs.iter().skip(skip).copied().collect()
 }
 
 impl TransportEngine {

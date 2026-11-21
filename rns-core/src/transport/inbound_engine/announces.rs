@@ -122,21 +122,21 @@ impl TransportEngine {
         } else {
             2usize
         };
-        if packet.raw.len() < payload_start {
+        let Some(payload) = packet.raw.get(payload_start..) else {
             return packet.raw.clone();
-        }
+        };
 
         // As upstream, the context flag is kept: it tells the client the
         // announce carries a ratchet.
         let flags = (constants::HEADER_2 << 6)
             | (packet.flags.context_flag << 5)
             | (constants::TRANSPORT_TRANSPORT << 4)
-            | (packet.raw[0] & 0x0F);
-        let mut raw = Vec::with_capacity(18 + packet.raw.len() - payload_start);
+            | (packet.raw_flags() & 0x0F);
+        let mut raw = Vec::with_capacity(18 + payload.len());
         raw.push(flags);
         raw.push(packet.hops);
         raw.extend_from_slice(&identity_hash);
-        raw.extend_from_slice(&packet.raw[payload_start..]);
+        raw.extend_from_slice(payload);
         PacketBytes::from(raw)
     }
 

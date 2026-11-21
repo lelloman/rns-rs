@@ -89,12 +89,10 @@ impl InterfaceAnnounceQueue {
     /// Select the next announce to send: minimum hops, then oldest (FIFO).
     /// Returns the index of the selected entry, or None if empty.
     pub fn select_next(&self) -> Option<usize> {
-        if self.entries.is_empty() {
-            return None;
-        }
+        let first = self.entries.first()?;
         let mut best_idx = 0;
-        let mut best_hops = self.entries[0].hops;
-        let mut best_time = self.entries[0].time;
+        let mut best_hops = first.hops;
+        let mut best_time = first.time;
 
         for (i, entry) in self.entries.iter().enumerate().skip(1) {
             if entry.hops < best_hops || (entry.hops == best_hops && entry.time < best_time) {

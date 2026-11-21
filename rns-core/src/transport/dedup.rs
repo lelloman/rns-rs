@@ -156,6 +156,10 @@ struct RawHashSlots {
     slots: Box<[MaybeUninit<Key>]>,
 }
 
+#[allow(
+    clippy::indexing_slicing,
+    reason = "an out-of-range slot index must panic before the unchecked reads; the queue keeps its indices below capacity"
+)]
 impl RawHashSlots {
     fn new(capacity: usize, allocation: PacketHashlistAllocation) -> Self {
         let mut slots = Box::<[Key]>::new_uninit_slice(capacity);
@@ -382,6 +386,10 @@ struct PacketHashSet {
 /// load nearly every entry sits within 15 buckets of its home.
 const DISPLACEMENT_BITS: u32 = 4;
 
+#[allow(
+    clippy::indexing_slicing,
+    reason = "bucket indices are masked to the power-of-two bucket count, and active never exceeds it"
+)]
 impl PacketHashSet {
     fn new(
         max_entries: usize,

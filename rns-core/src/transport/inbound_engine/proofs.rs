@@ -92,8 +92,8 @@ impl TransportEngine {
                 let mut delivery_raw = packet.raw.to_vec();
                 // LinkManager must see the same post-ingress hop metric that
                 // was authenticated and considered by transport.
-                if delivery_raw.len() >= 2 {
-                    delivery_raw[1] = packet.hops;
+                if let Some(hops) = delivery_raw.get_mut(1) {
+                    *hops = packet.hops;
                 }
                 actions.push(TransportAction::DeliverLocal {
                     destination_hash: packet.destination_hash,

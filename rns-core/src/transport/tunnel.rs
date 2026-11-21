@@ -161,7 +161,9 @@ pub fn build_tunnel_synthesize_data(
 
     // data = the fixed fields(112) + signature(64) + extension
     let mut data = Vec::with_capacity(TUNNEL_SYNTH_LENGTH + extension.len());
-    data.extend_from_slice(&signed_data[..112]);
+    data.extend_from_slice(&public_key);
+    data.extend_from_slice(interface_hash);
+    data.extend_from_slice(&random_hash);
     data.extend_from_slice(&signature);
     data.extend_from_slice(extension);
 
@@ -179,24 +181,30 @@ pub fn validate_tunnel_synthesize_data(data: &[u8]) -> Result<ValidatedTunnel, T
         return Err(TunnelError::InvalidLength);
     }
 
-    // Parse fields
-    let mut public_key = [0u8; 64];
-    public_key.copy_from_slice(&data[0..64]);
-
-    let mut interface_hash = [0u8; 32];
-    interface_hash.copy_from_slice(&data[64..96]);
-
-    let mut random_hash = [0u8; 16];
-    random_hash.copy_from_slice(&data[96..112]);
-
-    let mut signature = [0u8; 64];
-    signature.copy_from_slice(&data[112..176]);
+    // [public_key:64][interface_hash:32][random_hash:16][signature:64][extension:*]
+    let (fixed, rest) = data
+        .split_first_chunk::<112>()
+        .ok_or(TunnelError::InvalidLength)?;
+    let (signature, extension) = rest
+        .split_first_chunk::<64>()
+        .ok_or(TunnelError::InvalidLength)?;
+    let signature = *signature;
+    let (public_key, rest) = fixed
+        .split_first_chunk::<64>()
+        .ok_or(TunnelError::InvalidLength)?;
+    let (interface_hash, random_hash) = rest
+        .split_first_chunk::<32>()
+        .ok_or(TunnelError::InvalidLength)?;
+    let (public_key, interface_hash) = (*public_key, *interface_hash);
+    let random_hash: [u8; 16] = random_hash
+        .try_into()
+        .map_err(|_| TunnelError::InvalidLength)?;
 
     // Verify signature over (public_key || interface_hash || random_hash ||
     // extension)
-    let extension = data[TUNNEL_SYNTH_LENGTH..].to_vec();
+    let extension = extension.to_vec();
     let mut signed_data = Vec::with_capacity(112 + extension.len());
-    signed_data.extend_from_slice(&data[0..112]);
+    signed_data.extend_from_slice(fixed);
     signed_data.extend_from_slice(&extension);
     let remote_identity =
         Identity::from_public_key(&public_key).map_err(|_| TunnelError::InvalidPublicKey)?;

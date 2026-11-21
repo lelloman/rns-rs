@@ -297,8 +297,8 @@ impl PathSet {
     /// After mutation the vector is re-sorted so `paths[0]` remains the best.
     pub fn upsert(&mut self, entry: PathEntry) {
         // Check for existing same-next_hop path
-        if let Some(pos) = self.paths.iter().position(|p| p.next_hop == entry.next_hop) {
-            self.paths[pos] = entry;
+        if let Some(existing) = self.paths.iter_mut().find(|p| p.next_hop == entry.next_hop) {
+            *existing = entry;
         } else {
             // Add it, and at capacity let the truncation below drop the worst
             // path, which may be the new one.

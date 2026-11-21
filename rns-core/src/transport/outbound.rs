@@ -107,7 +107,7 @@ pub(crate) fn route_outbound_into<B: PacketStorage>(
                 if packet.flags.header_type == constants::HEADER_1 {
                     let hops = outbound_info
                         .and_then(|iface| local_hops_delta(packet, dest_type, iface, options))
-                        .unwrap_or(packet.raw.as_ref()[1]);
+                        .unwrap_or(packet.raw_hops());
                     actions.push(TransportAction::SendOnInterface {
                         interface: path_entry.receiving_interface,
                         raw: inject_transport_header_with_hops(packet, &path_entry.next_hop, hops)
@@ -204,22 +204,22 @@ fn inject_transport_header_with_hops<B: AsRef<[u8]>>(
     next_hop: &[u8; 16],
     hops: u8,
 ) -> Vec<u8> {
-    let raw = packet.raw.as_ref();
-    let new_flags =
-        (constants::HEADER_2 << 6) | (constants::TRANSPORT_TRANSPORT << 4) | (raw[0] & 0x0F);
+    let new_flags = (constants::HEADER_2 << 6)
+        | (constants::TRANSPORT_TRANSPORT << 4)
+        | (packet.raw_flags() & 0x0F);
 
     let mut new_raw = Vec::new();
     new_raw.push(new_flags);
     new_raw.push(hops);
     new_raw.extend_from_slice(next_hop); // transport_id = next hop
-    new_raw.extend_from_slice(&raw[2..]); // dest_hash + context + data
+    new_raw.extend_from_slice(packet.raw_from(2)); // dest_hash + context + data
     new_raw
 }
 
 fn mangle_hops(raw: &[u8], hops: u8) -> PacketBytes {
     let mut new_raw = raw.to_vec();
-    if new_raw.len() > 1 {
-        new_raw[1] = hops;
+    if let Some(old_hops) = new_raw.get_mut(1) {
+        *old_hops = hops;
     }
     new_raw.into()
 }

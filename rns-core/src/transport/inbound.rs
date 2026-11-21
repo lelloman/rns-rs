@@ -44,9 +44,9 @@ pub fn forward_transport_packet<B: AsRef<[u8]>>(
 ) -> Vec<u8> {
     if remaining_hops > 1 {
         // Replace transport_id with next_hop, update hops.
-        let tail = &packet.raw.as_ref()[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..];
+        let tail = packet.raw_from(constants::TRUNCATED_HASHLENGTH / 8 + 2);
         let mut new_raw = Vec::with_capacity(2 + next_hop.len() + tail.len());
-        new_raw.push(packet.raw.as_ref()[0]); // flags unchanged
+        new_raw.push(packet.raw_flags()); // flags unchanged
         new_raw.push(packet.hops); // updated hop count
         new_raw.extend_from_slice(&next_hop); // transport_id = next hop
                                               // Skip old transport_id (bytes 2..18), keep dest_hash + context + data
@@ -61,8 +61,8 @@ pub fn forward_transport_packet<B: AsRef<[u8]>>(
         // clients (#183).
         let new_flags = (constants::HEADER_1 << 6)
             | (constants::TRANSPORT_BROADCAST << 4)
-            | (packet.raw.as_ref()[0] & 0x0F);
-        let tail = &packet.raw.as_ref()[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..];
+            | (packet.raw_flags() & 0x0F);
+        let tail = packet.raw_from(constants::TRUNCATED_HASHLENGTH / 8 + 2);
         let mut new_raw = Vec::with_capacity(2 + tail.len());
         new_raw.push(new_flags);
         new_raw.push(packet.hops);
@@ -72,16 +72,16 @@ pub fn forward_transport_packet<B: AsRef<[u8]>>(
         // remaining_hops == 0 for a HEADER_1 packet to a local client: there
         // is no transport header to strip, only update hops.
         let mut new_raw = Vec::with_capacity(packet.raw.as_ref().len());
-        new_raw.push(packet.raw.as_ref()[0]);
+        new_raw.push(packet.raw_flags());
         new_raw.push(packet.hops);
-        new_raw.extend_from_slice(&packet.raw.as_ref()[2..]);
+        new_raw.extend_from_slice(packet.raw_from(2));
         new_raw
     } else {
         // remaining_hops == 0: final local delivery, strip transport header.
         let new_flags = (constants::HEADER_1 << 6)
             | (constants::TRANSPORT_BROADCAST << 4)
-            | (packet.raw.as_ref()[0] & 0x0F);
-        let tail = &packet.raw.as_ref()[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..];
+            | (packet.raw_flags() & 0x0F);
+        let tail = packet.raw_from(constants::TRUNCATED_HASHLENGTH / 8 + 2);
         let mut new_raw = Vec::with_capacity(2 + tail.len());
         new_raw.push(new_flags);
         new_raw.push(packet.hops);
@@ -126,7 +126,11 @@ pub fn clamp_forwarded_link_request_mtu(
     if let Some(receiving_mtu) = receiving_mtu.filter(|mtu| *mtu > 0) {
         limit = limit.min(receiving_mtu);
     }
-    lower_signalled_mtu(&mut new_raw[start..], limit)
+    let Some((_, signalling)) = new_raw.split_last_chunk_mut::<{ constants::LINK_MTU_SIZE }>()
+    else {
+        return Ok(());
+    };
+    lower_signalled_mtu(signalling, limit)
 }
 
 /// Clamp the link MTU signalled by a LINKREQUEST for a local destination to
@@ -159,27 +163,31 @@ pub fn clamp_local_link_request_mtu(
     } else {
         constants::MTU as u32
     };
-    let start = raw.len() - constants::LINK_MTU_SIZE;
-    lower_signalled_mtu(&mut raw[start..], limit)
+    let Some((_, signalling)) = raw.split_last_chunk_mut::<{ constants::LINK_MTU_SIZE }>() else {
+        return Ok(());
+    };
+    lower_signalled_mtu(signalling, limit)
 }
 
 /// Lower the MTU in three signalling bytes to `limit` if it is higher,
 /// keeping the mode bits. Lowering it for a mode that is not enabled fails
 /// with the mode value and leaves the bytes as they were, as upstream's
 /// `Link.signalling_bytes` raises for such a mode.
-fn lower_signalled_mtu(signalling: &mut [u8], limit: u32) -> Result<(), u8> {
-    let value =
-        ((signalling[0] as u32) << 16) | ((signalling[1] as u32) << 8) | (signalling[2] as u32);
+fn lower_signalled_mtu(
+    signalling: &mut [u8; constants::LINK_MTU_SIZE],
+    limit: u32,
+) -> Result<(), u8> {
+    let [high, middle, low] = *signalling;
+    let value = u32::from_be_bytes([0, high, middle, low]);
     if limit < value & constants::LINK_MTU_BYTEMASK {
-        let mode = (signalling[0] & constants::LINK_MODE_BYTEMASK) >> 5;
+        let mode = (high & constants::LINK_MODE_BYTEMASK) >> 5;
         if !crate::link::types::mode_value_enabled(mode) {
             return Err(mode);
         }
         let clamped =
             (value & !constants::LINK_MTU_BYTEMASK) | (limit & constants::LINK_MTU_BYTEMASK);
-        signalling[0] = (clamped >> 16) as u8;
-        signalling[1] = (clamped >> 8) as u8;
-        signalling[2] = clamped as u8;
+        let [_, high, middle, low] = clamped.to_be_bytes();
+        *signalling = [high, middle, low];
     }
     Ok(())
 }
@@ -250,9 +258,9 @@ pub fn route_proof_via_reverse<B: AsRef<[u8]>>(
 ) -> Option<TransportAction> {
     if receiving_interface == reverse_entry.outbound_interface {
         let mut new_raw = Vec::with_capacity(packet.raw.as_ref().len());
-        new_raw.push(packet.raw.as_ref()[0]);
+        new_raw.push(packet.raw_flags());
         new_raw.push(hop_rewrite.hop_byte(packet));
-        new_raw.extend_from_slice(&packet.raw.as_ref()[2..]);
+        new_raw.extend_from_slice(packet.raw_from(2));
 
         Some(TransportAction::SendOnInterface {
             interface: reverse_entry.receiving_interface,
@@ -315,9 +323,9 @@ pub fn route_via_link_table<B: AsRef<[u8]>>(
     let outbound_interface =
         link_table_outbound_interface(packet, link_entry, receiving_interface)?;
     let mut new_raw = Vec::with_capacity(packet.raw.as_ref().len());
-    new_raw.push(packet.raw.as_ref()[0]);
+    new_raw.push(packet.raw_flags());
     new_raw.push(hop_rewrite.hop_byte(packet));
-    new_raw.extend_from_slice(&packet.raw.as_ref()[2..]);
+    new_raw.extend_from_slice(packet.raw_from(2));
 
     Some((outbound_interface, new_raw))
 }
@@ -335,7 +343,9 @@ pub(super) fn route_via_link_table_shared<B: AsRef<[u8]>>(
     let mut raw: PacketBytes = packet.raw.as_ref().into();
     #[allow(clippy::expect_used, reason = "a just-allocated Arc is unique")]
     let out = Arc::get_mut(&mut raw).expect("fresh forwarding buffer is uniquely owned");
-    out[1] = hop_rewrite.hop_byte(packet);
+    if let Some(hops) = out.get_mut(1) {
+        *hops = hop_rewrite.hop_byte(packet);
+    }
     Some((outbound_interface, raw))
 }
 

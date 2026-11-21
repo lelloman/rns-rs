@@ -157,9 +157,10 @@ impl TransportEngine {
             && ctx.packet.hops == 0
             && ctx.packet.flags.destination_type != constants::DESTINATION_PLAIN
             && ctx.packet.flags.destination_type != constants::DESTINATION_GROUP
-            && new_raw.len() > 1
         {
-            new_raw[1] = self.config.local_hops_delta;
+            if let Some(hops) = new_raw.get_mut(1) {
+                *hops = self.config.local_hops_delta;
+            }
         }
 
         if ctx.packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST {
@@ -341,7 +342,9 @@ impl TransportEngine {
                 && ctx.packet.raw.len() >= 2
             {
                 let mut raw = ctx.packet.raw.to_vec();
-                raw[1] = ctx.packet.hops;
+                if let Some(hops) = raw.get_mut(1) {
+                    *hops = ctx.packet.hops;
+                }
                 PacketBytes::from(raw)
             } else if ctx.packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST
                 && ctx.packet.data().len() == constants::LINK_ECPUBSIZE + constants::LINK_MTU_SIZE

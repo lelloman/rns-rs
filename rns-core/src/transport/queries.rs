@@ -421,7 +421,9 @@ impl TransportEngine {
                 });
                 distribution.len() - 1
             });
-            let destination = &mut distribution[index];
+            let Some(destination) = distribution.get_mut(index) else {
+                continue;
+            };
             destination.traffic += entry.traffic;
             if !destination
                 .from_interfaces
