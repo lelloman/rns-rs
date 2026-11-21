@@ -2,10 +2,10 @@
 
 use super::*;
 
-impl Driver {
+impl InterfaceRegistry {
     /// Upstream's `str(interface)` for an interface entry.
     pub(crate) fn interface_display_name(&self, entry: &InterfaceEntry) -> String {
-        if let Some(display_name) = self.registry.display_names.get(&entry.info.id) {
+        if let Some(display_name) = self.display_names.get(&entry.info.id) {
             return display_name.clone();
         }
         // The shared instance's clients on its Unix socket, which its
@@ -27,27 +27,13 @@ impl Driver {
         )
     }
 
-    /// Upstream's `interface.get_hash()`: the full hash of the interface's
-    /// `str()`, named as the path table names it.
-    pub(crate) fn interface_hash(&self, id: &InterfaceId) -> [u8; 32] {
-        let name = match self.interfaces.get(id) {
-            Some(entry) => self.interface_display_name(entry),
-            None => self
-                .engine
-                .interface_info(id)
-                .map(|info| info.name.clone())
-                .unwrap_or_default(),
-        };
-        rns_core::hash::full_hash(name.as_bytes())
-    }
-
     /// Name a client the shared instance accepted on its abstract Unix
     /// socket, before it is added, as upstream does: `{clients}@\0rns/{instance}`,
     /// after the number of clients the instance serves (on TCP the
     /// listener names its clients after their port).
     #[cfg(feature = "iface-local")]
-    pub(crate) fn name_local_client(&mut self, id: InterfaceId) {
-        if self.registry.short_names.contains_key(&id) {
+    pub(crate) fn name_local_client(&mut self, interfaces: &Interfaces, id: InterfaceId) {
+        if self.short_names.contains_key(&id) {
             return;
         }
         let Some(ListenerStat {
@@ -58,18 +44,21 @@ impl Driver {
         else {
             return;
         };
-        let clients = self
-            .interfaces
+        let clients = interfaces
             .values()
             .filter(|entry| entry.info.is_local_client && entry.dynamic && entry.info.id != id)
             .count();
         let short_name = format!("{clients}@\0rns/{instance}");
-        self.registry.short_names.insert(id, short_name);
+        self.short_names.insert(id, short_name);
     }
 
     /// The display name of the listener that spawned an interface.
-    pub(super) fn parent_display_name(&self, entry: &InterfaceEntry) -> Option<String> {
-        let parent_id = match self.registry.dynamic_parents.get(&entry.info.id) {
+    pub(super) fn parent_display_name(
+        &self,
+        interfaces: &Interfaces,
+        entry: &InterfaceEntry,
+    ) -> Option<String> {
+        let parent_id = match self.dynamic_parents.get(&entry.info.id) {
             Some(parent_id) => *parent_id,
             // The shared instance's clients have no registered parent.
             None if entry.info.is_local_client && entry.dynamic => {
@@ -80,7 +69,7 @@ impl Driver {
             // Subinterfaces are configured, not spawned.
             None => {
                 return self
-                    .registry.listener_stats
+                    .listener_stats
                     .iter()
                     .find(|listener| {
                         matches!(&listener.clients, ListenerClients::Subinterfaces(ids) if ids.contains(&entry.info.id))
@@ -89,17 +78,16 @@ impl Driver {
             }
         };
         if let Some(listener) = self
-            .registry
             .listener_stats
             .iter()
             .find(|listener| listener.id == parent_id)
         {
             return Some(listener.display_name.clone());
         }
-        if let Some(display_name) = self.registry.display_names.get(&parent_id) {
+        if let Some(display_name) = self.display_names.get(&parent_id) {
             return Some(display_name.clone());
         }
-        self.interfaces
+        interfaces
             .get(&parent_id)
             .map(|parent| self.interface_display_name(parent))
     }
@@ -110,8 +98,24 @@ impl Driver {
     /// the connection fails, so it does not list them meanwhile.
     pub(super) fn subinterface_without_device(&self, entry: &InterfaceEntry) -> bool {
         !entry.online
-            && self.registry.listener_stats.iter().any(|listener| {
+            && self.listener_stats.iter().any(|listener| {
                 matches!(&listener.clients, ListenerClients::Subinterfaces(ids) if ids.contains(&entry.info.id))
             })
+    }
+}
+
+impl Driver {
+    /// Upstream's `interface.get_hash()`: the full hash of the interface's
+    /// `str()`, named as the path table names it.
+    pub(crate) fn interface_hash(&self, id: &InterfaceId) -> [u8; 32] {
+        let name = match self.interfaces.get(id) {
+            Some(entry) => self.registry.interface_display_name(entry),
+            None => self
+                .engine
+                .interface_info(id)
+                .map(|info| info.name.clone())
+                .unwrap_or_default(),
+        };
+        rns_core::hash::full_hash(name.as_bytes())
     }
 }

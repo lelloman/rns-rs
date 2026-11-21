@@ -143,6 +143,7 @@ mod housekeeping;
 mod interface_discovery;
 mod interface_management;
 mod interface_registry;
+use interface_registry::InterfaceRegistry;
 mod known_destinations;
 mod lifecycle;
 mod link_stamps;

@@ -18287,6 +18287,7 @@ fn link_distribution_rpc_answer_keeps_upstreams_order() {
     let hash_of = |id: u64| {
         rns_core::hash::full_hash(
             driver
+                .registry
                 .interface_display_name(&driver.interfaces[&InterfaceId(id)])
                 .as_bytes(),
         )
@@ -18366,6 +18367,7 @@ fn link_distribution_names_receiving_interfaces_by_hash() {
     let hash_of = |id: u64| {
         rns_core::hash::full_hash(
             driver
+                .registry
                 .interface_display_name(&driver.interfaces[&InterfaceId(id)])
                 .as_bytes(),
         )

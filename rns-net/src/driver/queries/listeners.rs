@@ -2,11 +2,10 @@
 
 use super::*;
 
-impl Driver {
+impl InterfaceRegistry {
     #[cfg(feature = "iface-local")]
     pub(super) fn shared_instance_listener(&self) -> Option<&ListenerStat> {
-        self.registry
-            .listener_stats
+        self.listener_stats
             .iter()
             .find(|listener| matches!(listener.clients, ListenerClients::Local(_)))
     }
@@ -24,15 +23,14 @@ impl Driver {
             ListenerClients::Subinterfaces(ids) => ids.contains(&entry.info.id),
             // The others are registered as their interfaces' parent.
             #[cfg(any(feature = "iface-tcp", feature = "iface-auto", feature = "iface-i2p"))]
-            _ => self.registry.dynamic_parents.get(&entry.info.id) == Some(&listener.id),
+            _ => self.dynamic_parents.get(&entry.info.id) == Some(&listener.id),
         }
     }
 
     /// Whether an I2P peer connected to this node (upstream's `Connected
     /// peer on {interface}`), rather than this node to it.
     pub(super) fn i2p_peer_accepted(&self, id: &InterfaceId) -> bool {
-        self.registry
-            .short_names
+        self.short_names
             .get(id)
             .is_some_and(|name| name.starts_with("Connected peer on "))
     }
@@ -41,9 +39,8 @@ impl Driver {
     /// `None` for any other interface.
     #[cfg(feature = "iface-i2p")]
     pub(super) fn i2p_tunnel_state(&self, entry: &InterfaceEntry) -> Option<Option<String>> {
-        let parent = self.registry.dynamic_parents.get(&entry.info.id)?;
-        self.registry
-            .listener_stats
+        let parent = self.dynamic_parents.get(&entry.info.id)?;
+        self.listener_stats
             .iter()
             .find_map(|listener| match &listener.clients {
                 ListenerClients::I2pPeers(i2p) if listener.id == *parent => Some(
@@ -60,14 +57,16 @@ impl Driver {
     pub(super) fn i2p_tunnel_state(&self, _entry: &InterfaceEntry) -> Option<Option<String>> {
         None
     }
+}
 
+impl Driver {
     /// The statistics of a listener without an interface entry of its own:
     /// upstream counts its clients and adds up their bytes.
     pub(super) fn listener_interface_stat(&self, listener: &ListenerStat) -> SingleInterfaceStat {
         let children: Vec<&InterfaceEntry> = self
             .interfaces
             .values()
-            .filter(|entry| self.listener_serves(listener, entry))
+            .filter(|entry| self.registry.listener_serves(listener, entry))
             .collect();
         let (status, clients, peers, i2p, accepted_tx_only) = match &listener.clients {
             #[cfg(feature = "iface-tcp")]
@@ -85,7 +84,7 @@ impl Driver {
                 };
                 let accepted = children
                     .iter()
-                    .filter(|child| self.i2p_peer_accepted(&child.info.id))
+                    .filter(|child| self.registry.i2p_peer_accepted(&child.info.id))
                     .count() as u64;
                 let i2p = crate::event::I2pEndpointStat {
                     connectable: i2p_listener.connectable,
@@ -197,7 +196,7 @@ impl Driver {
         for child in children {
             stat.rxb += child.stats.rxb;
             stat.traffic.rxs += child.stats.traffic_rates.rxs;
-            if !accepted_tx_only || self.i2p_peer_accepted(&child.info.id) {
+            if !accepted_tx_only || self.registry.i2p_peer_accepted(&child.info.id) {
                 stat.txb += child.stats.txb;
                 stat.traffic.txs += child.stats.traffic_rates.txs;
             }

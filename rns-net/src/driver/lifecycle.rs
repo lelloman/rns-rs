@@ -161,7 +161,7 @@ impl Driver {
                 ) {
                     log::info!(
                         "The interface {} is being torn down.",
-                        self.interface_display_name(entry)
+                        self.registry.interface_display_name(entry)
                     );
                 }
             }
