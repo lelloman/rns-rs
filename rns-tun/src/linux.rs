@@ -142,7 +142,7 @@ impl PacketDevice for TunDevice {
     fn write_packet(&mut self, packet: &[u8]) -> io::Result<()> {
         let mut offset = 0;
         while offset < packet.len() {
-            match self.file.write(&packet[offset..]) {
+            match self.file.write(packet.get(offset..).unwrap_or_default()) {
                 Ok(0) => {
                     return Err(io::Error::new(
                         io::ErrorKind::WriteZero,

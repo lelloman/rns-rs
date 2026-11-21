@@ -68,41 +68,41 @@ pub struct ValidatedIpv4 {
 /// TTL and no special-use (zero, loopback, link-local, multicast or
 /// reserved) source or destination.
 pub fn validate_ipv4(packet: &[u8], negotiated_mtu: usize) -> Result<ValidatedIpv4, PacketError> {
-    if packet.len() < 20 {
+    let Some(header) = packet.first_chunk::<20>() else {
         return Err(PacketError::TooShort);
-    }
-    if packet[0] >> 4 != 4 {
+    };
+    if header[0] >> 4 != 4 {
         return Err(PacketError::WrongVersion);
     }
-    if packet[0] & 0x0f != 5 {
+    if header[0] & 0x0f != 5 {
         return Err(PacketError::OptionsUnsupported);
     }
-    let total = u16::from_be_bytes([packet[2], packet[3]]) as usize;
+    let total = u16::from_be_bytes([header[2], header[3]]) as usize;
     if total != packet.len() || total < 20 {
         return Err(PacketError::InvalidLength);
     }
     if total > negotiated_mtu || total > PACKET_MAX {
         return Err(PacketError::TooLarge);
     }
-    if checksum(&packet[..20]) != 0 {
+    if checksum(header) != 0 {
         return Err(PacketError::InvalidChecksum);
     }
-    let fragment = u16::from_be_bytes([packet[6], packet[7]]);
+    let fragment = u16::from_be_bytes([header[6], header[7]]);
     if fragment & 0x8000 != 0 || fragment & 0x3fff != 0 {
         return Err(PacketError::NativeFragment);
     }
-    if packet[8] == 0 {
+    if header[8] == 0 {
         return Err(PacketError::InvalidTtl);
     }
-    let source = Ipv4Addr::new(packet[12], packet[13], packet[14], packet[15]);
-    let destination = Ipv4Addr::new(packet[16], packet[17], packet[18], packet[19]);
+    let source = Ipv4Addr::new(header[12], header[13], header[14], header[15]);
+    let destination = Ipv4Addr::new(header[16], header[17], header[18], header[19]);
     if is_forbidden_special(source) || is_forbidden_special(destination) {
         return Err(PacketError::InvalidAddress);
     }
     Ok(ValidatedIpv4 {
         source,
         destination,
-        protocol: packet[9],
+        protocol: header[9],
         total_len: total as u16,
     })
 }
@@ -112,10 +112,10 @@ pub fn validate_ipv4(packet: &[u8], negotiated_mtu: usize) -> Result<ValidatedIp
 pub fn checksum(header: &[u8]) -> u16 {
     let mut sum = 0u32;
     for pair in header.chunks(2) {
-        let word = if pair.len() == 2 {
-            u16::from_be_bytes([pair[0], pair[1]])
-        } else {
-            (pair[0] as u16) << 8
+        let word = match *pair {
+            [high, low] => u16::from_be_bytes([high, low]),
+            [high] => (high as u16) << 8,
+            _ => 0,
         };
         sum += word as u32;
         while sum > 0xffff {
@@ -136,11 +136,17 @@ pub fn valid_icmp_error_exception(packet: &[u8], assigned: Ipv4Addr, accepted: &
     if outer.protocol != 1 || outer.destination != assigned || packet.len() < 48 {
         return false;
     }
-    if !matches!(packet[20], 3 | 11 | 12) {
+    // [IPv4 header:20][ICMP type, code, checksum, unused:8][quoted header:20]...
+    let Some(&icmp_type) = packet.get(20) else {
+        return false;
+    };
+    if !matches!(icmp_type, 3 | 11 | 12) {
         return false;
     }
-    let quoted = &packet[28..];
-    if quoted.len() < 20 || quoted[0] != 0x45 || checksum(&quoted[..20]) != 0 {
+    let Some(quoted) = packet.get(28..).and_then(<[u8]>::first_chunk::<20>) else {
+        return false;
+    };
+    if quoted[0] != 0x45 || checksum(quoted) != 0 {
         return false;
     }
     let source = Ipv4Addr::new(quoted[12], quoted[13], quoted[14], quoted[15]);
@@ -220,11 +226,17 @@ impl Reassembler {
         if entry.fragments >= FRAGMENT_MAX {
             return Err(PacketError::ReassemblyLimit);
         }
+        // Both buffers are `total` bytes long, and end <= total.
+        let (Some(bytes), Some(received)) = (
+            entry.bytes.get_mut(start..end),
+            entry.received.get_mut(start..end),
+        ) else {
+            return Err(PacketError::InvalidFragment);
+        };
         let mut all_duplicate = true;
-        for (index, value) in fragment.payload.iter().enumerate() {
-            let at = start + index;
-            if entry.received[at] {
-                if entry.bytes[at] != *value {
+        for ((byte, got), value) in bytes.iter().zip(received.iter()).zip(&fragment.payload) {
+            if *got {
+                if byte != value {
                     return Err(PacketError::Overlap);
                 }
             } else {
@@ -235,13 +247,11 @@ impl Reassembler {
             entry.updated = now;
             return Ok(None);
         }
-        if (start..end).any(|at| entry.received[at]) {
+        if received.iter().any(|got| *got) {
             return Err(PacketError::Overlap);
         }
-        entry.bytes[start..end].copy_from_slice(&fragment.payload);
-        for bit in &mut entry.received[start..end] {
-            *bit = true;
-        }
+        bytes.copy_from_slice(&fragment.payload);
+        received.fill(true);
         entry.received_count += fragment.payload.len();
         entry.fragments += 1;
         entry.updated = now;

@@ -253,28 +253,28 @@ impl ControlMessage {
     /// Decode one whole control frame, rejecting trailing bytes and every
     /// limit [`ControlMessage::encode`] enforces.
     pub fn decode(frame: &[u8]) -> Result<Self, ProtocolError> {
-        if frame.len() < 10 {
+        let Some((header, body)) = frame.split_first_chunk::<10>() else {
             return Err(ProtocolError::Truncated);
-        }
+        };
         if frame.len() > CONTROL_FRAME_MAX {
             return Err(ProtocolError::LimitExceeded("control frame"));
         }
-        if frame[..4] != MAGIC {
+        let [m0, m1, m2, m3, version, kind, f0, f1, l0, l1] = *header;
+        if [m0, m1, m2, m3] != MAGIC {
             return Err(ProtocolError::InvalidMagic);
         }
-        if frame[4] != VERSION {
-            return Err(ProtocolError::UnsupportedVersion(frame[4]));
+        if version != VERSION {
+            return Err(ProtocolError::UnsupportedVersion(version));
         }
-        let kind = frame[5];
-        let flags = u16::from_be_bytes([frame[6], frame[7]]);
+        let flags = u16::from_be_bytes([f0, f1]);
         if flags != 0 {
             return Err(ProtocolError::UnknownFlags(flags));
         }
-        let body_len = u16::from_be_bytes([frame[8], frame[9]]) as usize;
-        if body_len != frame.len() - 10 {
+        let body_len = u16::from_be_bytes([l0, l1]) as usize;
+        if body_len != body.len() {
             return Err(ProtocolError::InvalidLength);
         }
-        let mut reader = Reader::new(&frame[10..]);
+        let mut reader = Reader::new(body);
         let message = match kind {
             KIND_CLIENT_HELLO => {
                 let count = reader.u8()? as usize;
@@ -393,20 +393,24 @@ impl PacketFragment {
         if frame.len() < FRAGMENT_HEADER_LEN {
             return Err(ProtocolError::Truncated);
         }
-        if frame[..4] != MAGIC {
+        let Some((&[m0, m1, m2, m3, version, kind, f0, f1], body)) = frame.split_first_chunk::<8>()
+        else {
+            return Err(ProtocolError::Truncated);
+        };
+        if [m0, m1, m2, m3] != MAGIC {
             return Err(ProtocolError::InvalidMagic);
         }
-        if frame[4] != VERSION {
-            return Err(ProtocolError::UnsupportedVersion(frame[4]));
+        if version != VERSION {
+            return Err(ProtocolError::UnsupportedVersion(version));
         }
-        if frame[5] != KIND_PACKET_FRAGMENT {
-            return Err(ProtocolError::UnknownKind(frame[5]));
+        if kind != KIND_PACKET_FRAGMENT {
+            return Err(ProtocolError::UnknownKind(kind));
         }
-        let flags = u16::from_be_bytes([frame[6], frame[7]]);
+        let flags = u16::from_be_bytes([f0, f1]);
         if flags != 0 {
             return Err(ProtocolError::UnknownFlags(flags));
         }
-        let mut reader = Reader::new(&frame[8..]);
+        let mut reader = Reader::new(body);
         let session_epoch = reader.epoch()?;
         let packet_id = reader.u64()?;
         let total_len = reader.u16()?;
@@ -503,19 +507,18 @@ impl<'a> Reader<'a> {
             .offset
             .checked_add(n)
             .ok_or(ProtocolError::InvalidLength)?;
-        if end > self.bytes.len() {
-            return Err(ProtocolError::Truncated);
-        }
-        let value = &self.bytes[self.offset..end];
+        let value = self
+            .bytes
+            .get(self.offset..end)
+            .ok_or(ProtocolError::Truncated)?;
         self.offset = end;
         Ok(value)
     }
     fn u8(&mut self) -> Result<u8, ProtocolError> {
-        Ok(self.bytes(1)?[0])
+        self.array().map(u8::from_be_bytes)
     }
     fn u16(&mut self) -> Result<u16, ProtocolError> {
-        let v = self.bytes(2)?;
-        Ok(u16::from_be_bytes([v[0], v[1]]))
+        self.array().map(u16::from_be_bytes)
     }
     fn array<const N: usize>(&mut self) -> Result<[u8; N], ProtocolError> {
         let v = self.bytes(N)?;
@@ -536,8 +539,7 @@ impl<'a> Reader<'a> {
         }
     }
     fn ip(&mut self) -> Result<Ipv4Addr, ProtocolError> {
-        let v = self.bytes(4)?;
-        Ok(Ipv4Addr::new(v[0], v[1], v[2], v[3]))
+        self.array::<4>().map(Ipv4Addr::from)
     }
     fn routes(&mut self) -> Result<Vec<Cidr>, ProtocolError> {
         let n = self.u8()? as usize;

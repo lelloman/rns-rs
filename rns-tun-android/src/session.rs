@@ -237,7 +237,10 @@ fn run(
         while !reader_stop.load(Ordering::Relaxed) {
             match reader.read(&mut buffer) {
                 Ok(size) => {
-                    if packet_tx.send(Ok(buffer[..size].to_vec())).is_err() {
+                    if packet_tx
+                        .send(Ok(buffer.get(..size).unwrap_or_default().to_vec()))
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -652,7 +655,7 @@ fn set_nonblocking(fd: libc::c_int) -> io::Result<()> {
 fn write_all_nonblocking(file: &mut File, bytes: &[u8]) -> io::Result<()> {
     let mut offset = 0;
     while offset < bytes.len() {
-        match file.write(&bytes[offset..]) {
+        match file.write(bytes.get(offset..).unwrap_or_default()) {
             Ok(0) => {
                 return Err(io::Error::new(
                     io::ErrorKind::WriteZero,
