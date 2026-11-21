@@ -389,7 +389,7 @@ impl Args {
                 parsed.store(opt, value);
             } else if arg.len() > 1 && arg.starts_with('-') && !looks_negative(&arg) {
                 let chars: Vec<char> = arg[1..].chars().collect();
-                if spec.short(chars[0]).is_none() {
+                if chars.first().and_then(|c| spec.short(*c)).is_none() {
                     // argparse: the whole argument is unrecognized.
                     parsed.unknown.push(arg.clone());
                     parsed.trace.push(Seen::Unknown(arg.clone()));
@@ -400,8 +400,11 @@ impl Args {
                 // must start with another option letter; `=` after a letter
                 // separates an explicit value.
                 let mut i = 0;
-                while let Some(opt) = chars.get(i).and_then(|c| spec.short(*c)) {
-                    let rest: String = chars[i + 1..].iter().collect();
+                while let Some((letter, opt)) = chars
+                    .get(i)
+                    .and_then(|c| spec.short(*c).map(|opt| (*c, opt)))
+                {
+                    let rest: String = chars.get(i + 1..).unwrap_or_default().iter().collect();
                     let (sep, explicit) = match rest.strip_prefix('=') {
                         Some(value) => (true, value.to_string()),
                         None => (false, rest.clone()),
@@ -419,7 +422,7 @@ impl Args {
                         }
                         parsed.trace.push(Seen::Option(opt, None));
                         parsed.store(opt, None);
-                        if spec.short(chars[i + 1]).is_none() {
+                        if chars.get(i + 1).and_then(|c| spec.short(*c)).is_none() {
                             let extra = format!("-{rest}");
                             parsed.unknown.push(extra.clone());
                             parsed.trace.push(Seen::Unknown(extra));
@@ -436,7 +439,7 @@ impl Args {
                         Some(explicit)
                     };
                     if value.is_none() && opt.nargs == Nargs::One {
-                        parsed.missing.push(format!("-{}", chars[i]));
+                        parsed.missing.push(format!("-{letter}"));
                         parsed.trace.push(Seen::Missing(opt));
                     } else {
                         parsed.trace.push(Seen::Option(opt, value.clone()));

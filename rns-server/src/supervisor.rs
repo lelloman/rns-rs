@@ -360,7 +360,7 @@ impl Supervisor {
         const MAX_UNEXPECTED_RESTARTS: usize = 3;
         const UNEXPECTED_RESTART_BACKOFF: Duration = Duration::from_millis(200);
 
-        let Some(index) = children.iter().position(|child| child.role == role) else {
+        let Some(slot) = children.iter_mut().find(|child| child.role == role) else {
             return Ok(false);
         };
         let Some(spec) = self.specs.iter().find(|spec| spec.role == role) else {
@@ -390,7 +390,7 @@ impl Supervisor {
         }
 
         thread::sleep(UNEXPECTED_RESTART_BACKOFF);
-        children[index] = spawn_child(spec, self.shared_state.as_ref(), self.log_store.clone())?;
+        *slot = spawn_child(spec, self.shared_state.as_ref(), self.log_store.clone())?;
         Ok(true)
     }
 
@@ -421,22 +421,21 @@ impl Supervisor {
         if let Some(index) = children.iter().position(|child| child.role == role) {
             self.drain_role(role, children, "process restart");
             let ready_file = ready_file_path_for_role(role, &self.readiness);
-            terminate_child(
-                &mut children[index],
-                self.shared_state.as_ref(),
-                ready_file.as_ref(),
-            )
-            .map_err(|source| SupervisorError::Terminate {
-                role,
-                during: "restart",
-                source,
-            })?;
+            let Some(child) = children.get_mut(index) else {
+                return Ok(());
+            };
+            terminate_child(child, self.shared_state.as_ref(), ready_file.as_ref()).map_err(
+                |source| SupervisorError::Terminate {
+                    role,
+                    during: "restart",
+                    source,
+                },
+            )?;
             if let Some(state) = self.shared_state.as_ref() {
                 mark_process_stopped(state, role.display_name(), None);
                 bump_process_restart_count(state, role.display_name());
             }
-            children[index] =
-                spawn_child(spec, self.shared_state.as_ref(), self.log_store.clone())?;
+            *child = spawn_child(spec, self.shared_state.as_ref(), self.log_store.clone())?;
         }
 
         Ok(())
@@ -477,18 +476,18 @@ impl Supervisor {
         };
         self.drain_role(role, children, "process stop");
         let ready_file = ready_file_path_for_role(role, &self.readiness);
-        terminate_child(
-            &mut children[index],
-            self.shared_state.as_ref(),
-            ready_file.as_ref(),
-        )
-        .map_err(|source| SupervisorError::Terminate {
-            role,
-            during: "stop",
-            source,
-        })?;
+        let Some(child) = children.get_mut(index) else {
+            return Ok(());
+        };
+        terminate_child(child, self.shared_state.as_ref(), ready_file.as_ref()).map_err(
+            |source| SupervisorError::Terminate {
+                role,
+                during: "stop",
+                source,
+            },
+        )?;
         if let Some(state) = self.shared_state.as_ref() {
-            let code = children[index]
+            let code = child
                 .child
                 .try_wait()
                 .ok()

@@ -220,7 +220,10 @@ impl Spinner {
     const SYMS: [char; 7] = ['⢄', '⢂', '⢁', '⡁', '⡈', '⡐', '⡠'];
 
     fn tick(&mut self) {
-        print!("\u{8}\u{8}{} ", Self::SYMS[self.0]);
+        print!(
+            "\u{8}\u{8}{} ",
+            Self::SYMS.get(self.0).copied().unwrap_or(' ')
+        );
         flush();
         self.0 = (self.0 + 1) % Self::SYMS.len();
     }

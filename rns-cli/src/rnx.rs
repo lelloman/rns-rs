@@ -687,11 +687,14 @@ impl Rnx {
                         while request.stats.len() > 32 {
                             request.stats.remove(0);
                         }
-                        let span = now.duration_since(request.stats[0].0).as_secs_f64();
+                        // Just pushed, so there is a first sample.
+                        let (first_at, first_got) =
+                            request.stats.first().copied().unwrap_or((now, got));
+                        let span = now.duration_since(first_at).as_secs_f64();
                         request.speed = if span == 0.0 {
                             0.0
                         } else {
-                            (got - request.stats[0].1) / span
+                            (got - first_got) / span
                         };
                     }
                 }
@@ -716,7 +719,7 @@ impl Rnx {
         self.pump(Duration::ZERO, &mut request);
         while deadline.is_none_or(|d| Instant::now() < d) && !until(self, request.as_deref()) {
             self.pump(Duration::from_millis(100), &mut request);
-            print!("\u{8}\u{8}{} ", SYMS[i]);
+            print!("\u{8}\u{8}{} ", SYMS.get(i).copied().unwrap_or(' '));
             flush();
             i = (i + 1) % SYMS.len();
         }
@@ -747,7 +750,10 @@ impl Rnx {
                 prettysize(r.response_transfer_size, "B"),
                 prettysize(r.speed, "b")
             );
-            print!("\r{blank}\rReceiving result {} {stat_str} ", SYMS[i]);
+            print!(
+                "\r{blank}\rReceiving result {} {stat_str} ",
+                SYMS.get(i).copied().unwrap_or(' ')
+            );
             flush();
             i = (i + 1) % SYMS.len();
         }
@@ -1132,13 +1138,13 @@ fn execute_request(data: &[u8], cancel: &AtomicBool, remote: Option<[u8; 16]>) -
         &format!("Executing command [{}] {}", request.command, party("for")),
         LOG_NOTICE,
     );
-    let argv = match split_command(&request.command) {
-        Ok(argv) if !argv.is_empty() => argv,
-        _ => return encode_result(false, None, None, None, None, None, started, None),
+    let argv = split_command(&request.command).unwrap_or_default();
+    let Some((program, args)) = argv.split_first() else {
+        return encode_result(false, None, None, None, None, None, started, None);
     };
-    let mut command = Command::new(&argv[0]);
+    let mut command = Command::new(program);
     command
-        .args(&argv[1..])
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1161,7 +1167,7 @@ fn execute_request(data: &[u8], cancel: &AtomicBool, remote: Option<[u8; 16]>) -
     let pid = child.id() as libc::pid_t;
     if let Some(mut stdin) = child.stdin.take() {
         if let Some(input) = request.stdin {
-            let _ = stdin.write_all(&input[..input.len().min(MAX_STDIN)]);
+            let _ = stdin.write_all(input.get(..MAX_STDIN).unwrap_or(&input));
         }
     }
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
@@ -1257,7 +1263,7 @@ fn read_bounded(mut reader: impl Read, limit: usize) -> (Vec<u8>, u64) {
             Ok(count) => {
                 total = total.saturating_add(count as u64);
                 let keep = count.min(limit.saturating_sub(retained.len()));
-                retained.extend_from_slice(&buffer[..keep]);
+                retained.extend_from_slice(buffer.get(..keep).unwrap_or_default());
             }
         }
     }
@@ -1276,15 +1282,15 @@ fn decode_command_request(data: &[u8]) -> Result<CommandRequest, ()> {
     let Value::Array(values) = msgpack::unpack_exact(data).map_err(|_| ())? else {
         return Err(());
     };
-    if values.len() != 5 {
+    let [command, timeout, stdout_limit, stderr_limit, stdin] = values.as_slice() else {
         return Err(());
-    }
-    let command = match &values[0] {
+    };
+    let command = match command {
         Value::Bin(value) => String::from_utf8(value.clone()).map_err(|_| ())?,
         Value::Str(value) => value.clone(),
         _ => return Err(()),
     };
-    let timeout = match values[1] {
+    let timeout = match *timeout {
         Value::Float(value) if value.is_finite() && value >= 0.0 => value,
         Value::UInt(value) => value as f64,
         Value::Nil => 15.0,
@@ -1295,7 +1301,7 @@ fn decode_command_request(data: &[u8]) -> Result<CommandRequest, ()> {
         Value::Nil => None,
         _ => None,
     };
-    let stdin = match &values[4] {
+    let stdin = match stdin {
         Value::Bin(value) => Some(value.clone()),
         Value::Nil => None,
         _ => return Err(()),
@@ -1306,8 +1312,8 @@ fn decode_command_request(data: &[u8]) -> Result<CommandRequest, ()> {
     Ok(CommandRequest {
         command,
         timeout,
-        stdout_limit: limit(&values[2]),
-        stderr_limit: limit(&values[3]),
+        stdout_limit: limit(stdout_limit),
+        stderr_limit: limit(stderr_limit),
         stdin,
     })
 }

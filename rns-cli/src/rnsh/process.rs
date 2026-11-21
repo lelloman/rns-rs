@@ -344,7 +344,7 @@ impl ExecPlan {
             .ok()?;
         let program = argv.first()?;
         let candidates = if program.contains('/') {
-            vec![args[0].clone()]
+            vec![args.first()?.clone()]
         } else {
             let path = std::env::var_os("PATH");
             let path = path
@@ -394,7 +394,7 @@ impl ExecPlan {
         };
         let argv_ptrs = null_terminated(&args);
         let mut sh_argv = vec![EXEC_SHELL.as_ptr(), std::ptr::null()];
-        sh_argv.extend_from_slice(&argv_ptrs[1..]);
+        sh_argv.extend(argv_ptrs.iter().skip(1));
         let envp = null_terminated(&envs);
         Some(ExecPlan {
             candidates,
@@ -419,7 +419,13 @@ impl ExecPlan {
             unsafe { libc::execve(path.as_ptr(), self.argv.as_ptr(), self.envp.as_ptr()) };
             match io::Error::last_os_error().raw_os_error() {
                 Some(libc::ENOEXEC) => {
-                    self.sh_argv[1] = path.as_ptr();
+                    #[allow(
+                        clippy::indexing_slicing,
+                        reason = "sh_argv starts with the shell and this slot; execve below relies on it"
+                    )]
+                    {
+                        self.sh_argv[1] = path.as_ptr();
+                    }
                     // SAFETY: as above; `sh_argv` is null-terminated and slot 1 now points at
                     // `path`, which `self.candidates` keeps alive.
                     unsafe {
@@ -482,7 +488,7 @@ pub(super) fn spawn_reader(
                     .send(RnshEvent::ProcessOutput {
                         link_id,
                         stream_id,
-                        data: buf[..bytes].to_vec(),
+                        data: buf.get(..bytes).unwrap_or_default().to_vec(),
                         budget: output_budget.clone(),
                     })
                     .is_err()
@@ -552,7 +558,8 @@ pub(super) fn write_all_fd(fd: RawFd, mut data: &[u8]) -> io::Result<()> {
         if n < 0 {
             return Err(io::Error::last_os_error());
         }
-        data = &data[n as usize..];
+        // write reports at most data.len() bytes written.
+        data = data.get(n as usize..).unwrap_or_default();
     }
     Ok(())
 }

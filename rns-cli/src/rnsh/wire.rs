@@ -113,44 +113,45 @@ impl RnshMessage {
                 .map_err(|_| RnshError::Protocol("invalid stream data message".into()))?,
             )),
             MSG_VERSION_INFO => {
-                let values = expect_array(msgpack_unpack(payload)?, 2)?;
+                let [sw_version, protocol_version] = expect_array(msgpack_unpack(payload)?)?;
                 Ok(RnshMessage::VersionInfo {
-                    sw_version: expect_string(&values[0])?,
-                    protocol_version: expect_int(&values[1])? as u64,
+                    sw_version: expect_string(&sw_version)?,
+                    protocol_version: expect_int(&protocol_version)? as u64,
                 })
             }
             MSG_WINDOW_SIZE => {
-                let values = expect_array(msgpack_unpack(payload)?, 4)?;
+                let [rows, cols, hpix, vpix] = expect_array(msgpack_unpack(payload)?)?;
                 Ok(RnshMessage::WindowSize(WindowSize {
-                    rows: opt_int_u16(&values[0])?,
-                    cols: opt_int_u16(&values[1])?,
-                    hpix: opt_int_u16(&values[2])?,
-                    vpix: opt_int_u16(&values[3])?,
+                    rows: opt_int_u16(&rows)?,
+                    cols: opt_int_u16(&cols)?,
+                    hpix: opt_int_u16(&hpix)?,
+                    vpix: opt_int_u16(&vpix)?,
                 }))
             }
             MSG_EXECUTE_COMMAND => {
-                let values = expect_array(msgpack_unpack(payload)?, 10)?;
-                let cmdline = expect_array_value(&values[0])?
+                let [cmdline, pipe_stdin, pipe_stdout, pipe_stderr, _, term, rows, cols, hpix, vpix] =
+                    expect_array(msgpack_unpack(payload)?)?;
+                let cmdline = expect_array_value(&cmdline)?
                     .iter()
                     .map(expect_string)
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(RnshMessage::ExecuteCommand(ExecuteCommand {
                     cmdline,
-                    pipe_stdin: expect_bool(&values[1])?,
-                    pipe_stdout: expect_bool(&values[2])?,
-                    pipe_stderr: expect_bool(&values[3])?,
-                    term: opt_string(&values[5])?,
-                    rows: opt_int_u16(&values[6])?,
-                    cols: opt_int_u16(&values[7])?,
-                    hpix: opt_int_u16(&values[8])?,
-                    vpix: opt_int_u16(&values[9])?,
+                    pipe_stdin: expect_bool(&pipe_stdin)?,
+                    pipe_stdout: expect_bool(&pipe_stdout)?,
+                    pipe_stderr: expect_bool(&pipe_stderr)?,
+                    term: opt_string(&term)?,
+                    rows: opt_int_u16(&rows)?,
+                    cols: opt_int_u16(&cols)?,
+                    hpix: opt_int_u16(&hpix)?,
+                    vpix: opt_int_u16(&vpix)?,
                 }))
             }
             MSG_ERROR => {
-                let values = expect_array(msgpack_unpack(payload)?, 3)?;
+                let [msg, fatal, _] = expect_array(msgpack_unpack(payload)?)?;
                 Ok(RnshMessage::Error {
-                    msg: expect_string(&values[0])?,
-                    fatal: expect_bool(&values[1])?,
+                    msg: expect_string(&msg)?,
+                    fatal: expect_bool(&fatal)?,
                 })
             }
             MSG_COMMAND_EXITED => Ok(RnshMessage::CommandExited(expect_int(&msgpack_unpack(
@@ -171,11 +172,12 @@ pub(super) fn opt_u16(value: Option<u16>) -> Value {
     value.map(|v| Value::UInt(v.into())).unwrap_or(Value::Nil)
 }
 
-pub(super) fn expect_array(value: Value, len: usize) -> Result<Vec<Value>, RnshError> {
+pub(super) fn expect_array<const N: usize>(value: Value) -> Result<[Value; N], RnshError> {
     match value {
-        Value::Array(values) if values.len() == len => Ok(values),
-        _ => Err(RnshError::Protocol("unexpected msgpack array".into())),
+        Value::Array(values) => values.try_into().ok(),
+        _ => None,
     }
+    .ok_or_else(|| RnshError::Protocol("unexpected msgpack array".into()))
 }
 
 pub(super) fn expect_array_value(value: &Value) -> Result<&[Value], RnshError> {

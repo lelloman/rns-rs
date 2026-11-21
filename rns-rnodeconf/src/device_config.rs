@@ -9,14 +9,14 @@ pub(super) fn ip_bytes(text: &str) -> Result<[u8; 4], String> {
         return Err("Invalid IP address length".into());
     }
     let mut bytes = [0u8; 4];
-    for (i, octet) in octets.iter().enumerate() {
+    for (byte, octet) in bytes.iter_mut().zip(&octets) {
         let value = py_int(octet).ok_or_else(|| {
             format!("Could not decode IP address octet: invalid literal for int() with base 10: '{octet}'")
         })?;
         if !(0..=255).contains(&value) {
             return Err("Could not decode IP address octet: Invalid IP octet value".into());
         }
-        bytes[i] = value as u8;
+        *byte = value as u8;
     }
     Ok(bytes)
 }
@@ -285,8 +285,10 @@ pub(super) fn show_config(rnode: &mut RNode, image: &[u8], _platform: u8, show_p
             bytes
         };
         let address = |start: u8| -> Option<String> {
-            let b = sector.get(start as usize..start as usize + 4)?;
-            let ip = format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3]);
+            let &[a, b, c, d] = sector.get(start as usize..start as usize + 4)? else {
+                return None;
+            };
+            let ip = format!("{a}.{b}.{c}.{d}");
             (ip != "255.255.255.255" && ip != "0.0.0.0").then_some(ip)
         };
         match String::from_utf8(text(rom::ADDR_CONF_SSID)) {

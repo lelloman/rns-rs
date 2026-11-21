@@ -36,18 +36,17 @@ fn der_element(data: &[u8]) -> Option<(u8, &[u8], &[u8])> {
         (first as usize, rest)
     } else {
         let count = (first & 0x7f) as usize;
-        if count == 0 || count > 4 || rest.len() < count {
+        if count == 0 || count > 4 {
             return None;
         }
-        let len = rest[..count]
+        let (len_bytes, rest) = rest.split_at_checked(count)?;
+        let len = len_bytes
             .iter()
             .fold(0usize, |acc, &b| (acc << 8) | b as usize);
-        (len, &rest[count..])
+        (len, rest)
     };
-    if rest.len() < len {
-        return None;
-    }
-    Some((tag, &rest[..len], &rest[len..]))
+    let (contents, after) = rest.split_at_checked(len)?;
+    Some((tag, contents, after))
 }
 
 const SEQUENCE: u8 = 0x30;
@@ -98,7 +97,7 @@ pub(crate) fn parse_public_key(der: &[u8]) -> Option<PublicKey> {
     if tag != BIT_STRING || bits.first() != Some(&0) {
         return None;
     }
-    rsa_key_integers(&bits[1..], false)
+    rsa_key_integers(bits.get(1..)?, false)
 }
 
 /// The public half of a DER RSA private key, in PKCS#8 or PKCS#1 form, as
@@ -211,15 +210,17 @@ pub(crate) fn verify_pss(key: &PublicKey, message: &[u8], signature: &[u8]) -> b
         return false;
     }
     let s_len = em_len - H_LEN - 2;
-    if em[em_len - 1] != 0xbc {
+    if em.last() != Some(&0xbc) {
         return false;
     }
     let db_len = em_len - H_LEN - 1;
     let (masked_db, rest) = em.split_at(db_len);
-    let h = &rest[..H_LEN];
+    let Some(h) = rest.get(..H_LEN) else {
+        return false;
+    };
     let unused_bits = 8 * em_len - em_bits;
     let top_mask = 0xffu8 >> unused_bits;
-    if masked_db[0] & !top_mask != 0 {
+    if masked_db.first().is_some_and(|b| b & !top_mask != 0) {
         return false;
     }
     let mut db: Vec<u8> = masked_db
@@ -227,12 +228,14 @@ pub(crate) fn verify_pss(key: &PublicKey, message: &[u8], signature: &[u8]) -> b
         .zip(mgf1(h, db_len))
         .map(|(a, b)| a ^ b)
         .collect();
-    db[0] &= top_mask;
-    let ps_len = db_len - s_len - 1;
-    if db[..ps_len].iter().any(|b| *b != 0) || db[ps_len] != 0x01 {
-        return false;
+    if let Some(first) = db.first_mut() {
+        *first &= top_mask;
     }
-    let salt = &db[ps_len + 1..];
+    let ps_len = db_len - s_len - 1;
+    let salt = match db.split_at_checked(ps_len) {
+        Some((ps, [0x01, salt @ ..])) if ps.iter().all(|b| *b == 0) => salt,
+        _ => return false,
+    };
     let mut m_prime = vec![0u8; 8];
     m_prime.extend_from_slice(&sha256(message));
     m_prime.extend_from_slice(salt);

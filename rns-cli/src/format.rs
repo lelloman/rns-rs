@@ -15,7 +15,9 @@ pub fn size_str(num: u64) -> String {
         val /= 1000.0;
         unit_idx += 1;
     }
-    format!("{:.2} {}", val, units[unit_idx])
+    // The loop stops at the last unit.
+    let unit = units.get(unit_idx).copied().unwrap_or_default();
+    format!("{:.2} {}", val, unit)
 }
 
 /// Format a bitrate as a human-readable string.
@@ -31,7 +33,9 @@ pub fn speed_str(bps: u64) -> String {
         val /= 1000.0;
         unit_idx += 1;
     }
-    format!("{:.2} {}", val, units[unit_idx])
+    // The loop stops at the last unit.
+    let unit = units.get(unit_idx).copied().unwrap_or_default();
+    format!("{:.2} {}", val, unit)
 }
 
 /// upstream's `RNS.prettytime(time)`: days, hours and minutes, and seconds
@@ -259,9 +263,17 @@ pub fn prettycost(value: Option<f64>) -> String {
     }
 }
 
+/// The RFC 4648 Base32 digit for the low five bits of `bits`.
+fn base32_digit(bits: u32) -> char {
+    const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    // Five bits index the 32 digits.
+    ALPHABET
+        .get((bits & 0x1F) as usize)
+        .map_or('=', |&digit| digit as char)
+}
+
 /// RFC 4648 Base32 encoding (standard alphabet, with padding).
 pub fn base32_encode(data: &[u8]) -> String {
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
     let mut result = String::new();
     let mut bits: u32 = 0;
     let mut num_bits: u32 = 0;
@@ -271,11 +283,11 @@ pub fn base32_encode(data: &[u8]) -> String {
         num_bits += 8;
         while num_bits >= 5 {
             num_bits -= 5;
-            result.push(ALPHABET[((bits >> num_bits) & 0x1F) as usize] as char);
+            result.push(base32_digit(bits >> num_bits));
         }
     }
     if num_bits > 0 {
-        result.push(ALPHABET[((bits << (5 - num_bits)) & 0x1F) as usize] as char);
+        result.push(base32_digit(bits << (5 - num_bits)));
     }
     // Pad to multiple of 8
     while !result.len().is_multiple_of(8) {

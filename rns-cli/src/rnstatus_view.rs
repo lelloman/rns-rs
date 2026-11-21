@@ -590,7 +590,7 @@ fn render_link(out: &mut String, ifstat: &PickleValue) {
     }
 
     if let Some(sig) = bytes_of(ifstat, "ifac_signature") {
-        let tail = &sig[sig.len().saturating_sub(5)..];
+        let tail = sig.get(sig.len().saturating_sub(5)..).unwrap_or_default();
         outln!(
             out,
             "    Access    : {}-bit IFAC by <…{}>",

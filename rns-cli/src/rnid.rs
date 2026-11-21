@@ -211,7 +211,7 @@ fn spin(until: impl Fn() -> bool, msg: &str, timeout: Option<f64>) -> bool {
     let mut i = 0;
     while deadline.is_none_or(|d| Instant::now() < d) && !until() {
         std::thread::sleep(Duration::from_millis(100));
-        print!("\u{8}\u{8}{} ", SYMS[i]);
+        print!("\u{8}\u{8}{} ", SYMS.get(i).copied().unwrap_or(' '));
         let _ = std::io::stdout().flush();
         i = (i + 1) % SYMS.len();
     }

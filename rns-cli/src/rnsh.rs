@@ -206,7 +206,13 @@ impl CliOptions {
     fn parse(argv: Vec<String>, columns: usize) -> Result<Self, crate::argparse::Exit> {
         // As upstream, everything after the first `--` is the command.
         let (rnsh_argv, command) = match argv.iter().position(|arg| arg == "--") {
-            Some(idx) => (argv[..idx].to_vec(), argv[idx + 1..].to_vec()),
+            Some(idx) => {
+                let (rnsh_argv, command) = argv.split_at(idx);
+                (
+                    rnsh_argv.to_vec(),
+                    command.iter().skip(1).cloned().collect(),
+                )
+            }
             None => (argv, Vec::new()),
         };
         let args = Args::parse_spec_from(rnsh_argv, &OPTIONS);

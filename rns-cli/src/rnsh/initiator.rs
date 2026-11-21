@@ -255,7 +255,9 @@ pub(super) fn spawn_stdin_reader(event_tx: mpsc::Sender<RnshEvent>) {
                     break;
                 }
                 Ok(n) => {
-                    let _ = event_tx.send(RnshEvent::LocalStdin(buf[..n].to_vec()));
+                    let _ = event_tx.send(RnshEvent::LocalStdin(
+                        buf.get(..n).unwrap_or_default().to_vec(),
+                    ));
                 }
                 Err(_) => {
                     let _ = event_tx.send(RnshEvent::LocalStdinEof);
