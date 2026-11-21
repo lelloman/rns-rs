@@ -71,6 +71,18 @@ impl InterfaceRegistry {
         }
     }
 
+    /// Apply the interface's own configured announce options, before the
+    /// instance-wide defaults fill whatever it left unset. Interfaces a
+    /// listener spawns copy their parent's values instead.
+    pub(crate) fn apply_announce_limits(
+        &self,
+        info: &mut rns_core::transport::types::InterfaceInfo,
+    ) {
+        if let Some(limits) = self.announce_limits.get(&info.name) {
+            limits.apply(info);
+        }
+    }
+
     /// Keep the names upstream gives an interface, when it names it
     /// otherwise than by its type and own name.
     pub(crate) fn record_interface_names(
