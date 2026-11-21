@@ -105,9 +105,10 @@ impl RuntimeConfigHandles {
     /// both register through here, so they expose the same keys.
     ///
     /// The settings are registered only when the config's type is one whose
-    /// runtime handle covers the whole interface. An `RNodeMultiInterface`
-    /// parses to an RNode config, but its handle would reach only the first
-    /// subinterface, so it has none.
+    /// runtime handle covers the whole interface. A `BackboneClientInterface`
+    /// parses to a Backbone config and has a Backbone client's settings.
+    /// An `RNodeMultiInterface` parses to an RNode config, but its handle
+    /// would reach only the first subinterface, so it has none.
     #[cfg(runtime_config_ifaces)]
     pub(crate) fn register_configured(
         &mut self,
@@ -118,7 +119,10 @@ impl RuntimeConfigHandles {
 
         match (config.kind(), config.config_data.known()) {
             #[cfg(feature = "iface-backbone")]
-            (Some(InterfaceKind::Backbone), KnownConfig::Backbone(mode)) => {
+            (
+                Some(InterfaceKind::Backbone | InterfaceKind::BackboneClient),
+                KnownConfig::Backbone(mode),
+            ) => {
                 use crate::interface::backbone::{
                     client_runtime_handle_from_mode, peer_state_handle_from_mode,
                     runtime_handle_from_mode,
