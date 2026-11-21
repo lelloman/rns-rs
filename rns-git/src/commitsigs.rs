@@ -289,7 +289,7 @@ pub(crate) fn extract_commit_author(message: &[u8]) -> Option<String> {
         if end <= start {
             return None;
         }
-        return std::str::from_utf8(&rest[start + 1..end])
+        return std::str::from_utf8(rest.get(start + 1..end)?)
             .ok()
             .map(str::to_string);
     }
@@ -319,8 +319,8 @@ pub(crate) fn extract_tag_tagger(message: &[u8]) -> (Option<String>, bool) {
             return (None, is_tag);
         }
         return (
-            std::str::from_utf8(&rest[start + 1..end])
-                .ok()
+            rest.get(start + 1..end)
+                .and_then(|email| std::str::from_utf8(email).ok())
                 .map(str::to_string),
             is_tag,
         );
@@ -404,11 +404,11 @@ fn validate_rsg(rsg: &[u8], message: &[u8]) -> Result<[u8; 16]> {
 }
 
 fn rsg_envelope(rsg: &[u8]) -> Result<Value> {
-    if rsg.len() <= SIG_LEN {
-        return Err(Error::msg("invalid RSG"));
-    }
-    msgpack::unpack_exact(&rsg[SIG_LEN..])
-        .map_err(|e| Error::msg(format!("invalid RSG envelope: {e}")))
+    let envelope = match rsg.get(SIG_LEN..) {
+        Some(envelope) if !envelope.is_empty() => envelope,
+        _ => return Err(Error::msg("invalid RSG")),
+    };
+    msgpack::unpack_exact(envelope).map_err(|e| Error::msg(format!("invalid RSG envelope: {e}")))
 }
 
 fn git_ssh_public_key(identity: &Identity) -> Result<Vec<u8>> {
@@ -491,10 +491,13 @@ fn read_u32(data: &[u8], offset: &mut usize) -> Result<u32> {
 
 fn read_ssh_string(data: &[u8], offset: &mut usize) -> Result<Vec<u8>> {
     let len = read_u32(data, offset)? as usize;
-    if data.len().saturating_sub(*offset) < len {
+    let Some(value) = data
+        .get(*offset..)
+        .and_then(|rest| rest.get(..len))
+        .map(<[u8]>::to_vec)
+    else {
         return Err(Error::msg("truncated SSH signature string"));
-    }
-    let value = data[*offset..*offset + len].to_vec();
+    };
     *offset += len;
     Ok(value)
 }

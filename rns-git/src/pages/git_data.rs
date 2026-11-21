@@ -93,12 +93,12 @@ pub(super) fn tree_entries(repo: &Path, reference: &str, path: &str) -> Result<V
             continue;
         };
         let parts: Vec<&str> = meta.split_whitespace().collect();
-        if parts.len() < 4 {
+        let [_, kind, _, size, ..] = parts.as_slice() else {
             continue;
-        }
-        let size = parts[3].parse::<u64>().ok();
+        };
+        let size = size.parse::<u64>().ok();
         entries.push(TreeEntry {
-            kind: parts[1].to_string(),
+            kind: kind.to_string(),
             name: name.to_string(),
             size,
         });
@@ -209,12 +209,12 @@ pub(super) fn commits(repo: &Path, reference: &str, limit: usize) -> Result<Vec<
     let mut commits = Vec::new();
     for line in output.lines() {
         let parts: Vec<&str> = line.split('\x1f').collect();
-        if parts.len() == 4 {
+        if let [hash, subject, author, timestamp] = parts.as_slice() {
             commits.push(CommitSummary {
-                hash: parts[0].to_string(),
-                subject: parts[1].to_string(),
-                author: parts[2].to_string(),
-                timestamp: parts[3].parse().unwrap_or_default(),
+                hash: hash.to_string(),
+                subject: subject.to_string(),
+                author: author.to_string(),
+                timestamp: timestamp.parse().unwrap_or_default(),
             });
         }
     }
@@ -250,9 +250,9 @@ pub(super) fn commit_info(repo: &Path, hash: &str) -> Result<CommitInfo> {
             .arg(hash),
     )?;
     let parts: Vec<&str> = output.splitn(6, '\x1f').collect();
-    if parts.len() != 6 {
+    let [hash, subject, author, email, timestamp, body] = parts.as_slice() else {
         return Err(Error::msg("invalid commit output"));
-    }
+    };
     let files_output = run_git(
         Command::new("git")
             .arg("--git-dir")
@@ -275,12 +275,12 @@ pub(super) fn commit_info(repo: &Path, hash: &str) -> Result<CommitInfo> {
         });
     }
     Ok(CommitInfo {
-        hash: parts[0].trim().to_string(),
-        subject: parts[1].trim().to_string(),
-        author: parts[2].trim().to_string(),
-        email: parts[3].trim().to_string(),
-        timestamp: parts[4].trim().parse().unwrap_or_default(),
-        body: parts[5].trim().to_string(),
+        hash: hash.trim().to_string(),
+        subject: subject.trim().to_string(),
+        author: author.trim().to_string(),
+        email: email.trim().to_string(),
+        timestamp: timestamp.trim().parse().unwrap_or_default(),
+        body: body.trim().to_string(),
         files,
     })
 }
