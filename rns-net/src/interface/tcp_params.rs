@@ -50,22 +50,29 @@ pub(crate) fn tcp_bitrate(bitrate: Option<u64>) -> u64 {
 #[cfg(feature = "iface-tcp")]
 pub(crate) fn parse_tcp_rate_params(
     params: &HashMap<String, String>,
-) -> Result<(Option<u64>, Option<u32>), String> {
+) -> Result<(Option<u64>, Option<u32>), super::InterfaceConfigError> {
     let bitrate = match params.get("bitrate") {
-        Some(value) => Some(
-            value
-                .parse::<u64>()
-                .map_err(|_| format!("invalid bitrate {value:?}"))?,
-        ),
+        Some(value) => Some(value.parse::<u64>().map_err(|_| {
+            super::InterfaceConfigError::invalid_value(
+                "bitrate",
+                format!("invalid bitrate {value:?}"),
+            )
+        })?),
         None => None,
     };
     let fixed_mtu = match params.get("fixed_mtu") {
         Some(value) => {
-            let mtu = value
-                .parse::<u32>()
-                .map_err(|_| format!("invalid fixed_mtu {value:?}"))?;
+            let mtu = value.parse::<u32>().map_err(|_| {
+                super::InterfaceConfigError::invalid_value(
+                    "fixed_mtu",
+                    format!("invalid fixed_mtu {value:?}"),
+                )
+            })?;
             if (mtu as usize) < rns_core::constants::MTU {
-                return Err(format!("Configured MTU of {mtu} bytes is too small"));
+                return Err(super::InterfaceConfigError::invalid_value(
+                    "fixed_mtu",
+                    format!("Configured MTU of {mtu} bytes is too small"),
+                ));
             }
             Some(mtu)
         }
@@ -91,13 +98,18 @@ pub(crate) const DEFAULT_FLUSH_AFTER: Option<Duration> = if cfg!(feature = "engi
 #[cfg(feature = "iface-tcp")]
 pub(crate) fn parse_flush_after(
     params: &HashMap<String, String>,
-) -> Result<Option<Duration>, String> {
+) -> Result<Option<Duration>, super::InterfaceConfigError> {
     match params.get("flush_after_us") {
         Some(value) if value.eq_ignore_ascii_case("off") => Ok(None),
         Some(value) => value
             .parse::<u64>()
             .map(|us| Some(Duration::from_micros(us)))
-            .map_err(|_| format!("invalid flush_after_us {value:?}")),
+            .map_err(|_| {
+                super::InterfaceConfigError::invalid_value(
+                    "flush_after_us",
+                    format!("invalid flush_after_us {value:?}"),
+                )
+            }),
         None => Ok(DEFAULT_FLUSH_AFTER),
     }
 }

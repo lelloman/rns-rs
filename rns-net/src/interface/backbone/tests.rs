@@ -164,7 +164,9 @@ fn client_limit_defaults_to_upstream_500() {
 #[test]
 fn client_limit_rejects_invalid_values() {
     for raw in ["abc", "-1", "1.5"] {
-        let err = parse_client_limit(&limit_params(&[("client_limit", raw)])).unwrap_err();
+        let err = parse_client_limit(&limit_params(&[("client_limit", raw)]))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("client_limit"), "{err}");
     }
 }
@@ -1854,7 +1856,7 @@ fn backbone_parse_config_rejects_invalid_fast_flapping_settings() {
 
         let err = match factory.parse_config("test-backbone", InterfaceId(92), &params) {
             Ok(_) => panic!("{key}={value} should be rejected"),
-            Err(err) => err,
+            Err(err) => err.to_string(),
         };
         assert!(err.contains(key), "unexpected error: {err}");
     }
@@ -1960,7 +1962,7 @@ fn backbone_parse_config_rejects_invalid_client_priority() {
 
         let err = match factory.parse_config("test-backbone-client", InterfaceId(94), &params) {
             Ok(_) => panic!("priority {value} should be rejected"),
-            Err(err) => err,
+            Err(err) => err.to_string(),
         };
         assert!(
             err.contains("priority"),

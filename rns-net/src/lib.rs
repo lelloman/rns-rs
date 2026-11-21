@@ -128,7 +128,8 @@ pub use interface::weave::{
 };
 pub use interface::{install_socket_protector, SocketProtector, SocketProtectorGuard};
 pub use interface::{
-    InterfaceConfigData, InterfaceFactory, StartContext, StartResult, SubInterface,
+    InterfaceConfigData, InterfaceConfigError, InterfaceFactory, StartContext, StartResult,
+    SubInterface,
 };
 pub use link_manager::{LinkManager, LinkManagerAction, RequestFailure, RequestResponse};
 pub use link_send::{LinkSendError, LinkSendReceipt};

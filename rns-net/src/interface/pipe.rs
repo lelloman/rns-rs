@@ -14,7 +14,9 @@ use std::time::Duration;
 
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
-use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
+use super::{
+    InterfaceConfigData, InterfaceConfigError, InterfaceFactory, StartContext, StartResult,
+};
 use crate::event::{Event, EventSender, LoopContext, LoopSource, SourceStatus};
 use crate::hdlc;
 use crate::interface::{lock_or_recover, Writer};
@@ -393,10 +395,10 @@ impl InterfaceFactory for PipeFactory {
         name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         let command = params
             .get("command")
-            .ok_or_else(|| "PipeInterface requires 'command'".to_string())?
+            .ok_or_else(|| InterfaceConfigError::missing("PipeInterface", &["command"]))?
             .clone();
 
         let respawn_delay = match params.get("respawn_delay") {
@@ -406,7 +408,12 @@ impl InterfaceFactory for PipeFactory {
                 .parse::<f64>()
                 .ok()
                 .and_then(|secs| Duration::try_from_secs_f64(secs).ok())
-                .ok_or_else(|| format!("invalid respawn_delay: {}", v))?,
+                .ok_or_else(|| {
+                    InterfaceConfigError::invalid_value(
+                        "respawn_delay",
+                        format!("invalid respawn_delay: {}", v),
+                    )
+                })?,
             None => Duration::from_secs(5),
         };
 

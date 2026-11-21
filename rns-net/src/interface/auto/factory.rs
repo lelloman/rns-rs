@@ -1,6 +1,7 @@
 //! Building AutoInterfaces from their config.
 
 use super::*;
+use crate::interface::InterfaceConfigError;
 
 /// Factory for `AutoInterface`.
 pub struct AutoFactory;
@@ -15,7 +16,7 @@ impl InterfaceFactory for AutoFactory {
         name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         let group_id = params
             .get("group_id")
             .map(|v| v.as_bytes().to_vec())

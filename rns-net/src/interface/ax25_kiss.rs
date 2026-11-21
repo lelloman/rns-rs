@@ -6,7 +6,9 @@ use std::io;
 use rns_core::transport::types::InterfaceId;
 
 use super::kiss_iface::{Ax25Address, KissFactory, KissIfaceConfig};
-use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
+use super::{
+    InterfaceConfigData, InterfaceConfigError, InterfaceFactory, StartContext, StartResult,
+};
 
 const HEADER_LEN: usize = 16;
 const CONTROL_UI: u8 = 0x03;
@@ -106,24 +108,30 @@ impl InterfaceFactory for Ax25KissFactory {
         name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         let base = KissFactory.parse_config(name, id, params)?;
         let mut config = *base
             .into_any()
             .downcast::<KissIfaceConfig>()
-            .map_err(|_| "wrong KISS config type".to_string())?;
+            .map_err(|_| InterfaceConfigError::Invalid("wrong KISS config type".into()))?;
         let callsign = params
             .get("callsign")
             .or_else(|| params.get("source_callsign"))
-            .ok_or_else(|| "AX25KISSInterface requires 'callsign'".to_string())?;
+            .ok_or_else(|| InterfaceConfigError::missing("AX25KISSInterface", &["callsign"]))?;
         let ssid = params
             .get("ssid")
             .or_else(|| params.get("source_ssid"))
             .map(|value| value.parse::<u8>())
             .transpose()
-            .map_err(|_| "invalid AX.25 SSID".to_string())?
+            .map_err(|_| InterfaceConfigError::invalid_value("ssid", "invalid AX.25 SSID"))?
             .unwrap_or(0);
-        config.ax25_source = Some(validate_address(callsign, ssid).map_err(|e| e.to_string())?);
+        config.ax25_source = Some(validate_address(callsign, ssid).map_err(|error| {
+            let key = match error {
+                Ax25AddressError::Callsign => "callsign",
+                Ax25AddressError::Ssid => "ssid",
+            };
+            InterfaceConfigError::invalid_value(key, error.to_string())
+        })?);
         config.interface_type_name = self.type_name().into();
         Ok(Box::new(config))
     }

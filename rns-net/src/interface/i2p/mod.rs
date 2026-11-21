@@ -766,7 +766,9 @@ fn peer_reader_loop(
 
 // --- Factory implementation ---
 
-use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
+use super::{
+    InterfaceConfigData, InterfaceConfigError, InterfaceFactory, StartContext, StartResult,
+};
 use std::collections::HashMap;
 
 /// Factory for `I2PInterface`.
@@ -782,7 +784,7 @@ impl InterfaceFactory for I2pFactory {
         name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         let sam_host = params
             .get("sam_host")
             .cloned()

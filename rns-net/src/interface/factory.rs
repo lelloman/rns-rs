@@ -189,6 +189,67 @@ impl<T: Send + 'static> InterfaceConfigData for T {
     }
 }
 
+/// Why an interface section could not be turned into an interface config.
+/// Its `Display` is the message logged for the section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InterfaceConfigError {
+    /// A required key is absent. Displays as `<section> requires 'a'`, or
+    /// `'a' or 'b'` when any of several keys would do.
+    MissingKey {
+        /// What requires the key, e.g. `PipeInterface` or `subinterface 'A'`.
+        section: String,
+        /// The keys, any one of which is required.
+        keys: &'static [&'static str],
+    },
+    /// A key has a value the interface cannot use.
+    InvalidValue {
+        /// The key.
+        key: &'static str,
+        /// What is wrong with it, naming the key and usually the value.
+        message: String,
+    },
+    /// The section as a whole cannot be used.
+    Invalid(String),
+}
+
+impl InterfaceConfigError {
+    /// A missing-key error for the interface type or section `section`.
+    pub fn missing(section: impl Into<String>, keys: &'static [&'static str]) -> Self {
+        Self::MissingKey {
+            section: section.into(),
+            keys,
+        }
+    }
+
+    /// An invalid-value error for `key`.
+    pub fn invalid_value(key: &'static str, message: impl Into<String>) -> Self {
+        Self::InvalidValue {
+            key,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for InterfaceConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingKey { section, keys } => {
+                write!(f, "{section} requires ")?;
+                for (index, key) in keys.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(" or ")?;
+                    }
+                    write!(f, "'{key}'")?;
+                }
+                Ok(())
+            }
+            Self::InvalidValue { message, .. } | Self::Invalid(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for InterfaceConfigError {}
+
 /// Factory that can parse config and start an interface type.
 pub trait InterfaceFactory: Send + Sync {
     /// Config-file type name, e.g. "TCPClientInterface".
@@ -205,7 +266,7 @@ pub trait InterfaceFactory: Send + Sync {
         name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String>;
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError>;
 
     /// Parse a complete ConfigObj interface section. Flat factories inherit
     /// the compatibility default; multi-interface factories can inspect children.
@@ -214,7 +275,7 @@ pub trait InterfaceFactory: Send + Sync {
         name: &str,
         id: InterfaceId,
         section: ConfigSection<'_>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         self.parse_config(name, id, section.params)
     }
 

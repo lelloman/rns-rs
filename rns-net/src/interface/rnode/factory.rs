@@ -1,6 +1,7 @@
 //! Building RNode interfaces from their config.
 
 use super::*;
+use crate::interface::InterfaceConfigError;
 
 /// Factory for `RNodeInterface`.
 pub struct RNodeFactory;
@@ -19,14 +20,14 @@ impl InterfaceFactory for RNodeFactory {
         name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         let pre_opened_fd = params.get("fd").and_then(|v| v.parse::<i32>().ok());
 
         let port = params
             .get("port")
             .cloned()
             .or_else(|| pre_opened_fd.map(|_| "usb-bridge".to_string()))
-            .ok_or_else(|| "RNodeInterface requires 'port' or 'fd'".to_string())?;
+            .ok_or_else(|| InterfaceConfigError::missing("RNodeInterface", &["port", "fd"]))?;
 
         let speed = params
             .get("speed")
@@ -82,8 +83,11 @@ impl InterfaceFactory for RNodeFactory {
         // As upstream, a callsign longer than CALLSIGN_MAX_LEN makes the
         // configuration invalid.
         if id_interval.is_some() && id_callsign.as_ref().is_some_and(|c| c.len() > 32) {
-            return Err(format!(
-                "The encoded ID callsign for RNodeInterface[{name}] exceeds the max length of 32 bytes."
+            return Err(InterfaceConfigError::invalid_value(
+                "id_callsign",
+                format!(
+                    "The encoded ID callsign for RNodeInterface[{name}] exceeds the max length of 32 bytes."
+                ),
             ));
         }
 
@@ -233,7 +237,7 @@ impl InterfaceFactory for RNodeMultiFactory {
         name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         self.parse_config_section(
             name,
             id,
@@ -249,12 +253,12 @@ impl InterfaceFactory for RNodeMultiFactory {
         name: &str,
         id: InterfaceId,
         section: ConfigSection<'_>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         let base = RNodeFactory.parse_config(name, id, section.params)?;
         let mut config = *base
             .into_any()
             .downcast::<RNodeConfig>()
-            .map_err(|_| "wrong RNode config type".to_string())?;
+            .map_err(|_| InterfaceConfigError::Invalid("wrong RNode config type".into()))?;
 
         let mut subinterfaces = Vec::new();
         for child in section.children {
@@ -268,20 +272,35 @@ impl InterfaceFactory for RNodeMultiFactory {
                 continue;
             }
             if subinterfaces.len() >= 11 {
-                return Err("RNodeMultiInterface supports at most 11 enabled subinterfaces".into());
+                return Err(InterfaceConfigError::Invalid(
+                    "RNodeMultiInterface supports at most 11 enabled subinterfaces".into(),
+                ));
             }
             let vport = child
                 .params
                 .get("vport")
-                .ok_or_else(|| format!("subinterface '{}' requires 'vport'", child.name))?
+                .ok_or_else(|| {
+                    InterfaceConfigError::missing(
+                        format!("subinterface '{}'", child.name),
+                        &["vport"],
+                    )
+                })?
                 .parse::<u8>()
-                .map_err(|_| format!("invalid RNode virtual port for '{}'", child.name))?;
+                .map_err(|_| {
+                    InterfaceConfigError::invalid_value(
+                        "vport",
+                        format!("invalid RNode virtual port for '{}'", child.name),
+                    )
+                })?;
             if vport > 10
                 || subinterfaces
                     .iter()
                     .any(|sub: &RNodeSubConfig| sub.vport == vport)
             {
-                return Err(format!("invalid or duplicate RNode virtual port {}", vport));
+                return Err(InterfaceConfigError::invalid_value(
+                    "vport",
+                    format!("invalid or duplicate RNode virtual port {}", vport),
+                ));
             }
             let parse_u32 = |key: &str, default| {
                 child
@@ -332,12 +351,14 @@ impl InterfaceFactory for RNodeMultiFactory {
                     .and_then(|v| v.parse().ok()),
             };
             if let Some(error) = validate_sub_config(&sub) {
-                return Err(error);
+                return Err(InterfaceConfigError::Invalid(error));
             }
             subinterfaces.push(sub);
         }
         if subinterfaces.is_empty() {
-            return Err("RNodeMultiInterface requires at least one enabled subinterface".into());
+            return Err(InterfaceConfigError::Invalid(
+                "RNodeMultiInterface requires at least one enabled subinterface".into(),
+            ));
         }
         config.multi = true;
         // Upstream adds the interface, then each subinterface once its

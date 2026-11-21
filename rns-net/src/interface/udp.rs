@@ -337,7 +337,9 @@ impl LoopSource for UdpSource {
 
 // --- Factory implementation ---
 
-use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
+use super::{
+    InterfaceConfigData, InterfaceConfigError, InterfaceFactory, StartContext, StartResult,
+};
 use rns_core::transport::types::InterfaceInfo;
 use std::collections::HashMap;
 
@@ -354,7 +356,7 @@ impl InterfaceFactory for UdpFactory {
         name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         let listen_ip = params.get("listen_ip").cloned();
 
         // 'port' is a shorthand that sets both listen_port and forward_port

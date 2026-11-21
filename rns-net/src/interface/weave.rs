@@ -13,7 +13,9 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 use rns_crypto::ed25519::{Ed25519PrivateKey, Ed25519PublicKey};
 use rns_crypto::sha256::sha256;
 
-use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult, Writer};
+use super::{
+    InterfaceConfigData, InterfaceConfigError, InterfaceFactory, StartContext, StartResult, Writer,
+};
 use crate::event::{
     DynamicInterfaceRegistration, Event, EventSender, InterfaceTelemetry, LoopContext, LoopSource,
     SourceStatus,
@@ -1069,11 +1071,11 @@ impl InterfaceFactory for WeaveFactory {
         name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         let port = params
             .get("port")
             .cloned()
-            .ok_or_else(|| "WeaveInterface requires 'port'".to_string())?;
+            .ok_or_else(|| InterfaceConfigError::missing("WeaveInterface", &["port"]))?;
         let configured_bitrate = params
             .get("configured_bitrate")
             .and_then(|v| v.parse().ok())
