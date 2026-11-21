@@ -4,6 +4,9 @@
 //! Reads standard Python RNS config files, opens TCP server/client, UDP, and
 //! Local interfaces, persists identity and known destinations.
 
+// A type in the public API that downstream code cannot name is either
+// API to export or a detail to keep out of public signatures.
+#![warn(unnameable_types)]
 // Test code is outside the code-quality lints' scope.
 #![cfg_attr(test, allow(unsafe_code, clippy::undocumented_unsafe_blocks))]
 
