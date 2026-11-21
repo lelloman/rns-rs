@@ -16,6 +16,9 @@ use crate::supervisor::{
 };
 use rns_net::RpcAddr;
 
+mod error;
+pub use error::ServerConfigError;
+
 const DEFAULT_STATS_MAX_AGE_DAYS: u64 = 30;
 
 /// Keys whose values name executables, libraries, or library locations. They
@@ -226,7 +229,7 @@ impl ServerConfig {
     pub fn validate_json_with_current_context(
         &self,
         body: &[u8],
-    ) -> Result<ServerConfigValidationSnapshot, String> {
+    ) -> Result<ServerConfigValidationSnapshot, ServerConfigError> {
         let mut candidate = Self::parse_config_json(body)?;
         self.keep_api_read_only_keys(&mut candidate)?;
         let mut warnings = Self::validate_file_config(&candidate)?;
@@ -247,9 +250,12 @@ impl ServerConfig {
     ///
     /// A key omitted from the submission keeps its current file value; a key
     /// that is present must equal the current file value.
-    fn keep_api_read_only_keys(&self, candidate: &mut ServerConfigFile) -> Result<(), String> {
+    fn keep_api_read_only_keys(
+        &self,
+        candidate: &mut ServerConfigFile,
+    ) -> Result<(), ServerConfigError> {
         let current = &self.file_config;
-        let pairs: [(&str, &mut Option<String>, &Option<String>); 4] = [
+        let pairs: [(&'static str, &mut Option<String>, &Option<String>); 4] = [
             ("rnsd_bin", &mut candidate.rnsd_bin, &current.rnsd_bin),
             (
                 "sentineld_bin",
@@ -264,10 +270,10 @@ impl ServerConfig {
                 None => *next = current.clone(),
                 Some(value) if Some(&*value) == current.as_ref() => {}
                 Some(_) => {
-                    return Err(format!(
-                        "read-only key: {key} can only be changed by editing {} and restarting rns-server",
-                        self.server_config_file_path.display()
-                    ));
+                    return Err(ServerConfigError::ReadOnlyKey {
+                        key,
+                        file: self.server_config_file_path.clone(),
+                    });
                 }
             }
         }
@@ -291,37 +297,33 @@ impl ServerConfig {
         mode: ServerConfigMutationMode,
         body: &[u8],
         control_tx: Option<mpsc::Sender<ProcessControlCommand>>,
-    ) -> Result<ServerConfigMutationResult, String> {
+    ) -> Result<ServerConfigMutationResult, ServerConfigError> {
         let mut candidate = Self::parse_config_json(body)?;
         self.keep_api_read_only_keys(&mut candidate)?;
         let warnings = Self::validate_file_config(&candidate)?;
         let next = self.with_file_config(&candidate, true);
         let apply_plan = self.apply_plan(&next);
 
-        std::fs::create_dir_all(&self.resolved_config_dir).map_err(|err| {
-            format!(
-                "failed to create config dir {}: {}",
-                self.resolved_config_dir.display(),
-                err
-            )
+        std::fs::create_dir_all(&self.resolved_config_dir).map_err(|source| {
+            ServerConfigError::CreateConfigDir {
+                path: self.resolved_config_dir.clone(),
+                source,
+            }
         })?;
-        let serialized = serde_json::to_vec_pretty(&candidate)
-            .map_err(|err| format!("failed to serialize server config JSON: {}", err))?;
-        std::fs::write(&self.server_config_file_path, serialized).map_err(|err| {
-            format!(
-                "failed to write {}: {}",
-                self.server_config_file_path.display(),
-                err
-            )
+        let serialized =
+            serde_json::to_vec_pretty(&candidate).map_err(ServerConfigError::Serialize)?;
+        std::fs::write(&self.server_config_file_path, serialized).map_err(|source| {
+            ServerConfigError::WriteFile {
+                path: self.server_config_file_path.clone(),
+                source,
+            }
         })?;
 
         if matches!(mode, ServerConfigMutationMode::Apply) {
             if let Some(tx) = control_tx {
                 for process in &apply_plan.processes_to_restart {
                     tx.send(ProcessControlCommand::Restart(process.clone()))
-                        .map_err(|_| {
-                            format!("failed to queue restart for process '{}'", process)
-                        })?;
+                        .map_err(|_| ServerConfigError::QueueRestart(process.clone()))?;
                 }
             }
         }
@@ -931,22 +933,24 @@ impl ServerConfig {
         }
     }
 
-    fn load_config_file(path: &Path) -> Result<(ServerConfigFile, bool), String> {
+    fn load_config_file(path: &Path) -> Result<(ServerConfigFile, bool), ServerConfigError> {
         if !path.exists() {
             return Ok((ServerConfigFile::default(), false));
         }
-        let body = std::fs::read(path)
-            .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
+        let body = std::fs::read(path).map_err(|source| ServerConfigError::ReadFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
         let cfg = Self::parse_config_json(&body)?;
         Self::validate_file_config(&cfg)?;
         Ok((cfg, true))
     }
 
-    fn parse_config_json(body: &[u8]) -> Result<ServerConfigFile, String> {
-        serde_json::from_slice(body).map_err(|err| format!("invalid server config JSON: {}", err))
+    fn parse_config_json(body: &[u8]) -> Result<ServerConfigFile, ServerConfigError> {
+        serde_json::from_slice(body).map_err(ServerConfigError::InvalidJson)
     }
 
-    fn validate_file_config(file_cfg: &ServerConfigFile) -> Result<Vec<String>, String> {
+    fn validate_file_config(file_cfg: &ServerConfigFile) -> Result<Vec<String>, ServerConfigError> {
         let mut warnings = Vec::new();
 
         validate_optional_nonempty("stats_db_path", file_cfg.stats_db_path.as_deref())?;
@@ -958,41 +962,41 @@ impl ServerConfig {
         validate_optional_nonempty("http.auth_token", file_cfg.http.auth_token.as_deref())?;
 
         if matches!(file_cfg.logs.max_file_size_mb, Some(0)) {
-            return Err("logs.max_file_size_mb must be greater than 0".into());
+            return Err(ServerConfigError::LogFileSizeZero);
         }
         if file_cfg
             .logs
             .max_file_size_mb
             .is_some_and(|value| value > 10_240)
         {
-            return Err("logs.max_file_size_mb must not exceed 10240".into());
+            return Err(ServerConfigError::LogFileSizeTooLarge);
         }
         if file_cfg.logs.max_archives.is_some_and(|value| value > 100) {
-            return Err("logs.max_archives must not exceed 100".into());
+            return Err(ServerConfigError::LogArchivesTooMany);
         }
         if matches!(file_cfg.stats.max_age_days, Some(0)) {
-            return Err("stats.max_age_days must be greater than 0 or null".into());
+            return Err(ServerConfigError::StatsMaxAgeZero);
         }
         if file_cfg
             .stats
             .max_age_days
             .is_some_and(|value| value > 3650)
         {
-            return Err("stats.max_age_days must not exceed 3650".into());
+            return Err(ServerConfigError::StatsMaxAgeTooLarge);
         }
         if file_cfg.stats.max_size_mb.is_some_and(|value| value < 64) {
-            return Err("stats.max_size_mb must be at least 64 or null".into());
+            return Err(ServerConfigError::StatsMaxSizeTooSmall);
         }
         if file_cfg
             .stats
             .max_size_mb
             .is_some_and(|value| value > 1_048_576)
         {
-            return Err("stats.max_size_mb must not exceed 1048576".into());
+            return Err(ServerConfigError::StatsMaxSizeTooLarge);
         }
 
         if matches!(file_cfg.http.enabled, Some(true)) && matches!(file_cfg.http.port, Some(0)) {
-            return Err("http.port must be greater than 0 when HTTP is enabled".into());
+            return Err(ServerConfigError::HttpPortZero);
         }
 
         if matches!(file_cfg.http.enabled, Some(false))
@@ -1208,9 +1212,12 @@ impl ServerConfig {
     }
 }
 
-fn validate_optional_nonempty(field: &str, value: Option<&str>) -> Result<(), String> {
+fn validate_optional_nonempty(
+    field: &'static str,
+    value: Option<&str>,
+) -> Result<(), ServerConfigError> {
     if value.is_some_and(|raw| raw.trim().is_empty()) {
-        return Err(format!("{field} cannot be empty"));
+        return Err(ServerConfigError::Empty(field));
     }
     Ok(())
 }
@@ -1433,7 +1440,8 @@ mod tests {
             let body = format!(r#"{{"{key}": "/usr/bin/other"}}"#);
             let err = current
                 .validate_json_with_current_context(body.as_bytes())
-                .unwrap_err();
+                .unwrap_err()
+                .to_string();
             assert!(err.starts_with(&format!("read-only key: {key}")), "{err}");
             for mode in [
                 rns_ctl::state::ServerConfigMutationMode::Save,
@@ -1441,7 +1449,8 @@ mod tests {
             ] {
                 let err = current
                     .mutate_json_with_current_context(mode, body.as_bytes(), None)
-                    .unwrap_err();
+                    .unwrap_err()
+                    .to_string();
                 assert!(err.starts_with(&format!("read-only key: {key}")), "{err}");
             }
         }
@@ -1486,7 +1495,8 @@ mod tests {
         // Changing a file-set key through the API is refused.
         let err = current
             .validate_json_with_current_context(br#"{"rnsd_bin": "/opt/other"}"#)
-            .unwrap_err();
+            .unwrap_err()
+            .to_string();
         assert!(err.starts_with("read-only key: rnsd_bin"), "{err}");
     }
 
@@ -1538,8 +1548,96 @@ mod tests {
     }
 
     #[test]
+    fn config_errors_keep_their_messages() {
+        use super::ServerConfigError as E;
+        let file = || PathBuf::from("/etc/rns/rns-server.json");
+        let io = || std::io::Error::other("denied");
+        let json = || serde_json::from_str::<u8>("x").unwrap_err();
+        let cases = [
+            (
+                E::ReadFile {
+                    path: file(),
+                    source: io(),
+                },
+                "failed to read /etc/rns/rns-server.json: denied",
+            ),
+            (
+                E::InvalidJson(json()),
+                "invalid server config JSON: expected value at line 1 column 1",
+            ),
+            (E::Empty("http.host"), "http.host cannot be empty"),
+            (
+                E::LogFileSizeZero,
+                "logs.max_file_size_mb must be greater than 0",
+            ),
+            (
+                E::LogFileSizeTooLarge,
+                "logs.max_file_size_mb must not exceed 10240",
+            ),
+            (
+                E::LogArchivesTooMany,
+                "logs.max_archives must not exceed 100",
+            ),
+            (
+                E::StatsMaxAgeZero,
+                "stats.max_age_days must be greater than 0 or null",
+            ),
+            (
+                E::StatsMaxAgeTooLarge,
+                "stats.max_age_days must not exceed 3650",
+            ),
+            (
+                E::StatsMaxSizeTooSmall,
+                "stats.max_size_mb must be at least 64 or null",
+            ),
+            (
+                E::StatsMaxSizeTooLarge,
+                "stats.max_size_mb must not exceed 1048576",
+            ),
+            (
+                E::HttpPortZero,
+                "http.port must be greater than 0 when HTTP is enabled",
+            ),
+            (
+                E::ReadOnlyKey {
+                    key: "rnsd_bin",
+                    file: file(),
+                },
+                "read-only key: rnsd_bin can only be changed by editing /etc/rns/rns-server.json and restarting rns-server",
+            ),
+            (
+                E::CreateConfigDir {
+                    path: PathBuf::from("/etc/rns"),
+                    source: io(),
+                },
+                "failed to create config dir /etc/rns: denied",
+            ),
+            (
+                E::Serialize(json()),
+                "failed to serialize server config JSON: expected value at line 1 column 1",
+            ),
+            (
+                E::WriteFile {
+                    path: file(),
+                    source: io(),
+                },
+                "failed to write /etc/rns/rns-server.json: denied",
+            ),
+            (
+                E::QueueRestart("rns-statsd".into()),
+                "failed to queue restart for process 'rns-statsd'",
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
     fn validation_rejects_unknown_fields() {
-        let err = ServerConfig::parse_config_json(br#"{"unknown":true}"#).unwrap_err();
+        let err = ServerConfig::parse_config_json(br#"{"unknown":true}"#)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("unknown field"));
     }
 
@@ -1549,7 +1647,8 @@ mod tests {
             stats_db_path: Some("   ".into()),
             ..ServerConfigFile::default()
         })
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert_eq!(err, "stats_db_path cannot be empty");
     }
 
@@ -1562,7 +1661,8 @@ mod tests {
             },
             ..ServerConfigFile::default()
         })
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert_eq!(zero_size, "logs.max_file_size_mb must be greater than 0");
 
         let too_many_archives = ServerConfig::validate_file_config(&ServerConfigFile {
@@ -1572,7 +1672,8 @@ mod tests {
             },
             ..ServerConfigFile::default()
         })
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert_eq!(too_many_archives, "logs.max_archives must not exceed 100");
     }
 
@@ -1599,7 +1700,8 @@ mod tests {
             },
             ..ServerConfigFile::default()
         })
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert_eq!(
             zero_age,
             "stats.max_age_days must be greater than 0 or null"
@@ -1612,7 +1714,8 @@ mod tests {
             },
             ..ServerConfigFile::default()
         })
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert_eq!(small_size, "stats.max_size_mb must be at least 64 or null");
     }
 
