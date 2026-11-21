@@ -124,14 +124,13 @@ impl LinkManager {
             {
                 receiver.continue_from(window, eifr);
             }
-            link.incoming_resources.push(receiver);
-            let idx = link.incoming_resources.len() - 1;
             if let Some(split) = link.incoming_splits.get_mut(&original_hash) {
                 split.current_segment_index = segment_index;
                 split.current_received_parts = 0;
                 split.current_total_parts = current_total_parts;
             }
-            let resource_actions = link.incoming_resources[idx].accept(now);
+            let resource_actions = receiver.accept(now);
+            link.incoming_resources.push(receiver);
             return self.process_resource_actions(link_id, resource_actions, rng);
         }
 
@@ -173,9 +172,8 @@ impl LinkManager {
                     },
                 );
             }
+            let resource_actions = receiver.accept(now);
             link.incoming_resources.push(receiver);
-            let idx = link.incoming_resources.len() - 1;
-            let resource_actions = link.incoming_resources[idx].accept(now);
             return self.process_resource_actions(link_id, resource_actions, rng);
         }
 
@@ -230,9 +228,8 @@ impl LinkManager {
                     },
                 );
             }
+            let resource_actions = receiver.accept(now);
             link.incoming_resources.push(receiver);
-            let idx = link.incoming_resources.len() - 1;
-            let resource_actions = link.incoming_resources[idx].accept(now);
             return self.process_resource_actions(link_id, resource_actions, rng);
         }
 
@@ -283,14 +280,13 @@ impl LinkManager {
                         },
                     );
                 }
-                link.incoming_resources.push(receiver);
-                let idx = link.incoming_resources.len() - 1;
                 let started = LinkManagerAction::ResourceStarted {
                     link_id: *link_id,
-                    resource_hash: link.incoming_resources[idx].resource_hash.clone(),
-                    data_size: link.incoming_resources[idx].data_size,
+                    resource_hash: receiver.resource_hash.clone(),
+                    data_size: receiver.data_size,
                 };
-                let resource_actions = link.incoming_resources[idx].accept(now);
+                let resource_actions = receiver.accept(now);
+                link.incoming_resources.push(receiver);
                 let mut actions = vec![started];
                 actions.extend(self.process_resource_actions(link_id, resource_actions, rng));
                 actions
@@ -323,28 +319,25 @@ impl LinkManager {
         };
 
         let now = time::now();
-        let idx = link
+        let Some(receiver) = link
             .incoming_resources
-            .iter()
-            .position(|r| r.resource_hash == resource_hash);
-        let idx = match idx {
-            Some(i) => i,
-            None => return Vec::new(),
+            .iter_mut()
+            .find(|r| r.resource_hash == resource_hash)
+        else {
+            return Vec::new();
         };
 
-        if accept && link.incoming_resources[idx].flags.split {
-            if let Some(original_hash) =
-                Self::resource_hash_key(&link.incoming_resources[idx].original_hash)
-            {
+        if accept && receiver.flags.split {
+            if let Some(original_hash) = Self::resource_hash_key(&receiver.original_hash) {
                 if !link.incoming_splits.contains_key(&original_hash) {
                     let storage = match Self::incoming_storage(
                         &link.resource_receive_mode,
                         &original_hash,
-                        link.incoming_resources[idx].data_size,
+                        receiver.data_size,
                     ) {
                         Ok(storage) => storage,
                         Err(error) => {
-                            let resource_actions = link.incoming_resources[idx].reject();
+                            let resource_actions = receiver.reject();
                             let mut actions =
                                 self.process_resource_actions(link_id, resource_actions, rng);
                             actions.push(LinkManagerAction::ResourceFailed {
@@ -357,15 +350,15 @@ impl LinkManager {
                     link.incoming_splits.insert(
                         original_hash,
                         IncomingSplitTransfer {
-                            total_segments: link.incoming_resources[idx].total_segments,
+                            total_segments: receiver.total_segments,
                             completed_segments: 0,
-                            current_segment_index: link.incoming_resources[idx].segment_index,
+                            current_segment_index: receiver.segment_index,
                             current_received_parts: 0,
-                            current_total_parts: link.incoming_resources[idx].total_parts,
+                            current_total_parts: receiver.total_parts,
                             storage,
                             metadata: None,
-                            is_request: link.incoming_resources[idx].flags.is_request,
-                            is_response: link.incoming_resources[idx].flags.is_response,
+                            is_request: receiver.flags.is_request,
+                            is_response: receiver.flags.is_response,
                             window: None,
                         },
                     );
@@ -377,12 +370,12 @@ impl LinkManager {
         let resource_actions = if accept {
             actions.push(LinkManagerAction::ResourceStarted {
                 link_id: *link_id,
-                resource_hash: link.incoming_resources[idx].resource_hash.clone(),
-                data_size: link.incoming_resources[idx].data_size,
+                resource_hash: receiver.resource_hash.clone(),
+                data_size: receiver.data_size,
             });
-            link.incoming_resources[idx].accept(now)
+            receiver.accept(now)
         } else {
-            link.incoming_resources[idx].reject()
+            receiver.reject()
         };
 
         actions.extend(self.process_resource_actions(link_id, resource_actions, rng));

@@ -75,13 +75,12 @@ impl LinkManager {
         }
 
         // Look up handler by path_hash
-        let handler_idx = self
+        let Some(handler) = self
             .request_handlers
             .iter()
-            .position(|h| h.path_hash == path_hash);
-        let handler_idx = match handler_idx {
-            Some(i) => i,
-            None => return Vec::new(),
+            .find(|h| h.path_hash == path_hash)
+        else {
+            return Vec::new();
         };
 
         // Check ACL
@@ -89,7 +88,6 @@ impl LinkManager {
             .links
             .get(link_id)
             .and_then(|l| l.remote_identity.as_ref());
-        let handler = &self.request_handlers[handler_idx];
         if let Some(ref allowed) = handler.allowed_list {
             match remote_identity {
                 Some((identity_hash, _)) => {

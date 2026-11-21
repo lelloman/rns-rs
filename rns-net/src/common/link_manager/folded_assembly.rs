@@ -51,12 +51,14 @@ impl FoldedAssembly {
         match done {
             None => {
                 let output = self.decoder.output();
-                self.hash.update(&output[self.hashed..]);
+                self.hash
+                    .update(output.get(self.hashed..).unwrap_or_default());
                 self.hashed = output.len();
                 None
             }
             Some(Ok(data)) => {
-                self.hash.update(&data[self.hashed..]);
+                self.hash
+                    .update(data.get(self.hashed..).unwrap_or_default());
                 let hash = core::mem::take(&mut self.hash);
                 let assembly = self.assembly.take()?;
                 Some(assembly.finish_decompressed(data, Some(hash)))
