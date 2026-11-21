@@ -209,8 +209,13 @@ for host in vps-eu vps-us; do
 done
 ```
 
-The supervised processes take up to about 30 seconds to report ready on a busy
-node. Then check them and the interfaces:
+The supervised processes usually report ready within 30 seconds, but on a
+busy node it can take longer: on 2026-11-21 vps-eu needed about 100 seconds.
+While it starts, `rnsd` logs nothing new, its threads wait and connections
+queue on the listener, which looks like a hang but is not one. Wait up to four
+minutes before treating a start as failed; `rnsd.log` shows `Transport
+Instance will respond to probe requests` once startup is complete. Then check
+the processes and the interfaces:
 
 ```bash
 for host in vps-eu vps-us; do

@@ -95,6 +95,22 @@ cargo update --workspace --manifest-path rns-esp32/Cargo.toml
 cargo metadata --locked --manifest-path rns-esp32/Cargo.toml --format-version 1 > /dev/null
 ```
 
+The fuzz targets and the WASM hook examples also keep their own lock files.
+Nothing builds them with `--locked`, so a stale one does not fail, but refresh
+them in the same commit so they name the versions being released:
+
+```bash
+cargo update --workspace --manifest-path fuzz/Cargo.toml
+for example in rns-hooks/examples/*/; do
+  cargo update --workspace --manifest-path "$example/Cargo.toml"
+done
+```
+
+Every publishable crate, including `rns-hooks-abi` and `rns-hooks-sdk`, sets
+`publish = ["crates-io"]`. Keep it that way: when the crates of one `cargo
+publish` command disagree on their allowed registries, cargo refuses to pick
+one.
+
 ## 4. Verify locally before publishing
 
 Run the full workspace checks first:

@@ -5,6 +5,7 @@ edition = "2021"
 description = "Guest-side SDK for writing rns-hooks WASM programs"
 license = "MIT"
 repository = "https://github.com/lelloman/rns-rs"
+publish = ["crates-io"]
 
 [features]
 default = []
