@@ -4,7 +4,6 @@
 //! The crate performs no I/O: engines take packets and the current time and
 //! return actions for the caller to carry out. Without the default `std`
 //! feature it builds as `no_std` with `alloc`.
-#![warn(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
 extern crate alloc;
 

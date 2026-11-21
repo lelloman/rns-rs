@@ -1,3 +1,5 @@
+//! Build script: the version string with the commit it was built from.
+
 use std::process::Command;
 
 fn main() {

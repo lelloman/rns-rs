@@ -21,6 +21,7 @@ unsafe_op_in_unsafe_fn = "warn"
 unused_lifetimes = "warn"
 # A `pub` item nothing outside its crate can reach says pub(crate).
 unreachable_pub = "warn"
+missing_docs = "warn"
 
 [workspace.lints.clippy]
 dbg_macro = "warn"

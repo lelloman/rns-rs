@@ -6,8 +6,6 @@
 //! and [`server::run_server_with_listener`], and reports its supervised
 //! processes and configuration through [`state`].
 
-#![warn(missing_docs)]
-
 /// Request routing and handlers: the JSON `/api/...` endpoints, the web UI
 /// shell and the health check.
 pub mod api;

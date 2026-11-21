@@ -1,3 +1,5 @@
+//! rntun - authenticated IPv4 tunnelling over a private Reticulum node.
+
 use rns_core::encoding::hex;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -1,3 +1,6 @@
+//! rns-ctl - the HTTP/WebSocket control plane and command-line tool for a
+//! Reticulum node.
+
 use std::process::ExitCode;
 
 use rns_cli::args::Args;

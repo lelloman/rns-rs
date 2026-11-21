@@ -1,3 +1,6 @@
+//! rngit - hosts git repositories over Reticulum, and manages their
+//! releases, work items and permissions.
+
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let result = if args.first().is_some_and(|arg| arg == "release") {

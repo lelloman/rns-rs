@@ -1,7 +1,5 @@
 //! Shared utilities for RNS CLI tools.
 
-#![warn(missing_docs)]
-
 extern crate self as rns_cli;
 
 pub mod app;

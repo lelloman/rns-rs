@@ -1,3 +1,7 @@
+//! The hook behind `rns-statsd`: emits a provider event for every packet,
+//! announce and link it sees, for the daemon to record. It builds as a
+//! WebAssembly guest, or with the `builtin` feature as a native built-in hook.
+
 #![cfg_attr(target_arch = "wasm32", no_std)]
 // As a wasm guest the crate exports its entry point unmangled and reads the
 // context the host wrote into its memory: that is the hook ABI.
@@ -25,6 +29,7 @@ use rns_hooks::{
     register_builtin_hook, BuiltinHookCall, BuiltinHookHost, HookContext, HookError, HookResult,
 };
 
+/// The name the built-in hook is registered under.
 #[cfg(feature = "builtin")]
 pub const BUILTIN_ID: &str = "rns.statsd";
 
@@ -64,6 +69,8 @@ fn announce_fields(raw: &[u8], data_offset: usize) -> Option<(&[u8; 64], &[u8; 1
     Some((public_key, name_hash, random_hash))
 }
 
+/// The guest entry point: emits packet, announce or link statistics for the
+/// context the host wrote at `ctx_ptr`, and lets the packet continue.
 #[cfg(target_arch = "wasm32")]
 #[no_mangle]
 pub extern "C" fn on_hook(ctx_ptr: i32) -> i32 {
@@ -145,6 +152,7 @@ fn emit_announce_stats(ctx: &PacketContext) {
     let _ = host::emit_event(ANNOUNCE_STATS_PAYLOAD_TYPE, &payload);
 }
 
+/// Register the built-in hook under [`BUILTIN_ID`].
 #[cfg(feature = "builtin")]
 pub fn register_builtin_hooks() -> Result<(), HookError> {
     register_builtin_hook(BUILTIN_ID, builtin_stats_hook)
@@ -244,6 +252,3 @@ mod tests {
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     core::arch::wasm32::unreachable()
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn build_dependency_marker() {}

@@ -1,3 +1,7 @@
+//! The hook behind `rns-sentineld`: emits a provider event for every backbone
+//! peer event it sees, for the daemon to judge the peer by. It builds as a
+//! WebAssembly guest, or with the `builtin` feature as a native built-in hook.
+
 #![cfg_attr(target_arch = "wasm32", no_std)]
 // As a wasm guest the crate exports its entry point unmangled and reads the
 // context the host wrote into its memory: that is the hook ABI.
@@ -24,6 +28,7 @@ use rns_hooks::{
     register_builtin_hook, BuiltinHookCall, BuiltinHookHost, HookContext, HookError, HookResult,
 };
 
+/// The name the built-in hook is registered under.
 #[cfg(feature = "builtin")]
 pub const BUILTIN_ID: &str = "rns.sentineld";
 
@@ -34,24 +39,10 @@ static mut RESULT: HookResult = HookResult {
     modified_data_len: 0,
 };
 
-/// Event kind byte, set by the host depending on which attach point fires.
-/// The sentinel binary passes a different hook name per attach point, but all
-/// hooks share this same wasm module. We derive the event kind from the
-/// `penalty_level` and `blacklist_for_secs` fields in the context: if
-/// `blacklist_for_secs > 0` it's a penalty event; otherwise we rely on the
-/// host setting the attach point name (which the provider bridge envelope
-/// carries). For simplicity we encode a sentinel-side discriminant from
-/// a static that the host sets before calling us.
-///
-/// Actually, since all 5 attach points call the same wasm entry point and
-/// we can't distinguish them from within the wasm, we store the event kind
-/// in a global that is set via `__rns_sentinel_set_event_kind` export.
-/// The host calls this before each `on_hook` invocation.
-///
-/// For now, we use a simpler approach: the sentinel binary loads 5 copies
-/// of this hook with different names. The provider bridge envelope carries
-/// `attach_point` which tells the consumer which event it was. The wasm
-/// hook just emits the context data; the consumer classifies by attach point.
+/// The guest entry point: emits the backbone peer context the host wrote at
+/// `ctx_ptr` as a provider event, and lets it continue. The same module is
+/// attached at every backbone peer hook point; the consumer tells the events
+/// apart by the attach point their envelope carries.
 #[cfg(target_arch = "wasm32")]
 #[no_mangle]
 pub extern "C" fn on_hook(ctx_ptr: i32) -> i32 {
@@ -102,6 +93,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     core::arch::wasm32::unreachable()
 }
 
+/// Register the built-in hook under [`BUILTIN_ID`].
 #[cfg(feature = "builtin")]
 pub fn register_builtin_hooks() -> Result<(), HookError> {
     register_builtin_hook(BUILTIN_ID, builtin_sentinel_hook)
@@ -173,6 +165,3 @@ fn builtin_sentinel_hook(
 
     Ok(HookResult::continue_result())
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn build_dependency_marker() {}

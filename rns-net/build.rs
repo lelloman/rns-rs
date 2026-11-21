@@ -1,3 +1,6 @@
+//! Build script: cfg aliases for interface feature sets, and the version
+//! string with the commit it was built from.
+
 use std::process::Command;
 
 /// cfg aliases for feature sets that gate code in several places:

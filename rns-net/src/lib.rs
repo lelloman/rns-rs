@@ -5,7 +5,6 @@
 //! Local interfaces, persists identity and known destinations.
 
 // Test code is outside the code-quality lints' scope.
-#![warn(missing_docs)]
 #![cfg_attr(test, allow(unsafe_code, clippy::undocumented_unsafe_blocks))]
 
 #[cfg(feature = "hooks")]
