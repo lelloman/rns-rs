@@ -2,11 +2,11 @@
 
 use super::*;
 
-impl Driver {
+impl RuntimeConfigHandles {
     #[cfg(feature = "iface-tcp")]
     pub(crate) fn list_tcp_server_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
-        let mut names: Vec<&String> = self.runtime_config.tcp_server.keys().collect();
+        let mut names: Vec<&String> = self.tcp_server.keys().collect();
         names.sort();
         for name in names {
             for suffix in [
@@ -33,7 +33,7 @@ impl Driver {
     #[cfg(feature = "iface-tcp")]
     pub(crate) fn list_tcp_client_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
-        let mut names: Vec<&String> = self.runtime_config.tcp_client.keys().collect();
+        let mut names: Vec<&String> = self.tcp_client.keys().collect();
         names.sort();
         for name in names {
             for suffix in [
@@ -54,7 +54,7 @@ impl Driver {
     pub(crate) fn tcp_client_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("tcp_client.")?;
         let (name, setting) = rest.split_once('.')?;
-        let handle = self.runtime_config.tcp_client.get(name)?;
+        let handle = self.tcp_client.get(name)?;
         let current = recover_mutex_guard(&handle.runtime, "tcp client runtime").clone();
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
@@ -116,26 +116,22 @@ impl Driver {
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_tcp_client_runtime_key(key)?;
-        let handle = self
-            .runtime_config
-            .tcp_client
-            .get(name)
-            .ok_or(RuntimeConfigError {
-                code: RuntimeConfigErrorCode::NotFound,
-                message: format!("tcp client interface '{}' not found", name),
-            })?;
+        let handle = self.tcp_client.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("tcp client interface '{}' not found", name),
+        })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "tcp client runtime");
         match setting {
             "connect_timeout_secs" => {
-                runtime.connect_timeout = Self::expect_duration_secs(value, key)?;
+                runtime.connect_timeout = expect_duration_secs(value, key)?;
                 Ok(())
             }
             "reconnect_wait_secs" => {
-                runtime.reconnect_wait = Self::expect_duration_secs(value, key)?;
+                runtime.reconnect_wait = expect_duration_secs(value, key)?;
                 Ok(())
             }
             "max_reconnect_tries" => {
-                runtime.max_reconnect_tries = match Self::expect_u64(value, key)? {
+                runtime.max_reconnect_tries = match expect_u64(value, key)? {
                     0 => None,
                     raw => Some(raw as u32),
                 };
@@ -154,14 +150,10 @@ impl Driver {
         key: &str,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_tcp_client_runtime_key(key)?;
-        let handle = self
-            .runtime_config
-            .tcp_client
-            .get(name)
-            .ok_or(RuntimeConfigError {
-                code: RuntimeConfigErrorCode::NotFound,
-                message: format!("tcp client interface '{}' not found", name),
-            })?;
+        let handle = self.tcp_client.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("tcp client interface '{}' not found", name),
+        })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "tcp client runtime");
         let startup = handle.startup.clone();
         match setting {
@@ -183,7 +175,7 @@ impl Driver {
         let rest = key.strip_prefix("tcp_server.")?;
         let (name, setting) = rest.split_once('.')?;
         if Self::is_discovery_runtime_setting(setting) {
-            let handle = self.runtime_config.tcp_server_discovery.get(name)?;
+            let handle = self.tcp_server_discovery.get(name)?;
             return Self::discovery_runtime_entry(
                 key,
                 setting,
@@ -195,7 +187,7 @@ impl Driver {
             );
         }
 
-        let handle = self.runtime_config.tcp_server.get(name)?;
+        let handle = self.tcp_server.get(name)?;
         let current = recover_mutex_guard(&handle.runtime, "tcp server runtime").clone();
         let startup = handle.startup.clone();
         match setting {
@@ -233,12 +225,14 @@ impl Driver {
         })
     }
 
+    /// Returns the interface's name when a discovery setting changed, so
+    /// the driver brings its discovery announces in step.
     #[cfg(feature = "iface-tcp")]
-    pub(crate) fn set_tcp_server_runtime_config(
+    pub(crate) fn set_tcp_server_runtime_config<'a>(
         &mut self,
-        key: &str,
+        key: &'a str,
         value: RuntimeConfigValue,
-    ) -> Result<(), RuntimeConfigError> {
+    ) -> Result<Option<&'a str>, RuntimeConfigError> {
         let (name, setting) = self.split_tcp_server_runtime_key(key)?;
         if matches!(
             setting,
@@ -252,21 +246,19 @@ impl Driver {
                 | "longitude"
                 | "height"
         ) {
-            return self.set_tcp_server_discovery_runtime_config(key, value);
+            return self
+                .set_tcp_server_discovery_runtime_config(key, value)
+                .map(Some);
         }
-        let handle = self
-            .runtime_config
-            .tcp_server
-            .get(name)
-            .ok_or(RuntimeConfigError {
-                code: RuntimeConfigErrorCode::NotFound,
-                message: format!("tcp server interface '{}' not found", name),
-            })?;
+        let handle = self.tcp_server.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("tcp server interface '{}' not found", name),
+        })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "tcp server runtime");
         match setting {
             "max_connections" => {
-                runtime.max_connections = Self::set_optional_usize(value, key)?;
-                Ok(())
+                runtime.max_connections = set_optional_usize(value, key)?;
+                Ok(None)
             }
             _ => Err(RuntimeConfigError {
                 code: RuntimeConfigErrorCode::UnknownKey,
@@ -275,11 +267,13 @@ impl Driver {
         }
     }
 
+    /// Returns the interface's name when a discovery setting changed, so
+    /// the driver brings its discovery announces in step.
     #[cfg(feature = "iface-tcp")]
-    pub(crate) fn reset_tcp_server_runtime_config(
+    pub(crate) fn reset_tcp_server_runtime_config<'a>(
         &mut self,
-        key: &str,
-    ) -> Result<(), RuntimeConfigError> {
+        key: &'a str,
+    ) -> Result<Option<&'a str>, RuntimeConfigError> {
         let (name, setting) = self.split_tcp_server_runtime_key(key)?;
         if matches!(
             setting,
@@ -293,16 +287,14 @@ impl Driver {
                 | "longitude"
                 | "height"
         ) {
-            return self.reset_tcp_server_discovery_runtime_config(key);
+            return self
+                .reset_tcp_server_discovery_runtime_config(key)
+                .map(Some);
         }
-        let handle = self
-            .runtime_config
-            .tcp_server
-            .get(name)
-            .ok_or(RuntimeConfigError {
-                code: RuntimeConfigErrorCode::NotFound,
-                message: format!("tcp server interface '{}' not found", name),
-            })?;
+        let handle = self.tcp_server.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("tcp server interface '{}' not found", name),
+        })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "tcp server runtime");
         let startup = handle.startup.clone();
         match setting {
@@ -314,18 +306,17 @@ impl Driver {
                 })
             }
         }
-        Ok(())
+        Ok(None)
     }
 
     #[cfg(feature = "iface-tcp")]
-    pub(crate) fn set_tcp_server_discovery_runtime_config(
+    pub(crate) fn set_tcp_server_discovery_runtime_config<'a>(
         &mut self,
-        key: &str,
+        key: &'a str,
         value: RuntimeConfigValue,
-    ) -> Result<(), RuntimeConfigError> {
+    ) -> Result<&'a str, RuntimeConfigError> {
         let (name, setting) = self.split_tcp_server_runtime_key(key)?;
         let handle = self
-            .runtime_config
             .tcp_server_discovery
             .get_mut(name)
             .ok_or(RuntimeConfigError {
@@ -333,12 +324,10 @@ impl Driver {
                 message: format!("tcp server interface '{}' not found", name),
             })?;
         match setting {
-            "discoverable" => handle.current.discoverable = Self::expect_bool(value, key)?,
-            "discovery_name" => {
-                handle.current.config.discovery_name = Self::expect_string(value, key)?
-            }
+            "discoverable" => handle.current.discoverable = expect_bool(value, key)?,
+            "discovery_name" => handle.current.config.discovery_name = expect_string(value, key)?,
             "announce_interval_secs" => {
-                let secs = Self::expect_u64(value, key)?;
+                let secs = expect_u64(value, key)?;
                 if secs < 300 {
                     return Err(RuntimeConfigError {
                         code: RuntimeConfigErrorCode::InvalidValue,
@@ -348,17 +337,17 @@ impl Driver {
                 handle.current.config.announce_interval = secs;
             }
             "reachable_on" => {
-                handle.current.config.reachable_on = Self::expect_optional_string(value, key)?
+                handle.current.config.reachable_on = expect_optional_string(value, key)?
             }
             "location_cmd" => {
-                handle.current.config.location_cmd = Self::expect_optional_string(value, key)?
+                handle.current.config.location_cmd = expect_optional_string(value, key)?
             }
             "stamp_value" => {
-                handle.current.config.stamp_value = Self::expect_discovery_stamp_value(value, key)?;
+                handle.current.config.stamp_value = expect_discovery_stamp_value(value, key)?;
             }
-            "latitude" => handle.current.config.latitude = Self::expect_optional_f64(value, key)?,
-            "longitude" => handle.current.config.longitude = Self::expect_optional_f64(value, key)?,
-            "height" => handle.current.config.height = Self::expect_optional_f64(value, key)?,
+            "latitude" => handle.current.config.latitude = expect_optional_f64(value, key)?,
+            "longitude" => handle.current.config.longitude = expect_optional_f64(value, key)?,
+            "height" => handle.current.config.height = expect_optional_f64(value, key)?,
             _ => {
                 return Err(RuntimeConfigError {
                     code: RuntimeConfigErrorCode::UnknownKey,
@@ -366,17 +355,16 @@ impl Driver {
                 })
             }
         }
-        self.sync_tcp_server_discovery_runtime(name)
+        Ok(name)
     }
 
     #[cfg(feature = "iface-tcp")]
-    pub(crate) fn reset_tcp_server_discovery_runtime_config(
+    pub(crate) fn reset_tcp_server_discovery_runtime_config<'a>(
         &mut self,
-        key: &str,
-    ) -> Result<(), RuntimeConfigError> {
+        key: &'a str,
+    ) -> Result<&'a str, RuntimeConfigError> {
         let (name, setting) = self.split_tcp_server_runtime_key(key)?;
         let handle = self
-            .runtime_config
             .tcp_server_discovery
             .get_mut(name)
             .ok_or(RuntimeConfigError {
@@ -408,6 +396,6 @@ impl Driver {
                 })
             }
         }
-        self.sync_tcp_server_discovery_runtime(name)
+        Ok(name)
     }
 }

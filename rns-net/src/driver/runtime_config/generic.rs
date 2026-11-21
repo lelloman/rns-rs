@@ -3,11 +3,13 @@
 
 use super::*;
 
-impl Driver {
-    pub(crate) fn list_generic_interface_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
+impl RuntimeConfigHandles {
+    pub(crate) fn list_generic_interface_runtime_config(
+        &self,
+        interfaces: &Interfaces,
+    ) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
-        let mut names: Vec<String> = self
-            .interfaces
+        let mut names: Vec<String> = interfaces
             .values()
             .map(|entry| entry.info.name.clone())
             .collect();
@@ -36,14 +38,14 @@ impl Driver {
                 "ic_held_release_interval",
             ] {
                 let key = format!("interface.{}.{}", name, suffix);
-                if let Some(entry) = self.generic_interface_runtime_entry(&key) {
+                if let Some(entry) = self.generic_interface_runtime_entry(interfaces, &key) {
                     entries.push(entry);
                 }
             }
-            if self.runtime_config.ifac.contains_key(&name) {
+            if self.ifac.contains_key(&name) {
                 for suffix in ["ifac_netname", "ifac_passphrase", "ifac_size_bytes"] {
                     let key = format!("interface.{}.{}", name, suffix);
-                    if let Some(entry) = self.generic_interface_runtime_entry(&key) {
+                    if let Some(entry) = self.generic_interface_runtime_entry(interfaces, &key) {
                         entries.push(entry);
                     }
                 }
@@ -52,7 +54,11 @@ impl Driver {
         entries
     }
 
-    pub(crate) fn generic_interface_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
+    pub(crate) fn generic_interface_runtime_entry(
+        &self,
+        interfaces: &Interfaces,
+        key: &str,
+    ) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("interface.")?;
         let (name, setting) = rest.rsplit_once('.')?;
         let make_entry = |value: RuntimeConfigValue,
@@ -75,10 +81,7 @@ impl Driver {
         };
         match setting {
             "enabled" => {
-                let entry = self
-                    .interfaces
-                    .values()
-                    .find(|entry| entry.info.name == name)?;
+                let entry = interfaces.values().find(|entry| entry.info.name == name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Bool(entry.enabled),
                     RuntimeConfigValue::Bool(true),
@@ -87,8 +90,8 @@ impl Driver {
                 ))
             }
             "ifac_netname" => {
-                let current = self.runtime_config.ifac.get(name)?;
-                let startup = self.runtime_config.ifac_defaults.get(name)?;
+                let current = self.ifac.get(name)?;
+                let startup = self.ifac_defaults.get(name)?;
                 Some(make_entry(
                     current
                         .netname
@@ -105,8 +108,8 @@ impl Driver {
                 ))
             }
             "ifac_passphrase" => {
-                let current = self.runtime_config.ifac.get(name)?;
-                let startup = self.runtime_config.ifac_defaults.get(name)?;
+                let current = self.ifac.get(name)?;
+                let startup = self.ifac_defaults.get(name)?;
                 let current_value = current
                     .netkey
                     .as_ref()
@@ -134,8 +137,8 @@ impl Driver {
                 })
             }
             "ifac_size_bytes" => {
-                let current = self.runtime_config.ifac.get(name)?;
-                let startup = self.runtime_config.ifac_defaults.get(name)?;
+                let current = self.ifac.get(name)?;
+                let startup = self.ifac_defaults.get(name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Int(current.size as i64),
                     RuntimeConfigValue::Int(startup.size as i64),
@@ -144,7 +147,8 @@ impl Driver {
                 ))
             }
             "mode" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::String(Self::interface_mode_name(current.mode)),
                     RuntimeConfigValue::String(Self::interface_mode_name(startup.mode)),
@@ -153,7 +157,8 @@ impl Driver {
                 ))
             }
             "gravity" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Int(current.gravity),
                     RuntimeConfigValue::Int(startup.gravity),
@@ -162,7 +167,8 @@ impl Driver {
                 ))
             }
             "announce_rate_target" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     current
                         .announce_rate_target
@@ -177,7 +183,8 @@ impl Driver {
                 ))
             }
             "announce_rate_grace" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Int(current.announce_rate_grace as i64),
                     RuntimeConfigValue::Int(startup.announce_rate_grace as i64),
@@ -186,7 +193,8 @@ impl Driver {
                 ))
             }
             "announce_rate_penalty" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Float(current.announce_rate_penalty),
                     RuntimeConfigValue::Float(startup.announce_rate_penalty),
@@ -195,7 +203,8 @@ impl Driver {
                 ))
             }
             "announce_cap" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Float(current.announce_cap),
                     RuntimeConfigValue::Float(startup.announce_cap),
@@ -204,7 +213,8 @@ impl Driver {
                 ))
             }
             "ingress_control" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Bool(current.ingress_control.enabled),
                     RuntimeConfigValue::Bool(startup.ingress_control.enabled),
@@ -213,7 +223,8 @@ impl Driver {
                 ))
             }
             "ic_max_held_announces" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Int(current.ingress_control.max_held_announces as i64),
                     RuntimeConfigValue::Int(startup.ingress_control.max_held_announces as i64),
@@ -222,7 +233,8 @@ impl Driver {
                 ))
             }
             "ic_burst_hold" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Float(current.ingress_control.burst_hold),
                     RuntimeConfigValue::Float(startup.ingress_control.burst_hold),
@@ -231,7 +243,8 @@ impl Driver {
                 ))
             }
             "ic_burst_freq_new" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Float(current.ingress_control.burst_freq_new),
                     RuntimeConfigValue::Float(startup.ingress_control.burst_freq_new),
@@ -240,7 +253,8 @@ impl Driver {
                 ))
             }
             "ic_burst_freq" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Float(current.ingress_control.burst_freq),
                     RuntimeConfigValue::Float(startup.ingress_control.burst_freq),
@@ -249,7 +263,8 @@ impl Driver {
                 ))
             }
             "ic_pr_burst_freq_new" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Float(current.ingress_control.pr_burst_freq_new),
                     RuntimeConfigValue::Float(startup.ingress_control.pr_burst_freq_new),
@@ -258,7 +273,8 @@ impl Driver {
                 ))
             }
             "ic_pr_burst_freq" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Float(current.ingress_control.pr_burst_freq),
                     RuntimeConfigValue::Float(startup.ingress_control.pr_burst_freq),
@@ -267,7 +283,8 @@ impl Driver {
                 ))
             }
             "egress_control" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Bool(current.ingress_control.egress_enabled),
                     RuntimeConfigValue::Bool(startup.ingress_control.egress_enabled),
@@ -276,7 +293,8 @@ impl Driver {
                 ))
             }
             "ec_pr_freq" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Float(current.ingress_control.egress_pr_freq),
                     RuntimeConfigValue::Float(startup.ingress_control.egress_pr_freq),
@@ -285,7 +303,8 @@ impl Driver {
                 ))
             }
             "ic_new_time" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Float(current.ingress_control.new_time),
                     RuntimeConfigValue::Float(startup.ingress_control.new_time),
@@ -294,7 +313,8 @@ impl Driver {
                 ))
             }
             "ic_burst_penalty" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Float(current.ingress_control.burst_penalty),
                     RuntimeConfigValue::Float(startup.ingress_control.burst_penalty),
@@ -303,7 +323,8 @@ impl Driver {
                 ))
             }
             "ic_held_release_interval" => {
-                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                let (_, current, startup) =
+                    self.interface_runtime_infos_by_name(interfaces, name)?;
                 Some(make_entry(
                     RuntimeConfigValue::Float(current.ingress_control.held_release_interval),
                     RuntimeConfigValue::Float(startup.ingress_control.held_release_interval),
@@ -329,19 +350,19 @@ impl Driver {
         })
     }
 
-    pub(crate) fn interface_runtime_infos_by_name(
-        &self,
+    pub(crate) fn interface_runtime_infos_by_name<'a>(
+        &'a self,
+        interfaces: &'a Interfaces,
         name: &str,
     ) -> Option<(
         rns_core::transport::types::InterfaceId,
-        &rns_core::transport::types::InterfaceInfo,
-        &rns_core::transport::types::InterfaceInfo,
+        &'a rns_core::transport::types::InterfaceInfo,
+        &'a rns_core::transport::types::InterfaceInfo,
     )> {
-        let (id, entry) = self
-            .interfaces
+        let (id, entry) = interfaces
             .iter()
             .find(|(_, entry)| entry.info.name == name)?;
-        let startup = self.runtime_config.interface_defaults.get(name)?;
+        let startup = self.interface_defaults.get(name)?;
         Some((*id, &entry.info, startup))
     }
 
@@ -406,12 +427,13 @@ impl Driver {
 
     pub(crate) fn set_generic_interface_runtime_config(
         &mut self,
+        interfaces: &mut Interfaces,
+        engine: &mut TransportEngine,
         key: &str,
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_generic_interface_runtime_key(key)?;
-        let (id, _) = self
-            .interfaces
+        let (id, _) = interfaces
             .iter()
             .find(|(_, entry)| entry.info.name == name)
             .map(|(id, entry)| (*id, entry))
@@ -419,23 +441,19 @@ impl Driver {
                 code: RuntimeConfigErrorCode::NotFound,
                 message: format!("interface '{}' not found", name),
             })?;
-        let entry = self.interfaces.get_mut(&id).ok_or(RuntimeConfigError {
+        let entry = interfaces.get_mut(&id).ok_or(RuntimeConfigError {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("interface '{}' not found", name),
         })?;
         match setting {
             "enabled" => {
-                entry.enabled = Self::expect_bool(value, key)?;
+                entry.enabled = expect_bool(value, key)?;
             }
             "ifac_netname" => {
-                let runtime = self
-                    .runtime_config
-                    .ifac
-                    .get_mut(name)
-                    .ok_or(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::UnknownKey,
-                        message: format!("unknown runtime-config key '{}'", key),
-                    })?;
+                let runtime = self.ifac.get_mut(name).ok_or(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })?;
                 runtime.netname = match value {
                     RuntimeConfigValue::Null => None,
                     RuntimeConfigValue::String(value) => Some(value),
@@ -449,14 +467,10 @@ impl Driver {
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "ifac_passphrase" => {
-                let runtime = self
-                    .runtime_config
-                    .ifac
-                    .get_mut(name)
-                    .ok_or(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::UnknownKey,
-                        message: format!("unknown runtime-config key '{}'", key),
-                    })?;
+                let runtime = self.ifac.get_mut(name).ok_or(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })?;
                 runtime.netkey = match value {
                     RuntimeConfigValue::Null => None,
                     RuntimeConfigValue::String(value) => Some(value),
@@ -470,16 +484,11 @@ impl Driver {
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "ifac_size_bytes" => {
-                let runtime = self
-                    .runtime_config
-                    .ifac
-                    .get_mut(name)
-                    .ok_or(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::UnknownKey,
-                        message: format!("unknown runtime-config key '{}'", key),
-                    })?;
-                runtime.size =
-                    (Self::expect_u64(value, key)? as usize).max(crate::ifac::IFAC_MIN_SIZE);
+                let runtime = self.ifac.get_mut(name).ok_or(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })?;
+                runtime.size = (expect_u64(value, key)? as usize).max(crate::ifac::IFAC_MIN_SIZE);
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "mode" => {
@@ -488,7 +497,7 @@ impl Driver {
                     message: format!("{} must be a valid interface mode", key),
                 })?;
             }
-            "gravity" => entry.info.gravity = Self::expect_i64(value, key)?,
+            "gravity" => entry.info.gravity = expect_i64(value, key)?,
             "announce_rate_target" => {
                 entry.info.announce_rate_target = match value {
                     RuntimeConfigValue::Null => None,
@@ -509,46 +518,35 @@ impl Driver {
                 };
             }
             "announce_rate_grace" => {
-                entry.info.announce_rate_grace = Self::expect_u64(value, key)? as u32
+                entry.info.announce_rate_grace = expect_u64(value, key)? as u32
             }
-            "announce_rate_penalty" => {
-                entry.info.announce_rate_penalty = Self::expect_f64(value, key)?
-            }
-            "announce_cap" => entry.info.announce_cap = Self::expect_f64(value, key)?,
-            "ingress_control" => {
-                entry.info.ingress_control.enabled = Self::expect_bool(value, key)?
-            }
+            "announce_rate_penalty" => entry.info.announce_rate_penalty = expect_f64(value, key)?,
+            "announce_cap" => entry.info.announce_cap = expect_f64(value, key)?,
+            "ingress_control" => entry.info.ingress_control.enabled = expect_bool(value, key)?,
             "ic_max_held_announces" => {
-                entry.info.ingress_control.max_held_announces =
-                    Self::expect_u64(value, key)? as usize
+                entry.info.ingress_control.max_held_announces = expect_u64(value, key)? as usize
             }
-            "ic_burst_hold" => {
-                entry.info.ingress_control.burst_hold = Self::expect_f64(value, key)?
-            }
+            "ic_burst_hold" => entry.info.ingress_control.burst_hold = expect_f64(value, key)?,
             "ic_burst_freq_new" => {
-                entry.info.ingress_control.burst_freq_new = Self::expect_f64(value, key)?
+                entry.info.ingress_control.burst_freq_new = expect_f64(value, key)?
             }
-            "ic_burst_freq" => {
-                entry.info.ingress_control.burst_freq = Self::expect_f64(value, key)?
-            }
+            "ic_burst_freq" => entry.info.ingress_control.burst_freq = expect_f64(value, key)?,
             "ic_pr_burst_freq_new" => {
-                entry.info.ingress_control.pr_burst_freq_new = Self::expect_f64(value, key)?
+                entry.info.ingress_control.pr_burst_freq_new = expect_f64(value, key)?
             }
             "ic_pr_burst_freq" => {
-                entry.info.ingress_control.pr_burst_freq = Self::expect_f64(value, key)?
+                entry.info.ingress_control.pr_burst_freq = expect_f64(value, key)?
             }
             "egress_control" => {
-                entry.info.ingress_control.egress_enabled = Self::expect_bool(value, key)?
+                entry.info.ingress_control.egress_enabled = expect_bool(value, key)?
             }
-            "ec_pr_freq" => {
-                entry.info.ingress_control.egress_pr_freq = Self::expect_f64(value, key)?
-            }
-            "ic_new_time" => entry.info.ingress_control.new_time = Self::expect_f64(value, key)?,
+            "ec_pr_freq" => entry.info.ingress_control.egress_pr_freq = expect_f64(value, key)?,
+            "ic_new_time" => entry.info.ingress_control.new_time = expect_f64(value, key)?,
             "ic_burst_penalty" => {
-                entry.info.ingress_control.burst_penalty = Self::expect_f64(value, key)?
+                entry.info.ingress_control.burst_penalty = expect_f64(value, key)?
             }
             "ic_held_release_interval" => {
-                entry.info.ingress_control.held_release_interval = Self::expect_f64(value, key)?
+                entry.info.ingress_control.held_release_interval = expect_f64(value, key)?
             }
             _ => {
                 return Err(RuntimeConfigError {
@@ -558,17 +556,18 @@ impl Driver {
             }
         }
         let info = entry.info.clone();
-        self.engine.register_interface(info);
+        engine.register_interface(info);
         Ok(())
     }
 
     pub(crate) fn reset_generic_interface_runtime_config(
         &mut self,
+        interfaces: &mut Interfaces,
+        engine: &mut TransportEngine,
         key: &str,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_generic_interface_runtime_key(key)?;
         let startup = self
-            .runtime_config
             .interface_defaults
             .get(name)
             .cloned()
@@ -576,8 +575,7 @@ impl Driver {
                 code: RuntimeConfigErrorCode::NotFound,
                 message: format!("interface '{}' not found", name),
             })?;
-        let entry = self
-            .interfaces
+        let entry = interfaces
             .values_mut()
             .find(|entry| entry.info.name == name)
             .ok_or(RuntimeConfigError {
@@ -587,62 +585,38 @@ impl Driver {
         match setting {
             "enabled" => entry.enabled = true,
             "ifac_netname" => {
-                let startup_ifac =
-                    self.runtime_config
-                        .ifac_defaults
-                        .get(name)
-                        .ok_or(RuntimeConfigError {
-                            code: RuntimeConfigErrorCode::UnknownKey,
-                            message: format!("unknown runtime-config key '{}'", key),
-                        })?;
-                let runtime = self
-                    .runtime_config
-                    .ifac
-                    .get_mut(name)
-                    .ok_or(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::UnknownKey,
-                        message: format!("unknown runtime-config key '{}'", key),
-                    })?;
+                let startup_ifac = self.ifac_defaults.get(name).ok_or(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })?;
+                let runtime = self.ifac.get_mut(name).ok_or(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })?;
                 runtime.netname = startup_ifac.netname.clone();
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "ifac_passphrase" => {
-                let startup_ifac =
-                    self.runtime_config
-                        .ifac_defaults
-                        .get(name)
-                        .ok_or(RuntimeConfigError {
-                            code: RuntimeConfigErrorCode::UnknownKey,
-                            message: format!("unknown runtime-config key '{}'", key),
-                        })?;
-                let runtime = self
-                    .runtime_config
-                    .ifac
-                    .get_mut(name)
-                    .ok_or(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::UnknownKey,
-                        message: format!("unknown runtime-config key '{}'", key),
-                    })?;
+                let startup_ifac = self.ifac_defaults.get(name).ok_or(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })?;
+                let runtime = self.ifac.get_mut(name).ok_or(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })?;
                 runtime.netkey = startup_ifac.netkey.clone();
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
             "ifac_size_bytes" => {
-                let startup_ifac =
-                    self.runtime_config
-                        .ifac_defaults
-                        .get(name)
-                        .ok_or(RuntimeConfigError {
-                            code: RuntimeConfigErrorCode::UnknownKey,
-                            message: format!("unknown runtime-config key '{}'", key),
-                        })?;
-                let runtime = self
-                    .runtime_config
-                    .ifac
-                    .get_mut(name)
-                    .ok_or(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::UnknownKey,
-                        message: format!("unknown runtime-config key '{}'", key),
-                    })?;
+                let startup_ifac = self.ifac_defaults.get(name).ok_or(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })?;
+                let runtime = self.ifac.get_mut(name).ok_or(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })?;
                 runtime.size = startup_ifac.size;
                 Self::apply_interface_ifac_runtime(entry, runtime);
             }
@@ -701,7 +675,7 @@ impl Driver {
             }
         }
         let info = entry.info.clone();
-        self.engine.register_interface(info);
+        engine.register_interface(info);
         Ok(())
     }
 }

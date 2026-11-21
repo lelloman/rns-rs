@@ -2,11 +2,11 @@
 
 use super::*;
 
-impl Driver {
+impl RuntimeConfigHandles {
     #[cfg(feature = "iface-auto")]
     pub(crate) fn list_auto_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
-        let mut names: Vec<&String> = self.runtime_config.auto.keys().collect();
+        let mut names: Vec<&String> = self.auto.keys().collect();
         names.sort();
         for name in names {
             for suffix in [
@@ -27,7 +27,7 @@ impl Driver {
     pub(crate) fn auto_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("auto.")?;
         let (name, setting) = rest.split_once('.')?;
-        let handle = self.runtime_config.auto.get(name)?;
+        let handle = self.auto.get(name)?;
         let current = recover_mutex_guard(&handle.runtime, "auto runtime").clone();
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
@@ -89,31 +89,27 @@ impl Driver {
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_auto_runtime_key(key)?;
-        let handle = self
-            .runtime_config
-            .auto
-            .get(name)
-            .ok_or(RuntimeConfigError {
-                code: RuntimeConfigErrorCode::NotFound,
-                message: format!("auto interface '{}' not found", name),
-            })?;
+        let handle = self.auto.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("auto interface '{}' not found", name),
+        })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "auto runtime");
         match setting {
             "announce_interval_secs" => {
-                let secs = Self::expect_f64(value, key)?.max(0.1);
+                let secs = expect_f64(value, key)?.max(0.1);
                 // The auto interface sleeps for 1.2x the announce interval
                 // before peering, so that value must be a valid duration too.
-                Self::duration_from_secs(secs * 1.2, key)?;
+                duration_from_secs(secs * 1.2, key)?;
                 runtime.announce_interval_secs = secs
             }
             "peer_timeout_secs" => {
-                let secs = Self::expect_f64(value, key)?.max(0.1);
-                Self::duration_from_secs(secs, key)?;
+                let secs = expect_f64(value, key)?.max(0.1);
+                duration_from_secs(secs, key)?;
                 runtime.peer_timeout_secs = secs
             }
             "peer_job_interval_secs" => {
-                let secs = Self::expect_f64(value, key)?.max(0.1);
-                Self::duration_from_secs(secs, key)?;
+                let secs = expect_f64(value, key)?.max(0.1);
+                duration_from_secs(secs, key)?;
                 runtime.peer_job_interval_secs = secs
             }
             _ => {
@@ -132,14 +128,10 @@ impl Driver {
         key: &str,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_auto_runtime_key(key)?;
-        let handle = self
-            .runtime_config
-            .auto
-            .get(name)
-            .ok_or(RuntimeConfigError {
-                code: RuntimeConfigErrorCode::NotFound,
-                message: format!("auto interface '{}' not found", name),
-            })?;
+        let handle = self.auto.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("auto interface '{}' not found", name),
+        })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "auto runtime");
         let startup = handle.startup.clone();
         match setting {

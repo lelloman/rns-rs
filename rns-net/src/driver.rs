@@ -88,6 +88,9 @@ use crate::interface::udp::UdpRuntime;
 #[cfg(feature = "iface-udp")]
 use crate::interface::udp::UdpRuntimeConfigHandle;
 use crate::interface::{InterfaceEntry, InterfaceStats};
+
+/// The interface entries the driver owns, by interface id.
+pub(crate) type Interfaces = crate::interface::InterfaceMap<InterfaceEntry>;
 use crate::link_manager::{LinkManager, LinkManagerAction};
 use crate::time;
 
@@ -150,6 +153,7 @@ mod resource_preparation;
 mod rpc_service;
 pub(crate) use rpc_service::{RpcListener, RpcService};
 mod runtime_config;
+use runtime_config::values::*;
 mod stamps;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod tick_source;

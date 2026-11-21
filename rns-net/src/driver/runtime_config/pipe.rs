@@ -2,11 +2,11 @@
 
 use super::*;
 
-impl Driver {
+impl RuntimeConfigHandles {
     #[cfg(feature = "iface-pipe")]
     pub(crate) fn list_pipe_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
-        let mut names: Vec<&String> = self.runtime_config.pipe.keys().collect();
+        let mut names: Vec<&String> = self.pipe.keys().collect();
         names.sort();
         for name in names {
             let key = format!("pipe.{}.respawn_delay_secs", name);
@@ -21,7 +21,7 @@ impl Driver {
     pub(crate) fn pipe_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("pipe.")?;
         let (name, setting) = rest.split_once('.')?;
-        let handle = self.runtime_config.pipe.get(name)?;
+        let handle = self.pipe.get(name)?;
         let current = recover_mutex_guard(&handle.runtime, "pipe runtime").clone();
         let startup = handle.startup.clone();
         match setting {
@@ -65,19 +65,14 @@ impl Driver {
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_pipe_runtime_key(key)?;
-        let handle = self
-            .runtime_config
-            .pipe
-            .get(name)
-            .ok_or(RuntimeConfigError {
-                code: RuntimeConfigErrorCode::NotFound,
-                message: format!("pipe interface '{}' not found", name),
-            })?;
+        let handle = self.pipe.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("pipe interface '{}' not found", name),
+        })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "pipe runtime");
         match setting {
             "respawn_delay_secs" => {
-                runtime.respawn_delay =
-                    Self::duration_from_secs(Self::expect_f64(value, key)?.max(0.1), key)?;
+                runtime.respawn_delay = duration_from_secs(expect_f64(value, key)?.max(0.1), key)?;
                 Ok(())
             }
             _ => Err(RuntimeConfigError {
@@ -93,14 +88,10 @@ impl Driver {
         key: &str,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_pipe_runtime_key(key)?;
-        let handle = self
-            .runtime_config
-            .pipe
-            .get(name)
-            .ok_or(RuntimeConfigError {
-                code: RuntimeConfigErrorCode::NotFound,
-                message: format!("pipe interface '{}' not found", name),
-            })?;
+        let handle = self.pipe.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("pipe interface '{}' not found", name),
+        })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "pipe runtime");
         let startup = handle.startup.clone();
         match setting {

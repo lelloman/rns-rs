@@ -2,11 +2,11 @@
 
 use super::*;
 
-impl Driver {
+impl RuntimeConfigHandles {
     #[cfg(feature = "iface-udp")]
     pub(crate) fn list_udp_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
-        let mut names: Vec<&String> = self.runtime_config.udp.keys().collect();
+        let mut names: Vec<&String> = self.udp.keys().collect();
         names.sort();
         for name in names {
             for suffix in ["forward_ip", "forward_port"] {
@@ -23,7 +23,7 @@ impl Driver {
     pub(crate) fn udp_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("udp.")?;
         let (name, setting) = rest.split_once('.')?;
-        let handle = self.runtime_config.udp.get(name)?;
+        let handle = self.udp.get(name)?;
         let current = recover_mutex_guard(&handle.runtime, "udp runtime").clone();
         let startup = handle.startup.clone();
         let make_entry = |value: RuntimeConfigValue,
@@ -94,24 +94,20 @@ impl Driver {
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_udp_runtime_key(key)?;
-        let handle = self
-            .runtime_config
-            .udp
-            .get(name)
-            .ok_or(RuntimeConfigError {
-                code: RuntimeConfigErrorCode::NotFound,
-                message: format!("udp interface '{}' not found", name),
-            })?;
+        let handle = self.udp.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("udp interface '{}' not found", name),
+        })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "udp runtime");
         match setting {
             "forward_ip" => {
-                runtime.forward_ip = Self::expect_optional_string(value, key)?;
+                runtime.forward_ip = expect_optional_string(value, key)?;
                 Ok(())
             }
             "forward_port" => {
                 runtime.forward_port = match value {
                     RuntimeConfigValue::Null => None,
-                    other => Some(Self::expect_u64(other, key)? as u16),
+                    other => Some(expect_u64(other, key)? as u16),
                 };
                 Ok(())
             }
@@ -125,14 +121,10 @@ impl Driver {
     #[cfg(feature = "iface-udp")]
     pub(crate) fn reset_udp_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_udp_runtime_key(key)?;
-        let handle = self
-            .runtime_config
-            .udp
-            .get(name)
-            .ok_or(RuntimeConfigError {
-                code: RuntimeConfigErrorCode::NotFound,
-                message: format!("udp interface '{}' not found", name),
-            })?;
+        let handle = self.udp.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("udp interface '{}' not found", name),
+        })?;
         let mut runtime = recover_mutex_guard(&handle.runtime, "udp runtime");
         let startup = handle.startup.clone();
         match setting {

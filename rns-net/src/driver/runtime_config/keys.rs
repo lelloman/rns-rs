@@ -4,161 +4,6 @@
 use super::*;
 
 impl Driver {
-    #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
-    pub(super) fn is_discovery_runtime_setting(setting: &str) -> bool {
-        matches!(
-            setting,
-            "discoverable"
-                | "discovery_name"
-                | "announce_interval_secs"
-                | "reachable_on"
-                | "location_cmd"
-                | "stamp_value"
-                | "latitude"
-                | "longitude"
-                | "height"
-        )
-    }
-
-    #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
-    pub(super) fn discovery_runtime_entry(
-        key: &str,
-        setting: &str,
-        interface_label: &str,
-        current_discoverable: bool,
-        startup_discoverable: bool,
-        current_config: &crate::discovery::DiscoveryConfig,
-        startup_config: &crate::discovery::DiscoveryConfig,
-    ) -> Option<RuntimeConfigEntry> {
-        let make_entry = |value: RuntimeConfigValue,
-                          default: RuntimeConfigValue,
-                          description: String|
-         -> RuntimeConfigEntry {
-            RuntimeConfigEntry {
-                key: key.to_string(),
-                source: if value == default {
-                    RuntimeConfigSource::Startup
-                } else {
-                    RuntimeConfigSource::RuntimeOverride
-                },
-                value,
-                default,
-                apply_mode: RuntimeConfigApplyMode::Immediate,
-                description: Some(description),
-            }
-        };
-
-        match setting {
-            "discoverable" => Some(make_entry(
-                RuntimeConfigValue::Bool(current_discoverable),
-                RuntimeConfigValue::Bool(startup_discoverable),
-                format!(
-                    "Whether this {} interface is advertised through interface discovery.",
-                    interface_label
-                ),
-            )),
-            "discovery_name" => Some(make_entry(
-                RuntimeConfigValue::String(current_config.discovery_name.clone()),
-                RuntimeConfigValue::String(startup_config.discovery_name.clone()),
-                format!(
-                    "Human-readable discovery name advertised for this {} interface.",
-                    interface_label
-                ),
-            )),
-            "announce_interval_secs" => Some(make_entry(
-                RuntimeConfigValue::Int(current_config.announce_interval as i64),
-                RuntimeConfigValue::Int(startup_config.announce_interval as i64),
-                format!(
-                    "Discovery announce interval for this {} interface in seconds.",
-                    interface_label
-                ),
-            )),
-            "reachable_on" => Some(make_entry(
-                current_config
-                    .reachable_on
-                    .clone()
-                    .map(RuntimeConfigValue::String)
-                    .unwrap_or(RuntimeConfigValue::Null),
-                startup_config
-                    .reachable_on
-                    .clone()
-                    .map(RuntimeConfigValue::String)
-                    .unwrap_or(RuntimeConfigValue::Null),
-                format!(
-                    "Reachable hostname or IP advertised for this {} interface; null clears it.",
-                    interface_label
-                ),
-            )),
-            "location_cmd" => Some(make_entry(
-                current_config
-                    .location_cmd
-                    .clone()
-                    .map(RuntimeConfigValue::String)
-                    .unwrap_or(RuntimeConfigValue::Null),
-                startup_config
-                    .location_cmd
-                    .clone()
-                    .map(RuntimeConfigValue::String)
-                    .unwrap_or(RuntimeConfigValue::Null),
-                format!(
-                    "Executable resolving discovery coordinates for this {} interface; null clears it.",
-                    interface_label
-                ),
-            )),
-            "stamp_value" => Some(make_entry(
-                RuntimeConfigValue::Float(current_config.stamp_value.as_f64()),
-                RuntimeConfigValue::Float(startup_config.stamp_value.as_f64()),
-                format!(
-                    "Discovery proof-of-work stamp cost for this {} interface.",
-                    interface_label
-                ),
-            )),
-            "latitude" => Some(make_entry(
-                current_config
-                    .latitude
-                    .map(RuntimeConfigValue::Float)
-                    .unwrap_or(RuntimeConfigValue::Null),
-                startup_config
-                    .latitude
-                    .map(RuntimeConfigValue::Float)
-                    .unwrap_or(RuntimeConfigValue::Null),
-                format!(
-                    "Latitude advertised for this {} interface; null clears it.",
-                    interface_label
-                ),
-            )),
-            "longitude" => Some(make_entry(
-                current_config
-                    .longitude
-                    .map(RuntimeConfigValue::Float)
-                    .unwrap_or(RuntimeConfigValue::Null),
-                startup_config
-                    .longitude
-                    .map(RuntimeConfigValue::Float)
-                    .unwrap_or(RuntimeConfigValue::Null),
-                format!(
-                    "Longitude advertised for this {} interface; null clears it.",
-                    interface_label
-                ),
-            )),
-            "height" => Some(make_entry(
-                current_config
-                    .height
-                    .map(RuntimeConfigValue::Float)
-                    .unwrap_or(RuntimeConfigValue::Null),
-                startup_config
-                    .height
-                    .map(RuntimeConfigValue::Float)
-                    .unwrap_or(RuntimeConfigValue::Null),
-                format!(
-                    "Height advertised for this {} interface; null clears it.",
-                    interface_label
-                ),
-            )),
-            _ => None,
-        }
-    }
-
     pub(crate) fn runtime_config_family_for_key(key: &str) -> Option<RuntimeConfigFamily> {
         #[cfg(feature = "iface-backbone")]
         if key.starts_with("backbone.") {
@@ -202,89 +47,52 @@ impl Driver {
         None
     }
 
-    pub(crate) fn runtime_config_family_entry(
-        &self,
-        family: RuntimeConfigFamily,
-        key: &str,
-    ) -> Option<RuntimeConfigEntry> {
-        match family {
-            #[cfg(feature = "iface-backbone")]
-            RuntimeConfigFamily::Backbone => self.backbone_runtime_entry(key),
-            #[cfg(feature = "iface-backbone")]
-            RuntimeConfigFamily::BackboneClient => self.backbone_client_runtime_entry(key),
-            #[cfg(feature = "iface-tcp")]
-            RuntimeConfigFamily::TcpServer => self.tcp_server_runtime_entry(key),
-            #[cfg(feature = "iface-tcp")]
-            RuntimeConfigFamily::TcpClient => self.tcp_client_runtime_entry(key),
-            #[cfg(feature = "iface-udp")]
-            RuntimeConfigFamily::Udp => self.udp_runtime_entry(key),
-            #[cfg(feature = "iface-auto")]
-            RuntimeConfigFamily::Auto => self.auto_runtime_entry(key),
-            #[cfg(feature = "iface-i2p")]
-            RuntimeConfigFamily::I2p => self.i2p_runtime_entry(key),
-            #[cfg(feature = "iface-pipe")]
-            RuntimeConfigFamily::Pipe => self.pipe_runtime_entry(key),
-            #[cfg(feature = "iface-rnode")]
-            RuntimeConfigFamily::Rnode => self.rnode_runtime_entry(key),
-            RuntimeConfigFamily::Interface => self.generic_interface_runtime_entry(key),
-        }
-    }
-
-    pub(crate) fn runtime_config_family_entries(
-        &self,
-        family: RuntimeConfigFamily,
-    ) -> Vec<RuntimeConfigEntry> {
-        match family {
-            #[cfg(feature = "iface-backbone")]
-            RuntimeConfigFamily::Backbone => self.list_backbone_runtime_config(),
-            #[cfg(feature = "iface-backbone")]
-            RuntimeConfigFamily::BackboneClient => self.list_backbone_client_runtime_config(),
-            #[cfg(feature = "iface-tcp")]
-            RuntimeConfigFamily::TcpServer => self.list_tcp_server_runtime_config(),
-            #[cfg(feature = "iface-tcp")]
-            RuntimeConfigFamily::TcpClient => self.list_tcp_client_runtime_config(),
-            #[cfg(feature = "iface-udp")]
-            RuntimeConfigFamily::Udp => self.list_udp_runtime_config(),
-            #[cfg(feature = "iface-auto")]
-            RuntimeConfigFamily::Auto => self.list_auto_runtime_config(),
-            #[cfg(feature = "iface-i2p")]
-            RuntimeConfigFamily::I2p => self.list_i2p_runtime_config(),
-            #[cfg(feature = "iface-pipe")]
-            RuntimeConfigFamily::Pipe => self.list_pipe_runtime_config(),
-            #[cfg(feature = "iface-rnode")]
-            RuntimeConfigFamily::Rnode => self.list_rnode_runtime_config(),
-            RuntimeConfigFamily::Interface => self.list_generic_interface_runtime_config(),
-        }
-    }
-
     pub(crate) fn set_runtime_config_family_value(
         &mut self,
         family: RuntimeConfigFamily,
         key: &str,
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
+        let config = &mut self.runtime_config;
         match family {
             #[cfg(feature = "iface-backbone")]
-            RuntimeConfigFamily::Backbone => self.set_backbone_runtime_config(key, value),
+            RuntimeConfigFamily::Backbone => {
+                match config.set_backbone_runtime_config(key, value)? {
+                    Some(name) => self.sync_backbone_discovery_runtime(name),
+                    None => Ok(()),
+                }
+            }
             #[cfg(feature = "iface-backbone")]
             RuntimeConfigFamily::BackboneClient => {
-                self.set_backbone_client_runtime_config(key, value)
+                config.set_backbone_client_runtime_config(key, value)
             }
             #[cfg(feature = "iface-tcp")]
-            RuntimeConfigFamily::TcpServer => self.set_tcp_server_runtime_config(key, value),
+            RuntimeConfigFamily::TcpServer => {
+                match config.set_tcp_server_runtime_config(key, value)? {
+                    Some(name) => self.sync_tcp_server_discovery_runtime(name),
+                    None => Ok(()),
+                }
+            }
             #[cfg(feature = "iface-tcp")]
-            RuntimeConfigFamily::TcpClient => self.set_tcp_client_runtime_config(key, value),
+            RuntimeConfigFamily::TcpClient => config.set_tcp_client_runtime_config(key, value),
             #[cfg(feature = "iface-udp")]
-            RuntimeConfigFamily::Udp => self.set_udp_runtime_config(key, value),
+            RuntimeConfigFamily::Udp => config.set_udp_runtime_config(key, value),
             #[cfg(feature = "iface-auto")]
-            RuntimeConfigFamily::Auto => self.set_auto_runtime_config(key, value),
+            RuntimeConfigFamily::Auto => config.set_auto_runtime_config(key, value),
             #[cfg(feature = "iface-i2p")]
-            RuntimeConfigFamily::I2p => self.set_i2p_runtime_config(key, value),
+            RuntimeConfigFamily::I2p => config.set_i2p_runtime_config(key, value),
             #[cfg(feature = "iface-pipe")]
-            RuntimeConfigFamily::Pipe => self.set_pipe_runtime_config(key, value),
+            RuntimeConfigFamily::Pipe => config.set_pipe_runtime_config(key, value),
             #[cfg(feature = "iface-rnode")]
-            RuntimeConfigFamily::Rnode => self.set_rnode_runtime_config(key, value),
-            RuntimeConfigFamily::Interface => self.set_generic_interface_runtime_config(key, value),
+            RuntimeConfigFamily::Rnode => {
+                config.set_rnode_runtime_config(&mut self.interfaces, &mut self.engine, key, value)
+            }
+            RuntimeConfigFamily::Interface => config.set_generic_interface_runtime_config(
+                &mut self.interfaces,
+                &mut self.engine,
+                key,
+                value,
+            ),
         }
     }
 
@@ -293,26 +101,39 @@ impl Driver {
         family: RuntimeConfigFamily,
         key: &str,
     ) -> Result<(), RuntimeConfigError> {
+        let config = &mut self.runtime_config;
         match family {
             #[cfg(feature = "iface-backbone")]
-            RuntimeConfigFamily::Backbone => self.reset_backbone_runtime_config(key),
+            RuntimeConfigFamily::Backbone => match config.reset_backbone_runtime_config(key)? {
+                Some(name) => self.sync_backbone_discovery_runtime(name),
+                None => Ok(()),
+            },
             #[cfg(feature = "iface-backbone")]
-            RuntimeConfigFamily::BackboneClient => self.reset_backbone_client_runtime_config(key),
+            RuntimeConfigFamily::BackboneClient => config.reset_backbone_client_runtime_config(key),
             #[cfg(feature = "iface-tcp")]
-            RuntimeConfigFamily::TcpServer => self.reset_tcp_server_runtime_config(key),
+            RuntimeConfigFamily::TcpServer => match config.reset_tcp_server_runtime_config(key)? {
+                Some(name) => self.sync_tcp_server_discovery_runtime(name),
+                None => Ok(()),
+            },
             #[cfg(feature = "iface-tcp")]
-            RuntimeConfigFamily::TcpClient => self.reset_tcp_client_runtime_config(key),
+            RuntimeConfigFamily::TcpClient => config.reset_tcp_client_runtime_config(key),
             #[cfg(feature = "iface-udp")]
-            RuntimeConfigFamily::Udp => self.reset_udp_runtime_config(key),
+            RuntimeConfigFamily::Udp => config.reset_udp_runtime_config(key),
             #[cfg(feature = "iface-auto")]
-            RuntimeConfigFamily::Auto => self.reset_auto_runtime_config(key),
+            RuntimeConfigFamily::Auto => config.reset_auto_runtime_config(key),
             #[cfg(feature = "iface-i2p")]
-            RuntimeConfigFamily::I2p => self.reset_i2p_runtime_config(key),
+            RuntimeConfigFamily::I2p => config.reset_i2p_runtime_config(key),
             #[cfg(feature = "iface-pipe")]
-            RuntimeConfigFamily::Pipe => self.reset_pipe_runtime_config(key),
+            RuntimeConfigFamily::Pipe => config.reset_pipe_runtime_config(key),
             #[cfg(feature = "iface-rnode")]
-            RuntimeConfigFamily::Rnode => self.reset_rnode_runtime_config(key),
-            RuntimeConfigFamily::Interface => self.reset_generic_interface_runtime_config(key),
+            RuntimeConfigFamily::Rnode => {
+                config.reset_rnode_runtime_config(&mut self.interfaces, &mut self.engine, key)
+            }
+            RuntimeConfigFamily::Interface => config.reset_generic_interface_runtime_config(
+                &mut self.interfaces,
+                &mut self.engine,
+                key,
+            ),
         }
     }
 
@@ -472,7 +293,8 @@ impl Driver {
                 ))
             }
             _ => Self::runtime_config_family_for_key(key)
-                .and_then(|family| self.runtime_config_family_entry(family, key)),
+                .and_then(|family| self.runtime_config
+                    .runtime_config_family_entry(&self.interfaces, family, key)),
         }
     }
 
@@ -506,24 +328,56 @@ impl Driver {
             );
         }
         #[cfg(feature = "iface-backbone")]
-        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::Backbone));
+        entries.extend(
+            self.runtime_config
+                .runtime_config_family_entries(&self.interfaces, RuntimeConfigFamily::Backbone),
+        );
         #[cfg(feature = "iface-backbone")]
-        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::BackboneClient));
+        entries.extend(
+            self.runtime_config.runtime_config_family_entries(
+                &self.interfaces,
+                RuntimeConfigFamily::BackboneClient,
+            ),
+        );
         #[cfg(feature = "iface-tcp")]
-        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::TcpServer));
+        entries.extend(
+            self.runtime_config
+                .runtime_config_family_entries(&self.interfaces, RuntimeConfigFamily::TcpServer),
+        );
         #[cfg(feature = "iface-tcp")]
-        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::TcpClient));
+        entries.extend(
+            self.runtime_config
+                .runtime_config_family_entries(&self.interfaces, RuntimeConfigFamily::TcpClient),
+        );
         #[cfg(feature = "iface-udp")]
-        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::Udp));
+        entries.extend(
+            self.runtime_config
+                .runtime_config_family_entries(&self.interfaces, RuntimeConfigFamily::Udp),
+        );
         #[cfg(feature = "iface-auto")]
-        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::Auto));
+        entries.extend(
+            self.runtime_config
+                .runtime_config_family_entries(&self.interfaces, RuntimeConfigFamily::Auto),
+        );
         #[cfg(feature = "iface-i2p")]
-        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::I2p));
+        entries.extend(
+            self.runtime_config
+                .runtime_config_family_entries(&self.interfaces, RuntimeConfigFamily::I2p),
+        );
         #[cfg(feature = "iface-pipe")]
-        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::Pipe));
+        entries.extend(
+            self.runtime_config
+                .runtime_config_family_entries(&self.interfaces, RuntimeConfigFamily::Pipe),
+        );
         #[cfg(feature = "iface-rnode")]
-        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::Rnode));
-        entries.extend(self.runtime_config_family_entries(RuntimeConfigFamily::Interface));
+        entries.extend(
+            self.runtime_config
+                .runtime_config_family_entries(&self.interfaces, RuntimeConfigFamily::Rnode),
+        );
+        entries.extend(
+            self.runtime_config
+                .runtime_config_family_entries(&self.interfaces, RuntimeConfigFamily::Interface),
+        );
 
         entries
     }
@@ -551,6 +405,222 @@ impl Driver {
                 _ => None,
             },
             _ => None,
+        }
+    }
+}
+
+impl RuntimeConfigHandles {
+    #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
+    pub(super) fn is_discovery_runtime_setting(setting: &str) -> bool {
+        matches!(
+            setting,
+            "discoverable"
+                | "discovery_name"
+                | "announce_interval_secs"
+                | "reachable_on"
+                | "location_cmd"
+                | "stamp_value"
+                | "latitude"
+                | "longitude"
+                | "height"
+        )
+    }
+
+    #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
+    pub(super) fn discovery_runtime_entry(
+        key: &str,
+        setting: &str,
+        interface_label: &str,
+        current_discoverable: bool,
+        startup_discoverable: bool,
+        current_config: &crate::discovery::DiscoveryConfig,
+        startup_config: &crate::discovery::DiscoveryConfig,
+    ) -> Option<RuntimeConfigEntry> {
+        let make_entry = |value: RuntimeConfigValue,
+                          default: RuntimeConfigValue,
+                          description: String|
+         -> RuntimeConfigEntry {
+            RuntimeConfigEntry {
+                key: key.to_string(),
+                source: if value == default {
+                    RuntimeConfigSource::Startup
+                } else {
+                    RuntimeConfigSource::RuntimeOverride
+                },
+                value,
+                default,
+                apply_mode: RuntimeConfigApplyMode::Immediate,
+                description: Some(description),
+            }
+        };
+
+        match setting {
+            "discoverable" => Some(make_entry(
+                RuntimeConfigValue::Bool(current_discoverable),
+                RuntimeConfigValue::Bool(startup_discoverable),
+                format!(
+                    "Whether this {} interface is advertised through interface discovery.",
+                    interface_label
+                ),
+            )),
+            "discovery_name" => Some(make_entry(
+                RuntimeConfigValue::String(current_config.discovery_name.clone()),
+                RuntimeConfigValue::String(startup_config.discovery_name.clone()),
+                format!(
+                    "Human-readable discovery name advertised for this {} interface.",
+                    interface_label
+                ),
+            )),
+            "announce_interval_secs" => Some(make_entry(
+                RuntimeConfigValue::Int(current_config.announce_interval as i64),
+                RuntimeConfigValue::Int(startup_config.announce_interval as i64),
+                format!(
+                    "Discovery announce interval for this {} interface in seconds.",
+                    interface_label
+                ),
+            )),
+            "reachable_on" => Some(make_entry(
+                current_config
+                    .reachable_on
+                    .clone()
+                    .map(RuntimeConfigValue::String)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                startup_config
+                    .reachable_on
+                    .clone()
+                    .map(RuntimeConfigValue::String)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                format!(
+                    "Reachable hostname or IP advertised for this {} interface; null clears it.",
+                    interface_label
+                ),
+            )),
+            "location_cmd" => Some(make_entry(
+                current_config
+                    .location_cmd
+                    .clone()
+                    .map(RuntimeConfigValue::String)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                startup_config
+                    .location_cmd
+                    .clone()
+                    .map(RuntimeConfigValue::String)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                format!(
+                    "Executable resolving discovery coordinates for this {} interface; null clears it.",
+                    interface_label
+                ),
+            )),
+            "stamp_value" => Some(make_entry(
+                RuntimeConfigValue::Float(current_config.stamp_value.as_f64()),
+                RuntimeConfigValue::Float(startup_config.stamp_value.as_f64()),
+                format!(
+                    "Discovery proof-of-work stamp cost for this {} interface.",
+                    interface_label
+                ),
+            )),
+            "latitude" => Some(make_entry(
+                current_config
+                    .latitude
+                    .map(RuntimeConfigValue::Float)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                startup_config
+                    .latitude
+                    .map(RuntimeConfigValue::Float)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                format!(
+                    "Latitude advertised for this {} interface; null clears it.",
+                    interface_label
+                ),
+            )),
+            "longitude" => Some(make_entry(
+                current_config
+                    .longitude
+                    .map(RuntimeConfigValue::Float)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                startup_config
+                    .longitude
+                    .map(RuntimeConfigValue::Float)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                format!(
+                    "Longitude advertised for this {} interface; null clears it.",
+                    interface_label
+                ),
+            )),
+            "height" => Some(make_entry(
+                current_config
+                    .height
+                    .map(RuntimeConfigValue::Float)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                startup_config
+                    .height
+                    .map(RuntimeConfigValue::Float)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                format!(
+                    "Height advertised for this {} interface; null clears it.",
+                    interface_label
+                ),
+            )),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn runtime_config_family_entry(
+        &self,
+        interfaces: &Interfaces,
+        family: RuntimeConfigFamily,
+        key: &str,
+    ) -> Option<RuntimeConfigEntry> {
+        match family {
+            #[cfg(feature = "iface-backbone")]
+            RuntimeConfigFamily::Backbone => self.backbone_runtime_entry(key),
+            #[cfg(feature = "iface-backbone")]
+            RuntimeConfigFamily::BackboneClient => self.backbone_client_runtime_entry(key),
+            #[cfg(feature = "iface-tcp")]
+            RuntimeConfigFamily::TcpServer => self.tcp_server_runtime_entry(key),
+            #[cfg(feature = "iface-tcp")]
+            RuntimeConfigFamily::TcpClient => self.tcp_client_runtime_entry(key),
+            #[cfg(feature = "iface-udp")]
+            RuntimeConfigFamily::Udp => self.udp_runtime_entry(key),
+            #[cfg(feature = "iface-auto")]
+            RuntimeConfigFamily::Auto => self.auto_runtime_entry(key),
+            #[cfg(feature = "iface-i2p")]
+            RuntimeConfigFamily::I2p => self.i2p_runtime_entry(key),
+            #[cfg(feature = "iface-pipe")]
+            RuntimeConfigFamily::Pipe => self.pipe_runtime_entry(key),
+            #[cfg(feature = "iface-rnode")]
+            RuntimeConfigFamily::Rnode => self.rnode_runtime_entry(key),
+            RuntimeConfigFamily::Interface => self.generic_interface_runtime_entry(interfaces, key),
+        }
+    }
+
+    pub(crate) fn runtime_config_family_entries(
+        &self,
+        interfaces: &Interfaces,
+        family: RuntimeConfigFamily,
+    ) -> Vec<RuntimeConfigEntry> {
+        match family {
+            #[cfg(feature = "iface-backbone")]
+            RuntimeConfigFamily::Backbone => self.list_backbone_runtime_config(),
+            #[cfg(feature = "iface-backbone")]
+            RuntimeConfigFamily::BackboneClient => self.list_backbone_client_runtime_config(),
+            #[cfg(feature = "iface-tcp")]
+            RuntimeConfigFamily::TcpServer => self.list_tcp_server_runtime_config(),
+            #[cfg(feature = "iface-tcp")]
+            RuntimeConfigFamily::TcpClient => self.list_tcp_client_runtime_config(),
+            #[cfg(feature = "iface-udp")]
+            RuntimeConfigFamily::Udp => self.list_udp_runtime_config(),
+            #[cfg(feature = "iface-auto")]
+            RuntimeConfigFamily::Auto => self.list_auto_runtime_config(),
+            #[cfg(feature = "iface-i2p")]
+            RuntimeConfigFamily::I2p => self.list_i2p_runtime_config(),
+            #[cfg(feature = "iface-pipe")]
+            RuntimeConfigFamily::Pipe => self.list_pipe_runtime_config(),
+            #[cfg(feature = "iface-rnode")]
+            RuntimeConfigFamily::Rnode => self.list_rnode_runtime_config(),
+            RuntimeConfigFamily::Interface => {
+                self.list_generic_interface_runtime_config(interfaces)
+            }
         }
     }
 }
