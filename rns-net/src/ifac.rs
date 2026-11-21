@@ -52,6 +52,33 @@ impl Clone for IfacState {
     }
 }
 
+/// Why IFAC state could not be derived.
+#[derive(Debug)]
+pub enum IfacError {
+    /// The IFAC key could not be derived.
+    KeyDerivation(hkdf::HkdfError),
+    /// The IFAC key could not be signed.
+    Signing(rns_crypto::identity::CryptoError),
+}
+
+impl std::fmt::Display for IfacError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::KeyDerivation(err) => write!(f, "failed to derive IFAC key: {}", err),
+            Self::Signing(err) => write!(f, "failed to sign IFAC key: {:?}", err),
+        }
+    }
+}
+
+impl std::error::Error for IfacError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::KeyDerivation(_) => None,
+            Self::Signing(err) => Some(err),
+        }
+    }
+}
+
 /// Derive IFAC state from network name and/or passphrase.
 ///
 /// Matches Python `Reticulum.py:811-829`:
@@ -65,7 +92,7 @@ pub fn derive_ifac(
     netname: Option<&str>,
     netkey: Option<&str>,
     size: usize,
-) -> Result<IfacState, String> {
+) -> Result<IfacState, IfacError> {
     let mut ifac_origin = Vec::new();
 
     if let Some(name) = netname {
@@ -80,7 +107,7 @@ pub fn derive_ifac(
 
     let ifac_origin_hash = sha256::sha256(&ifac_origin);
     let ifac_key_vec = hkdf::hkdf(64, &ifac_origin_hash, Some(&IFAC_SALT), None)
-        .map_err(|err| format!("failed to derive IFAC key: {}", err))?;
+        .map_err(IfacError::KeyDerivation)?;
 
     let mut ifac_key = [0u8; 64];
     ifac_key.copy_from_slice(&ifac_key_vec);
@@ -88,7 +115,7 @@ pub fn derive_ifac(
     let identity = Identity::from_private_key(&ifac_key);
     let signature = identity
         .sign(&sha256::sha256(&ifac_key))
-        .map_err(|err| format!("failed to sign IFAC key: {:?}", err))?;
+        .map_err(IfacError::Signing)?;
 
     Ok(IfacState {
         size: size.max(IFAC_MIN_SIZE),
