@@ -178,7 +178,7 @@ fn reader_loop(
                 }
             }
             Ok(n) => {
-                for frame in decoder.feed(&buf[..n]) {
+                for frame in decoder.feed(buf.get(..n).unwrap_or_default()) {
                     if tx
                         .send(Event::Frame {
                             interface_id: id,

@@ -136,7 +136,13 @@ pub(super) fn reader_loop_connected(
                     break true;
                 }
                 Ok(n) => {
-                    receiver.feed(&buf[..n], &config, &flow_states, &writer, &mut events);
+                    receiver.feed(
+                        buf.get(..n).unwrap_or_default(),
+                        &config,
+                        &flow_states,
+                        &writer,
+                        &mut events,
+                    );
                     for event in events.drain(..) {
                         if tx.send(event).is_err() {
                             return;
@@ -242,13 +248,13 @@ pub(super) fn signal_interface_up(
     flow_states: &[Arc<Mutex<SubFlowState>>],
     reconnected: bool,
 ) {
-    for (i, flow_state) in flow_states.iter().enumerate() {
+    for (i, (flow_state, sub)) in flow_states.iter().zip(&config.subinterfaces).enumerate() {
         let sub_id = InterfaceId(config.base_interface_id.0 + i as u64);
         let new_writer = reconnected.then(|| {
             make_sub_writer(
                 writer.clone(),
-                config.subinterfaces[i].vport,
-                config.subinterfaces[i].flow_control,
+                sub.vport,
+                sub.flow_control,
                 flow_state.clone(),
                 config.multi,
             )

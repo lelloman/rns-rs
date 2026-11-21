@@ -325,7 +325,8 @@ impl LoopSource for AutoSocket {
         if data && !self.tx.inbound_data_has_room() {
             return SourceStatus::Suspend;
         }
-        let buf = &mut cx.buf[..HW_MTU + 64];
+        let len = cx.buf.len().min(HW_MTU + 64);
+        let buf = cx.buf.get_mut(..len).unwrap_or_default();
         let mut events = Vec::new();
         for _ in 0..READ_BUDGET {
             let (n, src) = match self.socket.recv_from(buf) {
@@ -341,8 +342,13 @@ impl LoopSource for AutoSocket {
                 }
             };
             let event = match &self.kind {
-                Kind::Discovery(handler) => handler.handle(&buf[..n], src),
-                Kind::Data { if_index } => handle_data(&self.shared, *if_index, &buf[..n], src),
+                Kind::Discovery(handler) => handler.handle(buf.get(..n).unwrap_or_default(), src),
+                Kind::Data { if_index } => handle_data(
+                    &self.shared,
+                    *if_index,
+                    buf.get(..n).unwrap_or_default(),
+                    src,
+                ),
             };
             events.extend(event);
         }

@@ -310,7 +310,7 @@ mod bluez {
             let mut message =
                 Message::new_method_call(BLUEZ, &self.rx, CHARACTERISTIC, "WriteValue")
                     .map_err(io::Error::other)?
-                    .append2(buf[..n].to_vec(), options);
+                    .append2(buf.get(..n).unwrap_or_default().to_vec(), options);
             message.set_no_reply(true);
             channel.send(message).map_err(|()| {
                 io::Error::new(io::ErrorKind::BrokenPipe, "the D-Bus connection is closed")

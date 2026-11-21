@@ -61,7 +61,7 @@ const ACK_LEN: usize = HEADER_LEN + TAG_LEN;
 
 /// Whether `data` is a path MTU probe or acknowledgement.
 pub(crate) fn is_pmtu_datagram(data: &[u8]) -> bool {
-    data.len() >= 4 && matches!(&data[..4], b"RNSM" | b"RNSN")
+    matches!(data.first_chunk::<4>(), Some(b"RNSM" | b"RNSN"))
 }
 
 fn header(magic: &[u8; 4], session_id: &[u8; 16], nonce: &[u8; NONCE_LEN], size: u16) -> Vec<u8> {
@@ -87,17 +87,23 @@ fn open(
     session_id: &[u8; 16],
     key: &[u8; 32],
 ) -> Option<([u8; NONCE_LEN], u16)> {
-    if data.len() < ACK_LEN || &data[..4] != magic || data[4..20] != session_id[..] {
+    if data.len() < ACK_LEN {
         return None;
     }
-    let signed = &data[..data.len() - TAG_LEN];
+    // [magic:4][session id:16][nonce][size:2][padding][tag]
+    let (signed, received_tag) = data.split_last_chunk::<TAG_LEN>()?;
+    let (packet_magic, rest) = signed.split_first_chunk::<4>()?;
+    let (packet_session_id, rest) = rest.split_first_chunk::<16>()?;
+    if packet_magic != magic || packet_session_id != session_id {
+        return None;
+    }
     let tag = rns_crypto::hmac::hmac_sha256(key, signed);
-    if !super::constant_time_eq(&tag[..TAG_LEN], &data[signed.len()..]) {
+    if !super::constant_time_eq(&tag[..TAG_LEN], received_tag) {
         return None;
     }
-    let nonce = data[20..20 + NONCE_LEN].try_into().ok()?;
-    let size = u16::from_be_bytes([data[HEADER_LEN - 2], data[HEADER_LEN - 1]]);
-    Some((nonce, size))
+    let (nonce, rest) = rest.split_first_chunk::<NONCE_LEN>()?;
+    let size = u16::from_be_bytes(*rest.first_chunk::<2>()?);
+    Some((*nonce, size))
 }
 
 fn build_probe(

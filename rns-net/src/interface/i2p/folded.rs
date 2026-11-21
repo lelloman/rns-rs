@@ -227,7 +227,7 @@ impl LoopSource for ControlSource {
                 }
                 Ok(n) => {
                     let stream = &mut self.stream;
-                    self.lines.feed(&buf[..n], |reply| {
+                    self.lines.feed(buf.get(..n).unwrap_or_default(), |reply| {
                         let _ = stream.write_all(reply.as_bytes());
                     });
                 }
@@ -281,7 +281,7 @@ impl StreamSource {
         let id = *id;
         let n = crate::sys::recv(self.stream.as_raw_fd(), cx.buf, libc::MSG_DONTWAIT);
         let read = match n {
-            n if n > 0 => &cx.buf[..n as usize],
+            n if n > 0 => cx.buf.get(..n as usize).unwrap_or_default(),
             0 => {
                 log::warn!("[{}] I2P accept closed by the bridge", session.name);
                 arm_accept_later(&session, ACCEPT_RETRY_WAIT);
@@ -309,8 +309,8 @@ impl StreamSource {
             }
             return Some(SourceStatus::Rearm);
         };
-        line.extend_from_slice(&read[..end]);
-        let data = read[end + 1..].to_vec();
+        line.extend_from_slice(read.get(..end).unwrap_or_default());
+        let data = read.get(end + 1..).unwrap_or_default().to_vec();
         let remote = match std::str::from_utf8(line)
             .map_err(|e| SamError::InvalidResponse(e.to_string()))
             .and_then(|text| Destination::from_i2p_base64(text.trim()))

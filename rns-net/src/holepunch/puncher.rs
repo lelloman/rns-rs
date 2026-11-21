@@ -613,7 +613,10 @@ impl crate::event::LoopSource for PunchSource {
                 }
                 Err(_) => return crate::event::SourceStatus::Rearm,
             };
-            if let Some((peer_addr, rtt)) = self.punch.receive(socket, &cx.buf[..len], src) {
+            if let Some((peer_addr, rtt)) =
+                self.punch
+                    .receive(socket, cx.buf.get(..len).unwrap_or_default(), src)
+            {
                 return self.succeed(peer_addr, rtt);
             }
         }
@@ -694,7 +697,9 @@ fn run_udp_punch(
                 Err(_) => break,
             };
 
-            if let Some((peer_addr, rtt)) = punch.receive(&socket, &buf[..len], src) {
+            if let Some((peer_addr, rtt)) =
+                punch.receive(&socket, buf.get(..len).unwrap_or_default(), src)
+            {
                 status.store(STATUS_SUCCEEDED, Ordering::Relaxed);
                 // Set socket back to blocking with a reasonable timeout
                 let _ = socket.set_read_timeout(Some(Duration::from_millis(100)));
@@ -745,15 +750,21 @@ fn open_control(
     session_id: &[u8; 16],
     key: &[u8; 32],
 ) -> Option<[u8; NONCE_LEN]> {
-    if data.len() != PUNCH_PACKET_LEN || &data[..4] != magic || data[4..20] != session_id[..] {
+    if data.len() != PUNCH_PACKET_LEN {
         return None;
     }
-    let signed = &data[..PUNCH_PACKET_LEN - TAG_LEN];
+    // [magic:4][session id:16][nonce][tag]
+    let (signed, received_tag) = data.split_last_chunk::<TAG_LEN>()?;
+    let (packet_magic, rest) = signed.split_first_chunk::<4>()?;
+    let (packet_session_id, rest) = rest.split_first_chunk::<16>()?;
+    if packet_magic != magic || packet_session_id != session_id {
+        return None;
+    }
     let tag = rns_crypto::hmac::hmac_sha256(key, signed);
-    if !super::constant_time_eq(&tag[..TAG_LEN], &data[signed.len()..]) {
+    if !super::constant_time_eq(&tag[..TAG_LEN], received_tag) {
         return None;
     }
-    data[20..20 + NONCE_LEN].try_into().ok()
+    rest.first_chunk::<NONCE_LEN>().copied()
 }
 
 fn build_punch_packet(session_id: &[u8; 16], punch_token: &[u8; 32], nonce: &[u8; 16]) -> Vec<u8> {
@@ -790,7 +801,7 @@ pub(crate) fn fuzz_datagram(data: &[u8]) {
     let _ = open_control(data, PUNCH_MAGIC, &session_id, &token);
     let _ = open_control(data, ACK_MAGIC, &session_id, &token);
     if let Some(nonce) = data.first_chunk::<NONCE_LEN>() {
-        let magic = if data.len() > NONCE_LEN && data[NONCE_LEN] & 1 == 1 {
+        let magic = if data.get(NONCE_LEN).is_some_and(|byte| byte & 1 == 1) {
             ACK_MAGIC
         } else {
             PUNCH_MAGIC

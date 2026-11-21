@@ -184,7 +184,7 @@ impl RNodeSource {
             read += n;
             let mut events = Vec::new();
             self.receiver.feed(
-                &cx.buf[..n],
+                cx.buf.get(..n).unwrap_or_default(),
                 config,
                 &link.flow_states,
                 &link.writer,

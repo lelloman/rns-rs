@@ -417,8 +417,8 @@ impl HolePunchManager {
 
         // Bump-to-top: move the successful server to index 0
         if let Some(idx) = self.probe_addrs.iter().position(|a| *a == probe_server) {
-            if idx > 0 {
-                self.probe_addrs[..=idx].rotate_right(1);
+            if let Some(moved) = self.probe_addrs.get_mut(..=idx) {
+                moved.rotate_right(1);
             }
         }
 

@@ -248,7 +248,7 @@ fn udp_reader_loop(
                 if tx
                     .send(Event::Frame {
                         interface_id: id,
-                        data: buf[..n].into(),
+                        data: buf.get(..n).unwrap_or_default().into(),
                         rssi: None,
                         snr: None,
                     })
@@ -304,7 +304,8 @@ impl LoopSource for UdpSource {
         if !self.tx.inbound_data_has_room() {
             return SourceStatus::Suspend;
         }
-        let buf = &mut cx.buf[..MAX_DATAGRAM];
+        let len = cx.buf.len().min(MAX_DATAGRAM);
+        let buf = cx.buf.get_mut(..len).unwrap_or_default();
         let mut frames = Vec::new();
         let mut status = SourceStatus::Rearm;
         for _ in 0..LOOP_READ_BUDGET {
@@ -312,7 +313,7 @@ impl LoopSource for UdpSource {
                 Ok((0, _)) => {}
                 Ok((n, _)) => frames.push(Event::Frame {
                     interface_id: self.id,
-                    data: buf[..n].into(),
+                    data: buf.get(..n).unwrap_or_default().into(),
                     rssi: None,
                     snr: None,
                 }),

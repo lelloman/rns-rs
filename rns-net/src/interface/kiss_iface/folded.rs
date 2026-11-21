@@ -142,7 +142,7 @@ impl Port {
     /// exactly while bytes remain.
     fn drain(&mut self) {
         while !self.failed && self.head < self.out.len() {
-            let pending = &self.out[self.head..];
+            let pending = self.out.get(self.head..).unwrap_or_default();
             // SAFETY: `pending` is a valid initialized slice; the port is
             // non-blocking (set when it is served).
             let written = unsafe {
@@ -422,7 +422,7 @@ impl KissSource {
             let n = n as usize;
             read += n;
             let mut frames = Vec::new();
-            for event in self.decoder.feed(&cx.buf[..n]) {
+            for event in self.decoder.feed(cx.buf.get(..n).unwrap_or_default()) {
                 match event {
                     kiss::KissEvent::DataFrame(data) => {
                         let data = if ax25 {

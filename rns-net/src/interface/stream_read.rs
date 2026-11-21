@@ -115,7 +115,7 @@ fn read_frames(
         }
         let n = n as usize;
         read += n;
-        let decoded = decoder.feed_reused(&cx.buf[..n]);
+        let decoded = decoder.feed_reused(cx.buf.get(..n).unwrap_or_default());
         for &frame_len in &decoded.invalid_frame_lengths {
             log::debug!(
                 "[{}] invalid HDLC frame of {} bytes received on interface {}, dropping frame",

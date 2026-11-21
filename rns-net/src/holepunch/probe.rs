@@ -98,7 +98,9 @@ fn run_probe_server(
         };
         let socket = socket.get();
 
-        if let Some(response) = limiter.answer(&buf[..len], &src, Instant::now()) {
+        if let Some(response) =
+            limiter.answer(buf.get(..len).unwrap_or_default(), &src, Instant::now())
+        {
             if let Err(e) = socket.send_to(&response, src) {
                 log::debug!("Probe server send error: {}", e);
             }
@@ -109,15 +111,19 @@ fn run_probe_server(
 /// The response to a probe request from `src`, or `None` if `request` is
 /// not one.
 fn answer_probe(request: &[u8], src: &SocketAddr) -> Option<Vec<u8>> {
-    if !is_probe_request(request) {
-        return None;
-    }
-    Some(build_probe_response(&request[5..21], src))
+    let nonce = probe_request_nonce(request)?;
+    Some(build_probe_response(&nonce, src))
+}
+
+/// The nonce of `data` if it is a probe request: [magic:4][version:1][nonce:16].
+fn probe_request_nonce(data: &[u8]) -> Option<[u8; 16]> {
+    let [m0, m1, m2, m3, version, nonce @ ..]: [u8; PROBE_REQUEST_LEN] = data.try_into().ok()?;
+    (&[m0, m1, m2, m3] == PROBE_MAGIC && version == PROBE_VERSION).then_some(nonce)
 }
 
 /// Whether `data` is a probe request.
 fn is_probe_request(data: &[u8]) -> bool {
-    data.len() == PROBE_REQUEST_LEN && &data[..4] == PROBE_MAGIC && data[4] == PROBE_VERSION
+    probe_request_nonce(data).is_some()
 }
 
 /// Most sources a [`ProbeLimiter`] tracks at once.
@@ -372,7 +378,9 @@ impl FoldedProbeServer {
                     break;
                 }
             };
-            let response = self.limiter.answer(&buf[..len], &src, Instant::now());
+            let response =
+                self.limiter
+                    .answer(buf.get(..len).unwrap_or_default(), &src, Instant::now());
             if let Some(response) = response {
                 // A response the socket cannot take now is dropped, as a
                 // lost datagram would be; the client asks again.
@@ -561,7 +569,8 @@ fn ask_and_wait(
             .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "no probe reply"))?;
         socket.set_read_timeout(Some(remaining))?;
         let (len, src) = socket.recv_from(&mut buf)?;
-        if let Some(observed) = request.reply_from(&buf[..len], src, server) {
+        if let Some(observed) = request.reply_from(buf.get(..len).unwrap_or_default(), src, server)
+        {
             return Ok(observed);
         }
         log::debug!(
@@ -653,18 +662,17 @@ fn build_stun_binding_request(txn_id: &[u8; 12]) -> Vec<u8> {
 
 /// Parse a STUN Binding Response and extract the reflexive address.
 fn parse_stun_binding_response(data: &[u8], expected_txn_id: &[u8; 12]) -> Option<SocketAddr> {
-    if data.len() < STUN_HEADER_LEN {
-        return None;
-    }
-
-    let msg_type = u16::from_be_bytes([data[0], data[1]]);
-    let msg_len = u16::from_be_bytes([data[2], data[3]]) as usize;
-    let cookie = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+    // [type:2][length:2][cookie:4][transaction id:12][attributes]
+    let (&[t0, t1, l0, l1, c0, c1, c2, c3], rest) = data.split_first_chunk::<8>()?;
+    let (txn_id, payload) = rest.split_first_chunk::<12>()?;
+    let msg_type = u16::from_be_bytes([t0, t1]);
+    let msg_len = u16::from_be_bytes([l0, l1]) as usize;
+    let cookie = u32::from_be_bytes([c0, c1, c2, c3]);
 
     if cookie != STUN_MAGIC_COOKIE {
         return None;
     }
-    if &data[8..20] != expected_txn_id {
+    if txn_id != expected_txn_id {
         return None;
     }
 
@@ -677,11 +685,7 @@ fn parse_stun_binding_response(data: &[u8], expected_txn_id: &[u8; 12]) -> Optio
     }
 
     // Ensure payload fits
-    if data.len() < STUN_HEADER_LEN + msg_len {
-        return None;
-    }
-
-    let attrs = &data[STUN_HEADER_LEN..STUN_HEADER_LEN + msg_len];
+    let attrs = payload.get(..msg_len)?;
 
     // First try XOR-MAPPED-ADDRESS, then fall back to MAPPED-ADDRESS
     if let Some(addr) = find_stun_attribute(attrs, STUN_ATTR_XOR_MAPPED_ADDRESS) {
@@ -696,56 +700,43 @@ fn parse_stun_binding_response(data: &[u8], expected_txn_id: &[u8; 12]) -> Optio
 
 /// Find a STUN attribute by type, returning the attribute value bytes.
 fn find_stun_attribute(mut attrs: &[u8], target_type: u16) -> Option<&[u8]> {
-    while attrs.len() >= 4 {
-        let attr_type = u16::from_be_bytes([attrs[0], attrs[1]]);
-        let attr_len = u16::from_be_bytes([attrs[2], attrs[3]]) as usize;
-        if attrs.len() < 4 + attr_len {
-            return None;
-        }
+    while let Some((&[t0, t1, l0, l1], rest)) = attrs.split_first_chunk::<4>() {
+        let attr_type = u16::from_be_bytes([t0, t1]);
+        let attr_len = u16::from_be_bytes([l0, l1]) as usize;
+        let value = rest.get(..attr_len)?;
         if attr_type == target_type {
-            return Some(&attrs[4..4 + attr_len]);
+            return Some(value);
         }
         // Attributes are padded to 4-byte boundaries
         let padded_len = (attr_len + 3) & !3;
-        let advance = 4 + padded_len;
-        if advance > attrs.len() {
-            return None;
-        }
-        attrs = &attrs[advance..];
+        attrs = rest.get(padded_len..)?;
     }
     None
 }
 
 /// Parse XOR-MAPPED-ADDRESS attribute value.
 fn parse_xor_mapped_address(value: &[u8], txn_id: &[u8; 12]) -> Option<SocketAddr> {
-    if value.len() < 4 {
-        return None;
-    }
-    let family = value[1];
-    let xport = u16::from_be_bytes([value[2], value[3]]);
+    // [reserved:1][family:1][port:2][address]
+    let (&[_, family, p0, p1], address) = value.split_first_chunk::<4>()?;
+    let xport = u16::from_be_bytes([p0, p1]);
     let port = xport ^ (STUN_MAGIC_COOKIE >> 16) as u16;
 
     match family {
         STUN_FAMILY_IPV4 => {
-            if value.len() < 8 {
-                return None;
-            }
-            let xaddr = u32::from_be_bytes([value[4], value[5], value[6], value[7]]);
+            let xaddr = u32::from_be_bytes(*address.first_chunk::<4>()?);
             let addr = xaddr ^ STUN_MAGIC_COOKIE;
             let ip = std::net::Ipv4Addr::from(addr.to_be_bytes());
             Some(SocketAddr::new(ip.into(), port))
         }
         STUN_FAMILY_IPV6 => {
-            if value.len() < 20 {
-                return None;
-            }
+            let address = address.first_chunk::<16>()?;
             // XOR with magic cookie (4 bytes) + transaction ID (12 bytes)
             let mut xor_key = [0u8; 16];
             xor_key[..4].copy_from_slice(&STUN_MAGIC_COOKIE.to_be_bytes());
             xor_key[4..16].copy_from_slice(txn_id);
             let mut octets = [0u8; 16];
-            for i in 0..16 {
-                octets[i] = value[4 + i] ^ xor_key[i];
+            for ((octet, byte), key) in octets.iter_mut().zip(address).zip(xor_key) {
+                *octet = byte ^ key;
             }
             let ip = std::net::Ipv6Addr::from(octets);
             Some(SocketAddr::new(ip.into(), port))
@@ -756,27 +747,17 @@ fn parse_xor_mapped_address(value: &[u8], txn_id: &[u8; 12]) -> Option<SocketAdd
 
 /// Parse MAPPED-ADDRESS attribute value (no XOR, for older servers).
 fn parse_mapped_address(value: &[u8]) -> Option<SocketAddr> {
-    if value.len() < 4 {
-        return None;
-    }
-    let family = value[1];
-    let port = u16::from_be_bytes([value[2], value[3]]);
+    // [reserved:1][family:1][port:2][address]
+    let (&[_, family, p0, p1], address) = value.split_first_chunk::<4>()?;
+    let port = u16::from_be_bytes([p0, p1]);
 
     match family {
         STUN_FAMILY_IPV4 => {
-            if value.len() < 8 {
-                return None;
-            }
-            let ip = std::net::Ipv4Addr::new(value[4], value[5], value[6], value[7]);
+            let ip = std::net::Ipv4Addr::from(*address.first_chunk::<4>()?);
             Some(SocketAddr::new(ip.into(), port))
         }
         STUN_FAMILY_IPV6 => {
-            if value.len() < 20 {
-                return None;
-            }
-            let mut octets = [0u8; 16];
-            octets.copy_from_slice(&value[4..20]);
-            let ip = std::net::Ipv6Addr::from(octets);
+            let ip = std::net::Ipv6Addr::from(*address.first_chunk::<16>()?);
             Some(SocketAddr::new(ip.into(), port))
         }
         _ => None,
@@ -950,34 +931,32 @@ fn parse_probe_response(data: &[u8], expected_nonce: &[u8; 16]) -> Option<Socket
     if data.len() < 24 {
         return None;
     }
-    if &data[..4] != PROBE_MAGIC {
+    // [magic:4][version:1][nonce:16][address type:1][address][port:2]
+    let (magic, rest) = data.split_first_chunk::<4>()?;
+    let (&version, rest) = rest.split_first()?;
+    let (nonce, rest) = rest.split_first_chunk::<16>()?;
+    let (&addr_type, address) = rest.split_first()?;
+    if magic != PROBE_MAGIC {
         return None;
     }
-    if data[4] != PROBE_VERSION {
+    if version != PROBE_VERSION {
         return None;
     }
-    if &data[5..21] != expected_nonce {
+    if nonce != expected_nonce {
         return None;
     }
 
-    let addr_type = data[21];
     match addr_type {
         ADDR_TYPE_IPV4 => {
-            if data.len() < 28 {
-                return None;
-            }
-            let ip = std::net::Ipv4Addr::new(data[22], data[23], data[24], data[25]);
-            let port = u16::from_be_bytes([data[26], data[27]]);
+            let (ip, port) = address.split_first_chunk::<4>()?;
+            let ip = std::net::Ipv4Addr::from(*ip);
+            let port = u16::from_be_bytes(*port.first_chunk::<2>()?);
             Some(SocketAddr::new(ip.into(), port))
         }
         ADDR_TYPE_IPV6 => {
-            if data.len() < 40 {
-                return None;
-            }
-            let mut octets = [0u8; 16];
-            octets.copy_from_slice(&data[22..38]);
-            let ip = std::net::Ipv6Addr::from(octets);
-            let port = u16::from_be_bytes([data[38], data[39]]);
+            let (ip, port) = address.split_first_chunk::<16>()?;
+            let ip = std::net::Ipv6Addr::from(*ip);
+            let port = u16::from_be_bytes(*port.first_chunk::<2>()?);
             Some(SocketAddr::new(ip.into(), port))
         }
         _ => None,
@@ -1061,7 +1040,7 @@ pub(crate) mod tests {
             .unwrap();
         let mut buf = [0u8; 64];
         let (len, client) = server.recv_from(&mut buf).unwrap();
-        let id = id(&buf[..len]);
+        let id = id(buf.get(..len).unwrap_or_default());
         let mut other_id = id.clone();
         other_id[0] ^= 0xff;
         let other = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -1121,7 +1100,7 @@ pub(crate) mod tests {
         });
         let mut buf = [0u8; 64];
         let (len, client_addr) = server.recv_from(&mut buf).unwrap();
-        let nonce = rnsp_id(&buf[..len]);
+        let nonce = rnsp_id(buf.get(..len).unwrap_or_default());
         let mut wrong = nonce.clone();
         wrong[15] ^= 1;
         server

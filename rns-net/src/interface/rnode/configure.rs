@@ -40,7 +40,7 @@ pub(super) fn detect_and_configure(
                 ));
             }
             Ok(n) => {
-                for event in decoder.feed(&buf[..n]) {
+                for event in decoder.feed(buf.get(..n).unwrap_or_default()) {
                     match event {
                         rnode_kiss::RNodeEvent::Detected(true) => {
                             detected = true;
