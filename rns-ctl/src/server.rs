@@ -191,13 +191,32 @@ fn refuse_connection(mut tcp_stream: TcpStream, ctx: &ServerContext) {
     let _ = tcp_stream.shutdown(std::net::Shutdown::Both);
 }
 
+/// A TLS session could not be set up for a connection.
+#[cfg(feature = "tls")]
+#[derive(Debug)]
+struct TlsSessionError(rustls::Error);
+
+#[cfg(feature = "tls")]
+impl std::fmt::Display for TlsSessionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TLS error: {}", self.0)
+    }
+}
+
+#[cfg(feature = "tls")]
+impl std::error::Error for TlsSessionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
 /// Wrap a TCP stream in TLS if configured, otherwise return plain.
 fn wrap_stream(tcp_stream: TcpStream, ctx: &ServerContext) -> io::Result<ConnStream> {
     #[cfg(feature = "tls")]
     {
         if let Some(ref tls_config) = ctx.tls_config {
             let server_conn = rustls::ServerConnection::new(tls_config.clone())
-                .map_err(|e| io::Error::other(format!("TLS error: {}", e)))?;
+                .map_err(|e| io::Error::other(TlsSessionError(e)))?;
             return Ok(ConnStream::Tls(Box::new(rustls::StreamOwned::new(
                 server_conn,
                 tcp_stream,
@@ -334,5 +353,17 @@ fn handle_ws_text(text: &str, topics: &mut HashSet<String>, stream: &mut ConnStr
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(all(test, feature = "tls"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tls_session_error_keeps_its_message() {
+        let inner = || rustls::Error::General("no keys".into());
+        let error = io::Error::other(TlsSessionError(inner()));
+        assert_eq!(error.to_string(), format!("TLS error: {}", inner()));
     }
 }
