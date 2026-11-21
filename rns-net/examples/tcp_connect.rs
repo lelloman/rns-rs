@@ -9,7 +9,8 @@ use std::env;
 use std::sync::mpsc;
 
 use rns_net::{
-    interface::TcpClientConfig, Callbacks, InterfaceConfig, NodeConfig, RnsNode, MODE_FULL,
+    interface::TcpClientConfig, Callbacks, InterfaceConfig, InterfaceId, NodeConfig, RnsNode,
+    MODE_FULL,
 };
 
 struct LoggingCallbacks;
@@ -68,12 +69,12 @@ fn main() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
-                config_data: Box::new(TcpClientConfig {
-                    name: format!("TCP {}:{}", host, port),
-                    target_host: host,
-                    target_port: port,
-                    ..Default::default()
-                }),
+                config_data: Box::new(TcpClientConfig::new(
+                    format!("TCP {}:{}", host, port),
+                    InterfaceId(0),
+                    host,
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,

@@ -167,14 +167,12 @@ fn main() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
-                config_data: Box::new(TcpServerConfig {
-                    name: "Transport TCP".into(),
-                    listen_ip: "127.0.0.1".into(),
-                    listen_port: port,
-                    interface_id: InterfaceId(1),
-                    max_connections: None,
-                    ..TcpServerConfig::default()
-                }),
+                config_data: Box::new(TcpServerConfig::new(
+                    "Transport TCP",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -289,12 +287,12 @@ fn main() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
-                config_data: Box::new(TcpClientConfig {
-                    name: "Alice TCP".into(),
-                    target_host: "127.0.0.1".into(),
-                    target_port: port,
-                    ..Default::default()
-                }),
+                config_data: Box::new(TcpClientConfig::new(
+                    "Alice TCP",
+                    InterfaceId(0),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -412,12 +410,12 @@ fn main() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
-                config_data: Box::new(TcpClientConfig {
-                    name: "Bob TCP".into(),
-                    target_host: "127.0.0.1".into(),
-                    target_port: port,
-                    ..Default::default()
-                }),
+                config_data: Box::new(TcpClientConfig::new(
+                    "Bob TCP",
+                    InterfaceId(0),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,

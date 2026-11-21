@@ -15,7 +15,7 @@ use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 use rns_net::{
     interface::TcpClientConfig, AnnouncedIdentity, Callbacks, Destination, InterfaceConfig,
-    NodeConfig, RnsNode, MODE_FULL,
+    InterfaceId, NodeConfig, RnsNode, MODE_FULL,
 };
 
 const KNOWN_DESTINATIONS_TTL: Duration = Duration::from_secs(48 * 60 * 60);
@@ -440,14 +440,12 @@ fn tcp_client_interface(port: u16) -> InterfaceConfig {
         announce_limits: Default::default(),
         name: String::new(),
         type_name: "TCPClientInterface".to_string(),
-        config_data: Box::new(TcpClientConfig {
-            name: "interop-tcp".into(),
-            target_host: "127.0.0.1".into(),
-            target_port: port,
-            reconnect_wait: Duration::from_millis(500),
-            max_reconnect_tries: Some(3),
-            connect_timeout: Duration::from_secs(5),
-            ..Default::default()
+        config_data: Box::new({
+            let mut config = TcpClientConfig::new("interop-tcp", InterfaceId(0), "127.0.0.1", port);
+            config.reconnect_wait = Duration::from_millis(500);
+            config.max_reconnect_tries = Some(3);
+            config.connect_timeout = Duration::from_secs(5);
+            config
         }),
         mode: MODE_FULL,
         gravity: 0,
@@ -465,12 +463,12 @@ fn tcp_client_interface(port: u16) -> InterfaceConfig {
 fn tcp_server_interface(port: u16) -> InterfaceConfig {
     let mut interface = tcp_client_interface(port);
     interface.type_name = "TCPServerInterface".to_string();
-    interface.config_data = Box::new(rns_net::interface::TcpServerConfig {
-        name: "interop-tcp-server".into(),
-        listen_ip: "127.0.0.1".into(),
-        listen_port: port,
-        ..rns_net::interface::TcpServerConfig::default()
-    });
+    interface.config_data = Box::new(rns_net::interface::TcpServerConfig::new(
+        "interop-tcp-server",
+        InterfaceId(0),
+        "127.0.0.1",
+        port,
+    ));
     interface
 }
 

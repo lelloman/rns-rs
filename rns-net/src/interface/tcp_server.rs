@@ -26,6 +26,9 @@ use crate::interface::{lock_or_recover, ListenerControl, Writer};
 const HW_MTU: usize = 262_144;
 
 /// Configuration for a TCP server interface.
+///
+/// Start from [`TcpServerConfig::new`] or `default()`: the config also
+/// carries crate-private state it shares with the running interface.
 #[derive(Debug, Clone)]
 pub struct TcpServerConfig {
     /// Interface name from the config section.
@@ -49,19 +52,19 @@ pub struct TcpServerConfig {
     /// see [`super::DEFAULT_FLUSH_AFTER`]).
     pub flush_after: Option<Duration>,
     /// Settings shared with the running interface, adjustable at runtime.
-    pub runtime: Arc<Mutex<TcpServerRuntime>>,
+    pub(crate) runtime: Arc<Mutex<TcpServerRuntime>>,
 }
 
 /// TCP server settings that can be changed while it runs.
 #[derive(Debug, Clone)]
-pub struct TcpServerRuntime {
+pub(crate) struct TcpServerRuntime {
     /// Cap on simultaneous client connections; `None` is unlimited.
     pub max_connections: Option<usize>,
 }
 
 impl TcpServerRuntime {
     /// Runtime settings taken from `config`.
-    pub fn from_config(config: &TcpServerConfig) -> Self {
+    pub(crate) fn from_config(config: &TcpServerConfig) -> Self {
         Self {
             max_connections: config.max_connections,
         }
@@ -98,6 +101,26 @@ impl Default for TcpServerConfig {
         let startup = TcpServerRuntime::from_config(&config);
         config.runtime = Arc::new(Mutex::new(startup));
         config
+    }
+}
+
+impl TcpServerConfig {
+    /// A server named `name` with id `interface_id` that listens on
+    /// `listen_ip`:`listen_port`, with the defaults otherwise. Change the
+    /// other public fields on the result.
+    pub fn new(
+        name: impl Into<String>,
+        interface_id: InterfaceId,
+        listen_ip: impl Into<String>,
+        listen_port: u16,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            interface_id,
+            listen_ip: listen_ip.into(),
+            listen_port,
+            ..Self::default()
+        }
     }
 }
 

@@ -19,11 +19,7 @@ const DRIVEN_BUFFER_LIMIT: usize = 128 * 1024;
 /// driver loop (see [`crate::engine::FOLD_IO`]) it is *driven*: writes are
 /// buffered and written without blocking, and the rest is written when the
 /// driver reports the transport writable (see [`DeviceWriter::drain`]).
-#[cfg_attr(
-    not(feature = "iface-rnode"),
-    allow(unreachable_pub, reason = "public only through rnode::DeviceWriter")
-)]
-pub struct DeviceWriter<T> {
+pub(crate) struct DeviceWriter<T> {
     transport: T,
     driven: Option<Driven>,
 }
@@ -52,11 +48,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for DeviceWriter<T> {
 
 impl<T: Write + AsRawFd> DeviceWriter<T> {
     /// A writer that writes straight to `transport`.
-    #[cfg_attr(
-        not(feature = "iface-rnode"),
-        allow(unreachable_pub, reason = "public only through rnode::DeviceWriter")
-    )]
-    pub fn new(transport: T) -> Self {
+    pub(crate) fn new(transport: T) -> Self {
         Self {
             transport,
             driven: None,

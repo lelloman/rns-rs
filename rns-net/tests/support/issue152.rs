@@ -155,13 +155,12 @@ fn run_burst(async_api: bool) {
                 announce_limits: Default::default(),
                 name: "Bob TCP".into(),
                 type_name: "TCPServerInterface".into(),
-                config_data: Box::new(TcpServerConfig {
-                    name: "Bob TCP".into(),
-                    listen_ip: "127.0.0.1".into(),
-                    listen_port: port,
-                    interface_id: InterfaceId(1),
-                    ..Default::default()
-                }),
+                config_data: Box::new(TcpServerConfig::new(
+                    "Bob TCP",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -205,12 +204,12 @@ fn run_burst(async_api: bool) {
                 announce_limits: Default::default(),
                 name: "Alice paused TCP".into(),
                 type_name: "TCPClientInterface".into(),
-                config_data: Box::new(TcpClientConfig {
-                    name: "Alice paused TCP".into(),
-                    target_port: port,
-                    interface_id: InterfaceId(1),
-                    ..Default::default()
-                }),
+                config_data: Box::new(TcpClientConfig::new(
+                    "Alice paused TCP",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,

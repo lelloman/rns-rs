@@ -9,7 +9,7 @@ use crate::serial::SerialPort;
 const DEFAULT_PORT: u32 = 7633;
 
 #[derive(Debug)]
-pub enum Transport {
+pub(crate) enum Transport {
     Serial(std::fs::File),
     Tcp(TcpStream),
     /// The device's notifications over BLE, read from the descriptor
@@ -29,7 +29,7 @@ fn offline() -> io::Error {
 }
 
 impl Transport {
-    pub fn open(
+    pub(crate) fn open(
         config: &SerialConfig,
         underlay_mark: Option<u32>,
     ) -> io::Result<(Transport, Transport)> {
@@ -95,7 +95,7 @@ impl Transport {
 
     /// End the connection as upstream closes it: a BLE device is
     /// disconnected. Other connections close when dropped.
-    pub fn close(&self) {
+    pub(crate) fn close(&self) {
         match self {
             #[cfg(feature = "iface-rnode-ble")]
             Transport::BleNotify(_, session) | Transport::BleWrite(session) => session.close(),
@@ -106,7 +106,7 @@ impl Transport {
     /// End the connection as [`Self::close`] does, letting `read` read
     /// what the device answers while a BLE device disconnects. Other
     /// connections are not read: they close when dropped.
-    pub fn close_reading(&self, read: impl FnOnce(&mut std::fs::File)) {
+    pub(crate) fn close_reading(&self, read: impl FnOnce(&mut std::fs::File)) {
         match self {
             #[cfg(feature = "iface-rnode-ble")]
             Transport::BleNotify(_, session) | Transport::BleWrite(session) => {
@@ -117,7 +117,7 @@ impl Transport {
     }
 
     /// Note that the device dropped the connection.
-    pub fn lost(&self) {
+    pub(crate) fn lost(&self) {
         match self {
             #[cfg(feature = "iface-rnode-ble")]
             Transport::BleNotify(_, session) | Transport::BleWrite(session) => session.lost(),
@@ -127,7 +127,7 @@ impl Transport {
 
     /// Reader and writer on duplicates of `fd`, which stays the caller's:
     /// it is not closed here.
-    pub fn open_from_fd(fd: i32) -> io::Result<(Transport, Transport)> {
+    pub(crate) fn open_from_fd(fd: i32) -> io::Result<(Transport, Transport)> {
         let reader = crate::serial::dup_fd(fd)?;
         let writer = crate::serial::dup_fd(fd)?;
         Ok((

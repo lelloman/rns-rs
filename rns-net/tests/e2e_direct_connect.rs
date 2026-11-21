@@ -330,13 +330,11 @@ impl Pair {
             &bob_id,
             interface(
                 "TCPServerInterface",
-                Box::new(TcpServerConfig {
-                    name: "Bob".into(),
-                    listen_ip: "127.0.0.1".into(),
-                    listen_port: tcp_port,
-                    interface_id: InterfaceId(1),
-                    fixed_mtu: tcp_mtu,
-                    ..TcpServerConfig::default()
+                Box::new({
+                    let mut config =
+                        TcpServerConfig::new("Bob", InterfaceId(1), "127.0.0.1", tcp_port);
+                    config.fixed_mtu = tcp_mtu;
+                    config
                 }),
             ),
             probe_server,
@@ -364,13 +362,11 @@ impl Pair {
             &alice_id,
             interface(
                 "TCPClientInterface",
-                Box::new(TcpClientConfig {
-                    name: "Alice".into(),
-                    target_host: "127.0.0.1".into(),
-                    target_port: tcp_port,
-                    interface_id: InterfaceId(1),
-                    fixed_mtu: tcp_mtu,
-                    ..Default::default()
+                Box::new({
+                    let mut config =
+                        TcpClientConfig::new("Alice", InterfaceId(1), "127.0.0.1", tcp_port);
+                    config.fixed_mtu = tcp_mtu;
+                    config
                 }),
             ),
             probe_server,

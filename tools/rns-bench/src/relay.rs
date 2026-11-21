@@ -19,12 +19,7 @@ pub(crate) fn run(port: u16) -> Result<()> {
                 announce_limits: Default::default(),
                 name: "benchmark-relay".into(),
                 type_name: "TCPServerInterface".into(),
-                config_data: Box::new(TcpServerConfig {
-                    listen_ip: "127.0.0.1".into(),
-                    listen_port: port,
-                    interface_id: InterfaceId(1),
-                    ..Default::default()
-                }),
+                config_data: Box::new(TcpServerConfig::new("", InterfaceId(1), "127.0.0.1", port)),
                 mode: constants::MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,

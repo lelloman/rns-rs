@@ -77,7 +77,8 @@ pub(crate) use tcp_params::auto_mtu_for_bitrate;
 pub(crate) use tcp_params::{
     parse_flush_after, parse_tcp_rate_params, tcp_bitrate, tcp_hardware_mtu, DEFAULT_FLUSH_AFTER,
 };
-pub(crate) use type_hints::{shared_medium_hint, tunnels_allowed, InterfaceKind};
+pub use type_hints::InterfaceKind;
+pub(crate) use type_hints::{shared_medium_hint, tunnels_allowed};
 #[cfg(target_os = "linux")]
 pub(crate) use underlay::bind_to_device;
 #[cfg(all(target_os = "linux", feature = "iface-tcp"))]
@@ -124,7 +125,7 @@ pub use local::{LocalClientConfig, LocalClientFactory, LocalServerConfig, LocalS
 pub use pipe::{PipeConfig, PipeFactory};
 pub use registry::InterfaceRegistry;
 #[cfg(feature = "iface-rnode")]
-pub use rnode::{RNodeConfig, RNodeFactory, RNodeMultiFactory, RNodeRuntime, RNodeSubConfig};
+pub use rnode::{RNodeConfig, RNodeFactory, RNodeMultiFactory, RNodeSubConfig};
 #[cfg(feature = "iface-serial")]
 pub use serial_iface::{SerialFactory, SerialIfaceConfig};
 #[cfg(feature = "iface-tcp")]

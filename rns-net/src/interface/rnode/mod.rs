@@ -24,7 +24,6 @@ pub use factory::{RNodeFactory, RNodeMultiFactory};
 pub(crate) use radio::*;
 use reader::*;
 use receive::RNodeReceiver;
-pub use runtime::RNodeRuntime;
 pub(crate) use runtime::*;
 use telemetry::*;
 use writers::*;
@@ -114,6 +113,9 @@ pub struct RNodeSubConfig {
 }
 
 /// Configuration for the RNode device.
+///
+/// Start from `default()`: the config also carries crate-private state it
+/// shares with the running interface.
 #[derive(Debug, Clone)]
 pub struct RNodeConfig {
     /// Interface name.
@@ -145,13 +147,13 @@ pub struct RNodeConfig {
     /// Socket mark applied to the TCP connection of a `tcp:` port.
     pub underlay_mark: Option<u32>,
     /// Radio settings that can be changed while running, shared with the driver.
-    pub runtime: Arc<Mutex<RNodeRuntime>>,
+    pub(crate) runtime: Arc<Mutex<RNodeRuntime>>,
     /// What a BLE connection (`port = ble://...`) remembers between
     /// connections.
-    pub ble: Arc<Mutex<BleLinkState>>,
+    pub(crate) ble: Arc<Mutex<BleLinkState>>,
     /// The radio timing a single RNode last reported, kept across
     /// connections: upstream logs it only when it changes.
-    pub reported_phy: Arc<Mutex<Option<[u16; 6]>>>,
+    pub(crate) reported_phy: Arc<Mutex<Option<[u16; 6]>>>,
 }
 
 impl Default for RNodeConfig {

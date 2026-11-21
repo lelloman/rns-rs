@@ -19,6 +19,9 @@ use crate::interface::{lock_or_recover, ListenerControl, Writer};
 pub(crate) const HW_MTU: u32 = 1064;
 
 /// Configuration for a UDP interface.
+///
+/// Start from `default()`: the config also carries crate-private state it
+/// shares with the running interface.
 #[derive(Debug, Clone)]
 pub struct UdpConfig {
     /// Interface name from the config section.
@@ -34,12 +37,12 @@ pub struct UdpConfig {
     /// Interface ID assigned by the node.
     pub interface_id: InterfaceId,
     /// Settings shared with the running interface, adjustable at runtime.
-    pub runtime: Arc<Mutex<UdpRuntime>>,
+    pub(crate) runtime: Arc<Mutex<UdpRuntime>>,
 }
 
 /// UDP interface settings that can be changed while it runs.
 #[derive(Debug, Clone)]
-pub struct UdpRuntime {
+pub(crate) struct UdpRuntime {
     /// IP address datagrams are sent to; sending fails while it or the port is unset.
     pub forward_ip: Option<String>,
     /// UDP port datagrams are sent to.
@@ -48,7 +51,7 @@ pub struct UdpRuntime {
 
 impl UdpRuntime {
     /// Runtime settings taken from `config`.
-    pub fn from_config(config: &UdpConfig) -> Self {
+    pub(crate) fn from_config(config: &UdpConfig) -> Self {
         Self {
             forward_ip: config.forward_ip.clone(),
             forward_port: config.forward_port,

@@ -58,52 +58,25 @@ fn main() {
 
     log::info!("Connecting to RNode on {} at {} MHz", port, freq_mhz);
 
-    let mut rnode = RNodeConfig {
-        name: format!("RNode {}", port),
-        port: port.clone(),
-        speed: 115200,
-        interface_id: InterfaceId(1),
-        base_interface_id: InterfaceId(1),
-        subinterfaces: vec![RNodeSubConfig {
-            name: "LoRa".into(),
-            vport: 0,
-            outgoing: true,
-            frequency,
-            bandwidth: 125000,
-            txpower: 14,
-            spreading_factor: 8,
-            coding_rate: 5,
-            flow_control: false,
-            st_alock: None,
-            lt_alock: None,
-        }],
-        multi: false,
-        id_interval: None,
-        id_callsign: None,
-        pre_opened_fd: None,
-        underlay_mark: None,
-        runtime: std::sync::Arc::new(std::sync::Mutex::new(rns_net::interface::RNodeRuntime {
-            sub: RNodeSubConfig {
-                name: String::new(),
-                vport: 0,
-                outgoing: true,
-                frequency: 868_000_000,
-                bandwidth: 125_000,
-                txpower: 7,
-                spreading_factor: 8,
-                coding_rate: 5,
-                flow_control: false,
-                st_alock: None,
-                lt_alock: None,
-            },
-            writer: None,
-        })),
-        ble: Default::default(),
-        reported_phy: Default::default(),
-    };
-    rnode.runtime = std::sync::Arc::new(std::sync::Mutex::new(
-        rns_net::interface::RNodeRuntime::from_config(&rnode),
-    ));
+    let mut rnode = RNodeConfig::default();
+    rnode.name = format!("RNode {}", port);
+    rnode.port = port.clone();
+    rnode.speed = 115200;
+    rnode.interface_id = InterfaceId(1);
+    rnode.base_interface_id = InterfaceId(1);
+    rnode.subinterfaces = vec![RNodeSubConfig {
+        name: "LoRa".into(),
+        vport: 0,
+        outgoing: true,
+        frequency,
+        bandwidth: 125000,
+        txpower: 14,
+        spreading_factor: 8,
+        coding_rate: 5,
+        flow_control: false,
+        st_alock: None,
+        lt_alock: None,
+    }];
 
     let node = RnsNode::start(
         NodeConfig {

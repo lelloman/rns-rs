@@ -694,14 +694,12 @@ fn start_transport_node_with_limits(
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
-                config_data: Box::new(TcpServerConfig {
-                    name: "Transport TCP".into(),
-                    listen_ip: "127.0.0.1".into(),
-                    listen_port: port,
-                    interface_id: InterfaceId(1),
-                    max_connections: None,
-                    ..TcpServerConfig::default()
-                }),
+                config_data: Box::new(TcpServerConfig::new(
+                    "Transport TCP",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -840,13 +838,12 @@ fn start_client_node_with_options(
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
-                config_data: Box::new(TcpClientConfig {
-                    name: "Client TCP".into(),
-                    target_host: "127.0.0.1".into(),
-                    target_port: port,
-                    interface_id: InterfaceId(1),
-                    ..Default::default()
-                }),
+                config_data: Box::new(TcpClientConfig::new(
+                    "Client TCP",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -1422,14 +1419,12 @@ fn test_direct_link_no_transport() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
-                config_data: Box::new(TcpServerConfig {
-                    name: "Bob TCP Server".into(),
-                    listen_ip: "127.0.0.1".into(),
-                    listen_port: port,
-                    interface_id: InterfaceId(1),
-                    max_connections: None,
-                    ..TcpServerConfig::default()
-                }),
+                config_data: Box::new(TcpServerConfig::new(
+                    "Bob TCP Server",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -2056,14 +2051,12 @@ fn test_plain_message_delivery() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
-                config_data: Box::new(TcpServerConfig {
-                    name: "Bob TCP Server".into(),
-                    listen_ip: "127.0.0.1".into(),
-                    listen_port: port,
-                    interface_id: InterfaceId(1),
-                    max_connections: None,
-                    ..TcpServerConfig::default()
-                }),
+                config_data: Box::new(TcpServerConfig::new(
+                    "Bob TCP Server",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -2333,14 +2326,12 @@ fn test_group_message_delivery() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
-                config_data: Box::new(TcpServerConfig {
-                    name: "Bob TCP Server".into(),
-                    listen_ip: "127.0.0.1".into(),
-                    listen_port: port,
-                    interface_id: InterfaceId(1),
-                    max_connections: None,
-                    ..TcpServerConfig::default()
-                }),
+                config_data: Box::new(TcpServerConfig::new(
+                    "Bob TCP Server",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -2478,14 +2469,12 @@ fn test_group_wrong_key_fails() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
-                config_data: Box::new(TcpServerConfig {
-                    name: "Bob TCP Server".into(),
-                    listen_ip: "127.0.0.1".into(),
-                    listen_port: port,
-                    interface_id: InterfaceId(1),
-                    max_connections: None,
-                    ..TcpServerConfig::default()
-                }),
+                config_data: Box::new(TcpServerConfig::new(
+                    "Bob TCP Server",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -3834,14 +3823,15 @@ fn test_udp_announce_and_message() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "UDPInterface".to_string(),
-                config_data: Box::new(UdpConfig {
-                    name: "Alice UDP".into(),
-                    listen_ip: Some("127.0.0.1".into()),
-                    listen_port: Some(port_a),
-                    forward_ip: Some("127.0.0.1".into()),
-                    forward_port: Some(port_b),
-                    interface_id: InterfaceId(1),
-                    ..UdpConfig::default()
+                config_data: Box::new({
+                    let mut config = UdpConfig::default();
+                    config.name = "Alice UDP".into();
+                    config.listen_ip = Some("127.0.0.1".into());
+                    config.listen_port = Some(port_a);
+                    config.forward_ip = Some("127.0.0.1".into());
+                    config.forward_port = Some(port_b);
+                    config.interface_id = InterfaceId(1);
+                    config
                 }),
                 mode: MODE_FULL,
                 gravity: 0,
@@ -3934,14 +3924,15 @@ fn test_udp_announce_and_message() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "UDPInterface".to_string(),
-                config_data: Box::new(UdpConfig {
-                    name: "Bob UDP".into(),
-                    listen_ip: Some("127.0.0.1".into()),
-                    listen_port: Some(port_b),
-                    forward_ip: Some("127.0.0.1".into()),
-                    forward_port: Some(port_a),
-                    interface_id: InterfaceId(1),
-                    ..UdpConfig::default()
+                config_data: Box::new({
+                    let mut config = UdpConfig::default();
+                    config.name = "Bob UDP".into();
+                    config.listen_ip = Some("127.0.0.1".into());
+                    config.listen_port = Some(port_b);
+                    config.forward_ip = Some("127.0.0.1".into());
+                    config.forward_port = Some(port_a);
+                    config.interface_id = InterfaceId(1);
+                    config
                 }),
                 mode: MODE_FULL,
                 gravity: 0,
@@ -4131,14 +4122,12 @@ fn discovery_announce_received_by_client() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
-                config_data: Box::new(TcpServerConfig {
-                    name: "Discoverable TCP".into(),
-                    listen_ip: "127.0.0.1".into(),
-                    listen_port: port,
-                    interface_id: InterfaceId(1),
-                    max_connections: None,
-                    ..TcpServerConfig::default()
-                }),
+                config_data: Box::new(TcpServerConfig::new(
+                    "Discoverable TCP",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -4253,13 +4242,12 @@ fn discovery_announce_received_by_client() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
-                config_data: Box::new(TcpClientConfig {
-                    name: "Client TCP".into(),
-                    target_host: "127.0.0.1".into(),
-                    target_port: port,
-                    interface_id: InterfaceId(1),
-                    ..Default::default()
-                }),
+                config_data: Box::new(TcpClientConfig::new(
+                    "Client TCP",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -4406,14 +4394,12 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
-                config_data: Box::new(TcpServerConfig {
-                    name: "Discoverable TCP Pool Target".into(),
-                    listen_ip: "127.0.0.1".into(),
-                    listen_port: port,
-                    interface_id: InterfaceId(1),
-                    max_connections: None,
-                    ..TcpServerConfig::default()
-                }),
+                config_data: Box::new(TcpServerConfig::new(
+                    "Discoverable TCP Pool Target",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -4521,13 +4507,12 @@ fn backbone_peer_pool_connects_live_discovered_peer() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
-                config_data: Box::new(TcpClientConfig {
-                    name: "Discovery Listener TCP".into(),
-                    target_host: "127.0.0.1".into(),
-                    target_port: port,
-                    interface_id: InterfaceId(1),
-                    ..Default::default()
-                }),
+                config_data: Box::new(TcpClientConfig::new(
+                    "Discovery Listener TCP",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -4907,14 +4892,12 @@ fn backbone_peer_pool_live_discovered_priority_does_not_preempt_active_configure
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
-                config_data: Box::new(TcpServerConfig {
-                    name: "Discoverable Priority Target".into(),
-                    listen_ip: "127.0.0.1".into(),
-                    listen_port: discovered_port,
-                    interface_id: InterfaceId(1),
-                    max_connections: None,
-                    ..TcpServerConfig::default()
-                }),
+                config_data: Box::new(TcpServerConfig::new(
+                    "Discoverable Priority Target",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    discovered_port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -5100,14 +5083,12 @@ fn discovery_announce_through_relay() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
-                config_data: Box::new(TcpServerConfig {
-                    name: "Discoverable TCP".into(),
-                    listen_ip: "127.0.0.1".into(),
-                    listen_port: port_a,
-                    interface_id: InterfaceId(1),
-                    max_connections: None,
-                    ..TcpServerConfig::default()
-                }),
+                config_data: Box::new(TcpServerConfig::new(
+                    "Discoverable TCP",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port_a,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -5216,13 +5197,12 @@ fn discovery_announce_through_relay() {
                     announce_limits: Default::default(),
                     name: String::new(),
                     type_name: "TCPClientInterface".to_string(),
-                    config_data: Box::new(TcpClientConfig {
-                        name: "Relay Upstream".into(),
-                        target_host: "127.0.0.1".into(),
-                        target_port: port_a,
-                        interface_id: InterfaceId(1),
-                        ..Default::default()
-                    }),
+                    config_data: Box::new(TcpClientConfig::new(
+                        "Relay Upstream",
+                        InterfaceId(1),
+                        "127.0.0.1",
+                        port_a,
+                    )),
                     mode: MODE_FULL,
                     gravity: 0,
                     hop_limiter: None,
@@ -5238,14 +5218,12 @@ fn discovery_announce_through_relay() {
                     announce_limits: Default::default(),
                     name: String::new(),
                     type_name: "TCPServerInterface".to_string(),
-                    config_data: Box::new(TcpServerConfig {
-                        name: "Relay Downstream".into(),
-                        listen_ip: "127.0.0.1".into(),
-                        listen_port: port_b,
-                        interface_id: InterfaceId(2),
-                        max_connections: None,
-                        ..TcpServerConfig::default()
-                    }),
+                    config_data: Box::new(TcpServerConfig::new(
+                        "Relay Downstream",
+                        InterfaceId(2),
+                        "127.0.0.1",
+                        port_b,
+                    )),
                     mode: MODE_FULL,
                     gravity: 0,
                     hop_limiter: None,
@@ -5343,13 +5321,12 @@ fn discovery_announce_through_relay() {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
-                config_data: Box::new(TcpClientConfig {
-                    name: "Client TCP".into(),
-                    target_host: "127.0.0.1".into(),
-                    target_port: port_b,
-                    interface_id: InterfaceId(1),
-                    ..Default::default()
-                }),
+                config_data: Box::new(TcpClientConfig::new(
+                    "Client TCP",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port_b,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -5494,14 +5471,12 @@ fn start_shared_daemon_with_transport(
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
-                config_data: Box::new(TcpServerConfig {
-                    name: "Daemon TCP".into(),
-                    listen_ip: "127.0.0.1".into(),
-                    listen_port: tcp_port,
-                    interface_id: InterfaceId(1),
-                    max_connections: None,
-                    ..TcpServerConfig::default()
-                }),
+                config_data: Box::new(TcpServerConfig::new(
+                    "Daemon TCP",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    tcp_port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -5647,13 +5622,12 @@ fn start_managed_transport_client(
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
-                config_data: Box::new(TcpClientConfig {
-                    name: "Managed Remote TCP".into(),
-                    target_host: "127.0.0.1".into(),
-                    target_port: port,
-                    interface_id: InterfaceId(1),
-                    ..Default::default()
-                }),
+                config_data: Box::new(TcpClientConfig::new(
+                    "Managed Remote TCP",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,
@@ -6561,12 +6535,12 @@ fn local_ratchets_survive_shared_daemon_restart() {
                 announce_limits: Default::default(),
                 name: "ratchet-remote".into(),
                 type_name: "TCPClientInterface".into(),
-                config_data: Box::new(TcpClientConfig {
-                    target_host: "127.0.0.1".into(),
-                    target_port: tcp_port,
-                    reconnect_wait: Duration::from_millis(100),
-                    max_reconnect_tries: None,
-                    ..Default::default()
+                config_data: Box::new({
+                    let mut config =
+                        TcpClientConfig::new("", InterfaceId(0), "127.0.0.1", tcp_port);
+                    config.reconnect_wait = Duration::from_millis(100);
+                    config.max_reconnect_tries = None;
+                    config
                 }),
                 mode: MODE_FULL,
                 gravity: 0,

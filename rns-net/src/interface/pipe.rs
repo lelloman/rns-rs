@@ -22,6 +22,9 @@ use crate::hdlc;
 use crate::interface::{lock_or_recover, Writer};
 
 /// Configuration for a pipe interface.
+///
+/// Start from `default()`: the config also carries crate-private state it
+/// shares with the running interface.
 #[derive(Debug, Clone)]
 pub struct PipeConfig {
     /// Interface name from the config section.
@@ -33,19 +36,19 @@ pub struct PipeConfig {
     /// Interface ID assigned by the node.
     pub interface_id: InterfaceId,
     /// Settings shared with the running interface, adjustable at runtime.
-    pub runtime: Arc<Mutex<PipeRuntime>>,
+    pub(crate) runtime: Arc<Mutex<PipeRuntime>>,
 }
 
 /// Pipe interface settings that can be changed while it runs.
 #[derive(Debug, Clone)]
-pub struct PipeRuntime {
+pub(crate) struct PipeRuntime {
     /// Wait before respawning the subprocess after it exits.
     pub respawn_delay: Duration,
 }
 
 impl PipeRuntime {
     /// Runtime settings taken from `config`.
-    pub fn from_config(config: &PipeConfig) -> Self {
+    pub(crate) fn from_config(config: &PipeConfig) -> Self {
         Self {
             respawn_delay: config.respawn_delay,
         }

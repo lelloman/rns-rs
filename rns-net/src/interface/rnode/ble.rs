@@ -143,7 +143,7 @@ impl Target {
 
 /// What a BLE interface remembers between connections.
 #[derive(Debug, Default)]
-pub struct LinkState {
+pub(crate) struct LinkState {
     /// The address of the device last connected to: upstream then calls
     /// the port `ble://<address>`.
     pub(super) address: Option<String>,
@@ -250,7 +250,7 @@ mod bluez {
 
     /// A connection to an RNode over BLE: the D-Bus connection that holds
     /// it, and what writing to it needs.
-    pub struct Session {
+    pub(crate) struct Session {
         conn: SyncConnection,
         device: Path<'static>,
         rx: Path<'static>,
@@ -274,7 +274,7 @@ mod bluez {
     impl Session {
         /// The D-Bus connection's descriptor, writable when queued writes
         /// can go out.
-        pub fn fd(&self) -> RawFd {
+        pub(crate) fn fd(&self) -> RawFd {
             self.conn.channel().watch().fd
         }
 
@@ -283,7 +283,7 @@ mod bluez {
         /// while earlier writes still wait for the bus it fails with
         /// `WouldBlock`, and the driver retries once the descriptor is
         /// writable.
-        pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
+        pub(crate) fn write(&self, buf: &[u8]) -> io::Result<usize> {
             if buf.is_empty() {
                 return Ok(0);
             }
@@ -332,14 +332,14 @@ mod bluez {
 
         /// Disconnect the device, as upstream's `close`, after BlueZ has
         /// taken every write sent before. Once only.
-        pub fn close(&self) {
+        pub(crate) fn close(&self) {
             self.close_reading(|_| {});
         }
 
         /// Disconnect the device as [`Self::close`] does, letting `read`
         /// read what the device answers meanwhile: upstream reads the
         /// device until its connection is gone.
-        pub fn close_reading(&self, read: impl FnOnce(&mut File)) {
+        pub(crate) fn close_reading(&self, read: impl FnOnce(&mut File)) {
             if self.closed.swap(true, Ordering::Relaxed) {
                 return;
             }
@@ -362,7 +362,7 @@ mod bluez {
 
         /// Note a connection the device dropped: upstream's disconnect
         /// callback.
-        pub fn lost(&self) {
+        pub(crate) fn lost(&self) {
             if !self.closed.swap(true, Ordering::Relaxed) {
                 log::info!(
                     target: crate::logging::NOTICE_TARGET,
