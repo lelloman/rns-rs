@@ -124,7 +124,9 @@ impl Driver {
                 LinkManagerAction::PacketProved {
                     link_id,
                     packet_hash,
-                } => self.link_packet_proved(link_id, packet_hash),
+                } => self
+                    .proofs
+                    .link_packet_proved(&mut *self.callbacks, link_id, packet_hash),
                 LinkManagerAction::LinkEstablished {
                     link_id,
                     dest_hash,
@@ -463,7 +465,11 @@ impl Driver {
                     dest_hash,
                     packet_hash,
                 } => {
-                    if self.link_packet_proof_wanted(dest_hash, &packet_hash) {
+                    if self.proofs.link_packet_proof_wanted(
+                        &mut *self.callbacks,
+                        dest_hash,
+                        &packet_hash,
+                    ) {
                         let proof = self.link_manager.prove_link_packet(&link_id, &packet_hash);
                         self.dispatch_link_actions(proof);
                     }

@@ -15636,7 +15636,9 @@ fn plain_link_packets_are_proved_by_the_destination_strategy() {
             driver.proofs.strategies.insert(dest, (strategy, None));
         }
         assert_eq!(
-            driver.link_packet_proof_wanted(dest, &packet_hash),
+            driver
+                .proofs
+                .link_packet_proof_wanted(&mut *driver.callbacks, dest, &packet_hash),
             proved,
             "{strategy:?}"
         );
