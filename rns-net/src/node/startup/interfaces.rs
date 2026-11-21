@@ -199,11 +199,7 @@ impl InterfaceStarter<'_> {
         {
             return false;
         }
-        let Some(mode) = iface_config
-            .config_data
-            .as_any()
-            .downcast_ref::<BackboneMode>()
-        else {
+        let crate::interface::KnownConfig::Backbone(mode) = iface_config.config_data.known() else {
             return false;
         };
         let Some(client) = client_config_from_mode(mode) else {

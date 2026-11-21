@@ -573,7 +573,7 @@ pub(crate) fn parse_interface_announce_limits(
 /// `RNodeMultiInterface` one per subinterface after it.
 pub(crate) fn reserved_interface_ids(data: &dyn crate::interface::InterfaceConfigData) -> u64 {
     #[cfg(feature = "iface-rnode")]
-    if let Some(rnode) = data.as_any().downcast_ref::<RNodeConfig>() {
+    if let crate::interface::KnownConfig::RNode(rnode) = data.known() {
         if rnode.multi {
             return 1 + rnode.subinterfaces.len() as u64;
         }

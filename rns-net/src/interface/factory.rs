@@ -114,6 +114,87 @@ pub trait InterfaceConfigData: Send + Any {
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
+/// A parsed interface config of one of the types the node reads after
+/// parsing (for display names, runtime settings and auto-connects), so those
+/// readers match on it instead of downcasting each type in turn.
+#[derive(Clone, Copy)]
+pub(crate) enum KnownConfig<'a> {
+    /// A `TCPClientInterface`.
+    #[cfg(feature = "iface-tcp")]
+    TcpClient(&'a super::tcp::TcpClientConfig),
+    /// A `TCPServerInterface`.
+    #[cfg(feature = "iface-tcp")]
+    TcpServer(&'a super::tcp_server::TcpServerConfig),
+    /// A `UDPInterface`.
+    #[cfg(feature = "iface-udp")]
+    Udp(&'a super::udp::UdpConfig),
+    /// An `AutoInterface`.
+    #[cfg(feature = "iface-auto")]
+    Auto(&'a super::auto::AutoConfig),
+    /// An `I2PInterface`.
+    #[cfg(feature = "iface-i2p")]
+    I2p(&'a super::i2p::I2pConfig),
+    /// A `PipeInterface`.
+    #[cfg(feature = "iface-pipe")]
+    Pipe(&'a super::pipe::PipeConfig),
+    /// An `RNodeInterface` or `RNodeMultiInterface`.
+    #[cfg(feature = "iface-rnode")]
+    RNode(&'a super::rnode::RNodeConfig),
+    /// A `BackboneInterface`, listening or connecting.
+    #[cfg(feature = "iface-backbone")]
+    Backbone(&'a super::backbone::BackboneMode),
+    /// A `LocalClientInterface`.
+    #[cfg(feature = "iface-local")]
+    LocalClient(&'a super::local::LocalClientConfig),
+    /// Any other config.
+    Other(std::marker::PhantomData<&'a ()>),
+}
+
+impl dyn InterfaceConfigData {
+    /// This config as one of the [`KnownConfig`] types, if it is one.
+    pub(crate) fn known(&self) -> KnownConfig<'_> {
+        let any = self.as_any();
+        #[cfg(feature = "iface-tcp")]
+        if let Some(config) = any.downcast_ref() {
+            return KnownConfig::TcpClient(config);
+        }
+        #[cfg(feature = "iface-tcp")]
+        if let Some(config) = any.downcast_ref() {
+            return KnownConfig::TcpServer(config);
+        }
+        #[cfg(feature = "iface-udp")]
+        if let Some(config) = any.downcast_ref() {
+            return KnownConfig::Udp(config);
+        }
+        #[cfg(feature = "iface-auto")]
+        if let Some(config) = any.downcast_ref() {
+            return KnownConfig::Auto(config);
+        }
+        #[cfg(feature = "iface-i2p")]
+        if let Some(config) = any.downcast_ref() {
+            return KnownConfig::I2p(config);
+        }
+        #[cfg(feature = "iface-pipe")]
+        if let Some(config) = any.downcast_ref() {
+            return KnownConfig::Pipe(config);
+        }
+        #[cfg(feature = "iface-rnode")]
+        if let Some(config) = any.downcast_ref() {
+            return KnownConfig::RNode(config);
+        }
+        #[cfg(feature = "iface-backbone")]
+        if let Some(config) = any.downcast_ref() {
+            return KnownConfig::Backbone(config);
+        }
+        #[cfg(feature = "iface-local")]
+        if let Some(config) = any.downcast_ref() {
+            return KnownConfig::LocalClient(config);
+        }
+        let _ = any;
+        KnownConfig::Other(std::marker::PhantomData)
+    }
+}
+
 /// ConfigObj section passed to factories that need nested `[[[sections]]]`.
 pub struct ConfigSection<'a> {
     /// Key-value parameters of the section.

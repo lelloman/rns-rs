@@ -1,5 +1,7 @@
 use super::*;
 use crate::driver::IfacRuntimeConfig;
+#[cfg(feature = "iface-tcp")]
+use crate::interface::tcp::TcpClientConfig;
 use crate::storage::RatchetStore;
 use rns_core::stamp::StampCost;
 use std::fs;
