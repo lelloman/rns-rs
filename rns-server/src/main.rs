@@ -1,12 +1,14 @@
 //! rns-server - supervises rnsd and its sidecars behind an embedded HTTP
 //! control plane.
 
-use std::net::TcpListener;
+use std::fmt;
+use std::io;
+use std::net::{SocketAddr, TcpListener};
 use std::process::ExitCode;
 use std::thread;
 
 use rns_cli::args::Args as CliArgs;
-use rns_ctl::cmd::http::{prepare_embedded_with_state, HttpRunOptions};
+use rns_ctl::cmd::http::{prepare_embedded_with_state, HttpRunOptions, HttpSetupError};
 use rns_ctl::state::SharedState;
 use rns_server::args::Args;
 use rns_server::config::ServerConfig;
@@ -159,11 +161,45 @@ fn configured_logging(config_path: Option<&str>) -> rns_net::config::LoggingSect
     }
 }
 
+/// Why the embedded control plane could not be started.
+#[derive(Debug)]
+enum ControlHttpError {
+    Setup(HttpSetupError),
+    Bind { addr: SocketAddr, source: io::Error },
+    SpawnThread(io::Error),
+}
+
+impl fmt::Display for ControlHttpError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ControlHttpError::Setup(error) => write!(f, "{}", error),
+            ControlHttpError::Bind { addr, source } => write!(
+                f,
+                "failed to bind embedded control plane {}: {}",
+                addr, source
+            ),
+            ControlHttpError::SpawnThread(error) => {
+                write!(f, "failed to spawn control plane thread: {}", error)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ControlHttpError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ControlHttpError::Setup(error) => Some(error),
+            ControlHttpError::Bind { source, .. } => Some(source),
+            ControlHttpError::SpawnThread(error) => Some(error),
+        }
+    }
+}
+
 fn start_control_http(
     config: &ServerConfig,
     verbosity: u8,
     shared_state: SharedState,
-) -> Result<(), String> {
+) -> Result<(), ControlHttpError> {
     let config = config.clone();
     log::info!("starting embedded control plane");
     let prepared = prepare_embedded_with_state(
@@ -171,12 +207,10 @@ fn start_control_http(
         HttpRunOptions::embedded(),
         Some(shared_state.clone()),
     )
-    .map_err(|err| err.to_string())?;
-    let listener = TcpListener::bind(prepared.addr).map_err(|e| {
-        format!(
-            "failed to bind embedded control plane {}: {}",
-            prepared.addr, e
-        )
+    .map_err(ControlHttpError::Setup)?;
+    let listener = TcpListener::bind(prepared.addr).map_err(|source| ControlHttpError::Bind {
+        addr: prepared.addr,
+        source,
     })?;
 
     thread::Builder::new()
@@ -187,7 +221,7 @@ fn start_control_http(
                 log::error!("embedded control plane failed: {}", err);
             }
         })
-        .map_err(|e| format!("failed to spawn control plane thread: {}", e))?;
+        .map_err(ControlHttpError::SpawnThread)?;
     Ok(())
 }
 
@@ -292,6 +326,34 @@ mod tests {
         let (shared_state, _control_tx, _control_rx) = new_supervised_state();
 
         let err = start_control_http(&config, 0, shared_state).unwrap_err();
-        assert!(err.contains("failed to bind embedded control plane"));
+        assert!(err
+            .to_string()
+            .contains("failed to bind embedded control plane"));
+    }
+
+    #[test]
+    fn control_http_errors_keep_their_messages() {
+        let io = || std::io::Error::other("in use");
+        let cases = [
+            (
+                ControlHttpError::Bind {
+                    addr: "127.0.0.1:8080".parse().unwrap(),
+                    source: io(),
+                }
+                .to_string(),
+                "failed to bind embedded control plane 127.0.0.1:8080: in use",
+            ),
+            (
+                ControlHttpError::SpawnThread(io()).to_string(),
+                "failed to spawn control plane thread: in use",
+            ),
+            (
+                ControlHttpError::Setup(HttpSetupError::StartNode(io())).to_string(),
+                "failed to start node: in use",
+            ),
+        ];
+        for (actual, expected) in cases {
+            assert_eq!(actual, expected);
+        }
     }
 }
