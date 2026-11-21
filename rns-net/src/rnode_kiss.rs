@@ -349,210 +349,80 @@ impl RNodeDecoder {
 
     /// Check if a complete command response has been accumulated and emit event.
     fn parse_command(&mut self, events: &mut Vec<RNodeEvent>) {
-        let buf = &self.command_buffer;
-        match self.command {
-            CMD_DETECT => {
-                if !buf.is_empty() {
-                    events.push(RNodeEvent::Detected(buf[0] == DETECT_RESP));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
+        let event = match (self.command, self.command_buffer.as_slice()) {
+            (CMD_DETECT, [response, ..]) => RNodeEvent::Detected(*response == DETECT_RESP),
+            (CMD_FW_VERSION, [major, minor, ..]) => RNodeEvent::FirmwareVersion {
+                major: *major,
+                minor: *minor,
+            },
+            (CMD_PLATFORM, [platform, ..]) => RNodeEvent::Platform(*platform),
+            (CMD_MCU, [mcu, ..]) => RNodeEvent::Mcu(*mcu),
+            (CMD_INTERFACES, [index, type_byte, ..]) => RNodeEvent::InterfaceType {
+                index: *index,
+                type_byte: *type_byte,
+            },
+            (CMD_FREQUENCY, [a, b, c, d, ..]) => {
+                RNodeEvent::Frequency(u32::from_be_bytes([*a, *b, *c, *d]))
+            }
+            (CMD_BANDWIDTH, [a, b, c, d, ..]) => {
+                RNodeEvent::Bandwidth(u32::from_be_bytes([*a, *b, *c, *d]))
+            }
+            (CMD_TXPOWER, [power, ..]) => RNodeEvent::TxPower(*power as i8),
+            (CMD_SF, [sf, ..]) => RNodeEvent::SpreadingFactor(*sf),
+            (CMD_CR, [cr, ..]) => RNodeEvent::CodingRate(*cr),
+            (CMD_RADIO_STATE, [state, ..]) => RNodeEvent::RadioState(*state),
+            (CMD_STAT_RSSI, [rssi, ..]) => RNodeEvent::StatRssi(*rssi),
+            (CMD_STAT_SNR, [snr, ..]) => RNodeEvent::StatSnr(*snr as i8),
+            (
+                CMD_STAT_CHTM,
+                [as0, as1, al0, al1, ls0, ls1, ll0, ll1, current_rssi, noise_floor, interference, ..],
+            ) => RNodeEvent::ChannelStats {
+                airtime_short: u16::from_be_bytes([*as0, *as1]),
+                airtime_long: u16::from_be_bytes([*al0, *al1]),
+                channel_load_short: u16::from_be_bytes([*ls0, *ls1]),
+                channel_load_long: u16::from_be_bytes([*ll0, *ll1]),
+                current_rssi: *current_rssi,
+                noise_floor: *noise_floor,
+                interference: *interference,
+            },
+            (CMD_STAT_PHYPRM, [st0, st1, sr0, sr1, ps0, ps1, pm0, pm1, cs0, cs1, d0, d1, ..]) => {
+                RNodeEvent::PhyStats {
+                    symbol_time_us: u16::from_be_bytes([*st0, *st1]),
+                    symbol_rate: u16::from_be_bytes([*sr0, *sr1]),
+                    preamble_symbols: u16::from_be_bytes([*ps0, *ps1]),
+                    preamble_ms: u16::from_be_bytes([*pm0, *pm1]),
+                    csma_slot_ms: u16::from_be_bytes([*cs0, *cs1]),
+                    difs_ms: u16::from_be_bytes([*d0, *d1]),
                 }
             }
-            CMD_FW_VERSION => {
-                if buf.len() >= 2 {
-                    events.push(RNodeEvent::FirmwareVersion {
-                        major: buf[0],
-                        minor: buf[1],
-                    });
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
+            (CMD_STAT_CSMA, [band, window_min, window_max, ..]) => RNodeEvent::CsmaStats {
+                band: *band,
+                window_min: *window_min,
+                window_max: *window_max,
+            },
+            (CMD_STAT_BAT, [state, percent, ..]) => RNodeEvent::Battery {
+                state: *state,
+                percent: *percent,
+            },
+            (CMD_STAT_TEMP, [temperature, ..]) => RNodeEvent::Temperature(*temperature),
+            (CMD_ST_ALOCK, [high, low, ..]) => {
+                RNodeEvent::StAlock(u16::from_be_bytes([*high, *low]))
             }
-            CMD_PLATFORM => {
-                if !buf.is_empty() {
-                    events.push(RNodeEvent::Platform(buf[0]));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
+            (CMD_LT_ALOCK, [high, low, ..]) => {
+                RNodeEvent::LtAlock(u16::from_be_bytes([*high, *low]))
             }
-            CMD_MCU => {
-                if !buf.is_empty() {
-                    events.push(RNodeEvent::Mcu(buf[0]));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
+            (CMD_READY, _) => RNodeEvent::Ready,
+            (CMD_SEL_INT, [index, ..]) => {
+                self.selected_index = *index;
+                RNodeEvent::SelectedInterface(*index)
             }
-            CMD_INTERFACES => {
-                if buf.len() >= 2 {
-                    events.push(RNodeEvent::InterfaceType {
-                        index: buf[0],
-                        type_byte: buf[1],
-                    });
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_FREQUENCY => {
-                if buf.len() >= 4 {
-                    let freq = (buf[0] as u32) << 24
-                        | (buf[1] as u32) << 16
-                        | (buf[2] as u32) << 8
-                        | buf[3] as u32;
-                    events.push(RNodeEvent::Frequency(freq));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_BANDWIDTH => {
-                if buf.len() >= 4 {
-                    let bw = (buf[0] as u32) << 24
-                        | (buf[1] as u32) << 16
-                        | (buf[2] as u32) << 8
-                        | buf[3] as u32;
-                    events.push(RNodeEvent::Bandwidth(bw));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_TXPOWER => {
-                if !buf.is_empty() {
-                    events.push(RNodeEvent::TxPower(buf[0] as i8));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_SF => {
-                if !buf.is_empty() {
-                    events.push(RNodeEvent::SpreadingFactor(buf[0]));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_CR => {
-                if !buf.is_empty() {
-                    events.push(RNodeEvent::CodingRate(buf[0]));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_RADIO_STATE => {
-                if !buf.is_empty() {
-                    events.push(RNodeEvent::RadioState(buf[0]));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_STAT_RSSI => {
-                if !buf.is_empty() {
-                    events.push(RNodeEvent::StatRssi(buf[0]));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_STAT_SNR => {
-                if !buf.is_empty() {
-                    events.push(RNodeEvent::StatSnr(buf[0] as i8));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_STAT_CHTM => {
-                if buf.len() >= 11 {
-                    let be = |i: usize| u16::from_be_bytes([buf[i], buf[i + 1]]);
-                    events.push(RNodeEvent::ChannelStats {
-                        airtime_short: be(0),
-                        airtime_long: be(2),
-                        channel_load_short: be(4),
-                        channel_load_long: be(6),
-                        current_rssi: buf[8],
-                        noise_floor: buf[9],
-                        interference: buf[10],
-                    });
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_STAT_PHYPRM => {
-                if buf.len() >= 12 {
-                    let be = |i: usize| u16::from_be_bytes([buf[i], buf[i + 1]]);
-                    events.push(RNodeEvent::PhyStats {
-                        symbol_time_us: be(0),
-                        symbol_rate: be(2),
-                        preamble_symbols: be(4),
-                        preamble_ms: be(6),
-                        csma_slot_ms: be(8),
-                        difs_ms: be(10),
-                    });
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_STAT_CSMA => {
-                if buf.len() >= 3 {
-                    events.push(RNodeEvent::CsmaStats {
-                        band: buf[0],
-                        window_min: buf[1],
-                        window_max: buf[2],
-                    });
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_STAT_BAT => {
-                if buf.len() >= 2 {
-                    events.push(RNodeEvent::Battery {
-                        state: buf[0],
-                        percent: buf[1],
-                    });
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_STAT_TEMP => {
-                if !buf.is_empty() {
-                    events.push(RNodeEvent::Temperature(buf[0]));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_ST_ALOCK => {
-                if buf.len() >= 2 {
-                    let val = (buf[0] as u16) << 8 | buf[1] as u16;
-                    events.push(RNodeEvent::StAlock(val));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_LT_ALOCK => {
-                if buf.len() >= 2 {
-                    let val = (buf[0] as u16) << 8 | buf[1] as u16;
-                    events.push(RNodeEvent::LtAlock(val));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_READY => {
-                events.push(RNodeEvent::Ready);
-                self.command = kiss::CMD_UNKNOWN;
-                self.in_frame = false;
-            }
-            CMD_SEL_INT => {
-                if !buf.is_empty() {
-                    self.selected_index = buf[0];
-                    events.push(RNodeEvent::SelectedInterface(buf[0]));
-                    self.command = kiss::CMD_UNKNOWN;
-                    self.in_frame = false;
-                }
-            }
-            CMD_ERROR if !buf.is_empty() => {
-                events.push(RNodeEvent::Error(buf[0]));
-                self.command = kiss::CMD_UNKNOWN;
-                self.in_frame = false;
-            }
-            _ => {
-                // Unknown command, ignore
-            }
-        }
+            (CMD_ERROR, [error, ..]) => RNodeEvent::Error(*error),
+            // Incomplete, or an unknown command: ignore.
+            _ => return,
+        };
+        events.push(event);
+        self.command = kiss::CMD_UNKNOWN;
+        self.in_frame = false;
     }
 }
 
@@ -596,11 +466,10 @@ pub fn leave_request() -> Vec<u8> {
 /// Build a data frame for a subinterface:
 /// [FEND][CMD_INTn_DATA][escaped data][FEND].
 pub fn rnode_data_frame(index: u8, data: &[u8]) -> Vec<u8> {
-    let cmd = if (index as usize) < DATA_CMDS.len() {
-        DATA_CMDS[index as usize]
-    } else {
-        CMD_INT0_DATA
-    };
+    let cmd = DATA_CMDS
+        .get(index as usize)
+        .copied()
+        .unwrap_or(CMD_INT0_DATA);
     let escaped = kiss::escape(data);
     let mut out = Vec::with_capacity(escaped.len() + 3);
     out.push(kiss::FEND);
