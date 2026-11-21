@@ -69,6 +69,10 @@ impl HookRun {
     }
 }
 
+#[allow(
+    clippy::indexing_slicing,
+    reason = "the per-point arrays are HookPoint::COUNT long, and every index is a HookPoint discriminant or a parse_hook_point result, both below it"
+)]
 impl HookHost {
     pub(crate) fn new() -> Self {
         Self {

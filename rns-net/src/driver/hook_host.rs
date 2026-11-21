@@ -67,8 +67,8 @@ impl<'a> HookEvent<'a> {
     /// without a hash.
     pub(crate) fn wire_packet(raw: &'a [u8], interface_id: u64) -> Self {
         HookEvent::Packet {
-            flags: if raw.is_empty() { 0 } else { raw[0] },
-            hops: if raw.len() > 1 { raw[1] } else { 0 },
+            flags: raw.first().copied().unwrap_or(0),
+            hops: raw.get(1).copied().unwrap_or(0),
             destination_hash: extract_dest_hash(raw),
             packet_hash: [0; 32],
             interface_id,
