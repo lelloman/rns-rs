@@ -246,10 +246,10 @@ impl InterfaceStats {
     /// sample count over the time since the oldest one.
     fn compute_frequency(timestamps: &[f64], min_sample: usize, now: f64) -> f64 {
         let sample_count = timestamps.len();
-        if sample_count <= min_sample {
+        let Some(oldest) = timestamps.first().filter(|_| sample_count > min_sample) else {
             return 0.0;
-        }
-        let span = now - timestamps[0];
+        };
+        let span = now - oldest;
         if span <= 0.0 {
             return 0.0;
         }
@@ -260,7 +260,11 @@ impl InterfaceStats {
     /// more than `min_sample` samples, the oldest goes once it is older than
     /// `decay` seconds. One sample at most goes per read.
     fn decay(timestamps: &mut Vec<f64>, min_sample: usize, decay: f64, now: f64) {
-        if timestamps.len() > min_sample && now - timestamps[0] > decay {
+        if timestamps.len() > min_sample
+            && timestamps
+                .first()
+                .is_some_and(|oldest| now - oldest > decay)
+        {
             timestamps.remove(0);
         }
     }

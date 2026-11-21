@@ -247,10 +247,12 @@ fn calculate_stats(captures: &[Capture], include_threads: bool) -> Option<Profil
     let count = durations.len();
     let sum = durations.iter().sum::<f64>();
     let mean = sum / count as f64;
+    let (&min, &max) = (durations.first()?, durations.last()?);
+    let upper = durations.get(count / 2).copied().unwrap_or(max);
     let median = if count.is_multiple_of(2) {
-        (durations[count / 2 - 1] + durations[count / 2]) / 2.0
+        (durations.get(count / 2 - 1).copied().unwrap_or(min) + upper) / 2.0
     } else {
-        durations[count / 2]
+        upper
     };
     let stdev = (count > 1).then(|| {
         let variance = durations
@@ -271,8 +273,8 @@ fn calculate_stats(captures: &[Capture], include_threads: bool) -> Option<Profil
         count,
         mean,
         median,
-        min: durations[0],
-        max: durations[count - 1],
+        min,
+        max,
         stdev,
         sum,
         threads,

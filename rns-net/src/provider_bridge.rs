@@ -740,8 +740,8 @@ fn prune_disconnected_consumers(shared: &Arc<BridgeShared>) {
         let mut idx = 0;
         let mut removed = Vec::new();
 
-        while idx < state.consumers.len() {
-            let is_connected = lock_consumer_state(&state.consumers[idx].shared).connected;
+        while let Some(consumer) = state.consumers.get(idx) {
+            let is_connected = lock_consumer_state(&consumer.shared).connected;
             if is_connected {
                 idx += 1;
                 continue;

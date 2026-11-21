@@ -758,7 +758,7 @@ pub fn bench_shared_client_replay_once(
                 }
                 Err(e) => return Err(e),
             };
-            for frame in decoder.feed(&buf[..n]) {
+            for frame in decoder.feed(buf.get(..n).unwrap_or_default()) {
                 let Ok(packet) = RawPacket::unpack(&frame) else {
                     log::debug!("skipping malformed shared-instance packet");
                     continue;
@@ -1441,7 +1441,7 @@ mod tests {
             let Ok(n) = stream.read(&mut buf) else {
                 continue;
             };
-            for frame in decoder.feed(&buf[..n]) {
+            for frame in decoder.feed(buf.get(..n).unwrap_or_default()) {
                 let packet = RawPacket::unpack(&frame).unwrap();
                 if packet.destination_hash == dest.hash.0
                     && packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE

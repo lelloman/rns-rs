@@ -338,7 +338,7 @@ pub fn handle_path_request(
     let wanted =
         |entry: &Value| destination.is_none_or(|d| field(entry, "hash").as_ref() == Some(d));
 
-    let entries: Vec<Value> = match arr[0].as_str() {
+    let entries: Vec<Value> = match arr.first().and_then(Value::as_str) {
         Some("table") => path_table()
             .into_iter()
             .filter(|entry| {

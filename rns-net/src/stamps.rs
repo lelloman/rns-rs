@@ -427,7 +427,9 @@ pub fn generate_stamp_until(
                 rng.fill_bytes(&mut pool);
                 next_nonce = 0;
             }
-            nonce.copy_from_slice(&pool[next_nonce..next_nonce + size]);
+            if let Some(candidate) = pool.get(next_nonce..next_nonce + size) {
+                nonce.copy_from_slice(candidate);
+            }
             next_nonce += size;
             if stamp_valid(&nonce, stamp_cost, &workblock) {
                 return Some(nonce);

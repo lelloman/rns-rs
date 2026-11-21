@@ -632,9 +632,9 @@ fn parse_location_output(output: &[u8]) -> Result<(f64, f64, f64), LocationError
         return Err(LocationError::MultipleLines);
     }
     let values: Vec<&str> = line.split(',').map(str::trim).collect();
-    if values.len() != 3 {
+    let [latitude, longitude, height] = values.as_slice() else {
         return Err(LocationError::ComponentCount(values.len()));
-    }
+    };
     let parse = |value: &str, label: &'static str| {
         value
             .parse::<f64>()
@@ -650,9 +650,9 @@ fn parse_location_output(output: &[u8]) -> Result<(f64, f64, f64), LocationError
                     .ok_or(LocationError::NotFinite { label })
             })
     };
-    let latitude = parse(values[0], "latitude")?;
-    let longitude = parse(values[1], "longitude")?;
-    let height = parse(values[2], "height")?;
+    let latitude = parse(latitude, "latitude")?;
+    let longitude = parse(longitude, "longitude")?;
+    let height = parse(height, "height")?;
     let check = |label: &'static str, value: f64, valid: std::ops::RangeInclusive<f64>, range| {
         if valid.contains(&value) {
             Ok(())
@@ -814,20 +814,16 @@ impl InterfaceAnnouncer {
         if self.stamp_pending {
             return;
         }
-        let due_index = self
+        let due = self
             .interfaces
             .iter()
+            .zip(&self.last_announced)
             .enumerate()
-            .filter(|(i, iface)| {
-                now - self.last_announced[*i] >= iface.config.announce_interval as f64
-            })
-            .min_by(|(left, _), (right, _)| {
-                self.last_announced[*left].total_cmp(&self.last_announced[*right])
-            })
-            .map(|(i, _)| i);
+            .filter(|(_, (iface, last))| now - **last >= iface.config.announce_interval as f64)
+            .min_by(|(_, (_, left)), (_, (_, right))| left.total_cmp(right))
+            .map(|(i, (iface, _))| (i, iface.clone()));
 
-        if let Some(idx) = due_index {
-            let iface = self.interfaces[idx].clone();
+        if let Some((idx, iface)) = due {
             let transport_id = self.transport_id;
             let stamp_cost = iface.config.stamp_value;
             let name = iface.config.discovery_name.clone();
@@ -843,7 +839,9 @@ impl InterfaceAnnouncer {
             );
 
             self.stamp_pending = true;
-            self.last_announced[idx] = now;
+            if let Some(last) = self.last_announced.get_mut(idx) {
+                *last = now;
+            }
 
             std::thread::spawn(move || {
                 let packed = match prepare_interface_info(&transport_id, &iface, &requirements) {
@@ -925,7 +923,9 @@ impl InterfaceAnnouncer {
             .iter()
             .position(|existing| existing.interface_name == iface.interface_name)
         {
-            self.interfaces[index] = iface;
+            if let Some(existing) = self.interfaces.get_mut(index) {
+                *existing = iface;
+            }
             return;
         }
         self.interfaces.push(iface);

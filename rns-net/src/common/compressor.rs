@@ -75,9 +75,13 @@ impl<R: std::io::Read> BoundedDecompression<R> {
                 });
             }
             let read_len = remaining.min(buf.len());
-            match self.decoder.read(&mut buf[..read_len]) {
+            let window = buf.get_mut(..read_len).unwrap_or_default();
+            match self.decoder.read(window) {
                 Ok(0) => return Some(Ok(core::mem::take(&mut self.output))),
-                Ok(n) => self.output.extend_from_slice(&buf[..n]),
+                // read reports at most the length it was given.
+                Ok(n) => self
+                    .output
+                    .extend_from_slice(window.get(..n).unwrap_or_default()),
                 Err(_) => return Some(Err(DecompressError::InvalidData)),
             }
         }

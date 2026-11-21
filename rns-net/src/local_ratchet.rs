@@ -443,15 +443,20 @@ fn wipe(value: &mut Value) {
 struct Cursor<'a>(&'a [u8]);
 impl<'a> Cursor<'a> {
     fn take(&mut self, count: usize) -> io::Result<&'a [u8]> {
-        if count > self.0.len() {
-            return Err(invalid("truncated ratchet file"));
-        }
-        let (v, rest) = self.0.split_at(count);
+        let (v, rest) = self
+            .0
+            .split_at_checked(count)
+            .ok_or_else(|| invalid("truncated ratchet file"))?;
         self.0 = rest;
         Ok(v)
     }
     fn byte(&mut self) -> io::Result<u8> {
-        Ok(self.take(1)?[0])
+        let (&byte, rest) = self
+            .0
+            .split_first()
+            .ok_or_else(|| invalid("truncated ratchet file"))?;
+        self.0 = rest;
+        Ok(byte)
     }
     fn number(&mut self, bytes: usize) -> io::Result<usize> {
         Ok(self

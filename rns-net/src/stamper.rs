@@ -431,11 +431,15 @@ impl Stamper {
         if queues.stopped {
             return Err(QueueFull);
         }
-        let queue = &mut queues.queues[priority];
+        let (Some(queue), Some(&limit)) =
+            (queues.queues.get_mut(priority), QUEUE_LENGTHS.get(priority))
+        else {
+            return Err(QueueFull);
+        };
         if let Some(key) = key.as_ref() {
             queue.retain(|(existing, _)| existing.as_ref() != Some(key));
         }
-        if queue.len() >= QUEUE_LENGTHS[priority] {
+        if queue.len() >= limit {
             return Err(QueueFull);
         }
         queue.push_back((key, job));
