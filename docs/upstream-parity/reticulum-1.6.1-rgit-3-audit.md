@@ -52,12 +52,12 @@ the earlier 1.6.1 records stay unchanged.
 ## Commit Inventory
 
 Every commit in the audited range appears exactly once, in ancestry order.
-The disposition below is the one proposed by the 2026-11-21 diff review; the
-local evidence column is filled in when the mapping commit lands.
+The 2026-11-21 diff review proposed `Needs port`; the row now has its final
+disposition, recorded with its mapping commit and the evidence that ran.
 
-| # | Upstream commit | Date | Subject | Proposed disposition | Local evidence |
+| # | Upstream commit | Date | Subject | Final disposition | Local evidence |
 |---:|---|---|---|---|---|
-| 1 | `606a1691` | 2026-11-20 | Require explicit static_transport_identity configuration to allow discoverable interfaces on non-transport instances | Needs port | pending |
+| 1 | `606a1691` | 2026-11-20 | Require explicit static_transport_identity configuration to allow discoverable interfaces on non-transport instances | Integrated | `cbac787e`; `discoverable_interfaces_without_transport_need_static_transport_identity` (fails before the change); upstream's log block and interface state cross-checked against a Python instance at `606a1691` |
 
 ## Per-Commit Analysis
 
@@ -116,28 +116,74 @@ read `discoverable` from the interface's parameters:
 (`NodeConfig::interfaces` with a `DiscoveryConfig`) have no upstream
 counterpart, since upstream reads `discoverable` only from the config file.
 
-**Planned handling:** One check shared by both paths, placed where upstream
-places it (right after `discoverable` is read, before the mode is
-normalized and the discovery options are read), logging upstream's six
-lines at warning level and returning false; the startup path takes
-`enable_transport` and `static_transport_identity` from the config, the
-attach path from the running instance (`InterfaceManagementConfig`), as
-upstream reads its class flags rather than the reread file. The transport
-identity is chosen from `enable_transport` and `static_transport_identity`
-alone, and `effective_static_transport_identity` with its warning goes.
-Its unit test, which asserted the old behaviour, is replaced by a node-level
-regression over startup and attach for the three cases.
-`docs/configuration.md`, `docs/interface-discovery.md` and
-`docs/protocol-spec.md` describe the requirement.
+**Local handling and evidence:** `cbac787e`.
+`discoverable_on_instance` (`rns-net/src/node/interface_config.rs`) is the
+check: for an interface whose `discoverable` is true on an instance with
+neither `enable_transport` nor `static_transport_identity`, it logs
+upstream's six lines at warning level (`log::warn!`: an empty line, the four
+lines of text with the interface name, an empty line) and returns false.
+`build_interface_configs` and `parse_managed_interface` call it right after
+reading `discoverable`, so the false value then skips
+`normalize_discovery_mode` (the interface keeps its configured mode) and
+`extract_discovery_config` (no discovery config, so no discovery announces,
+and the runtime `discoverable` key of a TCP server or Backbone listener
+starts false). The startup path reads the two flags from the config; the
+attach path reads them from `InterfaceManagementConfig`, which gains
+`static_transport_identity` and replaces `parse_managed_interface`'s
+`storage_dir` argument. `NodeIdentities::new` chooses the stored transport
+identity only for `transport_enabled || static_transport_identity`;
+`effective_static_transport_identity`, its warning and its unit test are
+removed. `docs/configuration.md`, `docs/interface-discovery.md` and
+`docs/protocol-spec.md` state the requirement and the change.
 
-**Proposed disposition:** Needs port.
+Test: `discoverable_interfaces_without_transport_need_static_transport_identity`
+(`rns-net/src/node/tests.rs`) starts a node from a config file with a
+discoverable TCP server enabled at startup and a second one attached through
+interface management, for `enable_transport = no`, `enable_transport = no`
+with `static_transport_identity = yes`, and `enable_transport = yes`. Only
+in the first case are both interfaces up without discovery (runtime
+`discoverable` false) and in full mode, the transport identity differs from
+`storage/transport_identity`, and each interface's name is logged in the
+exact six-line warning block, contiguous on the thread that set it up
+(startup thread, driver thread for the attach). In the other two cases both
+are discoverable in gateway mode, the stored identity is used and no
+warning is logged; no case logs the removed warning. The log capture of the
+RNode tests moved to `test_support` and now records the logging thread, as
+the crate's tests can install a single logger. Before the change the test
+fails at the first case (the stored transport identity was used); with the
+gate removed from the attach path only, it fails on `Ephemeral Attached`
+(runtime `discoverable` true).
+
+Cross-check against upstream: a Python instance from a disposable worktree at
+`606a1691` with the same TCP server config logs the same six lines at
+`[Warning]`, reports `discoverable False`, mode 1 (full) and an ephemeral
+transport identity, and with `static_transport_identity = yes` reports
+`discoverable True`, mode 6 (gateway) and the stored identity.
+
+`cargo test -p rns-net`: lib 1,608 passed, e2e 74 (1 ignored),
+e2e_direct_connect 19, python_interop 6 (1 ignored, against the configured
+checkout at `f55c0c6e`), the fixture and vector tests, 0 failures.
+`cargo fmt --all --check` and `bash scripts/lint-host.sh` clean.
+
+Notes: interfaces built in code (`NodeConfig::interfaces` with a
+`DiscoveryConfig`) are not checked, as upstream has no such path; a node
+configured that way without transport or `static_transport_identity` now
+announces with an ephemeral transport identity, as upstream did before this
+commit. The runtime `discoverable` key of TCP server and Backbone listeners
+(an rns-rs extension) can still turn discovery on at runtime on such an
+instance; it is not touched by this port. rns-rs logs
+`Bringing up system interfaces...` and `System interfaces are ready` before
+it builds the interface configs, so at startup the warning block follows
+those lines instead of falling between them as upstream's does; that order
+predates this commit and applies to every per-interface log line.
+`rns-esp32` has no interface discovery and is unaffected.
+
+**Final disposition:** Integrated.
 
 ## Integration Plan
 
-1. `606a1691`: the check, the identity choice, the regression and the
-   documentation, in one mapping commit.
-2. Record the final disposition, local hash and test results here, run the
-   promotion gates, and write the parity record.
+The commit has its final disposition and one mapping commit; no
+implementation work remains. The promotion gates are next.
 
 ## Promotion Gates
 
