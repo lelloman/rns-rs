@@ -445,7 +445,9 @@ fn interface_announce_limits_parse_like_upstream() {
     );
 
     params.insert("announce_rate_target".to_string(), "4.5".to_string());
-    let err = super::parse_interface_announce_limits(&params).unwrap_err();
+    let err = super::parse_interface_announce_limits(&params)
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("announce_rate_target"));
 }
 
@@ -932,7 +934,8 @@ fn ingress_control_config_rejects_invalid_values() {
         crate::interface::InterfaceKind::from_type_name("TCPServerInterface"),
         &params,
     )
-    .unwrap_err();
+    .unwrap_err()
+    .to_string();
 
     assert!(err.contains("ic_burst_hold"));
 }
@@ -956,7 +959,9 @@ fn interface_stamp_costs_are_fractional_and_clamped() {
     assert_eq!(costs.pr_cost, Some(StampCost::ZERO));
 
     params.insert("destination_cost".to_string(), "steep".to_string());
-    let err = super::parse_interface_stamp_costs(&params).unwrap_err();
+    let err = super::parse_interface_stamp_costs(&params)
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("destination_cost"));
 }
 
