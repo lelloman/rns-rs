@@ -42,7 +42,7 @@ impl LinkManager {
     }
 
     /// The per-destination link request costs this manager enforces.
-    pub fn link_request_costs(&self) -> &crate::stamps::LinkRequestCosts {
+    pub(crate) fn link_request_costs(&self) -> &crate::stamps::LinkRequestCosts {
         &self.link_request_costs
     }
 

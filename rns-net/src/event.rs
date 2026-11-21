@@ -24,6 +24,7 @@ pub use crate::common::event::{
     RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
     SendProbeError, SingleInterfaceStat, TrafficDetail, MAX_PROBE_PAYLOAD_SIZE,
 };
+pub use crate::stamper::StampedPathRequest;
 
 /// Concrete Event type using boxed sync Writer.
 pub type Event = crate::common::event::Event<Box<dyn crate::interface::Writer>>;

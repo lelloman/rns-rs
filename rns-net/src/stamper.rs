@@ -94,7 +94,7 @@ impl StampTargets {
 
 /// A path request waiting for its stamp.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PathRequestStampJob {
+pub(crate) struct PathRequestStampJob {
     /// Destination the path is requested for.
     pub destination_hash: [u8; 16],
     /// 1..=16 bytes: the request's own random tag, or the tag of the local
@@ -106,7 +106,7 @@ pub struct PathRequestStampJob {
 
 /// Where a path request goes once it is stamped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PathRequestTarget {
+pub(crate) enum PathRequestTarget {
     /// Broadcast, as `Event::RequestPath` sends.
     All,
     /// This interface only, as a forwarded request.
@@ -117,7 +117,7 @@ pub enum PathRequestTarget {
 }
 
 /// An announce waiting for its destination stamp.
-pub struct AnnounceStampJob {
+pub(crate) struct AnnounceStampJob {
     /// Destination to stamp and announce.
     pub dest: Destination,
     /// Full private key of the identity owning `dest`; the announce is
@@ -133,7 +133,7 @@ pub struct AnnounceStampJob {
 /// A destination stamp to grind and persist before the driver sends the
 /// announce of one of its built-in destinations (remote management,
 /// blackhole list, probe responder), which it builds itself.
-pub struct DestinationStampJob {
+pub(crate) struct DestinationStampJob {
     /// Destination to stamp.
     pub dest: Destination,
     /// Full private key of the identity owning `dest`.
@@ -141,22 +141,23 @@ pub struct DestinationStampJob {
 }
 
 /// A path request stamp ground off the driver thread, ready to be sent.
+/// Only the stamper makes one, for the driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StampedPathRequest {
     /// Destination the path is requested for.
-    pub destination_hash: [u8; 16],
+    pub(crate) destination_hash: [u8; 16],
     /// Request tag, from [`PathRequestStampJob::tag`].
-    pub tag: Vec<u8>,
+    pub(crate) tag: Vec<u8>,
     /// Extension payload: marker, flags (0) and the stamp.
-    pub ext_payload: [u8; constants::PR_EXT_PAYLOAD_LENGTH],
+    pub(crate) ext_payload: [u8; constants::PR_EXT_PAYLOAD_LENGTH],
     /// Where the request is sent.
-    pub target: PathRequestTarget,
+    pub(crate) target: PathRequestTarget,
 }
 
 /// The queue for `priority` is at capacity; upstream drops the job with a
 /// debug log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct QueueFull;
+pub(crate) struct QueueFull;
 
 impl std::fmt::Display for QueueFull {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -270,12 +271,12 @@ impl Stamper {
     /// A stamper posting its results to `event_tx`, with the protocol stamp
     /// targets. Announce jobs need a stamp store; see
     /// [`Self::set_stamp_store`].
-    pub fn new(event_tx: EventSender, stamp_store: Option<DestinationStampStore>) -> Self {
+    pub(crate) fn new(event_tx: EventSender, stamp_store: Option<DestinationStampStore>) -> Self {
         Self::with_targets(event_tx, stamp_store, StampTargets::default())
     }
 
     /// As [`Self::new`], with explicit stamp targets.
-    pub fn with_targets(
+    pub(crate) fn with_targets(
         event_tx: EventSender,
         stamp_store: Option<DestinationStampStore>,
         targets: StampTargets,
@@ -302,7 +303,7 @@ impl Stamper {
     }
 
     /// Where destination stamps are persisted and reloaded from.
-    pub fn set_stamp_store(&self, stamp_store: Option<DestinationStampStore>) {
+    pub(crate) fn set_stamp_store(&self, stamp_store: Option<DestinationStampStore>) {
         *crate::sync::lock_or_recover(&self.inner.stamp_store, "stamper stamp store") = stamp_store;
     }
 
@@ -331,7 +332,7 @@ impl Stamper {
     }
 
     /// `Transport.pr_stamp_material`.
-    pub fn path_request_stamp_material(destination_hash: &[u8; 16], tag: &[u8]) -> Vec<u8> {
+    pub(crate) fn path_request_stamp_material(destination_hash: &[u8; 16], tag: &[u8]) -> Vec<u8> {
         let mut material = Vec::with_capacity(16 + tag.len());
         material.extend_from_slice(destination_hash);
         material.extend_from_slice(tag);
@@ -339,7 +340,7 @@ impl Stamper {
     }
 
     /// A previously ground stamp for this destination and tag, if cached.
-    pub fn cached_path_request_stamp(
+    pub(crate) fn cached_path_request_stamp(
         &self,
         destination_hash: &[u8; 16],
         tag: &[u8],
@@ -357,7 +358,7 @@ impl Stamper {
     ///
     /// Keyed on the destination hash plus the target, so a newer request
     /// for the same destination and target replaces a queued one.
-    pub fn enqueue_path_request(&self, job: PathRequestStampJob) -> Result<(), QueueFull> {
+    pub(crate) fn enqueue_path_request(&self, job: PathRequestStampJob) -> Result<(), QueueFull> {
         let mut key = job.destination_hash.to_vec();
         match job.target {
             PathRequestTarget::All => {}
@@ -378,7 +379,7 @@ impl Stamper {
     /// Keyed on the destination hash: a newer announce for the same
     /// destination replaces a queued one, whose completion, if any, then
     /// reports an interrupted transmission.
-    pub fn enqueue_announce(&self, job: AnnounceStampJob) -> Result<(), QueueFull> {
+    pub(crate) fn enqueue_announce(&self, job: AnnounceStampJob) -> Result<(), QueueFull> {
         let key = job.dest.hash.0.to_vec();
         self.put(PRIORITY_ANNOUNCE, Some(key), Job::Announce(Box::new(job)))
     }
@@ -387,7 +388,10 @@ impl Stamper {
     /// it; the worker posts [`Event::DestinationStampReady`] once the stamp
     /// is persisted. Shares the announce queue, keyed on the destination
     /// hash.
-    pub fn enqueue_destination_stamp(&self, job: DestinationStampJob) -> Result<(), QueueFull> {
+    pub(crate) fn enqueue_destination_stamp(
+        &self,
+        job: DestinationStampJob,
+    ) -> Result<(), QueueFull> {
         let key = job.dest.hash.0.to_vec();
         self.put(
             PRIORITY_ANNOUNCE,
@@ -401,7 +405,10 @@ impl Stamper {
     /// persisted. As upstream queues a path response's announce, it goes
     /// with path requests and has no key, so it neither replaces nor is
     /// replaced by a queued announce of the same destination.
-    pub fn enqueue_path_response_stamp(&self, job: DestinationStampJob) -> Result<(), QueueFull> {
+    pub(crate) fn enqueue_path_response_stamp(
+        &self,
+        job: DestinationStampJob,
+    ) -> Result<(), QueueFull> {
         self.put(
             PRIORITY_PATH_REQUEST,
             None,
@@ -410,7 +417,7 @@ impl Stamper {
     }
 
     /// The store destination stamps are persisted in, if any.
-    pub fn stamp_store(&self) -> Option<DestinationStampStore> {
+    pub(crate) fn stamp_store(&self) -> Option<DestinationStampStore> {
         self.inner.stamp_store()
     }
 
