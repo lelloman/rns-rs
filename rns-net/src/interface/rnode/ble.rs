@@ -217,13 +217,30 @@ mod bluez {
     const DEFAULT_MTU: u16 = 23;
     const ATT_WRITE_HEADER: usize = 3;
 
-    /// A D-Bus error as bleak words it.
+    /// A D-Bus error, worded as bleak words it.
+    #[derive(Debug)]
+    struct DbusError(dbus::Error);
+
+    impl std::fmt::Display for DbusError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "[{}] {}",
+                self.0.name().unwrap_or("org.freedesktop.DBus.Error.Failed"),
+                self.0.message().unwrap_or("")
+            )
+        }
+    }
+
+    impl std::error::Error for DbusError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    /// A D-Bus error as an io::Error that keeps it.
     fn dbus_error(error: dbus::Error) -> io::Error {
-        io::Error::other(format!(
-            "[{}] {}",
-            error.name().unwrap_or("org.freedesktop.DBus.Error.Failed"),
-            error.message().unwrap_or("")
-        ))
+        io::Error::other(DbusError(error))
     }
 
     /// What upstream raises when no connection came up in time.
