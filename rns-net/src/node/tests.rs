@@ -141,6 +141,77 @@ fn interface_ids_stay_unique_after_a_multi_interface() {
     assert_eq!(after, multi + 3, "{ids:?}");
 }
 
+/// An RNodeInterface exposes its radio settings, at startup and when
+/// attached; an RNodeMultiInterface exposes none, as its settings would
+/// reach only its first subinterface. Neither device exists: the
+/// interfaces come up offline.
+#[cfg(feature = "iface-rnode")]
+#[test]
+fn only_a_single_rnode_interface_exposes_rnode_runtime_keys() {
+    use crate::event::InterfaceManagementOperation as Operation;
+
+    let dir = tempdir().unwrap();
+    let missing = dir.path().join("missing-rnode-port");
+    let radio = "frequency = 868000000\n      bandwidth = 125000\n      txpower = 7\n      spreadingfactor = 8\n      codingrate = 5\n";
+    let single = |name: &str, enabled: &str| {
+        format!(
+            "  [[{name}]]\n    type = RNodeInterface\n    enabled = {enabled}\n    port = {}\n    {}",
+            missing.display(),
+            radio.replace("      ", "    "),
+        )
+    };
+    let multi = |name: &str, enabled: &str| {
+        format!(
+            "  [[{name}]]\n    type = RNodeMultiInterface\n    enabled = {enabled}\n    port = {}\n    [[[{name}A]]]\n      interface_enabled = yes\n      vport = 0\n      {radio}    [[[{name}B]]]\n      interface_enabled = yes\n      vport = 1\n      {radio}",
+            missing.display(),
+        )
+    };
+    fs::write(
+        dir.path().join("config"),
+        format!(
+            "[reticulum]\nshare_instance = no\n\n[interfaces]\n{}{}{}{}",
+            single("Single", "yes"),
+            multi("Multi", "yes"),
+            single("ManagedSingle", "no"),
+            multi("ManagedMulti", "no"),
+        ),
+    )
+    .unwrap();
+    let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+    for name in ["ManagedSingle", "ManagedMulti"] {
+        let attached = node
+            .query(query::ManageInterface {
+                operation: Operation::Attach,
+                name: name.into(),
+            })
+            .unwrap();
+        assert!(matches!(attached, Some(true)), "{name}: {attached:?}");
+    }
+    let entries: Vec<_> = node
+        .query(query::ListRuntimeConfig)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.key.starts_with("rnode."))
+        .collect();
+    node.shutdown();
+
+    for name in ["Single", "ManagedSingle"] {
+        let key = format!("rnode.{name}.frequency_hz");
+        let entry = entries.iter().find(|entry| entry.key == key);
+        assert_eq!(
+            entry.map(|entry| &entry.value),
+            Some(&crate::event::RuntimeConfigValue::Int(868_000_000)),
+            "{key}"
+        );
+    }
+    let keys: Vec<&str> = entries.iter().map(|entry| entry.key.as_str()).collect();
+    assert!(
+        keys.iter()
+            .all(|key| key.starts_with("rnode.Single.") || key.starts_with("rnode.ManagedSingle.")),
+        "{keys:?}"
+    );
+}
+
 #[test]
 fn interface_management_can_be_disabled() {
     use crate::event::InterfaceManagementOperation as Operation;

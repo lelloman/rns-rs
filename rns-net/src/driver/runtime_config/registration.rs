@@ -101,18 +101,24 @@ impl RuntimeConfigHandles {
     }
 
     /// Register the runtime settings of a configured interface, for the
-    /// interface types that have them.
+    /// interface types that have them. Startup and interface management
+    /// both register through here, so they expose the same keys.
+    ///
+    /// The settings are registered only when the config's type is one whose
+    /// runtime handle covers the whole interface. An `RNodeMultiInterface`
+    /// parses to an RNode config, but its handle would reach only the first
+    /// subinterface, so it has none.
     #[cfg(runtime_config_ifaces)]
     pub(crate) fn register_configured(
         &mut self,
         config: &crate::node::InterfaceConfig,
         #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))] transport_enabled: bool,
     ) {
-        use crate::interface::KnownConfig;
+        use crate::interface::{InterfaceKind, KnownConfig};
 
-        match config.config_data.known() {
+        match (config.kind(), config.config_data.known()) {
             #[cfg(feature = "iface-backbone")]
-            KnownConfig::Backbone(mode) => {
+            (Some(InterfaceKind::Backbone), KnownConfig::Backbone(mode)) => {
                 use crate::interface::backbone::{
                     client_runtime_handle_from_mode, peer_state_handle_from_mode,
                     runtime_handle_from_mode,
@@ -137,13 +143,13 @@ impl RuntimeConfigHandles {
                 }
             }
             #[cfg(feature = "iface-tcp")]
-            KnownConfig::TcpClient(value) => {
+            (Some(InterfaceKind::TcpClient), KnownConfig::TcpClient(value)) => {
                 self.register_tcp_client_runtime(
                     crate::interface::tcp::tcp_client_runtime_handle_from_config(value),
                 );
             }
             #[cfg(feature = "iface-tcp")]
-            KnownConfig::TcpServer(value) => {
+            (Some(InterfaceKind::TcpServer), KnownConfig::TcpServer(value)) => {
                 self.register_tcp_server_runtime(
                     crate::interface::tcp_server::runtime_handle_from_config(value),
                 );
@@ -158,31 +164,31 @@ impl RuntimeConfigHandles {
                 );
             }
             #[cfg(feature = "iface-udp")]
-            KnownConfig::Udp(value) => {
+            (Some(InterfaceKind::Udp), KnownConfig::Udp(value)) => {
                 self.register_udp_runtime(crate::interface::udp::udp_runtime_handle_from_config(
                     value,
                 ));
             }
             #[cfg(feature = "iface-auto")]
-            KnownConfig::Auto(value) => {
+            (Some(InterfaceKind::Auto), KnownConfig::Auto(value)) => {
                 self.register_auto_runtime(
                     crate::interface::auto::auto_runtime_handle_from_config(value),
                 );
             }
             #[cfg(feature = "iface-i2p")]
-            KnownConfig::I2p(value) => {
+            (Some(InterfaceKind::I2p), KnownConfig::I2p(value)) => {
                 self.register_i2p_runtime(crate::interface::i2p::i2p_runtime_handle_from_config(
                     value,
                 ));
             }
             #[cfg(feature = "iface-pipe")]
-            KnownConfig::Pipe(value) => {
+            (Some(InterfaceKind::Pipe), KnownConfig::Pipe(value)) => {
                 self.register_pipe_runtime(
                     crate::interface::pipe::pipe_runtime_handle_from_config(value),
                 );
             }
             #[cfg(feature = "iface-rnode")]
-            KnownConfig::RNode(value) => {
+            (Some(InterfaceKind::RNode), KnownConfig::RNode(value)) => {
                 self.register_rnode_runtime(
                     crate::interface::rnode::rnode_runtime_handle_from_config(value),
                 );
