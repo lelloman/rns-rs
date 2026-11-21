@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
+
 use alloc::vec::Vec;
 use core::fmt;
 
@@ -113,12 +115,14 @@ impl ValidatedAnnounce {
         let Some(app_data) = self.app_data.as_ref() else {
             return AnnounceStampStatus::NotStamped;
         };
-        if app_data.len() < constants::EXT_PAYLOAD_LENGTH {
+        let Some((stripped, ext)) =
+            app_data.split_last_chunk::<{ constants::EXT_PAYLOAD_LENGTH }>()
+        else {
             return AnnounceStampStatus::NotStamped;
-        }
-
-        let ext = &app_data[app_data.len() - constants::EXT_PAYLOAD_LENGTH..];
-        if ext[0] != constants::EXT_PAYLOAD_MARKER {
+        };
+        // [marker][header byte][stamp][link request cost: fraction, anchor]
+        let [marker, _, stamp @ .., lr_cost_fraction, lr_cost_anchor] = ext;
+        if *marker != constants::EXT_PAYLOAD_MARKER {
             return AnnounceStampStatus::NotStamped;
         }
 
@@ -126,18 +130,13 @@ impl ValidatedAnnounce {
         // request cost and the byte before it the 1/256 fraction (796ef2d4).
         // A set anchor high bit marks a newer, longer extension format that
         // this version must not interpret.
-        let Some(lr_cost) = crate::stamp::link_cost_from_ext_bytes(
-            ext[constants::EXT_PAYLOAD_LENGTH - 2],
-            ext[constants::EXT_PAYLOAD_LENGTH - 1],
-        ) else {
+        let Some(lr_cost) =
+            crate::stamp::link_cost_from_ext_bytes(*lr_cost_fraction, *lr_cost_anchor)
+        else {
             return AnnounceStampStatus::NotStamped;
         };
 
-        let mut stamp = [0u8; constants::STAMP_LENGTH];
-        stamp.copy_from_slice(
-            &ext[constants::EXT_HEADER_LENGTH
-                ..constants::EXT_HEADER_LENGTH + constants::STAMP_LENGTH],
-        );
+        let stamp: [u8; constants::STAMP_LENGTH] = *stamp;
         self.stamp = Some(stamp);
 
         let mut material = Vec::with_capacity(16 + 64 + 10);
@@ -148,11 +147,10 @@ impl ValidatedAnnounce {
         self.stamp_value = stamp_value(&workblock, &stamp);
 
         if stamp_valid(&stamp, required_value, &workblock) {
-            let stripped_len = app_data.len() - constants::EXT_PAYLOAD_LENGTH;
-            self.app_data = if stripped_len == 0 {
+            self.app_data = if stripped.is_empty() {
                 None
             } else {
-                Some(app_data[..stripped_len].to_vec())
+                Some(stripped.to_vec())
             };
             self.lr_cost = Some(lr_cost);
             AnnounceStampStatus::Valid
@@ -217,50 +215,31 @@ impl AnnounceData {
     ///
     /// `has_ratchet` corresponds to context_flag == FLAG_SET.
     pub fn unpack(data: &[u8], has_ratchet: bool) -> Result<Self, AnnounceError> {
-        let keysize = constants::KEYSIZE / 8; // 64
-        let name_hash_len = constants::NAME_HASH_LENGTH / 8; // 10
-        let sig_len = constants::SIGLENGTH / 8; // 64
-        let ratchet_size = constants::RATCHETSIZE / 8; // 32
-
-        let min_len = if has_ratchet {
-            keysize + name_hash_len + 10 + ratchet_size + sig_len
-        } else {
-            keysize + name_hash_len + 10 + sig_len
-        };
-
-        if data.len() < min_len {
-            return Err(AnnounceError::DataTooShort);
+        // [public_key:64][name_hash:10][random_hash:10][ratchet:32 if has_ratchet]
+        // [signature:64][app_data:*]
+        fn take<const N: usize>(rest: &mut &[u8]) -> Result<[u8; N], AnnounceError> {
+            let (field, tail) = rest
+                .split_first_chunk::<N>()
+                .ok_or(AnnounceError::DataTooShort)?;
+            *rest = tail;
+            Ok(*field)
         }
-
-        let mut public_key = [0u8; 64];
-        public_key.copy_from_slice(&data[..keysize]);
-
-        let mut name_hash = [0u8; 10];
-        name_hash.copy_from_slice(&data[keysize..keysize + name_hash_len]);
-
-        let mut random_hash = [0u8; 10];
-        random_hash.copy_from_slice(&data[keysize + name_hash_len..keysize + name_hash_len + 10]);
-
-        let (ratchet, sig_start) = if has_ratchet {
-            let mut ratchet = [0u8; 32];
-            ratchet.copy_from_slice(
-                &data[keysize + name_hash_len + 10..keysize + name_hash_len + 10 + ratchet_size],
-            );
-            (Some(ratchet), keysize + name_hash_len + 10 + ratchet_size)
-        } else {
-            (None, keysize + name_hash_len + 10)
-        };
-
-        let mut signature = [0u8; 64];
-        signature.copy_from_slice(&data[sig_start..sig_start + sig_len]);
-
-        // Determine app_data
-        // From Python: app_data is present if len(data) > keysize + name_hash_len + 10 + sig_len [+ ratchetsize]
-        let app_data_start = sig_start + sig_len;
-        let app_data = if data.len() > app_data_start {
-            Some(data[app_data_start..].to_vec())
+        let mut rest = data;
+        let public_key: [u8; constants::KEYSIZE / 8] = take(&mut rest)?;
+        let name_hash: [u8; constants::NAME_HASH_LENGTH / 8] = take(&mut rest)?;
+        let random_hash: [u8; 10] = take(&mut rest)?;
+        let ratchet: Option<[u8; constants::RATCHETSIZE / 8]> = if has_ratchet {
+            Some(take(&mut rest)?)
         } else {
             None
+        };
+        let signature: [u8; constants::SIGLENGTH / 8] = take(&mut rest)?;
+
+        // From Python: app_data is present if len(data) > keysize + name_hash_len + 10 + sig_len [+ ratchetsize]
+        let app_data = if rest.is_empty() {
+            None
+        } else {
+            Some(rest.to_vec())
         };
 
         Ok(AnnounceData {
