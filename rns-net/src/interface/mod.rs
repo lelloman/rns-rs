@@ -54,6 +54,8 @@ pub use egress::EgressControl;
 pub use entry::InterfaceEntry;
 #[cfg(all(test, any(feature = "iface-tcp", feature = "iface-backbone")))]
 pub(crate) use factory::test_start_context;
+#[cfg(any(runtime_config_ifaces, feature = "iface-local"))]
+pub(crate) use factory::KnownConfig;
 pub use factory::{
     ConfigSection, DynamicInterfaceTemplate, InterfaceConfigData, InterfaceConfigError,
     InterfaceFactory, StartContext, StartResult, SubInterface,

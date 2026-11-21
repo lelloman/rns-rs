@@ -29,20 +29,20 @@ impl ConfiguredDisplay {
             feature = "iface-backbone",
             feature = "iface-i2p"
         ))]
-        use crate::interface::display;
-        let data = config.config_data.as_any();
+        use crate::interface::{display, KnownConfig};
+        let known = config.config_data.known();
         let name = config.name.as_str();
         // Unused when no interface feature that reads them is enabled.
-        let _ = (data, name, ifac);
+        let _ = (known, name, ifac);
         #[cfg(feature = "iface-tcp")]
-        if let Some(tcp) = data.downcast_ref::<TcpClientConfig>() {
+        if let KnownConfig::TcpClient(tcp) = known {
             return Self {
                 interface: Some(display::tcp_client(name, &tcp.target_host, tcp.target_port)),
                 ..Self::default()
             };
         }
         #[cfg(feature = "iface-tcp")]
-        if let Some(tcp) = data.downcast_ref::<TcpServerConfig>() {
+        if let KnownConfig::TcpServer(tcp) = known {
             let display_name = display::tcp_server(name, &tcp.listen_ip, tcp.listen_port);
             return Self {
                 listener: Some((tcp.interface_id, display_name.clone())),
@@ -64,7 +64,7 @@ impl ConfiguredDisplay {
             };
         }
         #[cfg(feature = "iface-auto")]
-        if let Some(auto) = data.downcast_ref::<AutoConfig>() {
+        if let KnownConfig::Auto(auto) = known {
             return Self {
                 listener_stat: Some(crate::driver::ListenerStat {
                     id: auto.interface_id,
@@ -83,7 +83,7 @@ impl ConfiguredDisplay {
             };
         }
         #[cfg(feature = "iface-i2p")]
-        if let Some(i2p) = data.downcast_ref::<I2pConfig>() {
+        if let KnownConfig::I2p(i2p) = known {
             return Self {
                 listener_stat: Some(crate::driver::ListenerStat {
                     id: i2p.interface_id,
@@ -106,7 +106,7 @@ impl ConfiguredDisplay {
             };
         }
         #[cfg(feature = "iface-rnode")]
-        if let Some(rnode) = data.downcast_ref::<RNodeConfig>() {
+        if let KnownConfig::RNode(rnode) = known {
             if rnode.multi {
                 return Self {
                     listener_stat: Some(crate::driver::ListenerStat {
@@ -129,7 +129,7 @@ impl ConfiguredDisplay {
             }
         }
         #[cfg(feature = "iface-udp")]
-        if let Some(udp) = data.downcast_ref::<UdpConfig>() {
+        if let KnownConfig::Udp(udp) = known {
             return Self {
                 interface: Some(display::udp(
                     name,
@@ -140,7 +140,7 @@ impl ConfiguredDisplay {
             };
         }
         #[cfg(feature = "iface-backbone")]
-        if let Some(mode) = data.downcast_ref::<BackboneMode>() {
+        if let KnownConfig::Backbone(mode) = known {
             return match mode {
                 BackboneMode::Server(server) => Self {
                     listener: Some((
@@ -160,7 +160,7 @@ impl ConfiguredDisplay {
             };
         }
         #[cfg(feature = "iface-local")]
-        if let Some(local) = data.downcast_ref::<crate::interface::local::LocalClientConfig>() {
+        if let KnownConfig::LocalClient(local) = known {
             let endpoint = display::LocalEndpoint::for_client(
                 local.use_af_unix,
                 &local.instance_name,

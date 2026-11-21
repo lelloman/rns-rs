@@ -40,13 +40,11 @@ pub(super) fn register_interface_runtime(
     iface_config: &InterfaceConfig,
     #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))] transport_enabled: bool,
 ) {
+    use crate::interface::KnownConfig;
+
     #[cfg(feature = "iface-backbone")]
     if iface_config.type_name == "BackboneInterface" {
-        if let Some(mode) = iface_config
-            .config_data
-            .as_any()
-            .downcast_ref::<BackboneMode>()
-        {
+        if let KnownConfig::Backbone(mode) = iface_config.config_data.known() {
             if let Some(handle) = runtime_handle_from_mode(mode) {
                 driver.register_backbone_runtime(handle);
             }
@@ -69,21 +67,13 @@ pub(super) fn register_interface_runtime(
     }
     #[cfg(feature = "iface-tcp")]
     if iface_config.type_name == "TCPClientInterface" {
-        if let Some(tcp_config) = iface_config
-            .config_data
-            .as_any()
-            .downcast_ref::<TcpClientConfig>()
-        {
+        if let KnownConfig::TcpClient(tcp_config) = iface_config.config_data.known() {
             driver.register_tcp_client_runtime(tcp_client_runtime_handle_from_config(tcp_config));
         }
     }
     #[cfg(feature = "iface-tcp")]
     if iface_config.type_name == "TCPServerInterface" {
-        if let Some(tcp_config) = iface_config
-            .config_data
-            .as_any()
-            .downcast_ref::<TcpServerConfig>()
-        {
+        if let KnownConfig::TcpServer(tcp_config) = iface_config.config_data.known() {
             driver.register_tcp_server_runtime(tcp_runtime_handle_from_config(tcp_config));
             driver.register_tcp_server_discovery_runtime(
                 tcp_server_discovery_runtime_from_interface(
@@ -98,51 +88,31 @@ pub(super) fn register_interface_runtime(
     }
     #[cfg(feature = "iface-udp")]
     if iface_config.type_name == "UDPInterface" {
-        if let Some(udp_config) = iface_config
-            .config_data
-            .as_any()
-            .downcast_ref::<UdpConfig>()
-        {
+        if let KnownConfig::Udp(udp_config) = iface_config.config_data.known() {
             driver.register_udp_runtime(udp_runtime_handle_from_config(udp_config));
         }
     }
     #[cfg(feature = "iface-auto")]
     if iface_config.type_name == "AutoInterface" {
-        if let Some(auto_config) = iface_config
-            .config_data
-            .as_any()
-            .downcast_ref::<AutoConfig>()
-        {
+        if let KnownConfig::Auto(auto_config) = iface_config.config_data.known() {
             driver.register_auto_runtime(auto_runtime_handle_from_config(auto_config));
         }
     }
     #[cfg(feature = "iface-i2p")]
     if iface_config.type_name == "I2PInterface" {
-        if let Some(i2p_config) = iface_config
-            .config_data
-            .as_any()
-            .downcast_ref::<I2pConfig>()
-        {
+        if let KnownConfig::I2p(i2p_config) = iface_config.config_data.known() {
             driver.register_i2p_runtime(i2p_runtime_handle_from_config(i2p_config));
         }
     }
     #[cfg(feature = "iface-pipe")]
     if iface_config.type_name == "PipeInterface" {
-        if let Some(pipe_config) = iface_config
-            .config_data
-            .as_any()
-            .downcast_ref::<PipeConfig>()
-        {
+        if let KnownConfig::Pipe(pipe_config) = iface_config.config_data.known() {
             driver.register_pipe_runtime(pipe_runtime_handle_from_config(pipe_config));
         }
     }
     #[cfg(feature = "iface-rnode")]
     if iface_config.type_name == "RNodeInterface" {
-        if let Some(rnode_config) = iface_config
-            .config_data
-            .as_any()
-            .downcast_ref::<RNodeConfig>()
-        {
+        if let KnownConfig::RNode(rnode_config) = iface_config.config_data.known() {
             driver.register_rnode_runtime(rnode_runtime_handle_from_config(rnode_config));
         }
     }
@@ -152,19 +122,14 @@ pub(super) fn register_interface_runtime(
 /// an auto-connect must not duplicate.
 #[cfg(feature = "iface-backbone")]
 pub(super) fn configured_client_target(iface_config: &InterfaceConfig) -> Option<(String, u16)> {
+    use crate::interface::KnownConfig;
+
     #[cfg(feature = "iface-tcp")]
-    if let Some(tcp) = iface_config
-        .config_data
-        .as_any()
-        .downcast_ref::<crate::interface::tcp::TcpClientConfig>()
-    {
+    if let KnownConfig::TcpClient(tcp) = iface_config.config_data.known() {
         return Some((tcp.target_host.clone(), tcp.target_port));
     }
     #[cfg(feature = "iface-backbone")]
-    if let Some(BackboneMode::Client(client, _)) = iface_config
-        .config_data
-        .as_any()
-        .downcast_ref::<BackboneMode>()
+    if let KnownConfig::Backbone(BackboneMode::Client(client, _)) = iface_config.config_data.known()
     {
         return Some((client.target_host.clone(), client.target_port));
     }
