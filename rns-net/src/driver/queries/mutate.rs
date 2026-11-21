@@ -3,252 +3,6 @@
 use super::*;
 
 impl Driver {
-    pub(crate) fn handle_runtime_config_query(
-        &self,
-        request: QueryRequest,
-    ) -> Option<QueryResponse> {
-        match request {
-            QueryRequest::ListRuntimeConfig => {
-                Some(QueryResponse::RuntimeConfigList(self.list_runtime_config()))
-            }
-            QueryRequest::GetRuntimeConfig { key } => Some(QueryResponse::RuntimeConfigEntry(
-                self.runtime_config_entry(&key),
-            )),
-            QueryRequest::BackbonePeerState { interface_name } => {
-                Some(QueryResponse::BackbonePeerState(
-                    self.runtime_config
-                        .list_backbone_peer_state(interface_name.as_deref()),
-                ))
-            }
-            QueryRequest::SetRuntimeConfig { .. } => {
-                Some(QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
-                    code: RuntimeConfigErrorCode::Unsupported,
-                    message: "mutating runtime config is handled separately".to_string(),
-                })))
-            }
-            QueryRequest::ResetRuntimeConfig { .. } => {
-                Some(QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
-                    code: RuntimeConfigErrorCode::Unsupported,
-                    message: "mutating runtime config is handled separately".to_string(),
-                })))
-            }
-            QueryRequest::ClearBackbonePeerState { .. } => {
-                Some(QueryResponse::ClearBackbonePeerState(false))
-            }
-            QueryRequest::BlacklistBackbonePeer { .. } => {
-                Some(QueryResponse::BlacklistBackbonePeer(false))
-            }
-            _ => None,
-        }
-    }
-
-    pub(crate) fn handle_mutation_query(&mut self, request: QueryRequest) -> Option<QueryResponse> {
-        match request {
-            QueryRequest::BlackholeIdentity {
-                identity_hash,
-                duration_hours,
-                reason,
-            } => Some(QueryResponse::BlackholeResult(
-                self.blackhole_identity_local(identity_hash, duration_hours, reason),
-            )),
-            QueryRequest::UnblackholeIdentity { identity_hash } => Some(
-                QueryResponse::UnblackholeResult(self.unblackhole_identity_local(&identity_hash)),
-            ),
-            QueryRequest::DropPath { dest_hash } => {
-                Some(QueryResponse::DropPath(self.engine.drop_path(&dest_hash)))
-            }
-            QueryRequest::DropAllVia { transport_hash } => Some(QueryResponse::DropAllVia(
-                self.engine.drop_all_via(&transport_hash),
-            )),
-            QueryRequest::DropAnnounceQueues => {
-                self.engine.drop_announce_queues();
-                Some(QueryResponse::DropAnnounceQueues)
-            }
-            QueryRequest::ClearBackbonePeerState {
-                interface_name,
-                peer_ip,
-            } => Some(QueryResponse::ClearBackbonePeerState(
-                self.runtime_config
-                    .clear_backbone_peer_state(&interface_name, peer_ip),
-            )),
-            QueryRequest::BlacklistBackbonePeer {
-                interface_name,
-                peer_ip,
-                duration,
-                reason,
-                penalty_level,
-            } => Some(QueryResponse::BlacklistBackbonePeer(
-                self.blacklist_backbone_peer(
-                    &interface_name,
-                    peer_ip,
-                    duration,
-                    reason,
-                    penalty_level,
-                ),
-            )),
-            QueryRequest::InjectPath {
-                dest_hash,
-                next_hop,
-                hops,
-                expires,
-                interface_name,
-                packet_hash,
-            } => {
-                let iface_id = self
-                    .interfaces
-                    .iter()
-                    .find(|(_, entry)| entry.info.name == interface_name)
-                    .map(|(id, _)| *id);
-                Some(match iface_id {
-                    Some(id) => {
-                        let entry = PathEntry {
-                            timestamp: time::now(),
-                            next_hop,
-                            hops,
-                            expires,
-                            random_blobs: Vec::new(),
-                            receiving_interface: id,
-                            packet_hash,
-                            used: 0.0,
-                            announce_raw: None,
-                        };
-                        self.engine.inject_path(dest_hash, entry);
-                        QueryResponse::InjectPath(true)
-                    }
-                    None => QueryResponse::InjectPath(false),
-                })
-            }
-            QueryRequest::InjectIdentity {
-                dest_hash,
-                identity_hash,
-                public_key,
-                app_data,
-                hops,
-                received_at,
-            } => {
-                self.upsert_known_destination(
-                    dest_hash,
-                    crate::destination::AnnouncedIdentity {
-                        dest_hash: rns_core::types::DestHash(dest_hash),
-                        identity_hash: rns_core::types::IdentityHash(identity_hash),
-                        public_key,
-                        app_data,
-                        hops,
-                        received_at,
-                        receiving_interface: rns_core::transport::types::InterfaceId(0),
-                        rssi: None,
-                        snr: None,
-                    },
-                );
-                Some(QueryResponse::InjectIdentity(true))
-            }
-            QueryRequest::RestoreKnownDestination(entry) => {
-                self.known.entries.insert(
-                    entry.dest_hash,
-                    KnownDestinationState {
-                        packet_hash: entry.packet_hash,
-                        announced: crate::destination::AnnouncedIdentity {
-                            dest_hash: rns_core::types::DestHash(entry.dest_hash),
-                            identity_hash: rns_core::types::IdentityHash(entry.identity_hash),
-                            public_key: entry.public_key,
-                            app_data: entry.app_data,
-                            hops: entry.hops,
-                            received_at: entry.received_at,
-                            receiving_interface: entry.receiving_interface,
-                            rssi: None,
-                            snr: None,
-                        },
-                        was_used: entry.was_used,
-                        last_used_at: entry.last_used_at,
-                        retained: entry.retained,
-                        stamp: entry.stamp,
-                        stamp_value: entry.stamp_value,
-                        lr_cost: entry.lr_cost,
-                    },
-                );
-                Some(QueryResponse::RestoreKnownDestination(true))
-            }
-            QueryRequest::RetainKnownDestination { dest_hash } => Some(
-                QueryResponse::RetainKnownDestination(self.known.retain(&dest_hash)),
-            ),
-            QueryRequest::RetainIdentity { identity_hash } => Some(QueryResponse::RetainIdentity(
-                self.known.retain_identity(&identity_hash),
-            )),
-            QueryRequest::UnretainKnownDestination { dest_hash } => Some(
-                QueryResponse::UnretainKnownDestination(self.known.unretain(&dest_hash)),
-            ),
-            QueryRequest::MarkKnownDestinationUsed { dest_hash } => Some(
-                QueryResponse::MarkKnownDestinationUsed(self.known.mark_used(&dest_hash)),
-            ),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn runtime_config_query_fallback(request: &QueryRequest) -> QueryResponse {
-        match request {
-            QueryRequest::ListRuntimeConfig => QueryResponse::RuntimeConfigList(Vec::new()),
-            QueryRequest::GetRuntimeConfig { .. } => QueryResponse::RuntimeConfigEntry(None),
-            QueryRequest::BackbonePeerState { .. } => QueryResponse::BackbonePeerState(Vec::new()),
-            QueryRequest::SetRuntimeConfig { key, .. } => {
-                QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
-                    code: RuntimeConfigErrorCode::ApplyFailed,
-                    message: format!(
-                        "internal error: no response generated for runtime-config set '{}'",
-                        key
-                    ),
-                }))
-            }
-            QueryRequest::ResetRuntimeConfig { key } => {
-                QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
-                    code: RuntimeConfigErrorCode::ApplyFailed,
-                    message: format!(
-                        "internal error: no response generated for runtime-config reset '{}'",
-                        key
-                    ),
-                }))
-            }
-            QueryRequest::ClearBackbonePeerState { .. } => {
-                QueryResponse::ClearBackbonePeerState(false)
-            }
-            QueryRequest::BlacklistBackbonePeer { .. } => {
-                QueryResponse::BlacklistBackbonePeer(false)
-            }
-            _ => QueryResponse::RuntimeConfigEntry(None),
-        }
-    }
-
-    pub(crate) fn mutation_query_fallback(request: &QueryRequest) -> QueryResponse {
-        match request {
-            QueryRequest::BlackholeIdentity { .. } => QueryResponse::BlackholeResult(false),
-            QueryRequest::UnblackholeIdentity { .. } => QueryResponse::UnblackholeResult(false),
-            QueryRequest::DropPath { .. } => QueryResponse::DropPath(false),
-            QueryRequest::DropAllVia { .. } => QueryResponse::DropAllVia(0),
-            QueryRequest::DropAnnounceQueues => QueryResponse::DropAnnounceQueues,
-            QueryRequest::ClearBackbonePeerState { .. } => {
-                QueryResponse::ClearBackbonePeerState(false)
-            }
-            QueryRequest::BlacklistBackbonePeer { .. } => {
-                QueryResponse::BlacklistBackbonePeer(false)
-            }
-            QueryRequest::InjectPath { .. } => QueryResponse::InjectPath(false),
-            QueryRequest::InjectIdentity { .. } => QueryResponse::InjectIdentity(false),
-            QueryRequest::RestoreKnownDestination(..) => {
-                QueryResponse::RestoreKnownDestination(false)
-            }
-            QueryRequest::RetainKnownDestination { .. } => {
-                QueryResponse::RetainKnownDestination(false)
-            }
-            QueryRequest::RetainIdentity { .. } => QueryResponse::RetainIdentity(false),
-            QueryRequest::UnretainKnownDestination { .. } => {
-                QueryResponse::UnretainKnownDestination(false)
-            }
-            QueryRequest::MarkKnownDestinationUsed { .. } => {
-                QueryResponse::MarkKnownDestinationUsed(false)
-            }
-            _ => QueryResponse::InjectIdentity(false),
-        }
-    }
-
     /// Handle a mutating query request.
     pub(crate) fn handle_query_mut(&mut self, request: QueryRequest) -> QueryResponse {
         match request {
@@ -281,25 +35,119 @@ impl Driver {
             QueryRequest::ManageInterface { operation, name } => {
                 QueryResponse::InterfaceManagement(self.manage_interface(operation, &name))
             }
-            request @ (QueryRequest::BlackholeIdentity { .. }
-            | QueryRequest::UnblackholeIdentity { .. }
-            | QueryRequest::DropPath { .. }
-            | QueryRequest::DropAllVia { .. }
-            | QueryRequest::DropAnnounceQueues
-            | QueryRequest::ClearBackbonePeerState { .. }
-            | QueryRequest::BlacklistBackbonePeer { .. }
-            | QueryRequest::InjectPath { .. }
-            | QueryRequest::InjectIdentity { .. }
-            | QueryRequest::RestoreKnownDestination(..)
-            | QueryRequest::RetainKnownDestination { .. }
-            | QueryRequest::RetainIdentity { .. }
-            | QueryRequest::UnretainKnownDestination { .. }
-            | QueryRequest::MarkKnownDestinationUsed { .. }) => {
-                let fallback = Self::mutation_query_fallback(&request);
-                self.handle_mutation_query(request).unwrap_or_else(|| {
-                    log::error!("mutation query branch unexpectedly returned no response");
-                    fallback
-                })
+            QueryRequest::BlackholeIdentity {
+                identity_hash,
+                duration_hours,
+                reason,
+            } => QueryResponse::BlackholeResult(self.blackhole_identity_local(
+                identity_hash,
+                duration_hours,
+                reason,
+            )),
+            QueryRequest::UnblackholeIdentity { identity_hash } => {
+                QueryResponse::UnblackholeResult(self.unblackhole_identity_local(&identity_hash))
+            }
+            QueryRequest::DropPath { dest_hash } => {
+                QueryResponse::DropPath(self.engine.drop_path(&dest_hash))
+            }
+            QueryRequest::DropAllVia { transport_hash } => {
+                QueryResponse::DropAllVia(self.engine.drop_all_via(&transport_hash))
+            }
+            QueryRequest::DropAnnounceQueues => {
+                self.engine.drop_announce_queues();
+                QueryResponse::DropAnnounceQueues
+            }
+            QueryRequest::ClearBackbonePeerState {
+                interface_name,
+                peer_ip,
+            } => QueryResponse::ClearBackbonePeerState(
+                self.runtime_config
+                    .clear_backbone_peer_state(&interface_name, peer_ip),
+            ),
+            QueryRequest::BlacklistBackbonePeer {
+                interface_name,
+                peer_ip,
+                duration,
+                reason,
+                penalty_level,
+            } => QueryResponse::BlacklistBackbonePeer(self.blacklist_backbone_peer(
+                &interface_name,
+                peer_ip,
+                duration,
+                reason,
+                penalty_level,
+            )),
+            QueryRequest::InjectPath {
+                dest_hash,
+                next_hop,
+                hops,
+                expires,
+                interface_name,
+                packet_hash,
+            } => {
+                let iface_id = self
+                    .interfaces
+                    .iter()
+                    .find(|(_, entry)| entry.info.name == interface_name)
+                    .map(|(id, _)| *id);
+                match iface_id {
+                    Some(id) => {
+                        let entry = PathEntry {
+                            timestamp: time::now(),
+                            next_hop,
+                            hops,
+                            expires,
+                            random_blobs: Vec::new(),
+                            receiving_interface: id,
+                            packet_hash,
+                            used: 0.0,
+                            announce_raw: None,
+                        };
+                        self.engine.inject_path(dest_hash, entry);
+                        QueryResponse::InjectPath(true)
+                    }
+                    None => QueryResponse::InjectPath(false),
+                }
+            }
+            QueryRequest::InjectIdentity {
+                dest_hash,
+                identity_hash,
+                public_key,
+                app_data,
+                hops,
+                received_at,
+            } => {
+                self.upsert_known_destination(
+                    dest_hash,
+                    crate::destination::AnnouncedIdentity {
+                        dest_hash: rns_core::types::DestHash(dest_hash),
+                        identity_hash: rns_core::types::IdentityHash(identity_hash),
+                        public_key,
+                        app_data,
+                        hops,
+                        received_at,
+                        receiving_interface: rns_core::transport::types::InterfaceId(0),
+                        rssi: None,
+                        snr: None,
+                    },
+                );
+                QueryResponse::InjectIdentity(true)
+            }
+            QueryRequest::RestoreKnownDestination(entry) => {
+                self.restore_known_destination(entry);
+                QueryResponse::RestoreKnownDestination(true)
+            }
+            QueryRequest::RetainKnownDestination { dest_hash } => {
+                QueryResponse::RetainKnownDestination(self.known.retain(&dest_hash))
+            }
+            QueryRequest::RetainIdentity { identity_hash } => {
+                QueryResponse::RetainIdentity(self.known.retain_identity(&identity_hash))
+            }
+            QueryRequest::UnretainKnownDestination { dest_hash } => {
+                QueryResponse::UnretainKnownDestination(self.known.unretain(&dest_hash))
+            }
+            QueryRequest::MarkKnownDestinationUsed { dest_hash } => {
+                QueryResponse::MarkKnownDestinationUsed(self.known.mark_used(&dest_hash))
             }
             QueryRequest::RecallDestinationStamp { dest_hash } => {
                 QueryResponse::RecallDestinationStamp(self.known.entries.get(&dest_hash).map(
@@ -325,6 +173,33 @@ impl Driver {
             QueryRequest::ResetRuntimeConfig { key } => self.reset_runtime_config(key),
             other => self.handle_query(other),
         }
+    }
+
+    /// Put a known destination back with its full lifecycle state.
+    fn restore_known_destination(&mut self, entry: crate::event::KnownDestinationEntry) {
+        self.known.entries.insert(
+            entry.dest_hash,
+            KnownDestinationState {
+                packet_hash: entry.packet_hash,
+                announced: crate::destination::AnnouncedIdentity {
+                    dest_hash: rns_core::types::DestHash(entry.dest_hash),
+                    identity_hash: rns_core::types::IdentityHash(entry.identity_hash),
+                    public_key: entry.public_key,
+                    app_data: entry.app_data,
+                    hops: entry.hops,
+                    received_at: entry.received_at,
+                    receiving_interface: entry.receiving_interface,
+                    rssi: None,
+                    snr: None,
+                },
+                was_used: entry.was_used,
+                last_used_at: entry.last_used_at,
+                retained: entry.retained,
+                stamp: entry.stamp,
+                stamp_value: entry.stamp_value,
+                lr_cost: entry.lr_cost,
+            },
+        );
     }
 
     /// Drop every destination type requirement of `requester`.

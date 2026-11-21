@@ -308,21 +308,34 @@ impl Driver {
                 );
                 QueryResponse::DiscoveredInterfaces(interfaces)
             }
-            request @ (QueryRequest::ListRuntimeConfig
-            | QueryRequest::GetRuntimeConfig { .. }
-            | QueryRequest::BackbonePeerState { .. }
-            | QueryRequest::SetRuntimeConfig { .. }
-            | QueryRequest::ResetRuntimeConfig { .. }
-            | QueryRequest::ClearBackbonePeerState { .. }
-            | QueryRequest::BlacklistBackbonePeer { .. }) => {
-                let fallback = Self::runtime_config_query_fallback(&request);
-                self.handle_runtime_config_query(request)
-                    .unwrap_or_else(|| {
-                        log::error!(
-                            "runtime-config query branch unexpectedly returned no response"
-                        );
-                        fallback
-                    })
+            QueryRequest::ListRuntimeConfig => {
+                QueryResponse::RuntimeConfigList(self.list_runtime_config())
+            }
+            QueryRequest::GetRuntimeConfig { key } => {
+                QueryResponse::RuntimeConfigEntry(self.runtime_config_entry(&key))
+            }
+            QueryRequest::BackbonePeerState { interface_name } => QueryResponse::BackbonePeerState(
+                self.runtime_config
+                    .list_backbone_peer_state(interface_name.as_deref()),
+            ),
+            // Mutating queries handled by handle_query_mut
+            QueryRequest::SetRuntimeConfig { .. } => {
+                QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::Unsupported,
+                    message: "mutating runtime config is handled separately".to_string(),
+                }))
+            }
+            QueryRequest::ResetRuntimeConfig { .. } => {
+                QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::Unsupported,
+                    message: "mutating runtime config is handled separately".to_string(),
+                }))
+            }
+            QueryRequest::ClearBackbonePeerState { .. } => {
+                QueryResponse::ClearBackbonePeerState(false)
+            }
+            QueryRequest::BlacklistBackbonePeer { .. } => {
+                QueryResponse::BlacklistBackbonePeer(false)
             }
             // Mutating queries handled by handle_query_mut
             QueryRequest::SendProbe { .. } => {
