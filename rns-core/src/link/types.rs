@@ -102,7 +102,7 @@ pub fn mode_description(mode: u8) -> &'static str {
 
 /// Whether a signalled mode value is an enabled mode
 /// ([`LinkMode::ENABLED`]); the reserved values never are.
-pub fn mode_value_enabled(mode: u8) -> bool {
+pub(crate) fn mode_value_enabled(mode: u8) -> bool {
     LinkMode::from_byte(mode).is_ok_and(LinkMode::is_enabled)
 }
 

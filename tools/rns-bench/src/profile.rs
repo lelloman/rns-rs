@@ -5,7 +5,7 @@ use crate::{
 };
 use anyhow::{bail, ensure, Result};
 use rns_core::{
-    buffer::types::{Compressor, DecompressError},
+    buffer::{Compressor, DecompressError},
     resource::{ResourceAction, ResourceReceiver, ResourceSender, ResourceStatus},
 };
 use rns_crypto::{sha256::sha256, token::Token, OsRng, Rng};

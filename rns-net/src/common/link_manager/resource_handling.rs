@@ -42,7 +42,7 @@ pub(super) struct ResourceSendParams<'a> {
     pub(super) metadata: Option<&'a [u8]>,
     pub(super) auto_compress: bool,
     pub(super) app_flag: bool,
-    pub(super) compressor: &'a dyn rns_core::buffer::types::Compressor,
+    pub(super) compressor: &'a dyn rns_core::buffer::Compressor,
     pub(super) is_response: bool,
     pub(super) request_id: Option<Vec<u8>>,
     pub(super) rng: &'a mut dyn Rng,

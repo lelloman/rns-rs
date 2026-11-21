@@ -1,18 +1,12 @@
-/// Resource advertisement encoding and decoding.
-pub mod advertisement;
-pub mod assembly;
+pub(crate) mod advertisement;
+pub(crate) mod assembly;
 /// Part splitting, part map hashes, hashmaps and metadata framing.
 pub mod parts;
-/// Resource hash and proof computation and validation.
-pub mod proof;
-/// Receiving side of a resource transfer.
-pub mod receiver;
-/// Sending side of a resource transfer.
-pub mod sender;
-/// Resource statuses, advertisement flags, actions and errors.
-pub mod types;
-/// Transfer window adaptation.
-pub mod window;
+pub(crate) mod proof;
+pub(crate) mod receiver;
+pub(crate) mod sender;
+pub(crate) mod types;
+pub(crate) mod window;
 
 pub use advertisement::ResourceAdvertisement;
 pub use assembly::{AssemblyId, AssemblyResult, ResourceAssembly};

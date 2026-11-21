@@ -115,14 +115,14 @@ impl HolePunchManager {
         actions
     }
 
-    /// One proposal per link per [`PROPOSAL_COOLDOWN`](rns_core::holepunch::types::PROPOSAL_COOLDOWN).
+    /// One proposal per link per [`PROPOSAL_COOLDOWN`](rns_core::holepunch::PROPOSAL_COOLDOWN).
     pub(super) fn rate_limited(&self, link_id: &[u8; 16], now: f64) -> bool {
         let limited = self
             .link_to_session
             .get(link_id)
             .and_then(|session_id| self.sessions.get(session_id))
             .is_some_and(|session| {
-                now - session.last_proposal < rns_core::holepunch::types::PROPOSAL_COOLDOWN
+                now - session.last_proposal < rns_core::holepunch::PROPOSAL_COOLDOWN
             });
         if limited {
             log::debug!(

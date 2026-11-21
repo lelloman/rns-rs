@@ -1,6 +1,6 @@
 //! Bounded, node-owned compression preparation. Protocol state stays on the driver.
 use super::*;
-use rns_core::buffer::types::{Compressor, DecompressError};
+use rns_core::buffer::{Compressor, DecompressError};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc,

@@ -323,7 +323,7 @@ impl Driver {
             );
             self.callbacks.on_direct_connect_failed(
                 rns_core::types::LinkId(link_id),
-                rns_core::holepunch::types::FAIL_NOT_STARTED,
+                rns_core::holepunch::FAIL_NOT_STARTED,
             );
         }
     }

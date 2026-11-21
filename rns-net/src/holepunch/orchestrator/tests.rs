@@ -618,7 +618,7 @@ fn test_propose_rate_limited() {
     assert!(matches!(
         actions[..],
         [HolePunchManagerAction::DirectConnectFailed {
-            reason: rns_core::holepunch::types::FAIL_NOT_STARTED,
+            reason: rns_core::holepunch::FAIL_NOT_STARTED,
             ..
         }]
     ));
@@ -766,7 +766,7 @@ fn test_handle_probe_failed_with_session() {
     assert_eq!(actions.len(), 1);
     assert!(
         matches!(&actions[0], HolePunchManagerAction::DirectConnectFailed { reason, .. }
-            if *reason == rns_core::holepunch::types::FAIL_PROBE)
+            if *reason == rns_core::holepunch::FAIL_PROBE)
     );
 }
 
@@ -794,7 +794,7 @@ fn responder_probe_failure_rejects_the_request() {
     assert!(actions.iter().any(|a| matches!(
         a,
         HolePunchManagerAction::DirectConnectFailed { reason, .. }
-            if *reason == rns_core::holepunch::types::FAIL_PROBE
+            if *reason == rns_core::holepunch::FAIL_PROBE
     )));
     // The failed session is cleaned up.
     mgr.tick(&tx);
@@ -956,7 +956,7 @@ fn test_propose_without_probe_addr() {
         assert!(matches!(
             actions[..],
             [HolePunchManagerAction::DirectConnectFailed {
-                reason: rns_core::holepunch::types::FAIL_NOT_STARTED,
+                reason: rns_core::holepunch::FAIL_NOT_STARTED,
                 ..
             }]
         ));
@@ -1252,7 +1252,7 @@ fn lost_direct_path_is_proposed_again_with_backoff_until_the_limit() {
         // Once handed out, it is not handed out again.
         assert!(!run_due_reupgrade(&mut mgr, link_id));
         let before = time::now();
-        mgr.reupgrade_failed(link_id, rns_core::holepunch::types::FAIL_TIMEOUT);
+        mgr.reupgrade_failed(link_id, rns_core::holepunch::FAIL_TIMEOUT);
         if let Some(due) = reupgrade_due(&mgr, &link_id) {
             delays.push(due - before);
         }
@@ -1287,7 +1287,7 @@ fn reupgrade_stops_on_refusal_success_or_link_close() {
     let mut mgr = accepting_manager();
     lost(&mut mgr);
     let due = reupgrade_due(&mgr, &link_id);
-    mgr.reupgrade_failed(link_id, rns_core::holepunch::types::FAIL_TIMEOUT);
+    mgr.reupgrade_failed(link_id, rns_core::holepunch::FAIL_TIMEOUT);
     assert_eq!(reupgrade_due(&mgr, &link_id), due);
 
     // The link closes, or the driver finds it no longer active.
@@ -1321,7 +1321,7 @@ fn reupgrade_postponed_by_a_stale_link_keeps_its_attempt() {
     assert_eq!(mgr.reupgrades[&link_id].attempts, 1);
 
     // Nothing in flight: the schedule stays.
-    mgr.reupgrade_failed(link_id, rns_core::holepunch::types::FAIL_TIMEOUT);
+    mgr.reupgrade_failed(link_id, rns_core::holepunch::FAIL_TIMEOUT);
     let due = reupgrade_due(&mgr, &link_id);
     mgr.postpone_reupgrade(link_id);
     assert_eq!(reupgrade_due(&mgr, &link_id), due);
@@ -1366,7 +1366,7 @@ fn a_long_lived_path_starts_the_attempt_count_again() {
     upgraded(&mut mgr, link_id, 50_105);
     mgr.take_direct(&link_id, DirectLossCause::LinkFailed);
     assert!(run_due_reupgrade(&mut mgr, link_id));
-    mgr.reupgrade_failed(link_id, rns_core::holepunch::types::FAIL_TIMEOUT);
+    mgr.reupgrade_failed(link_id, rns_core::holepunch::FAIL_TIMEOUT);
     assert_eq!(mgr.reupgrades[&link_id].attempts, 2);
     // The next attempt succeeds, and the path is lost again soon: the
     // count goes on, and that was the last attempt.
@@ -1380,7 +1380,7 @@ fn a_long_lived_path_starts_the_attempt_count_again() {
     upgraded(&mut mgr, link_id, 50_107);
     mgr.take_direct(&link_id, DirectLossCause::LinkFailed);
     assert!(run_due_reupgrade(&mut mgr, link_id));
-    mgr.reupgrade_failed(link_id, rns_core::holepunch::types::FAIL_TIMEOUT);
+    mgr.reupgrade_failed(link_id, rns_core::holepunch::FAIL_TIMEOUT);
     assert_eq!(mgr.reupgrades[&link_id].attempts, 2);
     assert!(run_due_reupgrade(&mut mgr, link_id));
     mgr.reupgrades.get_mut(&link_id).unwrap().in_flight = false;
@@ -1399,8 +1399,8 @@ fn status_reports_paths_counts_failures_and_losses() {
     upgraded(&mut mgr, link_id, 50_201);
     mgr.count(link_id, |c| c.established += 1);
     mgr.note_direct_mtu(rns_core::transport::types::InterfaceId(50_201), 1400);
-    mgr.note_failed(other, rns_core::holepunch::types::FAIL_TIMEOUT);
-    mgr.note_failed(other, rns_core::holepunch::types::FAIL_TIMEOUT);
+    mgr.note_failed(other, rns_core::holepunch::FAIL_TIMEOUT);
+    mgr.note_failed(other, rns_core::holepunch::FAIL_TIMEOUT);
     mgr.note_failed(other, REJECT_BUSY);
 
     let status = mgr.status();
@@ -1414,10 +1414,7 @@ fn status_reports_paths_counts_failures_and_losses() {
     assert_eq!(direct.candidate, DirectCandidateKind::Reflexive);
     assert_eq!(
         status.totals.failed,
-        vec![
-            (REJECT_BUSY, 1),
-            (rns_core::holepunch::types::FAIL_TIMEOUT, 2)
-        ]
+        vec![(REJECT_BUSY, 1), (rns_core::holepunch::FAIL_TIMEOUT, 2)]
     );
     assert_eq!(status.totals.failed_total(), 3);
     assert_eq!(status.totals.established, 1);

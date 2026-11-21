@@ -118,7 +118,7 @@ pub struct DirectLinkCounters {
     /// Upgrades that established a direct path.
     pub established: u64,
     /// Upgrades that failed, each counted under its reason code (see
-    /// `rns_core::holepunch::types`), in ascending order of the code.
+    /// `rns_core::holepunch`), in ascending order of the code.
     pub failed: Vec<(u8, u64)>,
     /// Direct paths lost after they were established.
     pub lost: u64,
@@ -239,7 +239,7 @@ pub struct DirectLinkStatus {
 
 /// The name of a Direct Link failure or reject reason code.
 pub fn direct_link_reason_name(reason: u8) -> &'static str {
-    use rns_core::holepunch::types as t;
+    use rns_core::holepunch as t;
     match reason {
         t::REJECT_POLICY => "policy",
         t::REJECT_BUSY => "busy",

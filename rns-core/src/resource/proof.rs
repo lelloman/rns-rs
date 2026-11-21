@@ -34,7 +34,7 @@ pub fn compute_expected_proof(unencrypted_data: &[u8], resource_hash: &[u8; 32])
 }
 
 /// Build proof data: [resource_hash: 32 bytes][proof: 32 bytes].
-pub fn build_proof_data(resource_hash: &[u8; 32], proof: &[u8; 32]) -> Vec<u8> {
+pub(crate) fn build_proof_data(resource_hash: &[u8; 32], proof: &[u8; 32]) -> Vec<u8> {
     let mut data = Vec::with_capacity(64);
     data.extend_from_slice(resource_hash);
     data.extend_from_slice(proof);
@@ -46,7 +46,7 @@ pub fn build_proof_data(resource_hash: &[u8; 32], proof: &[u8; 32]) -> Vec<u8> {
 ///
 /// Only checks the proof portion (bytes 32..64) against the expected proof,
 /// matching Python's behavior which validates the proof hash, not the resource hash prefix.
-pub fn validate_proof(
+pub(crate) fn validate_proof(
     proof_data: &[u8],
     _expected_resource_hash: &[u8; 32],
     expected_proof: &[u8; 32],

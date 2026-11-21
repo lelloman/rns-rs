@@ -1,11 +1,11 @@
 extern crate rns_core;
 extern crate rns_crypto;
 
-use rns_core::buffer::types::NoopCompressor;
+use rns_core::buffer::NoopCompressor;
 use rns_core::constants::*;
-use rns_core::resource::receiver::ResourceReceiver;
-use rns_core::resource::sender::ResourceSender;
-use rns_core::resource::types::*;
+use rns_core::resource::ResourceReceiver;
+use rns_core::resource::ResourceSender;
+use rns_core::resource::{ResourceAction, ResourceStatus};
 
 fn identity_encrypt(data: &[u8]) -> Vec<u8> {
     data.to_vec()

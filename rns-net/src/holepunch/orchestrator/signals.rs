@@ -7,7 +7,7 @@ pub(super) fn not_started(link_id: [u8; 16]) -> HolePunchManagerAction {
     HolePunchManagerAction::DirectConnectFailed {
         link_id,
         session_id: [0u8; 16],
-        reason: rns_core::holepunch::types::FAIL_NOT_STARTED,
+        reason: rns_core::holepunch::FAIL_NOT_STARTED,
     }
 }
 

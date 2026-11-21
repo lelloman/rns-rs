@@ -693,7 +693,7 @@ impl EngineAccess for EngineRef<'_> {
             .map(|e| (e.stats.outgoing_announce_freq(time::now()) * 1000.0) as i32)
     }
     fn link_state(&self, link_hash: &[u8; 16]) -> Option<u8> {
-        use rns_core::link::types::LinkState;
+        use rns_core::link::LinkState;
         self.env
             .link_manager
             .link_state(link_hash)

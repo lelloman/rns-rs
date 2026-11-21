@@ -198,7 +198,7 @@ impl HolePunchManager {
                                             HolePunchManagerAction::DirectConnectFailed {
                                                 link_id: completion.link_id,
                                                 session_id,
-                                                reason: rns_core::holepunch::types::FAIL_TIMEOUT,
+                                                reason: rns_core::holepunch::FAIL_TIMEOUT,
                                             },
                                         );
                                         continue;

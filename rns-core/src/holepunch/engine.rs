@@ -26,7 +26,7 @@ use super::types::*;
 /// `HKDF(ikm=derived_key, salt=session_id, info="rns-holepunch-v1")[:32]`.
 /// It keys the tags of the punch packets and their acknowledgements, and
 /// never appears on the wire.
-pub fn derive_punch_token(
+pub(crate) fn derive_punch_token(
     derived_key: &[u8],
     session_id: &[u8; 16],
 ) -> Result<[u8; 32], HolePunchError> {
