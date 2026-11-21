@@ -45,14 +45,9 @@ impl Driver {
                 id,
                 display_name,
                 short_name,
-            } => {
-                if let Some(display_name) = display_name {
-                    self.registry.display_names.insert(id, display_name);
-                }
-                if let Some(short_name) = short_name {
-                    self.registry.short_names.insert(id, short_name);
-                }
-            }
+            } => self
+                .registry
+                .record_interface_names(id, display_name, short_name),
             Event::InterfaceTelemetry {
                 interface_id,
                 telemetry,
@@ -83,10 +78,7 @@ impl Driver {
             Event::RegisterDestination {
                 dest_hash,
                 dest_type,
-            } => {
-                self.engine.register_destination(dest_hash, dest_type);
-                self.local_destinations.insert(dest_hash, dest_type);
-            }
+            } => self.register_local_destination(dest_hash, dest_type),
             Event::StoreSharedAnnounce {
                 dest_hash,
                 name_hash,
@@ -112,12 +104,7 @@ impl Driver {
                 }
             }
             Event::DeregisterDestination { dest_hash } => {
-                self.path_responses.responders.remove(&dest_hash);
-                self.path_responses.waiting_for_stamp.remove(&dest_hash);
-                self.decrypted_destinations.remove(&dest_hash);
-                self.engine.deregister_destination(&dest_hash);
-                self.local_destinations.remove(&dest_hash);
-                self.path_responses.shared_announces.remove(&dest_hash);
+                self.deregister_local_destination(dest_hash);
             }
             Event::Query(request, response_tx) => {
                 let response = self.handle_query_mut(*request);
@@ -178,35 +165,11 @@ impl Driver {
                 dest_hash,
                 dest_sig_pub_bytes,
                 response_tx,
-            } => {
-                if self.is_draining() {
-                    self.reject_new_work("create link");
-                    let _ = (dest_hash, dest_sig_pub_bytes);
-                    let _ = response_tx.send([0u8; 16]);
-                    return true;
-                }
-                self.handle_create_link(dest_hash, dest_sig_pub_bytes, response_tx);
-            }
+            } => self.handle_create_link_event(dest_hash, dest_sig_pub_bytes, response_tx),
             Event::DestinationStampReady { dest_hash } => {
-                if self.is_draining() {
-                    return true;
-                }
-                self.emit_builtin_announce_for(dest_hash, time::now());
-                self.send_stamp_waiting_path_responses(dest_hash);
+                self.handle_destination_stamp_ready(dest_hash)
             }
-            Event::SendStampedPathRequest(request) => {
-                if self.is_draining() {
-                    self.reject_new_work("send stamped path request");
-                    return true;
-                }
-                let crate::stamper::StampedPathRequest {
-                    destination_hash,
-                    tag,
-                    ext_payload,
-                    target,
-                } = *request;
-                self.send_path_request(destination_hash, &tag, Some(&ext_payload), target);
-            }
+            Event::SendStampedPathRequest(request) => self.handle_stamped_path_request(*request),
             Event::CompleteStampedLink(keys) => self.handle_complete_stamped_link(*keys),
             Event::SendRequest {
                 link_id,
@@ -219,16 +182,7 @@ impl Driver {
                 link_id,
                 request_id,
                 data,
-            } => {
-                self.finish_resource_preparations_for(&link_id);
-                let link_actions = self.link_manager.send_deferred_response(
-                    &link_id,
-                    &request_id,
-                    &data,
-                    &mut self.rng,
-                );
-                self.dispatch_link_actions(link_actions);
-            }
+            } => self.handle_send_deferred_response(link_id, request_id, data),
             Event::IdentifyOnLink {
                 link_id,
                 identity_prv_key,
@@ -245,14 +199,7 @@ impl Driver {
                 data,
                 metadata,
                 options,
-            } => {
-                if self.is_draining() {
-                    self.reject_new_work("send resource");
-                    let _ = (link_id, data, metadata, options);
-                    return true;
-                }
-                self.prepare_resource_with_options(link_id, data, metadata, options);
-            }
+            } => self.handle_send_resource(link_id, data, metadata, options),
             Event::SendResourceStream {
                 link_id,
                 transfer_id,
@@ -268,16 +215,9 @@ impl Driver {
                 metadata,
                 options,
             ),
-            Event::SetResourceStrategy { link_id, strategy } => {
-                use crate::link_manager::ResourceStrategy;
-                let strat = match strategy {
-                    0 => ResourceStrategy::AcceptNone,
-                    1 => ResourceStrategy::AcceptAll,
-                    2 => ResourceStrategy::AcceptApp,
-                    _ => ResourceStrategy::AcceptNone,
-                };
-                self.link_manager.set_resource_strategy(&link_id, strat);
-            }
+            Event::SetResourceStrategy { link_id, strategy } => self
+                .link_manager
+                .set_resource_strategy(&link_id, resource_strategy_from_wire(strategy)),
             Event::SetResourceReceiveMode { link_id, mode } => {
                 self.link_manager.set_resource_receive_mode(&link_id, mode);
             }
@@ -309,25 +249,14 @@ impl Driver {
                 context,
                 response_tx,
             } => self.handle_send_on_link(link_id, data, context, response_tx),
-            Event::RequestPath { dest_hash } => {
-                if self.is_draining() {
-                    self.reject_new_work("request path");
-                    let _ = dest_hash;
-                    return true;
-                }
-                self.handle_request_path(dest_hash);
-            }
+            Event::RequestPath { dest_hash } => self.handle_request_path_event(dest_hash),
             Event::RegisterProofStrategy {
                 dest_hash,
                 strategy,
                 signing_key,
-            } => {
-                let identity =
-                    signing_key.map(|key| rns_crypto::identity::Identity::from_private_key(&key));
-                self.proofs
-                    .strategies
-                    .insert(dest_hash, (strategy, identity));
-            }
+            } => self
+                .proofs
+                .register_strategy(dest_hash, strategy, signing_key),
             Event::ProposeDirectConnect { link_id } => self.handle_propose_direct_connect(link_id),
             Event::BlackholeDirectPath { link_id } => {
                 if !self.holepunch_manager.blackhole_direct(&link_id) {
@@ -374,12 +303,122 @@ impl Driver {
             | Event::BackbonePeerWriteStall { .. }
             | Event::BackbonePeerPenalty { .. }) => self.handle_backbone_peer_event(&event),
             Event::Shutdown => {
-                self.event_tx.link_send_pool().close();
-                self.pending_link_frames.clear();
-                self.graceful_shutdown();
+                self.shut_down();
                 return false;
             }
         }
         true
+    }
+
+    /// Register a local destination with the transport engine.
+    fn register_local_destination(&mut self, dest_hash: [u8; 16], dest_type: u8) {
+        self.engine.register_destination(dest_hash, dest_type);
+        self.local_destinations.insert(dest_hash, dest_type);
+    }
+
+    /// Forget a local destination: its path responses, its decryption and
+    /// its registration.
+    fn deregister_local_destination(&mut self, dest_hash: [u8; 16]) {
+        self.path_responses.responders.remove(&dest_hash);
+        self.path_responses.waiting_for_stamp.remove(&dest_hash);
+        self.decrypted_destinations.remove(&dest_hash);
+        self.engine.deregister_destination(&dest_hash);
+        self.local_destinations.remove(&dest_hash);
+        self.path_responses.shared_announces.remove(&dest_hash);
+    }
+
+    /// Open a link, unless draining, when the caller gets a zero link id.
+    fn handle_create_link_event(
+        &mut self,
+        dest_hash: [u8; 16],
+        dest_sig_pub_bytes: [u8; 32],
+        response_tx: std::sync::mpsc::Sender<[u8; 16]>,
+    ) {
+        if self.is_draining() {
+            self.reject_new_work("create link");
+            let _ = response_tx.send([0u8; 16]);
+            return;
+        }
+        self.handle_create_link(dest_hash, dest_sig_pub_bytes, response_tx);
+    }
+
+    /// The stamper finished a destination's stamp: send what waited on it.
+    fn handle_destination_stamp_ready(&mut self, dest_hash: [u8; 16]) {
+        if self.is_draining() {
+            return;
+        }
+        self.emit_builtin_announce_for(dest_hash, time::now());
+        self.send_stamp_waiting_path_responses(dest_hash);
+    }
+
+    /// The stamper finished a path request's stamp: send the request.
+    fn handle_stamped_path_request(&mut self, request: crate::stamper::StampedPathRequest) {
+        if self.is_draining() {
+            self.reject_new_work("send stamped path request");
+            return;
+        }
+        let crate::stamper::StampedPathRequest {
+            destination_hash,
+            tag,
+            ext_payload,
+            target,
+        } = request;
+        self.send_path_request(destination_hash, &tag, Some(&ext_payload), target);
+    }
+
+    /// Send the response to a request the application answers later.
+    fn handle_send_deferred_response(
+        &mut self,
+        link_id: [u8; 16],
+        request_id: [u8; 16],
+        data: Vec<u8>,
+    ) {
+        self.finish_resource_preparations_for(&link_id);
+        let link_actions =
+            self.link_manager
+                .send_deferred_response(&link_id, &request_id, &data, &mut self.rng);
+        self.dispatch_link_actions(link_actions);
+    }
+
+    /// Send a resource on a link, unless draining.
+    fn handle_send_resource(
+        &mut self,
+        link_id: [u8; 16],
+        data: Vec<u8>,
+        metadata: Option<Vec<u8>>,
+        options: crate::resource::ResourceSendOptions,
+    ) {
+        if self.is_draining() {
+            self.reject_new_work("send resource");
+            return;
+        }
+        self.prepare_resource_with_options(link_id, data, metadata, options);
+    }
+
+    /// Request a path, unless draining.
+    fn handle_request_path_event(&mut self, dest_hash: [u8; 16]) {
+        if self.is_draining() {
+            self.reject_new_work("request path");
+            return;
+        }
+        self.handle_request_path(dest_hash);
+    }
+
+    /// Stop the link send pool and shut the node down.
+    fn shut_down(&mut self) {
+        self.event_tx.link_send_pool().close();
+        self.pending_link_frames.clear();
+        self.graceful_shutdown();
+    }
+}
+
+/// The resource strategy a link's `SetResourceStrategy` number stands for.
+fn resource_strategy_from_wire(strategy: u8) -> crate::link_manager::ResourceStrategy {
+    use crate::link_manager::ResourceStrategy;
+    match strategy {
+        0 => ResourceStrategy::AcceptNone,
+        1 => ResourceStrategy::AcceptAll,
+        2 => ResourceStrategy::AcceptApp,
+        _ => ResourceStrategy::AcceptNone,
     }
 }

@@ -54,6 +54,19 @@ impl PacketProofs {
 }
 
 impl PacketProofs {
+    /// Prove the packets `dest_hash` receives as `strategy` says, signing
+    /// with `signing_key`.
+    pub(crate) fn register_strategy(
+        &mut self,
+        dest_hash: [u8; 16],
+        strategy: rns_core::types::ProofStrategy,
+        signing_key: Option<[u8; 64]>,
+    ) {
+        let identity =
+            signing_key.map(|key| rns_crypto::identity::Identity::from_private_key(&key));
+        self.strategies.insert(dest_hash, (strategy, identity));
+    }
+
     /// The tracked packet a received proof for `dest_hash` proves, and the
     /// proof's signature. Reticulum supports both proof formats:
     /// - explicit: [packet_hash:32][signature:64]

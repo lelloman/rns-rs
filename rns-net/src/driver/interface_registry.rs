@@ -70,6 +70,22 @@ impl InterfaceRegistry {
             link_traffic: LinkTrafficSampler::default(),
         }
     }
+
+    /// Keep the names upstream gives an interface, when it names it
+    /// otherwise than by its type and own name.
+    pub(crate) fn record_interface_names(
+        &mut self,
+        id: InterfaceId,
+        display_name: Option<String>,
+        short_name: Option<String>,
+    ) {
+        if let Some(display_name) = display_name {
+            self.display_names.insert(id, display_name);
+        }
+        if let Some(short_name) = short_name {
+            self.short_names.insert(id, short_name);
+        }
+    }
 }
 
 /// Upstream ef3e8086's `link_speed_rx`/`link_speed_tx`, which its traffic
