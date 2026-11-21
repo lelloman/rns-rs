@@ -470,7 +470,9 @@ pub(crate) fn ensure_config_file(config_dir: &Path) -> io::Result<bool> {
         "Could not load config file, creating default configuration file..."
     );
     fs::create_dir_all(config_dir)?;
-    fs::write(&config_file, DEFAULT_CONFIG)?;
+    // Written whole and renamed into place: a process starting alongside
+    // reads no partial config.
+    atomic_write(&config_file, DEFAULT_CONFIG)?;
     log::info!(
         target: crate::logging::NOTICE_TARGET,
         "Default config file created. Make any necessary changes in {}/config and restart Reticulum if needed.",
@@ -522,19 +524,41 @@ pub(crate) fn full_hash_prefix(public_key: &[u8; 64]) -> [u8; 16] {
     hash
 }
 
-/// Save an identity's private key to a file (64 bytes).
+/// Save an identity's private key to a file (64 bytes), readable by its
+/// owner only. The key is written to a temporary file in the same directory
+/// and renamed over `path`, so a process reading `path` meanwhile, such as
+/// a client starting with its instance, sees the old file or the new one
+/// and never a partly written one.
 pub fn save_identity(identity: &Identity, path: &Path) -> io::Result<()> {
+    let temp_path = write_identity_temp(identity, path)?;
+    replace_file(&temp_path, path).inspect_err(|_| {
+        let _ = fs::remove_file(&temp_path);
+    })
+}
+
+/// Write `identity`'s private key to a new temporary file next to `path`
+/// and flush it to disk, returning the temporary file's path.
+fn write_identity_temp(identity: &Identity, path: &Path) -> io::Result<PathBuf> {
     let private_key = identity
         .get_private_key()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Identity has no private key"))?;
+    let temp_path = temp_path_for(path);
     let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    options.open(path)?.write_all(&private_key)
+    let mut file = options.open(&temp_path)?;
+    match file.write_all(&private_key).and_then(|()| file.sync_all()) {
+        Ok(()) => Ok(temp_path),
+        Err(err) => {
+            drop(file);
+            let _ = fs::remove_file(&temp_path);
+            Err(err)
+        }
+    }
 }
 
 /// Load an identity from a private key file (64 bytes).
@@ -603,6 +627,19 @@ pub(crate) fn save_known_destinations(
 }
 
 fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
+    let temp_path = temp_path_for(path);
+    match fs::write(&temp_path, data).and_then(|_| replace_file(&temp_path, path)) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let _ = fs::remove_file(&temp_path);
+            Err(err)
+        }
+    }
+}
+
+/// A temporary file name next to `path`, unique to this process and moment,
+/// for writing a file that then replaces `path` in one rename.
+fn temp_path_for(path: &Path) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
         .file_name()
@@ -612,14 +649,7 @@ fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
-    let temp_path = parent.join(format!(".{file_name}.tmp.{}.{}", std::process::id(), nonce));
-    match fs::write(&temp_path, data).and_then(|_| replace_file(&temp_path, path)) {
-        Ok(()) => Ok(()),
-        Err(err) => {
-            let _ = fs::remove_file(&temp_path);
-            Err(err)
-        }
-    }
+    parent.join(format!(".{file_name}.tmp.{}.{}", std::process::id(), nonce))
 }
 
 fn replace_file(temp_path: &Path, path: &Path) -> io::Result<()> {
@@ -1382,6 +1412,31 @@ mod tests {
         let loaded = load_identity(&path).unwrap();
 
         assert_eq!(*loaded.hash(), original_hash);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_identity_replaces_the_file_whole() {
+        let dir = temp_dir();
+        let path = dir.join("identity");
+        let first = Identity::new(&mut OsRng);
+        save_identity(&first, &path).unwrap();
+        // A second name for the first file: rewriting the file in place
+        // would show the new key through it too.
+        let reader_view = dir.join("reader_view");
+        fs::hard_link(&path, &reader_view).unwrap();
+
+        let second = Identity::new(&mut OsRng);
+        save_identity(&second, &path).unwrap();
+
+        assert_eq!(*load_identity(&reader_view).unwrap().hash(), *first.hash());
+        assert_eq!(*load_identity(&path).unwrap().hash(), *second.hash());
+        let names: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 2, "temporary file left behind: {names:?}");
 
         let _ = fs::remove_dir_all(&dir);
     }
