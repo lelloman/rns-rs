@@ -20,7 +20,27 @@ struct Ready {
     id: u64,
     data: Vec<u8>,
     metadata: Option<Vec<u8>>,
-    compressed: Result<Option<Box<[u8]>>, String>,
+    compressed: Result<Option<Box<[u8]>>, PreparationError>,
+}
+
+/// Why a Resource's compression could not be prepared.
+#[derive(Debug, PartialEq)]
+enum PreparationError {
+    Panicked,
+    WorkerStopped,
+    Compression(bzip2::Error),
+}
+
+impl std::fmt::Display for PreparationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PreparationError::Panicked => f.write_str("Resource compression worker panicked"),
+            PreparationError::WorkerStopped => f.write_str("Resource compression worker stopped"),
+            PreparationError::Compression(error) => {
+                write!(f, "Resource compression failed: {error}")
+            }
+        }
+    }
 }
 struct Pending {
     link: [u8; 16],
@@ -76,7 +96,7 @@ impl Worker {
                             // Charge retained output by length, not an allocator growth heuristic.
                             .map(Vec::into_boxed_slice)
                     }))
-                    .map_err(|_| "Resource compression worker panicked".to_string());
+                    .map_err(|_| PreparationError::Panicked);
                     if stopped.load(Ordering::Acquire) {
                         break;
                     }
@@ -191,7 +211,7 @@ impl Worker {
                     id,
                     data: Vec::new(),
                     metadata: None,
-                    compressed: Err("Resource compression worker stopped".into()),
+                    compressed: Err(PreparationError::WorkerStopped),
                 }
             }
         };
@@ -283,7 +303,7 @@ impl FoldedCompression {
                     // Kept only when it saves space, as the worker does.
                     Ok((output.len() < input_len).then(|| output.into_boxed_slice()))
                 }
-                Err(error) => Err(format!("Resource compression failed: {error}")),
+                Err(error) => Err(PreparationError::Compression(error)),
             }
         };
         Some((
@@ -470,7 +490,7 @@ impl Driver {
             }
             Err(error) => self
                 .callbacks
-                .on_resource_failed(rns_core::types::LinkId(pending.link), error),
+                .on_resource_failed(rns_core::types::LinkId(pending.link), error.to_string()),
         }
     }
 
