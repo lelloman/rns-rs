@@ -15,6 +15,25 @@ pub(crate) enum ProgramBackend {
 }
 
 #[cfg(feature = "wasm")]
+impl ProgramBackend {
+    /// The WebAssembly program, if this is one.
+    pub(crate) fn wasm(&self) -> Option<&WasmProgram> {
+        match self {
+            ProgramBackend::Wasm(wasm) => Some(wasm),
+            _ => None,
+        }
+    }
+
+    /// [`Self::wasm`], mutably.
+    pub(crate) fn wasm_mut(&mut self) -> Option<&mut WasmProgram> {
+        match self {
+            ProgramBackend::Wasm(wasm) => Some(wasm),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(feature = "wasm")]
 pub(crate) struct WasmProgram {
     pub(crate) module: Module,
     pub(crate) export_name: String,

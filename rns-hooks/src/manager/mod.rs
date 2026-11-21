@@ -242,20 +242,19 @@ impl HookManager {
             return None;
         }
 
-        if matches!(program.backend, ProgramBackend::Builtin(_)) {
-            let result = match &program.backend {
-                ProgramBackend::Builtin(builtin) => builtin.execute(
-                    ctx,
-                    data_override,
-                    engine_access,
-                    now,
-                    provider_events_enabled,
-                ),
-                #[cfg(feature = "wasm")]
-                ProgramBackend::Wasm(_) => unreachable!(),
-                #[cfg(feature = "native")]
-                ProgramBackend::Native(_) => unreachable!(),
-            };
+        let builtin = match &program.backend {
+            ProgramBackend::Builtin(builtin) => Some(builtin),
+            #[cfg(any(feature = "wasm", feature = "native"))]
+            _ => None,
+        };
+        if let Some(builtin) = builtin {
+            let result = builtin.execute(
+                ctx,
+                data_override,
+                engine_access,
+                now,
+                provider_events_enabled,
+            );
             return match result {
                 Ok(mut exec) => {
                     program.record_success();
@@ -294,14 +293,10 @@ impl HookManager {
                     return None;
                 }
             };
-            let result = match &program.backend {
-                ProgramBackend::Native(native) => {
-                    native.execute(&ctx_bytes, engine_access, provider_events_enabled)
-                }
-                ProgramBackend::Builtin(_) => unreachable!(),
-                #[cfg(feature = "wasm")]
-                ProgramBackend::Wasm(_) => unreachable!(),
+            let ProgramBackend::Native(native) = &program.backend else {
+                return None;
             };
+            let result = native.execute(&ctx_bytes, engine_access, provider_events_enabled);
             return match result {
                 Ok(mut exec) => {
                     program.record_success();

@@ -337,7 +337,8 @@ impl TransportEngine {
             MultiPathDecision::AddAlternative => {
                 self.upsert_path_destination(ctx.packet.destination_hash, path_entry, ctx.now)
             }
-            MultiPathDecision::Reject => unreachable!("rejected decisions returned above"),
+            // Rejected announces return before this; none is stored.
+            MultiPathDecision::Reject => {}
         }
         (expires, announce_entry)
     }
