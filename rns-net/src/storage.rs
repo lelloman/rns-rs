@@ -576,7 +576,7 @@ pub(crate) fn store_new_identity(identity: Identity, path: &Path) -> io::Result<
 
 /// Store `identity` at `path` unless a file is there already. Returns
 /// whether it was stored.
-pub(crate) fn store_identity_if_absent(identity: &Identity, path: &Path) -> io::Result<bool> {
+fn store_identity_if_absent(identity: &Identity, path: &Path) -> io::Result<bool> {
     let temp_path = write_identity_temp(identity, path)?;
     // A hard link publishes the complete file, and fails if `path` exists.
     let stored = match fs::hard_link(&temp_path, path) {
@@ -1329,19 +1329,41 @@ pub fn transport_identity_path(paths: &StoragePaths) -> PathBuf {
     paths.storage.join("transport_identity")
 }
 
+/// The transport identity, in `storage/transport_identity` as upstream
+/// keeps it, so a config directory keeps its transport identity whichever
+/// implementation runs it. Directories written before only hold
+/// `storage/identities/identity`: that one is carried over. With neither,
+/// the identity `create` makes is stored in both places.
+///
+/// Upstream's `Transport.ensure_identity` runs in every program, so an
+/// instance and its clients, started on a new directory at once, may each
+/// create one: all of them keep the one stored first.
+pub fn load_or_create_transport_identity(
+    paths: &StoragePaths,
+    create: impl FnOnce() -> Identity,
+) -> io::Result<Identity> {
+    let path = transport_identity_path(paths);
+    if path.exists() {
+        return load_identity(&path);
+    }
+    let node_identity_path = paths.identities.join("identity");
+    if node_identity_path.exists() {
+        let identity = load_identity(&node_identity_path)?;
+        return store_new_identity(identity, &path);
+    }
+    let identity = store_new_identity(create(), &path)?;
+    store_identity_if_absent(&identity, &node_identity_path)?;
+    Ok(identity)
+}
+
 /// Load the identity whose private key keys the shared-instance RPC socket.
 ///
 /// The daemon (like Python's `Reticulum.rpc_key`) derives the RPC auth key
-/// from the persisted transport identity. A config dir the daemon has not yet
-/// initialized may lack it; the daemon then seeds it from the node identity,
-/// so fall back to `storage/identities/identity`.
+/// from the persisted transport identity. A client finding none creates it
+/// as the daemon does, as upstream's clients do, so a daemon starting at
+/// the same time ends up with the same one.
 pub fn load_rpc_identity(paths: &StoragePaths) -> io::Result<Identity> {
-    let path = transport_identity_path(paths);
-    if path.exists() {
-        load_identity(&path)
-    } else {
-        load_or_create_identity(&paths.identities)
-    }
+    load_or_create_transport_identity(paths, || Identity::new(&mut OsRng))
 }
 
 #[cfg(test)]
@@ -2135,14 +2157,39 @@ mod tests {
     }
 
     #[test]
+    fn a_transport_identity_carries_over_the_node_identity() {
+        let dir = temp_dir();
+        let paths = ensure_storage_dirs(&dir).unwrap();
+        let node = Identity::new(&mut OsRng);
+        save_identity(&node, &paths.identities.join("identity")).unwrap();
+
+        let rpc = load_rpc_identity(&paths).unwrap();
+        assert_eq!(*rpc.hash(), *node.hash());
+        assert_eq!(
+            *load_identity(&transport_identity_path(&paths))
+                .unwrap()
+                .hash(),
+            *node.hash()
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn load_rpc_identity_prefers_transport_identity() {
         let dir = temp_dir();
         let paths = ensure_storage_dirs(&dir).unwrap();
 
-        // Without transport_identity, fall back to identities/identity.
+        // Without transport_identity, create it as the daemon does.
         let node = load_rpc_identity(&paths).unwrap();
         assert_eq!(
             *load_identity(&paths.identities.join("identity"))
+                .unwrap()
+                .hash(),
+            *node.hash()
+        );
+        assert_eq!(
+            *load_identity(&transport_identity_path(&paths))
                 .unwrap()
                 .hash(),
             *node.hash()
