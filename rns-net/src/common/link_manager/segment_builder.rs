@@ -14,7 +14,24 @@ use rns_core::resource::ResourceSender;
 use std::sync::mpsc;
 
 type Key = (LinkId, [u8; 32]);
-type Built = Result<Box<ResourceSender>, String>;
+type Built = Result<Box<ResourceSender>, BuildError>;
+
+/// Why a segment could not be built on the builder thread.
+#[derive(Debug)]
+enum BuildError {
+    Token(rns_crypto::token::TokenError),
+    Sender(rns_core::resource::ResourceError),
+}
+
+impl std::fmt::Display for BuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            // Reported in its Debug form, as it always was.
+            BuildError::Token(error) => write!(f, "{error:?}"),
+            BuildError::Sender(error) => error.fmt(f),
+        }
+    }
+}
 
 /// A stream's next segment to build: its data, read from the stream by the
 /// driver, and what encrypting and cutting it takes.
@@ -49,7 +66,7 @@ impl SegmentBuild {
     /// (`build_stream_segment`); the driver then applies the stream's and
     /// link's settings.
     fn run(&self) -> Built {
-        let token = rns_crypto::token::Token::new(&self.key).map_err(|e| format!("{e:?}"))?;
+        let token = rns_crypto::token::Token::new(&self.key).map_err(BuildError::Token)?;
         ResourceSender::new(
             &self.data,
             None,
@@ -68,7 +85,7 @@ impl SegmentBuild {
             6.0,
         )
         .map(Box::new)
-        .map_err(|error| error.to_string())
+        .map_err(BuildError::Sender)
     }
 }
 
@@ -281,7 +298,7 @@ impl LinkManager {
                 Self::configure_sender(link, &mut sender, stream.app_flag);
                 Ok(sender)
             }
-            Err(error) => Err(ResourceTransferError::Protocol(error)),
+            Err(error) => Err(ResourceTransferError::Protocol(error.to_string())),
         })
     }
 
