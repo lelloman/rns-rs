@@ -55,6 +55,13 @@ pub(crate) struct PathResponses {
 }
 
 impl PathResponses {
+    /// How long a path-response announce is replayed for a repeated tag
+    /// (Python `Destination.PR_TAG_WINDOW`).
+    pub(crate) const LOCAL_PATH_RESPONSE_WINDOW: f64 = 30.0;
+
+    /// Upper bound on cached path-response announces.
+    pub(crate) const LOCAL_PATH_RESPONSE_MAX_ENTRIES: usize = 1024;
+
     pub(crate) fn new() -> Self {
         Self {
             shared_announces: HashMap::new(),
@@ -63,5 +70,39 @@ impl PathResponses {
             waiting_for_stamp: HashMap::new(),
             local_cache: HashMap::new(),
         }
+    }
+
+    /// Drop path-response announces older than the replay window.
+    pub(crate) fn expire_local_responses(&mut self, now: f64) {
+        self.local_cache
+            .retain(|_, (created, _)| now - *created <= Self::LOCAL_PATH_RESPONSE_WINDOW);
+    }
+
+    /// Keep a path-response announce sent for `key` to replay, making room
+    /// by dropping the oldest when the cache is full.
+    pub(crate) fn cache_local_response(
+        &mut self,
+        key: ([u8; 16], Vec<u8>),
+        now: f64,
+        raw: Vec<u8>,
+    ) {
+        if self.local_cache.len() >= Self::LOCAL_PATH_RESPONSE_MAX_ENTRIES {
+            if let Some(oldest) = self
+                .local_cache
+                .iter()
+                .min_by(|a, b| a.1 .0.total_cmp(&b.1 .0))
+                .map(|(key, _)| key.clone())
+            {
+                self.local_cache.remove(&oldest);
+            }
+        }
+        self.local_cache.insert(key, (now, raw));
+    }
+
+    /// Forget a local destination's path responses and announce records.
+    pub(crate) fn forget(&mut self, dest_hash: &[u8; 16]) {
+        self.responders.remove(dest_hash);
+        self.waiting_for_stamp.remove(dest_hash);
+        self.shared_announces.remove(dest_hash);
     }
 }

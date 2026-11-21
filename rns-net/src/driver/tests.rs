@@ -14700,12 +14700,12 @@ fn local_path_response_replays_identical_bytes_for_repeated_tag() {
 
     // Entries expire after the replay window.
     assert_eq!(driver.path_responses.local_cache.len(), 6);
-    let later = time::now() + Driver::LOCAL_PATH_RESPONSE_WINDOW + 1.0;
-    driver.expire_local_path_responses(later);
+    let later = time::now() + PathResponses::LOCAL_PATH_RESPONSE_WINDOW + 1.0;
+    driver.path_responses.expire_local_responses(later);
     assert!(driver.path_responses.local_cache.is_empty());
 
     // The cache is bounded.
-    for i in 0..(Driver::LOCAL_PATH_RESPONSE_MAX_ENTRIES + 5) {
+    for i in 0..(PathResponses::LOCAL_PATH_RESPONSE_MAX_ENTRIES + 5) {
         let tag = (i as u32).to_be_bytes();
         driver.dispatch_all(vec![TransportAction::AnnounceLocalPathResponse {
             destination_hash: probe_dest,
@@ -14715,7 +14715,7 @@ fn local_path_response_replays_identical_bytes_for_repeated_tag() {
     }
     assert_eq!(
         driver.path_responses.local_cache.len(),
-        Driver::LOCAL_PATH_RESPONSE_MAX_ENTRIES
+        PathResponses::LOCAL_PATH_RESPONSE_MAX_ENTRIES
     );
 }
 

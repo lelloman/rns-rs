@@ -319,12 +319,10 @@ impl Driver {
     /// Forget a local destination: its path responses, its decryption and
     /// its registration.
     fn deregister_local_destination(&mut self, dest_hash: [u8; 16]) {
-        self.path_responses.responders.remove(&dest_hash);
-        self.path_responses.waiting_for_stamp.remove(&dest_hash);
+        self.path_responses.forget(&dest_hash);
         self.decrypted_destinations.remove(&dest_hash);
         self.engine.deregister_destination(&dest_hash);
         self.local_destinations.remove(&dest_hash);
-        self.path_responses.shared_announces.remove(&dest_hash);
     }
 
     /// Open a link, unless draining, when the caller gets a zero link id.
