@@ -5,7 +5,7 @@ exclude = ["rns-esp32", "vendor/maybe-async-cfg", "fuzz"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license-file = "LICENSE"
 publish = false
@@ -36,10 +36,10 @@ unwrap_used = "warn"
 expect_used = "warn"
 
 [workspace.dependencies]
-rns-crypto = { version = "0.3.0", path = "rns-crypto" }
-rns-core = { version = "0.9.0", path = "rns-core" }
-rns-net = { version = "0.14.0", path = "rns-net" }
-rns-hooks = { version = "0.3.0", path = "rns-hooks", default-features = false }
+rns-crypto = { version = "0.4.0", path = "rns-crypto" }
+rns-core = { version = "0.10.0", path = "rns-core" }
+rns-net = { version = "0.15.0", path = "rns-net" }
+rns-hooks = { version = "0.4.0", path = "rns-hooks", default-features = false }
 rns-tun = { version = "0.1.0", path = "rns-tun", default-features = false }
 
 # Compile the crypto crate, its curve arithmetic and its hashing stack with

@@ -1,7 +1,7 @@
 [package]
 name = "rns-core"
 description = "Wire protocol, transport routing, and link/resource engine for the Reticulum Network Stack"
-version = "0.9.0"
+version = "0.10.0"
 edition.workspace = true
 license-file.workspace = true
 publish = ["crates-io"]
@@ -15,14 +15,14 @@ std = ["rns-crypto/std"]
 fuzzing = ["rns-crypto/test-rng"]
 
 [dependencies]
-rns-crypto = { version = "0.3.0", path = "../rns-crypto", default-features = false }
+rns-crypto = { version = "0.4.0", path = "../rns-crypto", default-features = false }
 log = "0.4"
 libm = "0.2"
 hashbrown = { version = "0.17", default-features = false }
 foldhash = { version = "0.2", default-features = false }
 
 [dev-dependencies]
-rns-crypto = { version = "0.3.0", path = "../rns-crypto", default-features = false, features = ["test-rng"] }
+rns-crypto = { version = "0.4.0", path = "../rns-crypto", default-features = false, features = ["test-rng"] }
 criterion = { version = "0.8", features = ["html_reports"] }
 serde_json = "1"
 proptest = { version = "1.9", default-features = false, features = ["std"] }
