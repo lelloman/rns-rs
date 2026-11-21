@@ -114,19 +114,19 @@ pub const HELLO_RETRY_INTERVAL: f64 = 2.5;
 /// Interval between UPGRADE_REQUEST retransmissions while the initiator waits
 /// for the responder's ACCEPT and READY. The responder answers a repeated
 /// request with the replies it already sent.
-pub const REQUEST_RETRY_INTERVAL: f64 = 2.0;
+pub(crate) const REQUEST_RETRY_INTERVAL: f64 = 2.0;
 
 /// Time to wait for UPGRADE_ACCEPT after sending UPGRADE_REQUEST.
-pub const PROPOSE_TIMEOUT: f64 = 10.0;
+pub(crate) const PROPOSE_TIMEOUT: f64 = 10.0;
 
 /// Time to wait for endpoint discovery (probe).
-pub const DISCOVER_TIMEOUT: f64 = 10.0;
+pub(crate) const DISCOVER_TIMEOUT: f64 = 10.0;
 
 /// Time to wait for UPGRADE_READY after receiving UPGRADE_ACCEPT.
-pub const READY_TIMEOUT: f64 = 10.0;
+pub(crate) const READY_TIMEOUT: f64 = 10.0;
 
 /// Total time for the punch phase.
-pub const PUNCH_TIMEOUT: f64 = 10.0;
+pub(crate) const PUNCH_TIMEOUT: f64 = 10.0;
 
 /// Most host candidates (addresses of the sender's own interfaces, for a
 /// peer on the same network) one `UPGRADE_REQUEST` or `UPGRADE_READY`

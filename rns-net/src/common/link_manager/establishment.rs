@@ -192,9 +192,7 @@ impl LinkManager {
         if let Some(signalling) = signalling {
             log::debug!(
                 "Incoming link request with mode {}",
-                rns_core::link::types::mode_description(
-                    (signalling & constants::LINK_MODE_BYTEMASK) >> 5
-                )
+                rns_core::link::mode_description((signalling & constants::LINK_MODE_BYTEMASK) >> 5)
             );
         } else if data.len() == constants::LINK_ECPUBSIZE {
             log::debug!(

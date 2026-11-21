@@ -7,7 +7,7 @@
 //! with collection toggled on that function, so setup is excluded from both.
 use crate::heap::COUNTERS;
 use anyhow::{bail, ensure, Context, Result};
-use rns_core::buffer::types::NoopCompressor;
+use rns_core::buffer::NoopCompressor;
 use rns_core::constants;
 use rns_core::msgpack::{self, Value};
 use rns_core::packet::{PacketFlags, RawPacket};

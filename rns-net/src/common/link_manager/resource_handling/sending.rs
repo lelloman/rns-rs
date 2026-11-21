@@ -217,7 +217,7 @@ impl LinkManager {
         data: &[u8],
         metadata: Option<&[u8]>,
         options: ResourceSendOptions,
-        compressor: &dyn rns_core::buffer::types::Compressor,
+        compressor: &dyn rns_core::buffer::Compressor,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
         let link = match self.links.get_mut(link_id) {

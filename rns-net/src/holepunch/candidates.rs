@@ -11,7 +11,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 
-use rns_core::holepunch::types::MAX_HOST_CANDIDATES;
+use rns_core::holepunch::MAX_HOST_CANDIDATES;
 
 /// An address of one of this node's interfaces, with its prefix length.
 #[derive(Debug, Clone, PartialEq, Eq)]
