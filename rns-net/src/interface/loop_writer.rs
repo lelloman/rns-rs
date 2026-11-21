@@ -353,7 +353,7 @@ impl LoopWriter {
     fn drain(&mut self) {
         let sent_before = self.sent;
         while !self.failed && self.head < self.out.len() {
-            let pending = &self.out[self.head..];
+            let pending = self.out.get(self.head..).unwrap_or_default();
             // SAFETY: `pending` is a valid initialized slice; MSG_DONTWAIT
             // makes this call nonblocking without changing the socket's mode,
             // which a reader on a duplicate of the descriptor may rely on. A

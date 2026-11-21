@@ -35,7 +35,9 @@ impl ProbeJob {
     /// asked on the driver loop, or report the probe failed.
     fn ask_from(self, next: usize, mut serve: impl FnMut(Box<ProbeSource>)) {
         for index in next..self.servers.len() {
-            let server = self.servers[index];
+            let Some(&server) = self.servers.get(index) else {
+                break;
+            };
             match ask(server, &self) {
                 Ok((socket, registration, request)) => {
                     serve(Box::new(ProbeSource {
@@ -103,11 +105,9 @@ impl ProbeSource {
     /// Move on to the next server, if any.
     fn fail_over(&mut self, cx: &mut LoopContext<'_>, reason: &str) -> SourceStatus {
         if let Some(job) = self.job.take() {
-            log::debug!(
-                "Probe server {} failed: {}",
-                job.servers[self.index],
-                reason
-            );
+            if let Some(server) = job.servers.get(self.index) {
+                log::debug!("Probe server {} failed: {}", server, reason);
+            }
             job.ask_from(self.index + 1, |source| {
                 cx.add_source(super::next_loop_key(), source)
             });
@@ -134,12 +134,19 @@ impl LoopSource for ProbeSource {
                 // failed: the next server, at once.
                 Err(e) => return self.fail_over(cx, &e.to_string()),
             };
-            let Some(server) = self.job.as_ref().map(|job| job.servers[self.index]) else {
+            let Some(server) = self
+                .job
+                .as_ref()
+                .and_then(|job| job.servers.get(self.index).copied())
+            else {
                 return SourceStatus::Remove;
             };
             // Anything but the reply, from the server asked, is ignored
             // until the deadline.
-            let Some(observed) = self.request.reply_from(&cx.buf[..len], src, server) else {
+            let Some(observed) =
+                self.request
+                    .reply_from(cx.buf.get(..len).unwrap_or_default(), src, server)
+            else {
                 continue;
             };
             let (Some(job), Some(socket)) = (self.job.take(), self.socket.take()) else {

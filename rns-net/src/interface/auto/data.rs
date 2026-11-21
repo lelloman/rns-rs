@@ -97,7 +97,9 @@ pub(super) fn data_receiver_loop(
     while running.load(Ordering::Relaxed) {
         match socket.recv_from(&mut buf) {
             Ok((n, src)) => {
-                if let Some(frame) = handle_data(&shared, if_index, &buf[..n], src) {
+                if let Some(frame) =
+                    handle_data(&shared, if_index, buf.get(..n).unwrap_or_default(), src)
+                {
                     if tx.send(frame).is_err() {
                         return;
                     }

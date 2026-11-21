@@ -100,13 +100,12 @@ impl WdclFrame {
 
     /// Parses a frame; `None` if shorter than the five-byte header.
     pub fn decode(data: &[u8]) -> Option<Self> {
-        if data.len() < 5 {
-            return None;
-        }
+        let (destination, rest) = data.split_first_chunk::<4>()?;
+        let (&frame_type, payload) = rest.split_first()?;
         Some(Self {
-            destination: data[..4].try_into().ok()?,
-            frame_type: data[4],
-            payload: data[5..].to_vec(),
+            destination: *destination,
+            frame_type,
+            payload: payload.to_vec(),
         })
     }
 
@@ -231,8 +230,9 @@ pub fn parse_device_frame(data: &[u8], host_switch_id: [u8; 4]) -> Option<WeaveI
     let frame = WdclFrame::decode(data)?;
     match frame.frame_type {
         WDCL_T_DISCOVER if frame.payload.len() == 96 => {
-            let key: [u8; 32] = frame.payload[..32].try_into().ok()?;
-            let signature: [u8; 64] = frame.payload[32..].try_into().ok()?;
+            let (key, signature) = frame.payload.split_first_chunk::<32>()?;
+            let key = *key;
+            let signature: [u8; 64] = signature.try_into().ok()?;
             if !Ed25519PublicKey::from_bytes(&key)
                 .ok()?
                 .verify(&signature, &frame.destination)
@@ -245,27 +245,37 @@ pub fn parse_device_frame(data: &[u8], host_switch_id: [u8; 4]) -> Option<WeaveI
             })
         }
         WDCL_T_ENDPOINT_PKT if frame.destination == host_switch_id && frame.payload.len() > 8 => {
-            let split = frame.payload.len() - 8;
+            let (packet, source) = frame.payload.split_last_chunk::<8>()?;
             Some(WeaveInput::EndpointPacket {
-                source: frame.payload[split..].try_into().ok()?,
-                packet: frame.payload[..split].to_vec(),
+                source: *source,
+                packet: packet.to_vec(),
             })
         }
         WDCL_T_LOG if frame.payload.len() >= 9 => {
             // Firmware prepends a flow byte to the eight-byte log header.
-            let data = &frame.payload[1..];
+            // [flow:1][timestamp:4][level:1][event:2][data]
+            let [_, t0, t1, t2, t3, level, e0, e1, data @ ..] = frame.payload.as_slice() else {
+                return None;
+            };
             Some(WeaveInput::Log(WeaveLogFrame {
-                timestamp: u32::from_be_bytes(data[..4].try_into().ok()?) as f64 / 1000.0,
-                level: data[4],
-                event: u16::from_be_bytes(data[5..7].try_into().ok()?),
-                data: data[7..].to_vec(),
+                timestamp: u32::from_be_bytes([*t0, *t1, *t2, *t3]) as f64 / 1000.0,
+                level: *level,
+                event: u16::from_be_bytes([*e0, *e1]),
+                data: data.to_vec(),
             }))
         }
-        WDCL_T_DISP if frame.payload.len() >= 9 => Some(WeaveInput::Display {
-            offset: u32::from_be_bytes(frame.payload[1..5].try_into().ok()?) as usize,
-            total: u32::from_be_bytes(frame.payload[5..9].try_into().ok()?) as usize,
-            fragment: frame.payload[9..].to_vec(),
-        }),
+        WDCL_T_DISP if frame.payload.len() >= 9 => {
+            // [flow:1][offset:4][total:4][fragment]
+            let [_, o0, o1, o2, o3, t0, t1, t2, t3, fragment @ ..] = frame.payload.as_slice()
+            else {
+                return None;
+            };
+            Some(WeaveInput::Display {
+                offset: u32::from_be_bytes([*o0, *o1, *o2, *o3]) as usize,
+                total: u32::from_be_bytes([*t0, *t1, *t2, *t3]) as usize,
+                fragment: fragment.to_vec(),
+            })
+        }
         _ => Some(WeaveInput::Unknown(frame)),
     }
 }
@@ -386,7 +396,9 @@ impl WeaveState {
             return false;
         }
         self.display.resize(total, 0);
-        self.display[offset..offset + fragment.len()].copy_from_slice(fragment);
+        if let Some(slots) = self.display.get_mut(offset..offset + fragment.len()) {
+            slots.copy_from_slice(fragment);
+        }
         offset + fragment.len() == total
     }
 }
@@ -527,7 +539,7 @@ impl WeaveSession {
                         "serial port closed",
                     ));
                 }
-                for frame in decoder.feed(&buffer[..read]) {
+                for frame in decoder.feed(buffer.get(..read).unwrap_or_default()) {
                     self.process_frame(&frame)?;
                 }
             }
@@ -972,7 +984,7 @@ impl WeaveSource {
             }
             let n = n as usize;
             read += n;
-            for frame in self.decoder.feed(&cx.buf[..n]) {
+            for frame in self.decoder.feed(cx.buf.get(..n).unwrap_or_default()) {
                 self.session.process_frame(&frame)?;
             }
             if n < cx.buf.len() {

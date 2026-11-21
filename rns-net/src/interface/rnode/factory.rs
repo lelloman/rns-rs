@@ -160,8 +160,9 @@ impl InterfaceFactory for RNodeFactory {
         let (pairs, control) = start_with_control(rnode_config.clone(), ctx.tx)?;
 
         let mut subs = Vec::with_capacity(pairs.len());
-        for (index, (sub_id, writer)) in pairs.into_iter().enumerate() {
-            let sub_name = rnode_config.subinterfaces[index].name.clone();
+        let pairs = pairs.into_iter().zip(&rnode_config.subinterfaces);
+        for (index, ((sub_id, writer), sub)) in pairs.enumerate() {
+            let sub_name = sub.name.clone();
 
             let info = InterfaceInfo {
                 stamp_costs: Default::default(),
@@ -172,7 +173,7 @@ impl InterfaceFactory for RNodeFactory {
                 recursive_prs: ctx.recursive_prs,
                 announces_from_internal: ctx.announces_from_internal,
                 announces_to_internal: ctx.announces_to_internal,
-                out_capable: rnode_config.subinterfaces[index].outgoing,
+                out_capable: sub.outgoing,
                 in_capable: true,
                 bitrate: sub_bitrates.get(index).copied(),
                 airtime_profile: airtime_profiles.get(index).copied(),

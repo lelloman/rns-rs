@@ -331,7 +331,7 @@ fn reader_loop(
                 }
             }
             Ok(n) => {
-                for event in decoder.feed(&buf[..n]) {
+                for event in decoder.feed(buf.get(..n).unwrap_or_default()) {
                     match event {
                         kiss::KissEvent::DataFrame(data) => {
                             let data = if config.ax25_source.is_some() {

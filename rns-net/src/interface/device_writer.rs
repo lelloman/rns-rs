@@ -159,7 +159,10 @@ impl<T: Write + AsRawFd> DeviceWriter<T> {
         while !driven.failed && driven.head < driven.out.len() {
             // Through the transport, which may frame what it writes (a BLE
             // connection writes at most one attribute value at a time).
-            let written = match self.transport.write(&driven.out[driven.head..]) {
+            let written = match self
+                .transport
+                .write(driven.out.get(driven.head..).unwrap_or_default())
+            {
                 Ok(written) => written,
                 Err(error) => match error.kind() {
                     io::ErrorKind::Interrupted => continue,

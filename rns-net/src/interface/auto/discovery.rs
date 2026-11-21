@@ -79,15 +79,13 @@ impl DiscoveryHandler {
     /// Handle one discovery datagram, returning the event that brings up
     /// a newly admitted peer.
     pub(super) fn handle(&self, datagram: &[u8], src: std::net::SocketAddr) -> Option<Event> {
-        if datagram.len() < 32 {
-            return None;
-        }
+        let peering_hash = datagram.first_chunk::<32>()?;
         // Extract source IPv6 address
         let std::net::SocketAddr::V6(src_addr) = src else {
             return None;
         };
         let peer_key = peer_key_from_src(&src_addr, self.if_index);
-        let peering_hash = &datagram[..32];
+        let peering_hash = peering_hash.as_slice();
         let expected = compute_discovery_token(&self.group_id, &peer_key.link_local_addr);
         if peering_hash != expected {
             log::debug!(
@@ -142,7 +140,7 @@ pub(super) fn discovery_receiver_loop(
     while running.load(Ordering::Relaxed) {
         match socket.recv_from(&mut buf) {
             Ok((n, src)) => {
-                if let Some(event) = handler.handle(&buf[..n], src) {
+                if let Some(event) = handler.handle(buf.get(..n).unwrap_or_default(), src) {
                     let _ = tx.send(event);
                 }
             }

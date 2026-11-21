@@ -84,18 +84,27 @@ impl Keepalives {
 
     /// Whether `data` is a valid keepalive newer than any seen before.
     fn accept(&mut self, data: &[u8]) -> bool {
-        if data.len() != KEEPALIVE_LEN
-            || &data[..4] != KEEPALIVE_MAGIC
-            || data[4..20] != self.session_id
-        {
+        if data.len() != KEEPALIVE_LEN {
             return false;
         }
-        let signed = &data[..KEEPALIVE_LEN - KEEPALIVE_TAG_LEN];
+        // [magic:4][session id:16][counter:8][tag]
+        let Some((signed, received_tag)) = data.split_last_chunk::<KEEPALIVE_TAG_LEN>() else {
+            return false;
+        };
+        let Some((magic, rest)) = signed.split_first_chunk::<4>() else {
+            return false;
+        };
+        let Some((session_id, rest)) = rest.split_first_chunk::<16>() else {
+            return false;
+        };
+        if magic != KEEPALIVE_MAGIC || *session_id != self.session_id {
+            return false;
+        }
         let tag = rns_crypto::hmac::hmac_sha256(&self.key, signed);
-        if !super::constant_time_eq(&tag[..KEEPALIVE_TAG_LEN], &data[signed.len()..]) {
+        if !super::constant_time_eq(&tag[..KEEPALIVE_TAG_LEN], received_tag) {
             return false;
         }
-        let Some(counter) = data.get(20..).and_then(<[u8]>::first_chunk) else {
+        let Some(counter) = rest.first_chunk() else {
             return false;
         };
         let counter = u64::from_be_bytes(*counter);
@@ -110,7 +119,10 @@ impl Keepalives {
 /// Datagrams that are not Reticulum packets: keepalives, and punch packets
 /// and acknowledgements still arriving after the punch.
 fn is_control_datagram(data: &[u8]) -> bool {
-    data.len() >= 4 && matches!(&data[..4], b"RNSK" | b"RNSH" | b"RNSA" | b"RNSM" | b"RNSN")
+    matches!(
+        data.first_chunk::<4>(),
+        Some(b"RNSK" | b"RNSH" | b"RNSA" | b"RNSM" | b"RNSN")
+    )
 }
 
 /// Whether `frame` is a packet of the link the direct interface belongs to:
@@ -469,7 +481,7 @@ fn run_reader(mut reader: DirectReader) {
 
         match reader.socket.recv_from(&mut buf) {
             Ok((len, src)) => {
-                if let Some(frame) = reader.receive(&buf[..len], src) {
+                if let Some(frame) = reader.receive(buf.get(..len).unwrap_or_default(), src) {
                     let _ = reader.tx.send(frame);
                 }
                 for event in reader.pending.drain(..) {
@@ -529,7 +541,7 @@ impl LoopSource for DirectSource {
                     return SourceStatus::Remove;
                 }
             };
-            if let Some(frame) = reader.receive(&cx.buf[..len], src) {
+            if let Some(frame) = reader.receive(cx.buf.get(..len).unwrap_or_default(), src) {
                 frames.push(frame);
             }
             frames.append(&mut reader.pending);
@@ -571,8 +583,8 @@ pub(crate) fn fuzz_keepalive(data: &[u8]) {
     let session_id = [0x4d; 16];
     let mut keepalives = Keepalives::new(key, session_id);
     let _ = keepalives.accept(data);
-    if data.len() >= KEEPALIVE_LEN - KEEPALIVE_TAG_LEN {
-        let mut packet = data[..KEEPALIVE_LEN - KEEPALIVE_TAG_LEN].to_vec();
+    if let Some(signed) = data.get(..KEEPALIVE_LEN - KEEPALIVE_TAG_LEN) {
+        let mut packet = signed.to_vec();
         let tag = rns_crypto::hmac::hmac_sha256(&key, &packet);
         packet.extend_from_slice(&tag[..KEEPALIVE_TAG_LEN]);
         let _ = keepalives.accept(&packet);

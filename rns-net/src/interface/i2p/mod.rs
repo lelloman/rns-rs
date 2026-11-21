@@ -600,7 +600,7 @@ fn watch_session(control: &mut std::net::TcpStream, name: &str) {
                 log::warn!("[{}] the SAM bridge closed the I2P session", name);
                 return;
             }
-            Ok(n) => lines.feed(&buf[..n], |reply| {
+            Ok(n) => lines.feed(buf.get(..n).unwrap_or_default(), |reply| {
                 let _ = control.write_all(reply.as_bytes());
             }),
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
@@ -742,7 +742,7 @@ fn peer_reader_loop(
             }
             Ok(n) => {
                 tunnel.note_read();
-                for frame in decoder.feed(&buf[..n]) {
+                for frame in decoder.feed(buf.get(..n).unwrap_or_default()) {
                     if tx
                         .send(Event::Frame {
                             interface_id: id,

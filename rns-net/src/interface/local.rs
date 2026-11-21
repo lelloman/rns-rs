@@ -575,7 +575,7 @@ fn unix_reader_loop(
                 if let Some(ref sleep_hold) = sleep_hold {
                     sleep_hold.refresh();
                 }
-                for frame in decoder.feed(&buf[..n]) {
+                for frame in decoder.feed(buf.get(..n).unwrap_or_default()) {
                     if tx
                         .send(Event::Frame {
                             interface_id: id,
@@ -739,7 +739,7 @@ fn tcp_reader_loop(
                 if let Some(ref sleep_hold) = sleep_hold {
                     sleep_hold.refresh();
                 }
-                for frame in decoder.feed(&buf[..n]) {
+                for frame in decoder.feed(buf.get(..n).unwrap_or_default()) {
                     if tx
                         .send(Event::Frame {
                             interface_id: id,
@@ -958,7 +958,7 @@ fn local_client_reader_loop(
                 decoder = frame_decoder(0);
             }
             Ok(n) => {
-                for frame in decoder.feed(&buf[..n]) {
+                for frame in decoder.feed(buf.get(..n).unwrap_or_default()) {
                     if tx
                         .send(Event::Frame {
                             interface_id: id,

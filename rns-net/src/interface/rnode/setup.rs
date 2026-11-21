@@ -338,7 +338,7 @@ fn read_reports(
                 ))
             }
             Ok(n) => {
-                for event in decoder.feed(&buf[..n]) {
+                for event in decoder.feed(buf.get(..n).unwrap_or_default()) {
                     reports.apply(&event, name);
                 }
             }

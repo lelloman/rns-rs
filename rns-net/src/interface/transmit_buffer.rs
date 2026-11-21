@@ -215,7 +215,7 @@ impl TransmitBuffer {
                 self.pop_head();
                 continue;
             }
-            let write_result = writer.write(&chunk.data[self.head_offset..]);
+            let write_result = writer.write(chunk.data.get(self.head_offset..).unwrap_or_default());
 
             match write_result {
                 Ok(0) => break,

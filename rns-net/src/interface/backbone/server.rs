@@ -402,7 +402,9 @@ impl Server {
             let height = self.tx.inbound_queue_snapshot().heights[0];
             if height > self.ingress_thresholds.mid {
                 if let Some(key) = self.throttle_busiest_ingress(state) {
-                    self.set_readable(key, state.clients[&key].fd, false);
+                    if let Some(client) = state.clients.get(&key) {
+                        self.set_readable(key, client.fd, false);
+                    }
                 }
             } else if height < self.ingress_thresholds.low {
                 self.release_one_ingress(state, now);
@@ -805,7 +807,9 @@ impl LoopSource for PeerSource {
                 if key == self.key {
                     return SourceStatus::Hold;
                 }
-                server.set_readable(key, state.clients[&key].fd, false);
+                if let Some(client) = state.clients.get(&key) {
+                    server.set_readable(key, client.fd, false);
+                }
             }
         }
         status

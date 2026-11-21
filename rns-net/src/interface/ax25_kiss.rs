@@ -76,19 +76,19 @@ pub fn encode_ui_frame(source: &Ax25Address, payload: &[u8]) -> Vec<u8> {
 
 /// Payload of an AX.25 UI frame addressed to `APZRNS-0`, or `None` if the frame is not one.
 pub fn decode_ui_frame(frame: &[u8]) -> Option<&[u8]> {
-    if frame.len() < HEADER_LEN
-        || frame[14] != CONTROL_UI
-        || frame[15] != PID_NO_LAYER_3
-        || frame[6] & 1 != 0
-        || frame[13] & 1 == 0
+    let (header, payload) = frame.split_first_chunk::<HEADER_LEN>()?;
+    if header[14] != CONTROL_UI
+        || header[15] != PID_NO_LAYER_3
+        || header[6] & 1 != 0
+        || header[13] & 1 == 0
     {
         return None;
     }
-    let destination: Vec<u8> = frame[..6].iter().map(|byte| byte >> 1).collect();
-    if destination.as_slice() != b"APZRNS" || ((frame[6] >> 1) & 0x0f) != 0 {
+    let destination: Vec<u8> = header[..6].iter().map(|byte| byte >> 1).collect();
+    if destination.as_slice() != b"APZRNS" || ((header[6] >> 1) & 0x0f) != 0 {
         return None;
     }
-    Some(&frame[HEADER_LEN..])
+    Some(payload)
 }
 
 /// Factory for `AX25KISSInterface`.

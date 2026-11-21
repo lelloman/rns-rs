@@ -130,13 +130,19 @@ fn base32_encode(data: &[u8]) -> String {
         bits += 8;
         while bits >= 5 {
             bits -= 5;
-            out.push(BASE32_ALPHABET[((buffer >> bits) & 0x1F) as usize] as char);
+            out.push(base32_digit(buffer >> bits));
         }
     }
     if bits > 0 {
-        out.push(BASE32_ALPHABET[((buffer << (5 - bits)) & 0x1F) as usize] as char);
+        out.push(base32_digit(buffer << (5 - bits)));
     }
     out
+}
+
+/// The base32 digit for the low five bits of `value`.
+fn base32_digit(value: u64) -> char {
+    let index = (value & 0x1F) as usize;
+    char::from(BASE32_ALPHABET.get(index).copied().unwrap_or(b'a'))
 }
 
 // --- SAM response parsing ---

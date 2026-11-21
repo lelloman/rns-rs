@@ -79,13 +79,11 @@ pub(super) fn convert_engine_actions(
 pub fn endpoint_to_socket_addr(ep: &Endpoint) -> Option<SocketAddr> {
     match ep.addr.len() {
         4 => {
-            let ip = std::net::Ipv4Addr::new(ep.addr[0], ep.addr[1], ep.addr[2], ep.addr[3]);
+            let ip = std::net::Ipv4Addr::from(<[u8; 4]>::try_from(ep.addr.as_slice()).ok()?);
             Some(SocketAddr::new(ip.into(), ep.port))
         }
         16 => {
-            let mut octets = [0u8; 16];
-            octets.copy_from_slice(&ep.addr);
-            let ip = std::net::Ipv6Addr::from(octets);
+            let ip = std::net::Ipv6Addr::from(<[u8; 16]>::try_from(ep.addr.as_slice()).ok()?);
             Some(SocketAddr::new(ip.into(), ep.port))
         }
         _ => None,
