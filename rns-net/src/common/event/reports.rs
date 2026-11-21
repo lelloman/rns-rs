@@ -329,20 +329,21 @@ pub struct BlackholeInfo {
 }
 
 /// Keys for a stamped link request, ground off the driver thread, with the
-/// responder of the `CreateLink` that asked for them.
+/// responder of the `CreateLink` that asked for them. Only the node makes
+/// them, for the driver.
 pub struct StampedLinkKeys {
     /// The destination to link to.
-    pub dest_hash: [u8; 16],
+    pub(crate) dest_hash: [u8; 16],
     /// The destination's Ed25519 public key.
-    pub dest_sig_pub_bytes: [u8; 32],
+    pub(crate) dest_sig_pub_bytes: [u8; 32],
     /// X25519 private key of the link request.
-    pub prv_bytes: [u8; 32],
+    pub(crate) prv_bytes: [u8; 32],
     /// Ed25519 private key of the link request.
-    pub sig_prv_bytes: [u8; 32],
+    pub(crate) sig_prv_bytes: [u8; 32],
     /// Value of the stamp the keys make.
-    pub stamp_value: rns_core::stamp::StampValue,
+    pub(crate) stamp_value: rns_core::stamp::StampValue,
     /// The `CreateLink` responder, which receives the link id.
-    pub response_tx: mpsc::Sender<[u8; 16]>,
+    pub(crate) response_tx: mpsc::Sender<[u8; 16]>,
 }
 
 /// Stamp information recorded from a destination's last announce.

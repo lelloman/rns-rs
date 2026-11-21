@@ -16,7 +16,7 @@ pub use queries::{
     query, InterfaceManagementOperation, Query, QueryRequest, QueryResponse, SendProbeError,
     MAX_PROBE_PAYLOAD_SIZE,
 };
-pub(crate) use reports::StampedLinkKeys;
+pub use reports::StampedLinkKeys;
 pub use reports::{
     BackboneInterfaceEntry, BackbonePeerHookEvent, BackbonePeerStateEntry, BlackholeInfo,
     DestinationStampInfo, HookInfo, KnownDestinationEntry, LinkDistributionEntry, LinkInfoEntry,
@@ -246,16 +246,17 @@ pub struct DynamicInterfaceRegistration {
     pub reconnecting: bool,
 }
 
-/// Replay metadata carried atomically with an explicit announcement.
-#[doc(hidden)]
+/// Replay metadata carried atomically with an explicit announcement. Only
+/// the node makes one, for the driver.
 pub struct AnnounceReplay {
-    pub dest_hash: [u8; 16],
-    pub name_hash: [u8; 10],
-    pub identity_prv_key: [u8; 64],
-    pub app_data: Option<Vec<u8>>,
+    pub(crate) dest_hash: [u8; 16],
+    pub(crate) name_hash: [u8; 10],
+    pub(crate) identity_prv_key: [u8; 64],
+    pub(crate) app_data: Option<Vec<u8>>,
 }
 
-/// A single packet queued to be encrypted off the caller's thread.
+/// A single packet queued to be encrypted off the caller's thread. Only
+/// the node makes one, for the driver.
 pub struct DeferredSend {
     pub(crate) ticket: u64,
     pub(crate) destination: [u8; 16],
@@ -286,14 +287,11 @@ impl DeferredSend {
 }
 
 /// Events sent to the driver thread.
-///
-/// `W` is the writer type (e.g. `Box<dyn Writer>` for sync,
-/// or a channel sender for async).
 #[allow(
     clippy::large_enum_variant,
     reason = "boxing the large registration variant would change this published event API"
 )]
-pub enum Event<W: Send> {
+pub enum Event {
     /// A decoded frame arrived from an interface. Its bytes are shared, so
     /// the packet decoded from them is delivered without copying them.
     Frame {
@@ -326,13 +324,17 @@ pub enum Event<W: Send> {
     /// An interface came online after (re)connecting.
     /// Carries a new writer if the connection was re-established.
     /// Carries InterfaceInfo if this is a new dynamic interface (e.g. TCP server client).
-    InterfaceUp(InterfaceId, Option<W>, Option<Box<InterfaceInfo>>),
+    InterfaceUp(
+        InterfaceId,
+        Option<Box<dyn crate::interface::Writer>>,
+        Option<Box<InterfaceInfo>>,
+    ),
     /// Register a dynamic interface with an exact type and parent identity.
     DynamicInterfaceUp {
         /// Id of the new interface.
         id: InterfaceId,
         /// Writer for its outbound frames.
-        writer: W,
+        writer: Box<dyn crate::interface::Writer>,
         /// What to register it with.
         registration: Box<DynamicInterfaceRegistration>,
     },
@@ -885,7 +887,7 @@ pub enum Event<W: Send> {
     },
 }
 
-impl<W: Send> Event<W> {
+impl Event {
     /// A query for the driver, answered on `response`.
     pub fn query(request: QueryRequest, response: mpsc::Sender<QueryResponse>) -> Self {
         Event::Query(Box::new(request), response)

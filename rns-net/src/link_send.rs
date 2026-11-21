@@ -296,8 +296,9 @@ impl Drop for Permit {
     }
 }
 
-/// Internal writer completion token. Dropping it reports an interrupted send.
-#[doc(hidden)]
+/// Completion token of a confirmed send, which a writer settles once the
+/// frame is written. Dropping it reports an interrupted send. Only the node
+/// makes one, for the driver and the interface writers.
 pub struct Completion {
     ratchet_lease: Option<crate::local_ratchet::AnnouncementLease>,
     state: Arc<CompletionState>,

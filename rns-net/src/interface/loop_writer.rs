@@ -64,7 +64,8 @@ pub(crate) fn key_target(key: usize) -> (InterfaceId, bool) {
 /// Egress rules a writer asks the driver to apply instead of its default
 /// backpressure (see [`Writer::loop_egress`]). Frames are admitted up to a
 /// byte budget and dropped, not waited for, beyond it or while the peer is
-/// judged stalled, so one slow peer never holds up the driver.
+/// judged stalled, so one slow peer never holds up the driver. Only the
+/// built-in interfaces make one.
 pub struct LoopEgress {
     control: EgressControl,
     stall: Option<StallWatch>,
