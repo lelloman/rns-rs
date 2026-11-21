@@ -212,6 +212,58 @@ fn only_a_single_rnode_interface_exposes_rnode_runtime_keys() {
     );
 }
 
+/// A BackboneClientInterface exposes its client settings whether it starts
+/// from the config file or is attached later.
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn a_backbone_client_interface_exposes_its_runtime_keys() {
+    use crate::event::InterfaceManagementOperation as Operation;
+    use crate::event::RuntimeConfigValue;
+
+    let dir = tempdir().unwrap();
+    // Nothing listens there: the clients start unconnected and retry.
+    let port = crate::test_support::port();
+    let client = |name: &str, enabled: &str| {
+        format!(
+            "  [[{name}]]\n    type = BackboneClientInterface\n    enabled = {enabled}\n    remote = 127.0.0.1\n    target_port = {port}\n    max_reconnect_tries = 4\n"
+        )
+    };
+    fs::write(
+        dir.path().join("config"),
+        format!(
+            "[reticulum]\nshare_instance = no\n\n[interfaces]\n{}{}",
+            client("Uplink", "yes"),
+            client("ManagedUplink", "no"),
+        ),
+    )
+    .unwrap();
+    let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+    let attached = node
+        .query(query::ManageInterface {
+            operation: Operation::Attach,
+            name: "ManagedUplink".into(),
+        })
+        .unwrap();
+    assert!(matches!(attached, Some(true)), "{attached:?}");
+    let get = |key: String| {
+        node.query(query::GetRuntimeConfig { key: key.clone() })
+            .unwrap()
+            .unwrap_or_else(|| panic!("no runtime config entry {key}"))
+    };
+    for name in ["Uplink", "ManagedUplink"] {
+        for (setting, expected) in [
+            ("max_reconnect_tries", RuntimeConfigValue::Int(4)),
+            ("reconnect_wait_secs", RuntimeConfigValue::Float(5.0)),
+            ("connect_timeout_secs", RuntimeConfigValue::Float(5.0)),
+        ] {
+            let entry = get(format!("backbone_client.{name}.{setting}"));
+            assert_eq!(entry.value, expected, "{name}.{setting}");
+            assert_eq!(entry.default, expected, "{name}.{setting}");
+        }
+    }
+    node.shutdown();
+}
+
 #[test]
 fn interface_management_can_be_disabled() {
     use crate::event::InterfaceManagementOperation as Operation;
