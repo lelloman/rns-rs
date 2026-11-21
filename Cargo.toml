@@ -34,6 +34,11 @@ undocumented_unsafe_blocks = "warn"
 panic = "warn"
 unwrap_used = "warn"
 expect_used = "warn"
+# Input is untrusted: production code reads it with checked access (get,
+# split_first_chunk, slice patterns). An index that must stay one, such as a
+# bounds check an unsafe read relies on, carries a scoped allow naming its
+# invariant.
+indexing_slicing = "warn"
 
 [workspace.dependencies]
 rns-crypto = { version = "0.4.0", path = "rns-crypto" }

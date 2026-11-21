@@ -7,8 +7,6 @@
 // allowed only at FFI boundaries (OS randomness, the optional aws-lc
 // backends), each site opting in with a reasoned `#[allow(unsafe_code)]`.
 #![deny(unsafe_code)]
-// Inputs are untrusted: production code reads them with checked access.
-#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 extern crate alloc;
 
 /// AES-128-CBC.

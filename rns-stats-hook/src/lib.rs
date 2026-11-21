@@ -5,8 +5,6 @@
     target_arch = "wasm32",
     allow(unsafe_code, reason = "the wasm guest side of the hook ABI")
 )]
-// Packet bytes are untrusted: read them with checked access.
-#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 
 #[cfg(any(target_arch = "wasm32", feature = "builtin"))]
 use rns_hooks_abi::stats::{

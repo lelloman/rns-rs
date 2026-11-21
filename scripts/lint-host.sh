@@ -11,7 +11,7 @@ set -euo pipefail
 # Which lints apply is set in the root Cargo.toml's [workspace.lints].
 # Production targets get all of them. Test code (unit and integration
 # tests, benches) is outside the code-quality lints' scope.
-test_exempt=(-A unsafe_code -A clippy::undocumented_unsafe_blocks -A clippy::panic -A clippy::unwrap_used -A clippy::expect_used -A unreachable_pub)
+test_exempt=(-A unsafe_code -A clippy::undocumented_unsafe_blocks -A clippy::panic -A clippy::unwrap_used -A clippy::expect_used -A clippy::indexing_slicing -A unreachable_pub)
 lint() {
   cargo clippy "$@" ${production_targets:---lib --bins --examples} -- -D warnings
   cargo clippy "$@" --tests --benches -- -D warnings "${test_exempt[@]}"
