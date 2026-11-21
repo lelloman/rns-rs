@@ -13,6 +13,17 @@ pub(crate) struct Lifecycle {
     pub(crate) drain_deadline: Option<Instant>,
 }
 
+/// The work a drain waits for, as the driver counts it.
+struct DrainWork {
+    active_links: usize,
+    active_resource_transfers: usize,
+    active_holepunch_sessions: usize,
+    interface_writer_queued_frames: usize,
+    link_transmissions: usize,
+    provider_backlog_events: usize,
+    provider_consumer_queued_events: usize,
+}
+
 impl Lifecycle {
     pub(crate) fn new() -> Self {
         Self {
@@ -20,6 +31,126 @@ impl Lifecycle {
             accepting_work: Arc::new(AtomicBool::new(true)),
             drain_started_at: None,
             drain_deadline: None,
+        }
+    }
+
+    /// Start draining, or move the deadline of a drain under way, to
+    /// `timeout` from now. Returns whether listeners must stop accepting.
+    fn begin_drain(&mut self, timeout: Duration) -> bool {
+        let now = Instant::now();
+        // A timeout too long to represent as an instant means no deadline.
+        let deadline = now.checked_add(timeout);
+        match self.state {
+            LifecycleState::Active => {
+                self.state = LifecycleState::Draining;
+                self.accepting_work.store(false, Ordering::Release);
+                self.drain_started_at = Some(now);
+                self.drain_deadline = deadline;
+                log::info!(
+                    "driver entering drain mode with {:.3}s timeout",
+                    timeout.as_secs_f64()
+                );
+                true
+            }
+            LifecycleState::Draining => {
+                self.drain_deadline = deadline;
+                log::info!(
+                    "driver drain deadline updated to {:.3}s from now",
+                    timeout.as_secs_f64()
+                );
+                true
+            }
+            LifecycleState::Stopping | LifecycleState::Stopped => {
+                log::debug!(
+                    "ignoring BeginDrain while lifecycle state is {:?}",
+                    self.state
+                );
+                false
+            }
+        }
+    }
+
+    /// Where a drain stands, given the `work` still under way.
+    fn drain_status(&self, work: DrainWork) -> DrainStatus {
+        let now = Instant::now();
+        let DrainWork {
+            active_links,
+            active_resource_transfers,
+            active_holepunch_sessions,
+            interface_writer_queued_frames,
+            link_transmissions,
+            provider_backlog_events,
+            provider_consumer_queued_events,
+        } = work;
+        let drain_age_seconds = self
+            .drain_started_at
+            .map(|started| started.elapsed().as_secs_f64());
+        let deadline_remaining_seconds = self.drain_deadline.map(|deadline| {
+            deadline
+                .checked_duration_since(now)
+                .map(|remaining| remaining.as_secs_f64())
+                .unwrap_or(0.0)
+        });
+        let detail = match self.state {
+            LifecycleState::Active => Some("node is accepting normal work".into()),
+            LifecycleState::Draining => {
+                let mut remaining = Vec::new();
+                if active_links > 0 {
+                    remaining.push(format!("{active_links} link(s)"));
+                }
+                if active_resource_transfers > 0 {
+                    remaining.push(format!("{active_resource_transfers} resource transfer(s)"));
+                }
+                if active_holepunch_sessions > 0 {
+                    remaining.push(format!("{active_holepunch_sessions} hole-punch session(s)"));
+                }
+                if interface_writer_queued_frames > 0 {
+                    remaining.push(format!(
+                        "{interface_writer_queued_frames} queued interface writer frame(s)"
+                    ));
+                }
+                if link_transmissions > 0 {
+                    remaining.push(format!("{link_transmissions} pending Link transmission(s)"));
+                }
+                if provider_backlog_events > 0 {
+                    remaining.push(format!(
+                        "{provider_backlog_events} provider backlog event(s)"
+                    ));
+                }
+                if provider_consumer_queued_events > 0 {
+                    remaining.push(format!(
+                        "{provider_consumer_queued_events} queued provider consumer event(s)"
+                    ));
+                }
+                Some(if remaining.is_empty() {
+                    "node is draining existing work; no active links, resource transfers, hole-punch sessions, or queued writer/provider work remain".into()
+                } else {
+                    format!(
+                        "node is draining existing work; {} still active",
+                        remaining.join(", ")
+                    )
+                })
+            }
+            LifecycleState::Stopping => Some("node is tearing down remaining work".into()),
+            LifecycleState::Stopped => Some("node is stopped".into()),
+        };
+
+        DrainStatus {
+            state: self.state,
+            drain_age_seconds,
+            deadline_remaining_seconds,
+            drain_complete: !matches!(self.state, LifecycleState::Draining)
+                || (active_links == 0
+                    && active_resource_transfers == 0
+                    && active_holepunch_sessions == 0
+                    && interface_writer_queued_frames == 0
+                    && link_transmissions == 0
+                    && provider_backlog_events == 0
+                    && provider_consumer_queued_events == 0),
+            interface_writer_queued_frames,
+            provider_backlog_events,
+            provider_consumer_queued_events,
+            detail,
         }
     }
 }
@@ -39,37 +170,8 @@ impl Driver {
     pub(crate) fn begin_drain(&mut self, timeout: Duration) {
         // Frames deferred in this pass count as queued: get them moving.
         self.wake_writers();
-        let now = Instant::now();
-        // A timeout too long to represent as an instant means no deadline.
-        let deadline = now.checked_add(timeout);
-        match self.lifecycle.state {
-            LifecycleState::Active => {
-                self.lifecycle.state = LifecycleState::Draining;
-                self.lifecycle
-                    .accepting_work
-                    .store(false, Ordering::Release);
-                self.lifecycle.drain_started_at = Some(now);
-                self.lifecycle.drain_deadline = deadline;
-                log::info!(
-                    "driver entering drain mode with {:.3}s timeout",
-                    timeout.as_secs_f64()
-                );
-                self.stop_listener_accepts();
-            }
-            LifecycleState::Draining => {
-                self.lifecycle.drain_deadline = deadline;
-                log::info!(
-                    "driver drain deadline updated to {:.3}s from now",
-                    timeout.as_secs_f64()
-                );
-                self.stop_listener_accepts();
-            }
-            LifecycleState::Stopping | LifecycleState::Stopped => {
-                log::debug!(
-                    "ignoring BeginDrain while lifecycle state is {:?}",
-                    self.lifecycle.state
-                );
-            }
+        if self.lifecycle.begin_drain(timeout) {
+            self.stop_listener_accepts();
         }
     }
 
@@ -230,89 +332,21 @@ impl Driver {
     }
 
     pub(crate) fn drain_status(&self) -> DrainStatus {
-        let now = Instant::now();
-        let active_links = self.link_manager.link_count();
-        let active_resource_transfers = self.link_manager.resource_transfer_count()
-            + self
-                .resource_preparation
-                .as_ref()
-                .map_or(0, |worker| worker.len());
-        let active_holepunch_sessions = self.holepunch_manager.session_count();
-        let interface_writer_queued_frames = self.interface_writer_queued_frames();
-        let link_transmissions = self.event_tx.link_send_pool().in_flight();
         let (provider_backlog_events, provider_consumer_queued_events) =
             self.hooks.provider_queued_events();
-        let drain_age_seconds = self
-            .lifecycle
-            .drain_started_at
-            .map(|started| started.elapsed().as_secs_f64());
-        let deadline_remaining_seconds = self.lifecycle.drain_deadline.map(|deadline| {
-            deadline
-                .checked_duration_since(now)
-                .map(|remaining| remaining.as_secs_f64())
-                .unwrap_or(0.0)
-        });
-        let detail = match self.lifecycle.state {
-            LifecycleState::Active => Some("node is accepting normal work".into()),
-            LifecycleState::Draining => {
-                let mut remaining = Vec::new();
-                if active_links > 0 {
-                    remaining.push(format!("{active_links} link(s)"));
-                }
-                if active_resource_transfers > 0 {
-                    remaining.push(format!("{active_resource_transfers} resource transfer(s)"));
-                }
-                if active_holepunch_sessions > 0 {
-                    remaining.push(format!("{active_holepunch_sessions} hole-punch session(s)"));
-                }
-                if interface_writer_queued_frames > 0 {
-                    remaining.push(format!(
-                        "{interface_writer_queued_frames} queued interface writer frame(s)"
-                    ));
-                }
-                if link_transmissions > 0 {
-                    remaining.push(format!("{link_transmissions} pending Link transmission(s)"));
-                }
-                if provider_backlog_events > 0 {
-                    remaining.push(format!(
-                        "{provider_backlog_events} provider backlog event(s)"
-                    ));
-                }
-                if provider_consumer_queued_events > 0 {
-                    remaining.push(format!(
-                        "{provider_consumer_queued_events} queued provider consumer event(s)"
-                    ));
-                }
-                Some(if remaining.is_empty() {
-                    "node is draining existing work; no active links, resource transfers, hole-punch sessions, or queued writer/provider work remain".into()
-                } else {
-                    format!(
-                        "node is draining existing work; {} still active",
-                        remaining.join(", ")
-                    )
-                })
-            }
-            LifecycleState::Stopping => Some("node is tearing down remaining work".into()),
-            LifecycleState::Stopped => Some("node is stopped".into()),
-        };
-
-        DrainStatus {
-            state: self.lifecycle.state,
-            drain_age_seconds,
-            deadline_remaining_seconds,
-            drain_complete: !matches!(self.lifecycle.state, LifecycleState::Draining)
-                || (active_links == 0
-                    && active_resource_transfers == 0
-                    && active_holepunch_sessions == 0
-                    && interface_writer_queued_frames == 0
-                    && link_transmissions == 0
-                    && provider_backlog_events == 0
-                    && provider_consumer_queued_events == 0),
-            interface_writer_queued_frames,
+        self.lifecycle.drain_status(DrainWork {
+            active_links: self.link_manager.link_count(),
+            active_resource_transfers: self.link_manager.resource_transfer_count()
+                + self
+                    .resource_preparation
+                    .as_ref()
+                    .map_or(0, |worker| worker.len()),
+            active_holepunch_sessions: self.holepunch_manager.session_count(),
+            interface_writer_queued_frames: self.interface_writer_queued_frames(),
+            link_transmissions: self.event_tx.link_send_pool().in_flight(),
             provider_backlog_events,
             provider_consumer_queued_events,
-            detail,
-        }
+        })
     }
 
     pub(crate) fn enforce_drain_deadline(&mut self) {
