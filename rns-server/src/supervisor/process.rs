@@ -21,17 +21,20 @@ pub(crate) fn spawn_child(
     spec: &ProcessSpec,
     shared_state: Option<&SharedState>,
     log_store: Option<LogStore>,
-) -> Result<ManagedChild, String> {
+) -> Result<ManagedChild, SupervisorError> {
     log::info!("starting {}", spec.command_line());
     let mut command = command_for_spec(spec)?;
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
     let child = match command.spawn() {
         Ok(child) => child,
-        Err(e) => {
-            let err = format!("failed to start {}: {}", spec.role.display_name(), e);
+        Err(source) => {
+            let err = SupervisorError::Spawn {
+                role: spec.role,
+                source,
+            };
             if let Some(state) = shared_state {
-                mark_process_failed_spawn(state, spec.role.display_name(), err.clone());
+                mark_process_failed_spawn(state, spec.role.display_name(), err.to_string());
             }
             return Err(err);
         }
@@ -62,7 +65,7 @@ pub(crate) fn spawn_child(
     Ok(managed)
 }
 
-pub(crate) fn command_for_spec(spec: &ProcessSpec) -> Result<Command, String> {
+pub(crate) fn command_for_spec(spec: &ProcessSpec) -> Result<Command, SupervisorError> {
     match &spec.command {
         ProcessCommand::External(bin) => {
             let mut command = Command::new(bin);
@@ -70,7 +73,8 @@ pub(crate) fn command_for_spec(spec: &ProcessSpec) -> Result<Command, String> {
             Ok(command)
         }
         ProcessCommand::SelfInvoke => {
-            let mut command = Command::new(resolve_self_exec()?);
+            let mut command =
+                Command::new(resolve_self_exec().map_err(SupervisorError::ResolveSelfExec)?);
             command.arg0(spec.role.display_name());
             command.arg("--internal-role");
             command.arg(spec.role.display_name());
@@ -138,12 +142,15 @@ fn read_log_stream<R: io::Read + Send + 'static>(
 
 pub(crate) fn check_exits(
     children: &mut [ManagedChild],
-) -> Result<Option<(Role, ExitStatus)>, String> {
+) -> Result<Option<(Role, ExitStatus)>, SupervisorError> {
     for managed in children {
         let status = managed
             .child
             .try_wait()
-            .map_err(|e| format!("failed to poll {}: {}", managed.role.display_name(), e))?;
+            .map_err(|source| SupervisorError::Poll {
+                role: managed.role,
+                source,
+            })?;
         if let Some(status) = status {
             return Ok(Some((managed.role, status)));
         }
