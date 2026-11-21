@@ -7,6 +7,8 @@
 // allowed only at FFI boundaries (OS randomness, the optional aws-lc
 // backends), each site opting in with `#[allow(unsafe_code)]`.
 #![deny(unsafe_code)]
+// Inputs are untrusted: production code reads them with checked access.
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 extern crate alloc;
 
 /// AES-128-CBC.
@@ -66,7 +68,12 @@ impl FixedRng {
 impl Rng for FixedRng {
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         for b in dest.iter_mut() {
-            *b = self.bytes[self.pos % self.bytes.len()];
+            // `new` keeps bytes non-empty.
+            *b = self
+                .bytes
+                .get(self.pos % self.bytes.len())
+                .copied()
+                .unwrap_or_default();
             self.pos += 1;
         }
     }
@@ -112,7 +119,13 @@ impl Rng for OsRng {
                         panic!("getrandom failed: {error}");
                     }
                 }
-                rest = &mut rest[n as usize..];
+                #[allow(
+                    clippy::indexing_slicing,
+                    reason = "getrandom fills at most rest.len() bytes; a larger count must panic, not leave dest partly unfilled"
+                )]
+                {
+                    rest = &mut rest[n as usize..];
+                }
             }
         }
         #[cfg(not(any(target_os = "espidf", target_os = "linux")))]

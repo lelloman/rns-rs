@@ -387,7 +387,7 @@ impl Identity {
         if ciphertext_token.len() <= 32 + crate::token::TOKEN_OVERHEAD {
             return Err(CryptoError::TokenError(TokenError::InvalidToken));
         }
-        let Some(peer_pub_bytes) = ciphertext_token.first_chunk() else {
+        let Some((peer_pub_bytes, token_bytes)) = ciphertext_token.split_first_chunk() else {
             return Err(CryptoError::InvalidCiphertext);
         };
         let peer_pub = X25519PublicKey::from_bytes(peer_pub_bytes);
@@ -397,9 +397,7 @@ impl Identity {
                 .map_err(CryptoError::HkdfError)?,
         );
         let token = Token::new(&derived_key).map_err(CryptoError::TokenError)?;
-        token
-            .decrypt(&ciphertext_token[32..])
-            .map_err(CryptoError::TokenError)
+        token.decrypt(token_bytes).map_err(CryptoError::TokenError)
     }
 
     /// The Ed25519 key this identity signs with, when it has its private keys.

@@ -62,7 +62,9 @@ pub fn hkdf(
         mac.update(context);
         mac.update(&[((index + 1) % 256) as u8]);
         let next = mac.finalize();
-        out.copy_from_slice(&next[..out.len()]);
+        for (out, next) in out.iter_mut().zip(next) {
+            *out = next;
+        }
         block = Some(next);
     }
     Ok(derived)

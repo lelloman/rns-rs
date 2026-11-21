@@ -84,8 +84,9 @@ impl Ed25519PrivateKey {
         crate::aws_lc_init();
         // aws-lc's private key form: the seed, then the public key.
         let mut key = zeroize::Zeroizing::new([0u8; 64]);
-        key[..32].copy_from_slice(self.inner.as_bytes());
-        key[32..].copy_from_slice(self.inner.verifying_key().as_bytes());
+        let key_bytes: &mut [u8; 64] = &mut key;
+        key_bytes[..32].copy_from_slice(self.inner.as_bytes());
+        key_bytes[32..].copy_from_slice(self.inner.verifying_key().as_bytes());
         let mut signature = [0u8; 64];
         // SAFETY: `signature` and `key` are 64 bytes and `message` is
         // `message.len()` bytes, as the function takes.

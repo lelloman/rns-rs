@@ -129,13 +129,15 @@ impl Token {
     /// Write the IV and the padded, encrypted `plaintext` into `body`: a
     /// token without its tag.
     fn seal_body(&self, plaintext: &[u8], iv: &[u8; 16], body: &mut [u8]) {
-        let padding = body.len() - 16 - plaintext.len();
-        body[..16].copy_from_slice(iv);
-        body[16..16 + plaintext.len()].copy_from_slice(plaintext);
-        body[16 + plaintext.len()..].fill(padding as u8);
+        // Callers size `body` as the IV and the padded plaintext.
+        let (iv_slot, padded) = body.split_at_mut(16);
+        iv_slot.copy_from_slice(iv);
+        let (text, padding) = padded.split_at_mut(plaintext.len());
+        text.copy_from_slice(plaintext);
+        padding.fill(padding.len() as u8);
         let encrypted = match &self.mode {
-            AesMode::Aes128(aes) => aes.encrypt_cbc_in_place(&mut body[16..], iv),
-            AesMode::Aes256(aes) => aes.encrypt_cbc_in_place(&mut body[16..], iv),
+            AesMode::Aes128(aes) => aes.encrypt_cbc_in_place(padded, iv),
+            AesMode::Aes256(aes) => aes.encrypt_cbc_in_place(padded, iv),
         };
         #[allow(
             clippy::expect_used,
@@ -155,9 +157,10 @@ impl Token {
         token.extend_from_slice(iv);
         token.extend_from_slice(plaintext);
         token.resize(token.len() + padding, padding as u8);
+        let (_, padded) = token.split_at_mut(iv.len());
         let encrypted = match &self.mode {
-            AesMode::Aes128(aes) => aes.encrypt_cbc_in_place(&mut token[16..], iv),
-            AesMode::Aes256(aes) => aes.encrypt_cbc_in_place(&mut token[16..], iv),
+            AesMode::Aes128(aes) => aes.encrypt_cbc_in_place(padded, iv),
+            AesMode::Aes256(aes) => aes.encrypt_cbc_in_place(padded, iv),
         };
         #[allow(
             clippy::expect_used,
@@ -178,8 +181,10 @@ impl Token {
         let mut iv = [0u8; 16];
         rng.fill_bytes(&mut iv);
         let mut token = alloc::vec![0u8; Self::token_len(plaintext.len())];
+        // token_len covers the tag.
         let signed = token.len() - 32;
-        self.seal_body(plaintext, &iv, &mut token[..signed]);
+        let (body, _) = token.split_at_mut(signed);
+        self.seal_body(plaintext, &iv, body);
         (token, self.mac.clone())
     }
 
@@ -193,12 +198,14 @@ impl Token {
     /// Check the token's HMAC: [`TokenError::InvalidToken`] when it is too
     /// short to hold one, [`TokenError::HmacMismatch`] when it does not match.
     pub fn verify_hmac(&self, token: &[u8]) -> Result<(), TokenError> {
-        if token.len() <= 32 {
+        let Some((signed, received_hmac)) = token.split_last_chunk::<32>() else {
+            return Err(TokenError::InvalidToken);
+        };
+        if signed.is_empty() {
             return Err(TokenError::InvalidToken);
         }
-        let received_hmac = &token[token.len() - 32..];
         let mut mac = self.mac.clone();
-        mac.update(&token[..token.len() - 32]);
+        mac.update(signed);
         if mac.verify(received_hmac) {
             Ok(())
         } else {
@@ -214,10 +221,12 @@ impl Token {
             return Err(TokenError::InvalidToken);
         }
         self.verify_hmac(token)?;
-        let Some(iv) = token.first_chunk::<16>() else {
+        let Some((iv, rest)) = token.split_first_chunk::<16>() else {
             return Err(TokenError::InvalidToken);
         };
-        let ciphertext = &token[16..token.len() - 32];
+        let Some((ciphertext, _)) = rest.split_last_chunk::<32>() else {
+            return Err(TokenError::InvalidToken);
+        };
         if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) {
             return Err(TokenError::DecryptionFailed);
         }
@@ -318,6 +327,10 @@ pub struct TokenDecryptStream {
     plain_hash: Option<(Sha256, usize)>,
 }
 
+#[allow(
+    clippy::indexing_slicing,
+    reason = "offsets follow the stream's counters: tail_len <= 32, block_len < 16, an IV of 16 bytes, and hashed <= settled <= plaintext.len()"
+)]
 impl TokenDecryptStream {
     /// Also hash the plaintext, together with the tag's MAC, as it settles;
     /// [`Self::finish_hashed`] returns the hash. Call before any update.

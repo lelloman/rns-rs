@@ -35,14 +35,17 @@ pub fn pad(data: &[u8], block_size: usize) -> Vec<u8> {
 
 /// `data` without its padding.
 pub fn unpad(data: &[u8], block_size: usize) -> Result<&[u8], PadError> {
-    if data.is_empty() {
+    let Some(&n) = data.last() else {
         return Err(PadError::EmptyInput);
-    }
-    let n = data[data.len() - 1] as usize;
+    };
+    let n = n as usize;
     if n > block_size {
         return Err(PadError::InvalidPadding);
     }
-    Ok(&data[..data.len() - n])
+    data.len()
+        .checked_sub(n)
+        .and_then(|len| data.get(..len))
+        .ok_or(PadError::InvalidPadding)
 }
 
 #[cfg(test)]
