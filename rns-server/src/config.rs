@@ -17,7 +17,7 @@ use crate::supervisor::{
 use rns_net::RpcAddr;
 
 mod error;
-pub use error::ServerConfigError;
+pub use error::{BootstrapError, ServerConfigError};
 
 const DEFAULT_STATS_MAX_AGE_DAYS: u64 = 30;
 
@@ -363,11 +363,11 @@ impl ServerConfig {
     /// # Errors
     ///
     /// The directories or identity cannot be created or read.
-    pub fn ensure_runtime_bootstrap(&self) -> Result<(), String> {
+    pub fn ensure_runtime_bootstrap(&self) -> Result<(), BootstrapError> {
         let paths = rns_net::storage::ensure_storage_dirs(&self.resolved_config_dir)
-            .map_err(|err| format!("failed to create runtime storage dirs: {}", err))?;
+            .map_err(BootstrapError::StorageDirs)?;
         rns_net::storage::load_or_create_identity(&paths.identities)
-            .map_err(|err| format!("failed to initialize node identity: {}", err))?;
+            .map_err(BootstrapError::Identity)?;
         Ok(())
     }
 
@@ -1631,6 +1631,19 @@ mod tests {
         for (error, expected) in cases {
             assert_eq!(error.to_string(), expected);
         }
+    }
+
+    #[test]
+    fn bootstrap_errors_keep_their_messages() {
+        let io = || std::io::Error::other("denied");
+        assert_eq!(
+            super::BootstrapError::StorageDirs(io()).to_string(),
+            "failed to create runtime storage dirs: denied"
+        );
+        assert_eq!(
+            super::BootstrapError::Identity(io()).to_string(),
+            "failed to initialize node identity: denied"
+        );
     }
 
     #[test]

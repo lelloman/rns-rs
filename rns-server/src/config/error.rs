@@ -137,3 +137,34 @@ impl std::error::Error for ServerConfigError {
         }
     }
 }
+
+/// Why the runtime storage or node identity could not be set up.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum BootstrapError {
+    /// The storage directories could not be created.
+    StorageDirs(io::Error),
+    /// The node identity could not be loaded or created.
+    Identity(io::Error),
+}
+
+impl fmt::Display for BootstrapError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BootstrapError::StorageDirs(error) => {
+                write!(f, "failed to create runtime storage dirs: {}", error)
+            }
+            BootstrapError::Identity(error) => {
+                write!(f, "failed to initialize node identity: {}", error)
+            }
+        }
+    }
+}
+
+impl std::error::Error for BootstrapError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            BootstrapError::StorageDirs(error) | BootstrapError::Identity(error) => Some(error),
+        }
+    }
+}
