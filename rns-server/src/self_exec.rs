@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 
-pub(crate) fn resolve_self_exec() -> Result<PathBuf, String> {
+pub(crate) fn resolve_self_exec() -> std::io::Result<PathBuf> {
     let proc_self = PathBuf::from("/proc/self/exe");
     if proc_self.exists() {
         return Ok(proc_self);
     }
 
-    std::env::current_exe().map_err(|err| format!("failed to resolve current executable: {}", err))
+    std::env::current_exe()
 }
 
 pub(crate) fn self_exec_display() -> &'static str {

@@ -19,10 +19,12 @@ use rns_ctl::state::{
 use rns_net::{event::DrainStatus, HookInfo, RpcAddr, RpcClient};
 
 mod drain;
+mod error;
 mod process;
 mod readiness;
 mod wake;
 
+pub use self::error::SupervisorError;
 use self::process::{
     check_exits, exit_code, role_from_name, spawn_child, terminate_child, terminate_children,
     ManagedChild,
@@ -180,7 +182,7 @@ impl Supervisor {
     }
 
     /// [`run_with_started_hook`](Self::run_with_started_hook) with no hook.
-    pub fn run(&self) -> Result<i32, String> {
+    pub fn run(&self) -> Result<i32, SupervisorError> {
         self.run_with_started_hook(|| Ok(()))
     }
 
@@ -199,9 +201,9 @@ impl Supervisor {
     /// `on_started`, a failure to wait on a child, or a control command
     /// naming an unknown process. The children started so far are stopped
     /// before the error is returned.
-    pub fn run_with_started_hook<F>(&self, on_started: F) -> Result<i32, String>
+    pub fn run_with_started_hook<F>(&self, on_started: F) -> Result<i32, SupervisorError>
     where
-        F: FnOnce() -> Result<(), String>,
+        F: FnOnce() -> Result<(), Box<dyn std::error::Error + Send + Sync>>,
     {
         let mut children = Vec::with_capacity(self.specs.len());
         let result = self.spawn_and_supervise(&mut children, on_started);
@@ -219,9 +221,9 @@ impl Supervisor {
         &self,
         children: &mut Vec<ManagedChild>,
         on_started: F,
-    ) -> Result<i32, String>
+    ) -> Result<i32, SupervisorError>
     where
-        F: FnOnce() -> Result<(), String>,
+        F: FnOnce() -> Result<(), Box<dyn std::error::Error + Send + Sync>>,
     {
         for spec in &self.specs {
             children.push(spawn_child(
@@ -232,9 +234,9 @@ impl Supervisor {
         }
         let mut unexpected_restart_counts = HashMap::new();
 
-        on_started()?;
+        on_started().map_err(SupervisorError::Started)?;
 
-        let wake = wake::Wake::new().map_err(|e| format!("cannot set up the supervisor: {}", e))?;
+        let wake = wake::Wake::new().map_err(SupervisorError::Setup)?;
         wake.install_signal_handlers();
         let control = self.forward_control_commands(wake.waker());
         let mut exit_watches: HashMap<u32, std::os::fd::OwnedFd> = HashMap::new();
@@ -354,7 +356,7 @@ impl Supervisor {
         status: ExitStatus,
         children: &mut [ManagedChild],
         unexpected_restart_counts: &mut HashMap<Role, usize>,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, SupervisorError> {
         const MAX_UNEXPECTED_RESTARTS: usize = 3;
         const UNEXPECTED_RESTART_BACKOFF: Duration = Duration::from_millis(200);
 
@@ -396,7 +398,7 @@ impl Supervisor {
         &self,
         command: ProcessControlCommand,
         children: &mut Vec<ManagedChild>,
-    ) -> Result<(), String> {
+    ) -> Result<(), SupervisorError> {
         match command {
             ProcessControlCommand::Restart(name) => self.restart_process(&name, children),
             ProcessControlCommand::Start(name) => self.start_process(&name, children),
@@ -404,12 +406,16 @@ impl Supervisor {
         }
     }
 
-    fn restart_process(&self, name: &str, children: &mut [ManagedChild]) -> Result<(), String> {
+    fn restart_process(
+        &self,
+        name: &str,
+        children: &mut [ManagedChild],
+    ) -> Result<(), SupervisorError> {
         let Some(role) = role_from_name(name) else {
-            return Err(format!("unknown process '{}'", name));
+            return Err(SupervisorError::UnknownProcess(name.to_string()));
         };
         let Some(spec) = self.specs.iter().find(|spec| spec.role == role) else {
-            return Err(format!("missing process spec for '{}'", name));
+            return Err(SupervisorError::MissingSpec(name.to_string()));
         };
 
         if let Some(index) = children.iter().position(|child| child.role == role) {
@@ -420,12 +426,10 @@ impl Supervisor {
                 self.shared_state.as_ref(),
                 ready_file.as_ref(),
             )
-            .map_err(|e| {
-                format!(
-                    "failed to terminate {} during restart: {}",
-                    role.display_name(),
-                    e
-                )
+            .map_err(|source| SupervisorError::Terminate {
+                role,
+                during: "restart",
+                source,
             })?;
             if let Some(state) = self.shared_state.as_ref() {
                 mark_process_stopped(state, role.display_name(), None);
@@ -438,15 +442,19 @@ impl Supervisor {
         Ok(())
     }
 
-    fn start_process(&self, name: &str, children: &mut Vec<ManagedChild>) -> Result<(), String> {
+    fn start_process(
+        &self,
+        name: &str,
+        children: &mut Vec<ManagedChild>,
+    ) -> Result<(), SupervisorError> {
         let Some(role) = role_from_name(name) else {
-            return Err(format!("unknown process '{}'", name));
+            return Err(SupervisorError::UnknownProcess(name.to_string()));
         };
         if children.iter().any(|child| child.role == role) {
             return Ok(());
         }
         let Some(spec) = self.specs.iter().find(|spec| spec.role == role) else {
-            return Err(format!("missing process spec for '{}'", name));
+            return Err(SupervisorError::MissingSpec(name.to_string()));
         };
         children.push(spawn_child(
             spec,
@@ -456,9 +464,13 @@ impl Supervisor {
         Ok(())
     }
 
-    fn stop_process(&self, name: &str, children: &mut Vec<ManagedChild>) -> Result<(), String> {
+    fn stop_process(
+        &self,
+        name: &str,
+        children: &mut Vec<ManagedChild>,
+    ) -> Result<(), SupervisorError> {
         let Some(role) = role_from_name(name) else {
-            return Err(format!("unknown process '{}'", name));
+            return Err(SupervisorError::UnknownProcess(name.to_string()));
         };
         let Some(index) = children.iter().position(|child| child.role == role) else {
             return Ok(());
@@ -470,12 +482,10 @@ impl Supervisor {
             self.shared_state.as_ref(),
             ready_file.as_ref(),
         )
-        .map_err(|e| {
-            format!(
-                "failed to terminate {} during stop: {}",
-                role.display_name(),
-                e
-            )
+        .map_err(|source| SupervisorError::Terminate {
+            role,
+            during: "stop",
+            source,
         })?;
         if let Some(state) = self.shared_state.as_ref() {
             let code = children[index]
@@ -577,11 +587,64 @@ mod tests {
             Err("startup failed".into())
         });
 
-        assert_eq!(result, Err("startup failed".to_string()));
+        assert_eq!(
+            result.map_err(|error| error.to_string()),
+            Err("startup failed".to_string())
+        );
         assert!(!pid.is_empty(), "the process never ran");
         // Stopped and reaped.
         assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn supervisor_errors_keep_their_messages() {
+        use super::SupervisorError;
+        let io = || std::io::Error::other("boom");
+        let cases = [
+            (
+                SupervisorError::ResolveSelfExec(io()),
+                "failed to resolve current executable: boom",
+            ),
+            (
+                SupervisorError::Spawn {
+                    role: Role::Statsd,
+                    source: io(),
+                },
+                "failed to start rns-statsd: boom",
+            ),
+            (SupervisorError::Started("hook".into()), "hook"),
+            (
+                SupervisorError::Setup(io()),
+                "cannot set up the supervisor: boom",
+            ),
+            (
+                SupervisorError::Poll {
+                    role: Role::Rnsd,
+                    source: io(),
+                },
+                "failed to poll rnsd: boom",
+            ),
+            (
+                SupervisorError::UnknownProcess("x".into()),
+                "unknown process 'x'",
+            ),
+            (
+                SupervisorError::MissingSpec("rnsd".into()),
+                "missing process spec for 'rnsd'",
+            ),
+            (
+                SupervisorError::Terminate {
+                    role: Role::Sentineld,
+                    during: "restart",
+                    source: io(),
+                },
+                "failed to terminate rns-sentineld during restart: boom",
+            ),
+        ];
+        for (error, message) in cases {
+            assert_eq!(error.to_string(), message);
+        }
     }
 
     #[test]
