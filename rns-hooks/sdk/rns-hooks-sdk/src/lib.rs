@@ -13,6 +13,8 @@
 
 #![no_std]
 #![warn(missing_docs)]
+// Host data is read with checked access.
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 
 #[cfg(feature = "alloc")]
 extern crate alloc;

@@ -43,9 +43,7 @@ impl PacketStatsPayload {
 
     /// Decodes a payload; `None` if `bytes` has the wrong length.
     pub fn decode(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() != PACKET_STATS_ENCODED_LEN {
-            return None;
-        }
+        let bytes: &[u8; PACKET_STATS_ENCODED_LEN] = bytes.try_into().ok()?;
         let mut packet_len = [0u8; 4];
         packet_len.copy_from_slice(&bytes[1..5]);
         let mut interface_id = [0u8; 8];
@@ -90,9 +88,7 @@ impl AnnounceStatsPayload {
 
     /// Decodes a payload; `None` if `bytes` has the wrong length.
     pub fn decode(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() != ANNOUNCE_STATS_ENCODED_LEN {
-            return None;
-        }
+        let bytes: &[u8; ANNOUNCE_STATS_ENCODED_LEN] = bytes.try_into().ok()?;
         let mut identity_hash = [0u8; 16];
         identity_hash.copy_from_slice(&bytes[0..16]);
         let mut destination_hash = [0u8; 16];
@@ -135,9 +131,7 @@ impl LinkStatsPayload {
 
     /// Decodes a payload; `None` if `bytes` has the wrong length.
     pub fn decode(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() != LINK_STATS_ENCODED_LEN {
-            return None;
-        }
+        let bytes: &[u8; LINK_STATS_ENCODED_LEN] = bytes.try_into().ok()?;
         let mut link_id = [0u8; 16];
         link_id.copy_from_slice(&bytes[0..16]);
         let mut interface_id = [0u8; 8];

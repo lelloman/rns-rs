@@ -10,6 +10,8 @@
 
 #![no_std]
 #![warn(missing_docs)]
+// Payloads come from the other side of the ABI: read them with checked access.
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 
 pub mod context;
 pub mod native;

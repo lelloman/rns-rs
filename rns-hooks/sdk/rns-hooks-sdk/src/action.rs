@@ -1,12 +1,22 @@
 // Import tag constants from shared ABI crate.
 pub use rns_hooks_abi::wire::*;
 
+/// Write `bytes` at `off`. Each encoder below documents the buffer size its
+/// layout needs; a shorter buffer is a caller bug and panics here.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "the encoders' documented layouts give the buffer size; a shorter buffer must panic, not truncate an action"
+)]
+fn put(buf: &mut [u8], off: usize, bytes: &[u8]) {
+    buf[off..off + bytes.len()].copy_from_slice(bytes);
+}
+
 fn write_u32(buf: &mut [u8], off: usize, val: u32) {
-    buf[off..off + 4].copy_from_slice(&val.to_le_bytes());
+    put(buf, off, &val.to_le_bytes());
 }
 
 fn write_u64(buf: &mut [u8], off: usize, val: u64) {
-    buf[off..off + 8].copy_from_slice(&val.to_le_bytes());
+    put(buf, off, &val.to_le_bytes());
 }
 
 /// Encode `SendOnInterface`. Returns bytes written.
@@ -17,7 +27,7 @@ pub fn encode_send_on_interface(
     data_ptr: u32,
     data_len: u32,
 ) -> usize {
-    buf[0] = TAG_SEND_ON_INTERFACE;
+    put(buf, 0, &[TAG_SEND_ON_INTERFACE]);
     write_u64(buf, 1, interface);
     write_u32(buf, 9, data_ptr);
     write_u32(buf, 13, data_len);
@@ -33,11 +43,11 @@ pub fn encode_broadcast(
     exclude: u64,
     has_exclude: bool,
 ) -> usize {
-    buf[0] = TAG_BROADCAST;
+    put(buf, 0, &[TAG_BROADCAST]);
     write_u32(buf, 1, data_ptr);
     write_u32(buf, 5, data_len);
     write_u64(buf, 9, exclude);
-    buf[17] = has_exclude as u8;
+    put(buf, 17, &[has_exclude as u8]);
     18
 }
 
@@ -51,11 +61,11 @@ pub fn encode_deliver_local(
     packet_hash: &[u8; 32],
     receiving_interface: u64,
 ) -> usize {
-    buf[0] = TAG_DELIVER_LOCAL;
-    buf[1..17].copy_from_slice(destination_hash);
+    put(buf, 0, &[TAG_DELIVER_LOCAL]);
+    put(buf, 1, destination_hash);
     write_u32(buf, 17, data_ptr);
     write_u32(buf, 21, data_len);
-    buf[25..57].copy_from_slice(packet_hash);
+    put(buf, 25, packet_hash);
     write_u64(buf, 57, receiving_interface);
     65
 }
@@ -77,15 +87,15 @@ pub fn encode_announce_received(
     hops: u8,
     receiving_interface: u64,
 ) -> usize {
-    buf[0] = TAG_ANNOUNCE_RECEIVED;
-    buf[1..17].copy_from_slice(destination_hash);
-    buf[17..33].copy_from_slice(identity_hash);
-    buf[33..97].copy_from_slice(public_key);
-    buf[97..107].copy_from_slice(name_hash);
-    buf[107..117].copy_from_slice(random_hash);
-    buf[117] = hops;
+    put(buf, 0, &[TAG_ANNOUNCE_RECEIVED]);
+    put(buf, 1, destination_hash);
+    put(buf, 17, identity_hash);
+    put(buf, 33, public_key);
+    put(buf, 97, name_hash);
+    put(buf, 107, random_hash);
+    put(buf, 117, &[hops]);
     write_u64(buf, 118, receiving_interface);
-    buf[126] = 0; // has_app_data = false
+    put(buf, 126, &[0]); // has_app_data = false
     127
 }
 
@@ -118,7 +128,7 @@ pub fn encode_announce_received_with_app_data(
         hops,
         receiving_interface,
     );
-    buf[126] = 1; // has_app_data = true
+    put(buf, 126, &[1]); // has_app_data = true
     write_u32(buf, 127, app_data_ptr);
     write_u32(buf, 131, app_data_len);
     135
@@ -133,10 +143,10 @@ pub fn encode_path_updated(
     next_hop: &[u8; 16],
     interface: u64,
 ) -> usize {
-    buf[0] = TAG_PATH_UPDATED;
-    buf[1..17].copy_from_slice(destination_hash);
-    buf[17] = hops;
-    buf[18..34].copy_from_slice(next_hop);
+    put(buf, 0, &[TAG_PATH_UPDATED]);
+    put(buf, 1, destination_hash);
+    put(buf, 17, &[hops]);
+    put(buf, 18, next_hop);
     write_u64(buf, 34, interface);
     42
 }
@@ -150,11 +160,11 @@ pub fn encode_forward_local_clients(
     exclude: u64,
     has_exclude: bool,
 ) -> usize {
-    buf[0] = TAG_FORWARD_LOCAL_CLIENTS;
+    put(buf, 0, &[TAG_FORWARD_LOCAL_CLIENTS]);
     write_u32(buf, 1, data_ptr);
     write_u32(buf, 5, data_len);
     write_u64(buf, 9, exclude);
-    buf[17] = has_exclude as u8;
+    put(buf, 17, &[has_exclude as u8]);
     18
 }
 
@@ -168,12 +178,12 @@ pub fn encode_forward_plain_broadcast(
     exclude: u64,
     has_exclude: bool,
 ) -> usize {
-    buf[0] = TAG_FORWARD_PLAIN_BROADCAST;
+    put(buf, 0, &[TAG_FORWARD_PLAIN_BROADCAST]);
     write_u32(buf, 1, data_ptr);
     write_u32(buf, 5, data_len);
-    buf[9] = to_local as u8;
+    put(buf, 9, &[to_local as u8]);
     write_u64(buf, 10, exclude);
-    buf[18] = has_exclude as u8;
+    put(buf, 18, &[has_exclude as u8]);
     19
 }
 
@@ -185,8 +195,8 @@ pub fn encode_cache_announce(
     data_ptr: u32,
     data_len: u32,
 ) -> usize {
-    buf[0] = TAG_CACHE_ANNOUNCE;
-    buf[1..33].copy_from_slice(packet_hash);
+    put(buf, 0, &[TAG_CACHE_ANNOUNCE]);
+    put(buf, 1, packet_hash);
     write_u32(buf, 33, data_ptr);
     write_u32(buf, 37, data_len);
     41
@@ -201,19 +211,19 @@ pub fn encode_tunnel_synthesize(
     data_len: u32,
     dest_hash: &[u8; 16],
 ) -> usize {
-    buf[0] = TAG_TUNNEL_SYNTHESIZE;
+    put(buf, 0, &[TAG_TUNNEL_SYNTHESIZE]);
     write_u64(buf, 1, interface);
     write_u32(buf, 9, data_ptr);
     write_u32(buf, 13, data_len);
-    buf[17..33].copy_from_slice(dest_hash);
+    put(buf, 17, dest_hash);
     33
 }
 
 /// Encode `TunnelEstablished`. Returns bytes written.
 /// Layout: tag(1) + tunnel_id(32) + interface(8) = 41
 pub fn encode_tunnel_established(buf: &mut [u8], tunnel_id: &[u8; 32], interface: u64) -> usize {
-    buf[0] = TAG_TUNNEL_ESTABLISHED;
-    buf[1..33].copy_from_slice(tunnel_id);
+    put(buf, 0, &[TAG_TUNNEL_ESTABLISHED]);
+    put(buf, 1, tunnel_id);
     write_u64(buf, 33, interface);
     41
 }
