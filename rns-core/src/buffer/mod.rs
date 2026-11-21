@@ -1,5 +1,4 @@
-/// Stream identifiers, compression trait and buffer errors.
-pub mod types;
+pub(crate) mod types;
 
 use alloc::vec::Vec;
 

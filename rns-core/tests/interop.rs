@@ -10,9 +10,9 @@ use rns_core::hash;
 use rns_core::msgpack;
 use rns_core::packet::{PacketFlags, RawPacket};
 use rns_core::receipt::{self, ProofResult};
-use rns_core::resource::advertisement::ResourceAdvertisement;
 use rns_core::resource::parts::map_hash;
-use rns_core::resource::proof::{compute_expected_proof, compute_resource_hash};
+use rns_core::resource::ResourceAdvertisement;
+use rns_core::resource::{compute_expected_proof, compute_resource_hash};
 use rns_crypto::identity::Identity;
 
 fn fixture_path(name: &str) -> PathBuf {

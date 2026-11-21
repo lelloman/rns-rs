@@ -28,14 +28,14 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use rns_core::announce::AnnounceData;
-use rns_core::buffer::types::NoopCompressor;
+use rns_core::buffer::NoopCompressor;
 use rns_core::channel::{Channel, ChannelAction};
 use rns_core::constants;
 use rns_core::link::{LinkAction, LinkEngine, LinkMode, LinkState};
 use rns_core::packet::{PacketFlags, RawPacket};
-use rns_core::resource::receiver::ResourceReceiver;
-use rns_core::resource::sender::ResourceSender;
-use rns_core::resource::types::{ResourceAction, ResourceStatus};
+use rns_core::resource::ResourceReceiver;
+use rns_core::resource::ResourceSender;
+use rns_core::resource::{ResourceAction, ResourceStatus};
 use rns_core::transport::types::{
     InterfaceId, InterfaceInfo, TransportAction, TransportConfig, DEFAULT_MAX_PATH_DESTINATIONS,
 };

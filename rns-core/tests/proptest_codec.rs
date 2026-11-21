@@ -13,8 +13,8 @@ use rns_core::constants;
 use rns_core::hash::truncated_hash;
 use rns_core::msgpack;
 use rns_core::packet::{PacketError, PacketFlags, RawPacket};
-use rns_core::resource::advertisement::ResourceAdvertisement;
-use rns_core::resource::types::AdvFlags;
+use rns_core::resource::AdvFlags;
+use rns_core::resource::ResourceAdvertisement;
 use rns_crypto::identity::Identity;
 
 /// `cases` per property, unless `PROPTEST_CASES` asks for a deeper run.

@@ -6,8 +6,7 @@ pub mod handshake;
 pub mod identify;
 /// Keepalive, stale and establishment timer calculations.
 pub mod keepalive;
-/// Link states, actions and errors.
-pub mod types;
+pub(crate) mod types;
 
 use alloc::vec::Vec;
 
@@ -21,7 +20,9 @@ use crate::constants::{
     LINK_MTU_MAX, LINK_MTU_MIN, LINK_MTU_SIZE, LINK_WATCHDOG_MAX_SLEEP, MTU, PATHFINDER_M,
 };
 
-pub use types::{LinkAction, LinkError, LinkId, LinkMode, LinkState, TeardownReason};
+pub use types::{
+    mode_description, LinkAction, LinkError, LinkId, LinkMode, LinkState, TeardownReason,
+};
 
 use crypto::{create_session_token, link_decrypt, link_decrypt_chunks, link_encrypt};
 use handshake::{

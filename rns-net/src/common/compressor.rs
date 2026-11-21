@@ -1,6 +1,6 @@
 //! bzip2 compression for Resources and Buffer streams.
 
-use rns_core::buffer::types::{Compressor, DecompressError};
+use rns_core::buffer::{Compressor, DecompressError};
 
 /// bzip2 [`Compressor`], the compression upstream applies to Resources and
 /// Buffer streams.

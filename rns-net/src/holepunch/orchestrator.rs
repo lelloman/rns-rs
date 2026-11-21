@@ -28,7 +28,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::thread;
 use std::time::Instant;
 
-use rns_core::holepunch::types::{is_holepunch_msgtype, HELLO_RETRY_INTERVAL, HELLO_TIMEOUT};
+use rns_core::holepunch::{is_holepunch_msgtype, HELLO_RETRY_INTERVAL, HELLO_TIMEOUT};
 use rns_core::holepunch::{
     Endpoint, HolePunchAction, HolePunchEngine, HolePunchState, ProbeProtocol, HELLO, REJECT_BUSY,
     REJECT_POLICY, REJECT_UNSUPPORTED, UPGRADE_REQUEST,
@@ -205,7 +205,7 @@ fn reupgrade_delay(config: &DirectReupgradeConfig, attempt: u32, jitter: f64) ->
     let initial = config
         .initial_delay
         .as_secs_f64()
-        .max(rns_core::holepunch::types::PROPOSAL_COOLDOWN);
+        .max(rns_core::holepunch::PROPOSAL_COOLDOWN);
     let max = config.max_delay.as_secs_f64().max(initial);
     let base = (initial * 2f64.powi(attempt.min(32) as i32)).min(max);
     base * (1.0 + 0.25 * jitter.clamp(0.0, 1.0))

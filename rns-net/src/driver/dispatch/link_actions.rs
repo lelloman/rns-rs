@@ -371,7 +371,7 @@ impl Driver {
     fn link_closed(
         &mut self,
         link_id: [u8; 16],
-        reason: Option<rns_core::link::types::TeardownReason>,
+        reason: Option<rns_core::link::TeardownReason>,
         hook_injected: &mut Vec<TransportAction>,
     ) {
         self.run_hooks_with_effects(

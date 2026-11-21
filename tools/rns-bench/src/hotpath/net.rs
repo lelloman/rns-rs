@@ -9,7 +9,7 @@
 use super::{bytes, data_flags, fail, interface, rng, transport_config, Op, DEST, TRANSPORT_ID};
 use anyhow::{ensure, Context, Result};
 use rns_core::constants;
-use rns_core::link::types::LinkState;
+use rns_core::link::LinkState;
 use rns_core::packet::RawPacket;
 use rns_core::transport::types::{InterfaceId, PacketBytes, TransportConfig};
 use rns_crypto::ed25519::Ed25519PrivateKey;

@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::common::compressor::BoundedDecompression;
-use rns_core::buffer::types::DecompressError;
+use rns_core::buffer::DecompressError;
 use rns_core::resource::{AssemblyId, AssemblyResult, ResourceAssembly};
 use rns_crypto::sha256::Sha256;
 use std::sync::Arc;
