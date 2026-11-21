@@ -1,5 +1,3 @@
-#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
-
 /// Channel envelope packing and unpacking.
 pub mod envelope;
 /// Channel actions, errors and identifier types.

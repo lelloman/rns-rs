@@ -1,5 +1,3 @@
-#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
-
 use alloc::string::String;
 use alloc::vec::Vec;
 

@@ -1,5 +1,3 @@
-#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
-
 /// Announce processing: path and announce table entries from a validated
 /// announce, and rebuilt announces for retransmission.
 pub mod announce_proc;

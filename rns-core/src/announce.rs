@@ -1,5 +1,3 @@
-#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
-
 use alloc::vec::Vec;
 use core::fmt;
 

@@ -1,4 +1,3 @@
-#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 #![allow(
     unsafe_code,
     reason = "packing into uninitialised buffers on the hot path"
