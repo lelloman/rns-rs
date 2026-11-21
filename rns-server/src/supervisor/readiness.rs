@@ -1,3 +1,4 @@
+use super::error::RpcCallError;
 use super::*;
 
 /// What a readiness probe checks.
@@ -238,12 +239,11 @@ fn probe_hook_set(
     rpc_addr: &RpcAddr,
     auth_key: &[u8; 32],
     required_hooks: &[(String, String)],
-) -> Result<(bool, String), String> {
-    let mut client = RpcClient::connect(rpc_addr, auth_key)
-        .map_err(|err| format!("rpc connect failed: {}", err))?;
+) -> Result<(bool, String), RpcCallError> {
+    let mut client = RpcClient::connect(rpc_addr, auth_key).map_err(RpcCallError::Connect)?;
     let hooks = client
         .list_hooks()
-        .map_err(|err| format!("list_hooks failed: {}", err))?;
+        .map_err(RpcCallError::call("list_hooks"))?;
 
     let missing = missing_required_hooks(&hooks, required_hooks);
 
