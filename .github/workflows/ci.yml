@@ -416,12 +416,20 @@ jobs:
           cargo test -p rns-net --test python_interop -- --nocapture
           cargo test -p rns-net --features compact-threads --test python_interop -- --nocapture
           cargo test -p rns-net --features engine-parallel --test python_interop -- --nocapture
+          # Direct Link proposals to a Python link peer, which ignores them.
+          cargo test -p rns-net --test direct_link_python_interop -- --ignored --nocapture
           cargo test -p rns-cli --test utility_interop -- --ignored --nocapture
+          # rnsd and its clients' startup, compared with upstream's where
+          # the Python Reticulum is 1.6.1; on older ones they check rns-rs
+          # alone.
+          cargo test -p rns-cli --test rnsd_cli -- --nocapture
           cargo test -p rns-cli --test placeholders -- --ignored --nocapture
           cargo test -p rns-rnodeconf --test rnodeconf -- --ignored --nocapture
           # rns-git's Python-peer tests skip themselves without Python RNS,
           # so they only really run here.
           cargo test -p rns-git --lib -- --nocapture
+          # A Python client through rngit's work lifecycle.
+          cargo test -p rns-git --test e2e python_work_lifecycle_interop -- --ignored --nocapture
 
   cargo-test-hooks:
     name: Cargo Test (rns-hooks)
