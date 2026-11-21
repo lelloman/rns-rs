@@ -130,7 +130,7 @@ impl TransportEngine {
             );
             return alloc::vec![TransportAction::AnnounceLocalPathResponse {
                 destination_hash: ctx.destination_hash,
-                tag: ctx.tag[..ctx.tag_len].to_vec(),
+                tag: ctx.tag.to_vec(),
                 interface: ctx.interface_id,
             }];
         }
@@ -185,7 +185,7 @@ impl TransportEngine {
         // tag was recorded on acceptance so echoes are dropped. During the
         // transition, a stamping node marks an unstamped request relayed to
         // local clients with the 0xFF sentinel flags byte (upstream 7c1b6486).
-        let tag = &ctx.tag[..ctx.tag_len];
+        let tag = &ctx.tag;
         if !relay_to_local_clients && self.path_requests.stamp_prs && ctx.ext_payload.is_none() {
             // Transport.py:3826-3828 with STAMP_PRS: `request_path` finds no
             // stamp for the client's tag and queues one stamper job per
@@ -231,14 +231,11 @@ impl TransportEngine {
         interface_id: InterfaceId,
         now: f64,
     ) -> Option<AcceptedPathRequest> {
-        if data.len() < 16 {
-            return None;
-        }
+        // [destination_hash:16][transport_id:16, but legacy][tag:16][ext:16, if stamped]
+        let (destination_hash, rest) = data.split_first_chunk::<16>()?;
+        let destination_hash = *destination_hash;
 
-        let mut destination_hash = [0u8; 16];
-        destination_hash.copy_from_slice(&data[..16]);
-
-        if data.len() <= 16 {
+        if rest.is_empty() {
             log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                 "Ignoring tagless path request for {:02x?}",
                 &destination_hash[..4],
@@ -259,23 +256,21 @@ impl TransportEngine {
             );
             return None;
         }
-        let ext_payload = if data.len() == constants::PATH_REQUEST_STAMPED_LENGTH {
-            let mut ext = [0u8; constants::PR_EXT_PAYLOAD_LENGTH];
-            ext.copy_from_slice(&data[constants::PATH_REQUEST_LENGTH..]);
-            Some(ext)
+        let (requestor_transport_id, rest) = if data.len() == constants::PATH_REQUEST_LEGACY_LENGTH
+        {
+            (None, rest)
         } else {
-            None
+            let (transport_id, rest) = rest.split_first_chunk::<16>()?;
+            (Some(*transport_id), rest)
         };
-        let (requestor_transport_id, tag_bytes) =
-            if data.len() == constants::PATH_REQUEST_LEGACY_LENGTH {
-                (None, &data[16..32])
+        let (tag, ext) = rest.split_first_chunk::<16>()?;
+        let tag = *tag;
+        let ext_payload: Option<[u8; constants::PR_EXT_PAYLOAD_LENGTH]> =
+            if data.len() == constants::PATH_REQUEST_STAMPED_LENGTH {
+                Some(ext.try_into().ok()?)
             } else {
-                let mut transport_id = [0u8; 16];
-                transport_id.copy_from_slice(&data[16..32]);
-                (Some(transport_id), &data[32..48])
+                None
             };
-
-        let tag_len = tag_bytes.len();
 
         let mut carried_stamp_value = None;
         let mut stamped = false;
@@ -291,19 +286,18 @@ impl TransportEngine {
                     log::trace!("Unstamped path request for {:02x?}", &destination_hash[..4]);
                     false
                 }
-                Some(ext) if ext[0] != constants::EXT_PAYLOAD_MARKER => {
+                Some([marker, ..]) if marker != constants::EXT_PAYLOAD_MARKER => {
                     log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                         "Unrecognized stamp payload in path request for {:02x?}",
                         &destination_hash[..4]
                     );
                     false
                 }
-                Some(ext) => {
-                    let mut material = Vec::with_capacity(16 + tag_len);
+                Some([_, relay_flag, ref stamp @ ..]) => {
+                    let mut material = Vec::with_capacity(16 + tag.len());
                     material.extend_from_slice(&destination_hash);
-                    material.extend_from_slice(&tag_bytes[..tag_len]);
+                    material.extend_from_slice(&tag);
                     let workblock = crate::stamp::stamp_workblock(&material, 0);
-                    let stamp = &ext[constants::EXT_HEADER_LENGTH..];
                     let value = crate::stamp::stamp_value(&workblock, stamp);
                     // The receiving interface's `pr_cost` (9b464382).
                     let required_value = self
@@ -314,7 +308,7 @@ impl TransportEngine {
                     let valid = crate::stamp::stamp_valid(stamp, required_value, &workblock);
                     carried_stamp_value = Some(value);
                     stamped = valid;
-                    let relayed = ext[1] == constants::PR_FLAG_UNSTAMPED_RELAY;
+                    let relayed = relay_flag == constants::PR_FLAG_UNSTAMPED_RELAY;
                     if relayed {
                         log::trace!(target: crate::logging::PATHING_LOG_TARGET,
                             "Lenient-relayed path request for {:02x?} with value {value}",
@@ -347,7 +341,7 @@ impl TransportEngine {
 
         let mut unique_tag = [0u8; 32];
         unique_tag[..16].copy_from_slice(&destination_hash);
-        unique_tag[16..16 + tag_len].copy_from_slice(&tag_bytes[..tag_len]);
+        unique_tag[16..].copy_from_slice(&tag);
         if !self.insert_discovery_pr_tag(unique_tag) {
             return None;
         }
@@ -360,11 +354,8 @@ impl TransportEngine {
             .entry(destination_hash)
             .or_insert(now);
 
-        let mut tag = [0u8; 16];
-        tag[..tag_len].copy_from_slice(&tag_bytes[..tag_len]);
         Some(AcceptedPathRequest {
             tag,
-            tag_len,
             interface_id,
             now,
             destination_hash,
@@ -650,7 +641,7 @@ impl TransportEngine {
         let Some((path_request_raw, path_request_len)) = build_path_request_packet(
             &ctx.destination_hash,
             self.config.identity_hash.as_ref(),
-            &ctx.tag[..ctx.tag_len],
+            &ctx.tag,
             ext_payload.as_ref(),
         ) else {
             return Vec::new();

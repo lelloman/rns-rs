@@ -451,21 +451,19 @@ impl TransportEngine {
 
     /// Extract destination hash and hops from raw announce bytes.
     fn extract_announce_info(raw: &[u8]) -> ([u8; 16], u8) {
-        if raw.len() < 18 {
+        let [flags, hops, rest @ ..] = raw else {
             return ([0; 16], 0);
-        }
-        let header_type = (raw[0] >> 6) & 0x03;
-        let hops = raw[1];
-        if header_type == constants::HEADER_2 && raw.len() >= 34 {
-            // H2: transport_id at [2..18], dest_hash at [18..34]
-            let mut dest = [0u8; 16];
-            dest.copy_from_slice(&raw[18..34]);
-            (dest, hops)
+        };
+        // H2: transport_id at [2..18], dest_hash at [18..34]
+        let h2_dest = if (flags >> 6) & 0x03 == constants::HEADER_2 {
+            rest.get(16..).and_then(<[u8]>::first_chunk::<16>)
         } else {
-            // H1: dest_hash at [2..18]
-            let mut dest = [0u8; 16];
-            dest.copy_from_slice(&raw[2..18]);
-            (dest, hops)
+            None
+        };
+        // H1, or a short H2: dest_hash at [2..18]
+        match h2_dest.or_else(|| rest.first_chunk::<16>()) {
+            Some(dest) => (*dest, *hops),
+            None => ([0; 16], 0),
         }
     }
 

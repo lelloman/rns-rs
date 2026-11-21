@@ -565,14 +565,31 @@ impl RawPacket {
 }
 
 impl<B: AsRef<[u8]>> RawPacket<B> {
+    /// The flags byte as it is on the wire.
+    #[inline]
+    pub fn raw_flags(&self) -> u8 {
+        // A parsed or packed packet is longer than its header.
+        self.raw.as_ref().first().copied().unwrap_or_default()
+    }
+
+    /// The hop count as it is on the wire, which `hops` may since have
+    /// changed from.
+    #[inline]
+    pub fn raw_hops(&self) -> u8 {
+        self.raw.as_ref().get(1).copied().unwrap_or_default()
+    }
+
+    /// The wire bytes after the first `skip`, or none if there are fewer.
+    #[inline]
+    pub fn raw_from(&self, skip: usize) -> &[u8] {
+        self.raw.as_ref().get(skip..).unwrap_or_default()
+    }
+
     /// The payload: the wire bytes after the header.
     #[inline]
     pub fn data(&self) -> &[u8] {
         // A parsed or packed packet is longer than its header.
-        self.raw
-            .as_ref()
-            .get(<RawPacket>::data_offset(self.flags.header_type)..)
-            .unwrap_or_default()
+        self.raw_from(<RawPacket>::data_offset(self.flags.header_type))
     }
 
     /// Whether this packet is link resource traffic whose hash nothing

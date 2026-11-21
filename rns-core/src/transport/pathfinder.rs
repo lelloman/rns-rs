@@ -109,12 +109,7 @@ pub fn selection_timebase_from_random_blobs(
 /// length 10 bytes.
 pub fn extract_random_blob(packet_data: &[u8]) -> Option<[u8; 10]> {
     let offset = constants::KEYSIZE / 8 + constants::NAME_HASH_LENGTH / 8;
-    if packet_data.len() < offset + 10 {
-        return None;
-    }
-    let mut blob = [0u8; 10];
-    blob.copy_from_slice(&packet_data[offset..offset + 10]);
-    Some(blob)
+    packet_data.get(offset..)?.first_chunk().copied()
 }
 
 /// Verdict of [`should_update_path`] on an announce.

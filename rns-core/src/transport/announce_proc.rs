@@ -29,8 +29,8 @@ pub fn build_retransmit_announce(
     // For an announce: packet_type = ANNOUNCE(0x01), destination_type = SINGLE(0x00)
     // So lower bits = 0x01
     // But we preserve original flags from the raw packet
-    let original_flags = if !entry.packet_raw.is_empty() {
-        entry.packet_raw[0] & 0x0F
+    let original_flags = if let Some(flags) = entry.packet_raw.first() {
+        flags & 0x0F
     } else {
         // Fallback: SINGLE ANNOUNCE
         (constants::DESTINATION_SINGLE << 2) | constants::PACKET_TYPE_ANNOUNCE
@@ -86,9 +86,8 @@ pub fn process_validated_announce(
     if !random_blobs.contains(&random_blob) {
         random_blobs.push(random_blob);
         // Cap at MAX_RANDOM_BLOBS
-        if random_blobs.len() > constants::MAX_RANDOM_BLOBS {
-            let start = random_blobs.len() - constants::MAX_RANDOM_BLOBS;
-            random_blobs = random_blobs[start..].to_vec();
+        if let Some(excess) = random_blobs.len().checked_sub(constants::MAX_RANDOM_BLOBS) {
+            random_blobs.drain(..excess);
         }
     }
 

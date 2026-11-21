@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
+
 /// Announce processing: path and announce table entries from a validated
 /// announce, and rebuilt announces for retransmission.
 pub mod announce_proc;
@@ -255,7 +257,6 @@ struct TickCtx<'a> {
 #[doc(hidden)]
 pub struct AcceptedPathRequest {
     tag: [u8; 16],
-    tag_len: usize,
     interface_id: InterfaceId,
     now: f64,
     destination_hash: [u8; 16],
