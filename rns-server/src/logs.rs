@@ -1,5 +1,6 @@
+use std::fmt;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -25,6 +26,82 @@ impl Default for LogPolicy {
         Self {
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             max_archives: DEFAULT_MAX_ARCHIVES,
+        }
+    }
+}
+
+/// Why a line could not be written to a process log.
+#[derive(Debug)]
+pub(crate) enum LogWriteError {
+    /// Another writer panicked while holding the write lock.
+    LockPoisoned,
+    /// The log directory could not be created.
+    CreateDir { path: PathBuf, source: io::Error },
+    /// The active log could not be opened.
+    Open { path: PathBuf, source: io::Error },
+    /// The line could not be appended to the active log.
+    Append { path: PathBuf, source: io::Error },
+    /// A log could not be renamed to its next archive.
+    Rotate {
+        from: PathBuf,
+        to: PathBuf,
+        source: io::Error,
+    },
+    /// A log past the retention limit could not be deleted.
+    Prune { path: PathBuf, source: io::Error },
+}
+
+impl fmt::Display for LogWriteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LogWriteError::LockPoisoned => f.write_str("durable log write lock is poisoned"),
+            LogWriteError::CreateDir { path, source } => {
+                write!(f, "failed to create log dir {}: {}", path.display(), source)
+            }
+            LogWriteError::Open { path, source } => {
+                write!(
+                    f,
+                    "failed to open process log {}: {}",
+                    path.display(),
+                    source
+                )
+            }
+            LogWriteError::Append { path, source } => {
+                write!(
+                    f,
+                    "failed to append process log {}: {}",
+                    path.display(),
+                    source
+                )
+            }
+            LogWriteError::Rotate { from, to, source } => write!(
+                f,
+                "failed to rotate process log {} to {}: {}",
+                from.display(),
+                to.display(),
+                source
+            ),
+            LogWriteError::Prune { path, source } => {
+                write!(
+                    f,
+                    "failed to prune process log {}: {}",
+                    path.display(),
+                    source
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for LogWriteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            LogWriteError::LockPoisoned => None,
+            LogWriteError::CreateDir { source, .. }
+            | LogWriteError::Open { source, .. }
+            | LogWriteError::Append { source, .. }
+            | LogWriteError::Rotate { source, .. }
+            | LogWriteError::Prune { source, .. } => Some(source),
         }
     }
 }
@@ -62,15 +139,17 @@ impl LogStore {
         process: &str,
         stream: &str,
         line: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), LogWriteError> {
         let rendered = format!("{} [{}] {}\n", unix_timestamp_secs(), stream, line);
         let _guard = self
             .write_lock
             .lock()
-            .map_err(|_| "durable log write lock is poisoned".to_string())?;
+            .map_err(|_| LogWriteError::LockPoisoned)?;
 
-        fs::create_dir_all(&self.dir)
-            .map_err(|err| format!("failed to create log dir {}: {}", self.dir.display(), err))?;
+        fs::create_dir_all(&self.dir).map_err(|source| LogWriteError::CreateDir {
+            path: self.dir.clone(),
+            source,
+        })?;
         let path = self.process_log_path(process);
         let current_len = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
         if current_len > 0
@@ -83,12 +162,15 @@ impl LogStore {
             .create(true)
             .append(true)
             .open(&path)
-            .map_err(|err| format!("failed to open process log {}: {}", path.display(), err))?;
+            .map_err(|source| LogWriteError::Open {
+                path: path.clone(),
+                source,
+            })?;
         file.write_all(rendered.as_bytes())
-            .map_err(|err| format!("failed to append process log {}: {}", path.display(), err))
+            .map_err(|source| LogWriteError::Append { path, source })
     }
 
-    fn rotate(&self, active_path: &Path, active_len: u64) -> Result<(), String> {
+    fn rotate(&self, active_path: &Path, active_len: u64) -> Result<(), LogWriteError> {
         if self.policy.max_archives == 0 || active_len > self.policy.max_file_bytes {
             remove_if_present(active_path)?;
             return Ok(());
@@ -99,25 +181,21 @@ impl LogStore {
             let source = archive_path(active_path, index);
             if source.exists() {
                 let destination = archive_path(active_path, index + 1);
-                fs::rename(&source, &destination).map_err(|err| {
-                    format!(
-                        "failed to rotate process log {} to {}: {}",
-                        source.display(),
-                        destination.display(),
-                        err
-                    )
-                })?;
+                if let Err(err) = fs::rename(&source, &destination) {
+                    return Err(LogWriteError::Rotate {
+                        from: source,
+                        to: destination,
+                        source: err,
+                    });
+                }
             }
         }
 
         let first_archive = archive_path(active_path, 1);
-        fs::rename(active_path, &first_archive).map_err(|err| {
-            format!(
-                "failed to rotate process log {} to {}: {}",
-                active_path.display(),
-                first_archive.display(),
-                err
-            )
+        fs::rename(active_path, &first_archive).map_err(|source| LogWriteError::Rotate {
+            from: active_path.to_path_buf(),
+            to: first_archive,
+            source,
         })
     }
 }
@@ -128,15 +206,14 @@ fn archive_path(active_path: &Path, index: usize) -> PathBuf {
     PathBuf::from(path)
 }
 
-fn remove_if_present(path: &Path) -> Result<(), String> {
+fn remove_if_present(path: &Path) -> Result<(), LogWriteError> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(format!(
-            "failed to prune process log {}: {}",
-            path.display(),
-            err
-        )),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(LogWriteError::Prune {
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 
@@ -157,6 +234,62 @@ mod tests {
             std::process::id(),
             unix_timestamp_secs()
         ))
+    }
+
+    #[test]
+    fn log_write_errors_keep_their_messages() {
+        let path = || PathBuf::from("/var/log/rns/rnsd.log");
+        let io = || io::Error::other("denied");
+        let cases = [
+            (
+                LogWriteError::LockPoisoned.to_string(),
+                "durable log write lock is poisoned",
+            ),
+            (
+                LogWriteError::CreateDir {
+                    path: PathBuf::from("/var/log/rns"),
+                    source: io(),
+                }
+                .to_string(),
+                "failed to create log dir /var/log/rns: denied",
+            ),
+            (
+                LogWriteError::Open {
+                    path: path(),
+                    source: io(),
+                }
+                .to_string(),
+                "failed to open process log /var/log/rns/rnsd.log: denied",
+            ),
+            (
+                LogWriteError::Append {
+                    path: path(),
+                    source: io(),
+                }
+                .to_string(),
+                "failed to append process log /var/log/rns/rnsd.log: denied",
+            ),
+            (
+                LogWriteError::Rotate {
+                    from: path(),
+                    to: PathBuf::from("/var/log/rns/rnsd.log.1"),
+                    source: io(),
+                }
+                .to_string(),
+                "failed to rotate process log /var/log/rns/rnsd.log to /var/log/rns/rnsd.log.1: denied",
+            ),
+            (
+                LogWriteError::Prune {
+                    path: path(),
+                    source: io(),
+                }
+                .to_string(),
+                "failed to prune process log /var/log/rns/rnsd.log: denied",
+            ),
+        ];
+        for (actual, expected) in cases {
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
