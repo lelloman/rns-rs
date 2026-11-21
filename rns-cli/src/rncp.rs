@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use rns_core::msgpack::{self, Value};
 use rns_core::types::{DestHash, IdentityHash, LinkId};
-use rns_net::destination::Destination;
+use rns_net::Destination;
 use rns_net::{
     Callbacks, ReceivedResourceFile, ResourceReceiveMode, ResourceTransferError,
     ResourceTransferId, RnsNode,
@@ -252,7 +252,7 @@ impl Callbacks for RncpCallbacks {
         &mut self,
         _link_id: LinkId,
         _request_id: [u8; 16],
-        _reason: rns_net::link_manager::RequestFailure,
+        _reason: rns_net::RequestFailure,
     ) {
         let _ = self.tx.send(RncpEvent::RequestFailed);
     }

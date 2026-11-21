@@ -197,7 +197,7 @@ impl LinkRequestCosts {
 }
 
 /// Default scheduling niceness of stamp search threads (`Stamps.NICENESS`).
-pub const DEFAULT_WORKER_NICENESS: i32 = 16;
+pub(crate) const DEFAULT_WORKER_NICENESS: i32 = 16;
 
 /// `[stamps] max_workers`; 0 keeps the default.
 static MAX_WORKERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -208,7 +208,7 @@ static WORKER_NICENESS: std::sync::atomic::AtomicI32 =
 /// Apply `[stamps] max_workers` and `worker_niceness` (upstream 16621a78)
 /// to the stamp searches of this process, as upstream's module-wide
 /// `Stamps.MAX_WORKERS` and `Stamps.NICENESS` do.
-pub fn set_worker_limits(max_workers: Option<usize>, niceness: i32) {
+pub(crate) fn set_worker_limits(max_workers: Option<usize>, niceness: i32) {
     use std::sync::atomic::Ordering;
     MAX_WORKERS.store(max_workers.unwrap_or(0), Ordering::Relaxed);
     WORKER_NICENESS.store(niceness.clamp(0, 20), Ordering::Relaxed);
@@ -326,7 +326,7 @@ where
 /// engine grinds on the calling thread (see [`search`]). Gives up and returns
 /// `None` once `deadline` passes, mirroring upstream's `LINK_STAMP_TIMEOUT`
 /// watchdog. This is unbounded work and must not run on the driver thread.
-pub fn generate_stamped_link_keys(
+pub(crate) fn generate_stamped_link_keys(
     destination_hash: &[u8; 16],
     stamp_cost: StampCost,
     deadline: std::time::Instant,
@@ -363,7 +363,7 @@ pub fn generate_stamped_link_keys(
 /// computation are identical.
 ///
 /// Returns `(stamp, value)`, or `None` for a zero stamp size.
-pub fn generate_stamp(
+pub(crate) fn generate_stamp(
     material: &[u8],
     stamp_cost: StampCost,
     size: usize,
@@ -384,7 +384,7 @@ const NONCES_PER_FILL: usize = 256;
 /// the path request watchdog in `Transport.stamp_path_request` calls after
 /// `PR_STAMP_TIMEOUT` (Transport.py:3977-3986, d7749b0b). Returns `None`
 /// when cancelled, as the cancelled upstream job yields no stamp.
-pub fn generate_stamp_until(
+pub(crate) fn generate_stamp_until(
     material: &[u8],
     stamp_cost: StampCost,
     size: usize,

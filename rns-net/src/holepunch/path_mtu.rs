@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 /// (1280, less 40 bytes of IPv6 and 8 of UDP header) with room for a
 /// tunnel or PPPoE header on the way, and any IPv4 path that carries
 /// ordinary internet traffic.
-pub const MTU_FLOOR: u32 = 1200;
+pub(crate) const MTU_FLOOR: u32 = 1200;
 
 /// Sizes probed above the floor, largest first: the UDP payload of a
 /// 1500-byte Ethernet path (1472 over IPv4, 1452 over IPv6), a size that
@@ -45,11 +45,11 @@ fn ladder(ipv4: bool) -> [u32; 3] {
 }
 
 /// Rounds of probes sent.
-pub const PROBE_ROUNDS: u32 = 3;
+pub(crate) const PROBE_ROUNDS: u32 = 3;
 /// Time between rounds, and after the last one before probing ends.
-pub const ROUND_INTERVAL: Duration = Duration::from_secs(1);
+pub(crate) const ROUND_INTERVAL: Duration = Duration::from_secs(1);
 /// Upper bound on acknowledgements a path sends over its life.
-pub const MAX_ACKS: u32 = 32;
+pub(crate) const MAX_ACKS: u32 = 32;
 
 const PROBE_MAGIC: &[u8; 4] = b"RNSM";
 const ACK_MAGIC: &[u8; 4] = b"RNSN";

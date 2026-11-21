@@ -9,7 +9,7 @@ use super::*;
 ///   2. Build suffix from hash bytes 2..14 as 6 little-endian 16-bit words
 ///   3. First word is hardcoded "0"
 ///   4. Prefix = "ff" + address_type + scope
-pub fn derive_multicast_address(group_id: &[u8], address_type: &str, scope: &str) -> String {
+pub(crate) fn derive_multicast_address(group_id: &[u8], address_type: &str, scope: &str) -> String {
     let group_hash = rns_crypto::sha256::sha256(group_id);
     let g = &group_hash;
 
@@ -28,12 +28,12 @@ pub fn derive_multicast_address(group_id: &[u8], address_type: &str, scope: &str
 }
 
 /// Parse a multicast address string into an Ipv6Addr.
-pub fn parse_multicast_addr(addr: &str) -> Option<Ipv6Addr> {
+pub(crate) fn parse_multicast_addr(addr: &str) -> Option<Ipv6Addr> {
     addr.parse::<Ipv6Addr>().ok()
 }
 
 /// Compute the discovery token: SHA-256(group_id + link_local_address_string).
-pub fn compute_discovery_token(group_id: &[u8], link_local_addr: &str) -> [u8; 32] {
+pub(crate) fn compute_discovery_token(group_id: &[u8], link_local_addr: &str) -> [u8; 32] {
     let mut input = group_id.to_vec();
     input.extend_from_slice(link_local_addr.as_bytes());
     rns_crypto::sha256::sha256(&input)

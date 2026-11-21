@@ -249,7 +249,7 @@ pub(super) fn strip_comment(line: &str) -> &str {
 }
 
 /// Parse a string as a boolean (ConfigObj style). Public API for use by node.rs.
-pub fn parse_bool_pub(value: &str) -> Option<bool> {
+pub(crate) fn parse_bool_pub(value: &str) -> Option<bool> {
     parse_bool(value)
 }
 

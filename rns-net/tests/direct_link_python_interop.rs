@@ -18,8 +18,8 @@ use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 use rns_net::event::HolePunchPolicy;
 use rns_net::{
-    AnnouncedIdentity, Callbacks, DestHash, InterfaceConfig, InterfaceId, NodeConfig, RnsNode,
-    TcpClientConfig, MODE_FULL,
+    interface::TcpClientConfig, AnnouncedIdentity, Callbacks, DestHash, InterfaceConfig,
+    InterfaceId, NodeConfig, RnsNode, MODE_FULL,
 };
 
 /// `REJECT_UNSUPPORTED` from `rns_core::holepunch`.

@@ -2,8 +2,8 @@
 //! with a controlled pause at the sender's concrete writer (no injected drops).
 use super::*;
 use rns_net::interface::{
-    registry::InterfaceRegistry, tcp::TcpClientFactory, InterfaceConfigData, InterfaceFactory,
-    StartContext, StartResult, Writer,
+    InterfaceConfigData, InterfaceFactory, InterfaceRegistry, StartContext, StartResult,
+    TcpClientFactory, Writer,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -46,7 +46,7 @@ impl InterfaceFactory for PausedTcpFactory {
         name: &str,
         id: InterfaceId,
         params: &std::collections::HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, rns_net::InterfaceConfigError> {
+    ) -> Result<Box<dyn InterfaceConfigData>, rns_net::interface::InterfaceConfigError> {
         TcpClientFactory.parse_config(name, id, params)
     }
 

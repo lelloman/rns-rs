@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub use crate::event::ProbeRateLimit;
+pub(crate) use crate::event::ProbeRateLimit;
 
 use crate::engine::service_keys::PROBE_SERVER as PROBE_SERVER_KEY;
 use crate::poll::{Event as Interest, Events, Poller};
@@ -35,13 +35,14 @@ const ADDR_TYPE_IPV6: u8 = 6;
 /// Start a probe server on the given address. Runs in a background thread.
 ///
 /// Returns a handle to stop the server.
-pub fn start_probe_server(listen_addr: SocketAddr) -> io::Result<ProbeServerHandle> {
+#[cfg(test)]
+pub(crate) fn start_probe_server(listen_addr: SocketAddr) -> io::Result<ProbeServerHandle> {
     start_probe_server_with_mark(listen_addr, None, ProbeRateLimit::default())
 }
 
 /// [`start_probe_server`] with a Linux `SO_MARK` for the server socket and
 /// explicit rate limits.
-pub fn start_probe_server_with_mark(
+pub(crate) fn start_probe_server_with_mark(
     listen_addr: SocketAddr,
     underlay_mark: Option<u32>,
     limit: ProbeRateLimit,
@@ -168,19 +169,19 @@ impl Bucket {
 /// Counts of a probe server's work over its life, shared with the node's
 /// status report.
 #[derive(Debug, Default)]
-pub struct ProbeServerCounters {
+pub(crate) struct ProbeServerCounters {
     answered: AtomicU64,
     rate_limited: AtomicU64,
 }
 
 impl ProbeServerCounters {
     /// Probe requests answered.
-    pub fn answered(&self) -> u64 {
+    pub(crate) fn answered(&self) -> u64 {
         self.answered.load(Ordering::Relaxed)
     }
 
     /// Probe requests dropped over the rate limits.
-    pub fn rate_limited(&self) -> u64 {
+    pub(crate) fn rate_limited(&self) -> u64 {
         self.rate_limited.load(Ordering::Relaxed)
     }
 }
@@ -429,7 +430,7 @@ fn bind_server_socket(listen_addr: SocketAddr) -> io::Result<UdpSocket> {
 
 /// The address a probe server listens on for `port`: every IPv6 and IPv4
 /// address when the host has IPv6, else every IPv4 address.
-pub fn probe_server_listen_addrs(port: u16) -> [SocketAddr; 2] {
+pub(crate) fn probe_server_listen_addrs(port: u16) -> [SocketAddr; 2] {
     [
         SocketAddr::from(([0u16; 8], port)),
         SocketAddr::from(([0, 0, 0, 0], port)),
@@ -462,9 +463,10 @@ fn build_probe_response(nonce: &[u8], src: &SocketAddr) -> Vec<u8> {
 }
 
 /// Handle to a running probe server. Stops the server when dropped.
-pub struct ProbeServerHandle {
+pub(crate) struct ProbeServerHandle {
     running: Arc<AtomicBool>,
     wake: crate::listen::ListenerWake,
+    #[cfg_attr(not(test), allow(dead_code, reason = "only the tests read it"))]
     local_addr: SocketAddr,
     thread: Option<thread::JoinHandle<()>>,
     counters: Arc<ProbeServerCounters>,
@@ -472,17 +474,18 @@ pub struct ProbeServerHandle {
 
 impl ProbeServerHandle {
     /// The address the server answers on.
-    pub fn local_addr(&self) -> SocketAddr {
+    #[cfg(test)]
+    pub(crate) fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
 
     /// What the server has answered and dropped so far.
-    pub fn counters(&self) -> Arc<ProbeServerCounters> {
+    pub(crate) fn counters(&self) -> Arc<ProbeServerCounters> {
         Arc::clone(&self.counters)
     }
 
     /// Stop the server and wait for its thread to exit.
-    pub fn stop(&mut self) {
+    pub(crate) fn stop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
         self.wake.wake();
         if let Some(handle) = self.thread.take() {
@@ -503,7 +506,8 @@ impl Drop for ProbeServerHandle {
 /// and returns the observed public endpoint.
 ///
 /// The socket is returned so it can be reused for hole punching (same NAT mapping).
-pub fn probe_endpoint(
+#[cfg(test)]
+pub(crate) fn probe_endpoint(
     probe_server: SocketAddr,
     existing_socket: Option<UdpSocket>,
     timeout: Duration,
@@ -512,8 +516,10 @@ pub fn probe_endpoint(
     probe_endpoint_with_mark(probe_server, existing_socket, timeout, device, None)
 }
 
-/// [`probe_endpoint`] with a Linux `SO_MARK` applied to the probe socket.
-pub fn probe_endpoint_with_mark(
+/// Discover our public endpoint by sending a probe to `probe_server`, with
+/// a Linux `SO_MARK` applied to the probe socket. Returns the observed
+/// endpoint and the socket, for reuse in hole punching (same NAT mapping).
+pub(crate) fn probe_endpoint_with_mark(
     probe_server: SocketAddr,
     existing_socket: Option<UdpSocket>,
     timeout: Duration,
@@ -604,7 +610,8 @@ const STUN_FAMILY_IPV6: u8 = 0x02;
 /// Discover our public endpoint using a STUN Binding Request (RFC 5389).
 ///
 /// Same contract as `probe_endpoint`: returns `(observed_addr, socket)`.
-pub fn stun_probe_endpoint(
+#[cfg(test)]
+pub(crate) fn stun_probe_endpoint(
     stun_server: SocketAddr,
     existing_socket: Option<UdpSocket>,
     timeout: Duration,
@@ -613,8 +620,10 @@ pub fn stun_probe_endpoint(
     stun_probe_endpoint_with_mark(stun_server, existing_socket, timeout, device, None)
 }
 
-/// [`stun_probe_endpoint`] with a Linux `SO_MARK` applied to the probe socket.
-pub fn stun_probe_endpoint_with_mark(
+/// Discover our public endpoint with a STUN Binding Request (RFC 5389),
+/// with a Linux `SO_MARK` applied to the probe socket. Returns the observed
+/// endpoint and the socket.
+pub(crate) fn stun_probe_endpoint_with_mark(
     stun_server: SocketAddr,
     existing_socket: Option<UdpSocket>,
     timeout: Duration,
@@ -764,20 +773,9 @@ fn parse_mapped_address(value: &[u8]) -> Option<SocketAddr> {
     }
 }
 
-/// Unified probe dispatcher: calls RNSP or STUN based on the protocol.
-pub fn probe_endpoint_with_protocol(
-    server: SocketAddr,
-    protocol: rns_core::holepunch::ProbeProtocol,
-    existing_socket: Option<UdpSocket>,
-    timeout: Duration,
-    device: Option<&str>,
-) -> io::Result<(SocketAddr, UdpSocket)> {
-    probe_endpoint_with_protocol_and_mark(server, protocol, existing_socket, timeout, device, None)
-}
-
-/// [`probe_endpoint_with_protocol`] with a Linux `SO_MARK` applied to the probe
-/// socket.
-pub fn probe_endpoint_with_protocol_and_mark(
+/// Probe `server` with RNSP or STUN, as `protocol` says, with a Linux
+/// `SO_MARK` applied to the probe socket.
+pub(crate) fn probe_endpoint_with_protocol_and_mark(
     server: SocketAddr,
     protocol: rns_core::holepunch::ProbeProtocol,
     existing_socket: Option<UdpSocket>,
@@ -795,22 +793,10 @@ pub fn probe_endpoint_with_protocol_and_mark(
     }
 }
 
-/// Try multiple probe servers sequentially, returning the first successful result.
-///
-/// Returns `(observed_addr, socket, server_that_worked)`.
-/// All servers fail → returns the last error.
-pub fn probe_endpoint_failover(
-    servers: &[SocketAddr],
-    protocol: rns_core::holepunch::ProbeProtocol,
-    timeout_per_server: Duration,
-    device: Option<&str>,
-) -> io::Result<(SocketAddr, UdpSocket, SocketAddr)> {
-    probe_endpoint_failover_with_mark(servers, protocol, timeout_per_server, device, None)
-}
-
-/// [`probe_endpoint_failover`] with a Linux `SO_MARK` applied to each probe
-/// socket.
-pub fn probe_endpoint_failover_with_mark(
+/// Try the probe servers in turn, returning the first success as
+/// `(observed_addr, socket, server_that_worked)` or, when all fail, the last
+/// error; with a Linux `SO_MARK` applied to each probe socket.
+pub(crate) fn probe_endpoint_failover_with_mark(
     servers: &[SocketAddr],
     protocol: rns_core::holepunch::ProbeProtocol,
     timeout_per_server: Duration,

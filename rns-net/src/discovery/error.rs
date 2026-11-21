@@ -8,7 +8,7 @@ use super::LOCATION_CMD_MAX_STDOUT;
 /// Why an interface's `location_cmd` gave no coordinates.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum LocationError {
+pub(crate) enum LocationError {
     /// The command printed more than the output limit.
     OutputTooLong,
     /// The command's output is not UTF-8.
@@ -76,6 +76,7 @@ pub enum LocationError {
     /// The command exited unsuccessfully.
     Failed(std::process::ExitStatus),
     /// `location_cmd` is not supported on this platform.
+    #[cfg(windows)]
     Unsupported,
 }
 
@@ -136,6 +137,7 @@ impl std::fmt::Display for LocationError {
                 write!(f, "failed reading location command stdout: {error}")
             }
             LocationError::Failed(status) => write!(f, "location command exited with {status}"),
+            #[cfg(windows)]
             LocationError::Unsupported => f.write_str("location_cmd is not supported on Windows"),
         }
     }
@@ -158,7 +160,7 @@ impl std::error::Error for LocationError {
 /// Why a discovery announce was suppressed while preparing it.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum AnnounceError {
+pub(crate) enum AnnounceError {
     /// The interface's `location_cmd` gave no coordinates.
     Location(LocationError),
     /// An interface of this type is announced only with a `reachable_on`

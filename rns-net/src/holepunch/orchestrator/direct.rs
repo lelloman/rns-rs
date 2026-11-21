@@ -70,7 +70,7 @@ impl HolePunchManager {
     /// A Direct Link attempt on the link failed: if it was a re-upgrade,
     /// try again later, unless the peer refused by policy or does not
     /// answer the capability check.
-    pub fn reupgrade_failed(&mut self, link_id: [u8; 16], reason: u8) {
+    pub(crate) fn reupgrade_failed(&mut self, link_id: [u8; 16], reason: u8) {
         if !self
             .reupgrades
             .get(&link_id)
@@ -100,7 +100,7 @@ impl HolePunchManager {
     /// sends the keepalive whose answer reactivates it, so a link that is
     /// fine is stale for a moment every so often; one that is not closes
     /// soon after, which cancels the re-upgrade.
-    pub fn postpone_reupgrade(&mut self, link_id: [u8; 16]) {
+    pub(crate) fn postpone_reupgrade(&mut self, link_id: [u8; 16]) {
         if let Some(entry) = self.reupgrades.get_mut(&link_id) {
             if entry.in_flight {
                 log::debug!(
@@ -114,14 +114,14 @@ impl HolePunchManager {
     }
 
     /// Stop re-upgrading the link (it is no longer active).
-    pub fn cancel_reupgrade(&mut self, link_id: &[u8; 16]) {
+    pub(crate) fn cancel_reupgrade(&mut self, link_id: &[u8; 16]) {
         self.reupgrades.remove(link_id);
     }
 
     /// Called when a link is closed — clean up any associated session.
     /// The link's direct interface is removed by a later [`tick`](Self::tick),
     /// once the link's closing packets have been sent on it.
-    pub fn link_closed(&mut self, link_id: &[u8; 16]) {
+    pub(crate) fn link_closed(&mut self, link_id: &[u8; 16]) {
         self.remove_link_session(link_id);
         self.history.remove(link_id);
         self.peer_support.remove(link_id);
@@ -137,7 +137,7 @@ impl HolePunchManager {
 
     /// Whether `interface_id` is a direct interface, of a live upgrade or
     /// of a closed link waiting to be removed.
-    pub fn is_direct_interface(
+    pub(crate) fn is_direct_interface(
         &self,
         interface_id: rns_core::transport::types::InterfaceId,
     ) -> bool {
@@ -151,7 +151,8 @@ impl HolePunchManager {
     }
 
     /// The direct interface a link was upgraded to, if any.
-    pub fn direct_interface(
+    #[cfg(test)]
+    pub(crate) fn direct_interface(
         &self,
         link_id: &[u8; 16],
     ) -> Option<rns_core::transport::types::InterfaceId> {
@@ -159,7 +160,7 @@ impl HolePunchManager {
     }
 
     /// The link whose direct interface `interface_id` is, if any.
-    pub fn direct_link_of(
+    pub(crate) fn direct_link_of(
         &self,
         interface_id: rns_core::transport::types::InterfaceId,
     ) -> Option<[u8; 16]> {
@@ -170,13 +171,13 @@ impl HolePunchManager {
     }
 
     /// The session of the link's direct path, if any.
-    pub fn direct_session(&self, link_id: &[u8; 16]) -> Option<[u8; 16]> {
+    pub(crate) fn direct_session(&self, link_id: &[u8; 16]) -> Option<[u8; 16]> {
         self.direct.get(link_id).map(|path| path.session_id)
     }
 
     /// Stop using the link's direct path: forget it and return its
     /// interface and session. The caller removes the interface.
-    pub fn take_direct(
+    pub(crate) fn take_direct(
         &mut self,
         link_id: &[u8; 16],
         cause: DirectLossCause,
@@ -188,7 +189,7 @@ impl HolePunchManager {
 
     /// Make the link's direct path silently drop all traffic both ways, as
     /// a network that stopped carrying it would. For tests.
-    pub fn blackhole_direct(&self, link_id: &[u8; 16]) -> bool {
+    pub(crate) fn blackhole_direct(&self, link_id: &[u8; 16]) -> bool {
         match self.direct.get(link_id) {
             Some(path) => {
                 path.blackhole
@@ -201,7 +202,7 @@ impl HolePunchManager {
 
     /// Called when an interface went down: if it was a link's direct
     /// interface, forget it and return the link and the path's session.
-    pub fn direct_interface_down(
+    pub(crate) fn direct_interface_down(
         &mut self,
         interface_id: rns_core::transport::types::InterfaceId,
     ) -> Option<([u8; 16], [u8; 16])> {

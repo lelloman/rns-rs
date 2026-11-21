@@ -54,7 +54,7 @@ impl PipeRuntime {
 
 /// Driver-side handle to a running pipe interface's runtime settings.
 #[derive(Debug, Clone)]
-pub struct PipeRuntimeConfigHandle {
+pub(crate) struct PipeRuntimeConfigHandle {
     /// Name of the pipe interface.
     pub interface_name: String,
     /// Live settings shared with the interface.
@@ -97,7 +97,7 @@ impl Writer for PipeWriter {
 }
 
 /// Start the pipe interface. Spawns subprocess, returns writer.
-pub fn start(config: PipeConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
+pub(crate) fn start(config: PipeConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
     let id = config.interface_id;
     {
         let startup = PipeRuntime::from_config(&config);

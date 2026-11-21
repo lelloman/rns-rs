@@ -15,8 +15,8 @@ use crate::rnstatus_view::{
 };
 use crate::shared_instance::LocalInstance;
 use rns_net::pickle::PickleValue;
+use rns_net::rpc::RpcClient;
 use rns_net::storage;
-use rns_net::RpcClient;
 use rns_net::TeardownReason;
 
 const VERSION: &str = env!("FULL_VERSION");

@@ -302,6 +302,6 @@ impl PrivateNode {
     }
 }
 
-fn node_error(error: rns_net::node::SendError) -> io::Error {
+fn node_error(error: rns_net::SendError) -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, error)
 }

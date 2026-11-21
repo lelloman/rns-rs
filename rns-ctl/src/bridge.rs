@@ -1,6 +1,6 @@
 use rns_core::transport::types::InterfaceId;
 use rns_core::types::{DestHash, IdentityHash, LinkId, PacketHash};
-use rns_net::destination::AnnouncedIdentity;
+use rns_net::AnnouncedIdentity;
 use rns_net::Callbacks;
 
 use crate::encode::{to_base64, to_hex};

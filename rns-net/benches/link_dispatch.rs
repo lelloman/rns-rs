@@ -3,8 +3,8 @@ use rns_core::constants;
 use rns_core::packet::RawPacket;
 use rns_crypto::ed25519::Ed25519PrivateKey;
 use rns_crypto::{FixedRng, Rng};
-use rns_net::link_manager::{LinkManager, ResourceStrategy};
-use rns_net::{InterfaceId, LinkManagerAction};
+use rns_net::{testing::LinkManager, ResourceStrategy};
+use rns_net::{testing::LinkManagerAction, InterfaceId};
 use std::hint::black_box;
 
 fn make_rng(seed: u8) -> FixedRng {

@@ -17,12 +17,16 @@ mod stats;
 mod tests;
 mod wire;
 
-pub use client::*;
+use client::*;
+pub use client::{RpcClient, SharedInstanceRpc};
 pub(crate) use handlers::*;
-pub use responses::*;
-pub use server::*;
+pub use responses::discovered_interfaces_to_pickle;
+pub(crate) use responses::*;
+pub use server::RpcServer;
+pub(crate) use server::*;
 pub(crate) use stats::*;
-pub use wire::*;
+pub use wire::derive_auth_key;
+pub(crate) use wire::*;
 
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};

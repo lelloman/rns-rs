@@ -22,8 +22,8 @@ use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
 
 use rns_net::rnode_kiss::{self, RNodeDecoder, RNodeEvent};
+use rns_net::serial::Parity;
 use rns_net::serial::{SerialConfig, SerialPort};
-use rns_net::Parity;
 
 const BAUD: u32 = 115_200;
 const BANDWIDTH: u32 = 125_000;

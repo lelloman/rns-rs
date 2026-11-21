@@ -20,7 +20,11 @@ use super::discovery::{
 /// This node's extension: upstream's `ext_info`, in its key order, with
 /// rns-rs's implementation name and version as interface discovery
 /// announces them.
-pub fn encode(transport_enabled: bool, destination_cost: StampCost, pr_cost: StampCost) -> Vec<u8> {
+pub(crate) fn encode(
+    transport_enabled: bool,
+    destination_cost: StampCost,
+    pr_cost: StampCost,
+) -> Vec<u8> {
     msgpack::pack(&Value::Map(vec![
         (
             Value::UInt(u64::from(TRANSPORT_IMPL)),
@@ -54,7 +58,7 @@ pub fn encode(transport_enabled: bool, destination_cost: StampCost, pr_cost: Sta
 /// a boolean. The costs are quantized to the cost grid. A non-finite cost,
 /// which makes upstream's quantization raise, is the parsing exception
 /// upstream reports.
-pub fn decode(extension: &[u8]) -> Result<RemoteTransportInfo, &'static str> {
+pub(crate) fn decode(extension: &[u8]) -> Result<RemoteTransportInfo, &'static str> {
     let Ok(value) = msgpack::unpack_exact(extension) else {
         return Err("Undecodable ext_payload in tunnel synthesis packet");
     };

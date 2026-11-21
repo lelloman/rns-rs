@@ -62,7 +62,7 @@ pub struct FastFlapRecord {
 
 /// The flap count upstream gives an address from the `blocked_ips` file
 /// (rgit `5f2dbc16`): it blocks wherever the listener's grace is below it.
-pub const STATIC_BLOCK_FLAP_COUNT: u64 = 0xFFFF;
+pub(crate) const STATIC_BLOCK_FLAP_COUNT: u64 = 0xFFFF;
 
 /// Process-wide fast-flap history. Policy remains per listener, while the IP
 /// history is shared like upstream's class-level `fast_flapping` table.
@@ -237,7 +237,7 @@ impl BackboneFastFlapMonitor {
 /// (rgit `5f2dbc16`): one IPv4 or IPv6 address per line, lines starting
 /// with `#` skipped, anything else ignored. A missing file blocks nothing;
 /// an unreadable one is logged and blocks nothing.
-pub fn read_blocked_ips_file(config_dir: &std::path::Path) -> Vec<IpAddr> {
+pub(crate) fn read_blocked_ips_file(config_dir: &std::path::Path) -> Vec<IpAddr> {
     let path = config_dir.join("blocked_ips");
     if !path.is_file() {
         return Vec::new();
@@ -259,7 +259,7 @@ pub fn read_blocked_ips_file(config_dir: &std::path::Path) -> Vec<IpAddr> {
 
 /// Block the addresses in `<config dir>/blocked_ips` on every Backbone
 /// listener of this process, as upstream does at startup.
-pub fn load_blocked_ips_file(config_dir: &std::path::Path) {
+pub(crate) fn load_blocked_ips_file(config_dir: &std::path::Path) {
     if !config_dir.join("blocked_ips").is_file() {
         return;
     }

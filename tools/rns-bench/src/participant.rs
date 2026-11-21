@@ -6,8 +6,9 @@ use anyhow::{bail, ensure, Result};
 use rns_core::{constants, types::LinkId};
 use rns_crypto::{identity::Identity, OsRng};
 use rns_net::{
+    interface::{TcpClientConfig, TcpServerConfig},
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig,
-    InterfaceId, NodeConfig, RnsNode, TcpClientConfig, TcpServerConfig,
+    InterfaceId, NodeConfig, RnsNode,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},

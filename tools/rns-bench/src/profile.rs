@@ -9,7 +9,7 @@ use rns_core::{
     resource::{ResourceAction, ResourceReceiver, ResourceSender, ResourceStatus},
 };
 use rns_crypto::{sha256::sha256, token::Token, OsRng, Rng};
-use rns_net::compressor::Bzip2Compressor;
+use rns_net::Bzip2Compressor;
 use serde::{Deserialize, Serialize};
 use std::{
     cell::{Cell, RefCell},

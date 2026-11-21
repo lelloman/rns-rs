@@ -19,12 +19,13 @@ mod tests;
 mod writers;
 
 pub(crate) use configure::*;
-pub use connection::*;
-pub use factory::*;
-pub use radio::*;
+use connection::*;
+pub use factory::{RNodeFactory, RNodeMultiFactory};
+pub(crate) use radio::*;
 use reader::*;
 use receive::RNodeReceiver;
-pub use runtime::*;
+pub use runtime::RNodeRuntime;
+pub(crate) use runtime::*;
 use telemetry::*;
 use writers::*;
 
@@ -33,7 +34,7 @@ mod folded;
 mod setup;
 mod transport;
 
-pub use ble::LinkState as BleLinkState;
+pub(crate) use ble::LinkState as BleLinkState;
 
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
@@ -44,7 +45,7 @@ use std::time::Duration;
 use transport::Transport;
 
 /// The shared write side of an RNode connection.
-pub type DeviceWriter = crate::interface::device_writer::DeviceWriter<Transport>;
+pub(crate) type DeviceWriter = crate::interface::device_writer::DeviceWriter<Transport>;
 
 use rns_core::transport::types::{AirtimeProfile, InterfaceId};
 
@@ -57,33 +58,33 @@ use crate::serial::{Parity, SerialConfig};
 // Validation limits matching Python RNodeInterface.
 
 /// Lowest accepted radio frequency, in Hz.
-pub const FREQ_MIN: u32 = 137_000_000;
+pub(crate) const FREQ_MIN: u32 = 137_000_000;
 /// Highest accepted radio frequency, in Hz.
-pub const FREQ_MAX: u32 = 3_000_000_000;
+pub(crate) const FREQ_MAX: u32 = 3_000_000_000;
 /// Narrowest accepted LoRa bandwidth, in Hz.
-pub const BW_MIN: u32 = 7_800;
+pub(crate) const BW_MIN: u32 = 7_800;
 /// Widest accepted LoRa bandwidth, in Hz.
-pub const BW_MAX: u32 = 1_625_000;
+pub(crate) const BW_MAX: u32 = 1_625_000;
 /// Lowest accepted LoRa spreading factor.
-pub const SF_MIN: u8 = 5;
+pub(crate) const SF_MIN: u8 = 5;
 /// Highest accepted LoRa spreading factor.
-pub const SF_MAX: u8 = 12;
+pub(crate) const SF_MAX: u8 = 12;
 /// Lowest accepted LoRa coding rate (the `5` of 4/5).
-pub const CR_MIN: u8 = 5;
+pub(crate) const CR_MIN: u8 = 5;
 /// Highest accepted LoRa coding rate (the `8` of 4/8).
-pub const CR_MAX: u8 = 8;
+pub(crate) const CR_MAX: u8 = 8;
 /// Lowest accepted transmit power, in dBm.
-pub const TXPOWER_MIN: i8 = 0;
+pub(crate) const TXPOWER_MIN: i8 = 0;
 /// Highest accepted transmit power, in dBm.
-pub const TXPOWER_MAX: i8 = 37;
+pub(crate) const TXPOWER_MAX: i8 = 37;
 /// Hardware MTU of an RNode interface, in bytes (upstream `HW_MTU`).
-pub const HW_MTU: u32 = 508;
+pub(crate) const HW_MTU: u32 = 508;
 /// LoRa preamble length, in symbols, used for airtime estimates.
-pub const LORA_PREAMBLE_SYMBOLS: u16 = 8;
+pub(crate) const LORA_PREAMBLE_SYMBOLS: u16 = 8;
 /// Whether airtime estimates assume an explicit LoRa header.
-pub const LORA_EXPLICIT_HEADER: bool = true;
+pub(crate) const LORA_EXPLICIT_HEADER: bool = true;
 /// Whether airtime estimates assume a LoRa payload CRC.
-pub const LORA_CRC: bool = true;
+pub(crate) const LORA_CRC: bool = true;
 
 /// Configuration for one RNode subinterface (radio).
 #[derive(Debug, Clone)]

@@ -187,13 +187,13 @@ impl std::fmt::Display for InterfaceKind {
 
 /// Return whether an interface type normally operates on a shared medium;
 /// see [`InterfaceKind::shared_medium`]. `false` for an unknown type.
-pub fn shared_medium_hint(interface_type: &str) -> bool {
+pub(crate) fn shared_medium_hint(interface_type: &str) -> bool {
     InterfaceKind::from_type_name(interface_type).is_some_and(InterfaceKind::shared_medium)
 }
 
 /// Whether a tunnel may be synthesized over an interface of this type; see
 /// [`InterfaceKind::tunnels_allowed`]. `false` for an unknown type.
-pub fn tunnels_allowed(interface_type: &str) -> bool {
+pub(crate) fn tunnels_allowed(interface_type: &str) -> bool {
     InterfaceKind::from_type_name(interface_type).is_some_and(InterfaceKind::tunnels_allowed)
 }
 

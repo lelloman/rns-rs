@@ -5,8 +5,8 @@ use std::io;
 use std::path::Path;
 
 use rns_net::config::{self, ConfigError, RnsConfig};
+use rns_net::rpc::SharedInstanceRpc;
 use rns_net::storage::{self, StoragePaths};
-use rns_net::SharedInstanceRpc;
 
 /// What upstream's `RNS.Reticulum(configdir)` gives a tool for the local
 /// instance: the config, the storage, and the shared instance's RPC.

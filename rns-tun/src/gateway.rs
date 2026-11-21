@@ -768,7 +768,7 @@ fn reject(private: &PrivateNode, link_id: [u8; 16], reason: u16, diagnostic: &st
     );
     let _ = private.node.teardown_link(link_id);
 }
-fn node_error(error: rns_net::node::SendError) -> io::Error {
+fn node_error(error: rns_net::SendError) -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, error)
 }
 fn session_error(error: crate::SessionError) -> io::Error {

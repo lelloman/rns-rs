@@ -1,38 +1,38 @@
 //! Network interface abstractions.
 
 #[cfg(feature = "iface-auto")]
-pub mod auto;
+pub(crate) mod auto;
 #[cfg(feature = "iface-kiss")]
-pub mod ax25_kiss;
+pub(crate) mod ax25_kiss;
 #[cfg(feature = "iface-backbone")]
-pub mod backbone;
+pub(crate) mod backbone;
 #[cfg(any(feature = "iface-rnode", feature = "iface-weave"))]
 pub(crate) mod device_writer;
 pub(crate) mod display;
 #[cfg(feature = "iface-i2p")]
-pub mod i2p;
+pub(crate) mod i2p;
 #[cfg(feature = "iface-kiss")]
-pub mod kiss_iface;
+pub(crate) mod kiss_iface;
 #[cfg(feature = "iface-local")]
-pub mod local;
+pub(crate) mod local;
 pub(crate) mod loop_writer;
 #[cfg(feature = "iface-pipe")]
-pub mod pipe;
-pub mod registry;
+pub(crate) mod pipe;
+pub(crate) mod registry;
 #[cfg(feature = "iface-rnode")]
-pub mod rnode;
+pub(crate) mod rnode;
 #[cfg(feature = "iface-serial")]
-pub mod serial_iface;
+pub(crate) mod serial_iface;
 pub(crate) mod stream_read;
 #[cfg(feature = "iface-tcp")]
-pub mod tcp;
+pub(crate) mod tcp;
 #[cfg(feature = "iface-tcp")]
-pub mod tcp_server;
+pub(crate) mod tcp_server;
 pub(crate) mod transmit_buffer;
 #[cfg(feature = "iface-udp")]
-pub mod udp;
+pub(crate) mod udp;
 #[cfg(all(feature = "iface-weave", target_os = "linux"))]
-pub mod weave;
+pub(crate) mod weave;
 
 mod async_writer;
 mod egress;
@@ -51,7 +51,7 @@ pub use async_writer::{
     DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
 };
 pub use egress::EgressControl;
-pub use entry::InterfaceEntry;
+pub(crate) use entry::InterfaceEntry;
 #[cfg(all(test, any(feature = "iface-tcp", feature = "iface-backbone")))]
 pub(crate) use factory::test_start_context;
 #[cfg(any(runtime_config_ifaces, feature = "iface-local"))]
@@ -60,7 +60,7 @@ pub use factory::{
     ConfigSection, DynamicInterfaceTemplate, InterfaceConfigData, InterfaceConfigError,
     InterfaceFactory, StartContext, StartResult, SubInterface,
 };
-pub use interface_map::{InterfaceIdHasher, InterfaceMap};
+pub(crate) use interface_map::InterfaceMap;
 #[cfg(any(feature = "iface-serial", feature = "iface-kiss"))]
 pub(crate) use listener_control::poll_readable;
 #[cfg(any(
@@ -77,13 +77,13 @@ pub(crate) use tcp_params::auto_mtu_for_bitrate;
 pub(crate) use tcp_params::{
     parse_flush_after, parse_tcp_rate_params, tcp_bitrate, tcp_hardware_mtu, DEFAULT_FLUSH_AFTER,
 };
-pub use type_hints::{shared_medium_hint, tunnels_allowed, InterfaceKind};
-pub use underlay::{
-    apply_underlay_mark, install_socket_protector, validate_underlay_mark, SocketProtector,
-    SocketProtectorGuard,
-};
+pub(crate) use type_hints::{shared_medium_hint, tunnels_allowed, InterfaceKind};
 #[cfg(target_os = "linux")]
-pub use underlay::{bind_to_device, connect_tcp_with_options};
+pub(crate) use underlay::bind_to_device;
+#[cfg(all(target_os = "linux", feature = "iface-tcp"))]
+pub(crate) use underlay::connect_tcp_with_options;
+pub(crate) use underlay::{apply_underlay_mark, validate_underlay_mark};
+pub use underlay::{install_socket_protector, SocketProtector, SocketProtectorGuard};
 #[cfg(any(
     feature = "iface-tcp",
     feature = "iface-serial",
@@ -96,4 +96,45 @@ pub use writer::{FrameBytes, Writer};
 
 pub(crate) use crate::sync::lock_or_recover;
 
-pub use crate::common::interface_stats::{InterfaceStats, TrafficRates, ANNOUNCE_SAMPLE_MAX};
+pub use crate::common::interface_stats::{
+    FrequencySample, InterfaceStats, RadioStats, TrafficRates, ANNOUNCE_SAMPLE_MAX,
+};
+
+// The built-in interfaces: their factories and configs.
+#[cfg(feature = "iface-auto")]
+pub use auto::{AutoConfig, AutoFactory};
+#[cfg(feature = "iface-ax25-kiss")]
+pub use ax25_kiss::{
+    decode_ui_frame as decode_ax25_ui_frame, encode_ui_frame as encode_ax25_ui_frame,
+    validate_address as validate_ax25_address, Ax25AddressError, Ax25KissFactory,
+};
+#[cfg(feature = "iface-backbone")]
+pub use backbone::{
+    BackboneClientConfig, BackboneClientInterfaceFactory, BackboneConfig, BackboneInterfaceFactory,
+};
+#[cfg(feature = "iface-i2p")]
+pub use i2p::{I2pConfig, I2pFactory};
+#[cfg(feature = "iface-ax25-kiss")]
+pub use kiss_iface::Ax25Address;
+#[cfg(feature = "iface-kiss")]
+pub use kiss_iface::{KissFactory, KissIfaceConfig};
+#[cfg(feature = "iface-local")]
+pub use local::{LocalClientConfig, LocalClientFactory, LocalServerConfig, LocalServerFactory};
+#[cfg(feature = "iface-pipe")]
+pub use pipe::{PipeConfig, PipeFactory};
+pub use registry::InterfaceRegistry;
+#[cfg(feature = "iface-rnode")]
+pub use rnode::{RNodeConfig, RNodeFactory, RNodeMultiFactory, RNodeRuntime, RNodeSubConfig};
+#[cfg(feature = "iface-serial")]
+pub use serial_iface::{SerialFactory, SerialIfaceConfig};
+#[cfg(feature = "iface-tcp")]
+pub use tcp::{TcpClientConfig, TcpClientFactory};
+#[cfg(feature = "iface-tcp")]
+pub use tcp_server::{TcpServerConfig, TcpServerFactory};
+#[cfg(feature = "iface-udp")]
+pub use udp::{UdpConfig, UdpFactory};
+#[cfg(all(feature = "iface-weave", target_os = "linux"))]
+pub use weave::{
+    parse_device_frame as parse_weave_device_frame, WdclFrame, WeaveConfig, WeaveFactory,
+    WeaveInput, WeaveLogFrame, WeavePeerState, WeaveState,
+};

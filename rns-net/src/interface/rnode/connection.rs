@@ -2,19 +2,6 @@
 
 use super::*;
 
-/// Start the RNode interface.
-///
-/// Opens serial port, spawns reader thread which performs detect+configure,
-/// then enters data relay mode.
-///
-/// Returns one `(InterfaceId, Box<dyn Writer>)` per subinterface.
-pub fn start(
-    config: RNodeConfig,
-    tx: EventSender,
-) -> io::Result<Vec<(InterfaceId, Box<dyn Writer>)>> {
-    start_with_control(config, tx).map(|(writers, _)| writers)
-}
-
 pub(super) fn start_with_control(
     config: RNodeConfig,
     tx: EventSender,

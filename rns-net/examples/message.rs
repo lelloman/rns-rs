@@ -19,9 +19,9 @@ use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 
 use rns_net::{
+    interface::{TcpClientConfig, TcpServerConfig},
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig,
-    InterfaceId, NodeConfig, PacketHash, ProofStrategy, RnsNode, TcpClientConfig, TcpServerConfig,
-    MODE_FULL,
+    InterfaceId, NodeConfig, PacketHash, ProofStrategy, RnsNode, MODE_FULL,
 };
 
 const APP_NAME: &str = "example_utilities";

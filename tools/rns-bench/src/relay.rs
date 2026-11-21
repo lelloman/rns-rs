@@ -2,7 +2,9 @@
 use crate::protocol::{self, Command, Message};
 use anyhow::{bail, Result};
 use rns_core::constants;
-use rns_net::{Callbacks, InterfaceConfig, InterfaceId, NodeConfig, RnsNode, TcpServerConfig};
+use rns_net::{
+    interface::TcpServerConfig, Callbacks, InterfaceConfig, InterfaceId, NodeConfig, RnsNode,
+};
 
 struct RelayCallbacks;
 impl Callbacks for RelayCallbacks {}

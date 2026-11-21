@@ -3,7 +3,7 @@
 use super::*;
 
 /// Validate subinterface configuration. Returns error message if invalid.
-pub fn validate_sub_config(sub: &RNodeSubConfig) -> Option<String> {
+pub(crate) fn validate_sub_config(sub: &RNodeSubConfig) -> Option<String> {
     if sub.frequency < FREQ_MIN || sub.frequency > FREQ_MAX {
         return Some(format!(
             "Invalid frequency {} for {}",
@@ -44,14 +44,14 @@ pub fn validate_sub_config(sub: &RNodeSubConfig) -> Option<String> {
 /// Estimate the LoRa physical bit rate for announce bandwidth gating.
 ///
 /// Formula: SF * (bandwidth / 2^SF) * (4 / coding_rate).
-pub fn estimate_lora_bitrate_bps(sub: &RNodeSubConfig) -> u64 {
+pub(crate) fn estimate_lora_bitrate_bps(sub: &RNodeSubConfig) -> u64 {
     let symbols_per_second = sub.bandwidth as f64 / (1u64 << sub.spreading_factor) as f64;
     let bits_per_symbol = sub.spreading_factor as f64 * (4.0 / sub.coding_rate as f64);
     (symbols_per_second * bits_per_symbol).round().max(1.0) as u64
 }
 
 /// LoRa airtime parameters of a subinterface, for airtime estimates.
-pub fn lora_airtime_profile(sub: &RNodeSubConfig) -> AirtimeProfile {
+pub(crate) fn lora_airtime_profile(sub: &RNodeSubConfig) -> AirtimeProfile {
     AirtimeProfile::Lora {
         bandwidth: sub.bandwidth,
         spreading_factor: sub.spreading_factor,

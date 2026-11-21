@@ -20,7 +20,8 @@ use rns_hooks_crate::{BuiltinHookCall, BuiltinHookHost, HookError, HookResult};
 use rusqlite::Connection;
 
 use rns_net::{
-    InterfaceConfig, InterfaceId, NodeConfig, RnsNode, TcpClientConfig, TcpServerConfig, MODE_FULL,
+    interface::{TcpClientConfig, TcpServerConfig},
+    InterfaceConfig, InterfaceId, NodeConfig, RnsNode, MODE_FULL,
 };
 
 use rns_ctl::api::NodeHandle;
