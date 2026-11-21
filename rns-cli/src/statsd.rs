@@ -958,10 +958,10 @@ fn read_proc_sample(pid: u32) -> Option<ProcessSample> {
     if fields.len() < 22 {
         return None;
     }
-    let utime_ticks: u64 = fields[11].parse().ok()?;
-    let stime_ticks: u64 = fields[12].parse().ok()?;
-    let num_threads: u32 = fields[17].parse().ok()?;
-    let rss_pages: u64 = fields[21].parse().ok()?;
+    let utime_ticks: u64 = fields.get(11)?.parse().ok()?;
+    let stime_ticks: u64 = fields.get(12)?.parse().ok()?;
+    let num_threads: u32 = fields.get(17)?.parse().ok()?;
+    let rss_pages: u64 = fields.get(21)?.parse().ok()?;
 
     let clk_tck = crate::sys::sysconf(libc::_SC_CLK_TCK) as u64;
     let page_size = crate::sys::sysconf(libc::_SC_PAGESIZE) as u64;
