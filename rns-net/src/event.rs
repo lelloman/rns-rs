@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use rns_core::transport::types::InterfaceId;
 
 pub use crate::common::event::{direct_link_reason_name, query};
+pub use crate::common::event::{AnnounceReplay, DeferredSend, Event, StampedLinkKeys};
 pub use crate::common::event::{
     BackboneInterfaceEntry, BackbonePeerHookEvent, BackbonePeerPoolMemberStatus,
     BackbonePeerPoolStatus, BackbonePeerStateEntry, BlackholeInfo, DestinationStampInfo,
@@ -24,10 +25,8 @@ pub use crate::common::event::{
     RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
     SendProbeError, SingleInterfaceStat, TrafficDetail, MAX_PROBE_PAYLOAD_SIZE,
 };
+pub use crate::link_send::Completion;
 pub use crate::stamper::StampedPathRequest;
-
-/// Concrete Event type using boxed sync Writer.
-pub type Event = crate::common::event::Event<Box<dyn crate::interface::Writer>>;
 
 /// Default capacity, in events, of the control queue and of the inbound data queue.
 pub const DEFAULT_EVENT_QUEUE_CAPACITY: usize = 1024;

@@ -71,6 +71,7 @@ pub(crate) use listener_control::poll_readable;
 ))]
 pub(crate) use listener_control::wait_while_active;
 pub use listener_control::ListenerControl;
+pub use loop_writer::LoopEgress;
 #[cfg(feature = "iface-backbone")]
 pub(crate) use tcp_params::auto_mtu_for_bitrate;
 #[cfg(feature = "iface-tcp")]
