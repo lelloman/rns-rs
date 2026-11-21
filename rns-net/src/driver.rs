@@ -163,19 +163,22 @@ mod tick_source;
 pub(crate) mod tests;
 
 fn inject_transport_header(raw: &[u8], next_hop: &[u8; 16]) -> Vec<u8> {
+    let [flags, hops, rest @ ..] = raw else {
+        return raw.to_vec();
+    };
     if raw.len() < 18 {
         return raw.to_vec();
     }
 
     let new_flags = (rns_core::constants::HEADER_2 << 6)
         | (rns_core::constants::TRANSPORT_TRANSPORT << 4)
-        | (raw[0] & 0x0F);
+        | (flags & 0x0F);
 
     let mut new_raw = Vec::with_capacity(raw.len() + 16);
     new_raw.push(new_flags);
-    new_raw.push(raw[1]);
+    new_raw.push(*hops);
     new_raw.extend_from_slice(next_hop);
-    new_raw.extend_from_slice(&raw[2..]);
+    new_raw.extend_from_slice(rest);
     new_raw
 }
 
@@ -244,17 +247,14 @@ pub(crate) const PACKET_SIGNAL_CACHE_MAXSIZE: usize = 512;
 /// HEADER_1 (raw[0] & 0x40 == 0): dest at bytes 2..18
 /// HEADER_2 (raw[0] & 0x40 != 0): dest at bytes 18..34 (after transport ID)
 fn extract_dest_hash(raw: &[u8]) -> [u8; 16] {
-    let mut dest = [0u8; 16];
-    if raw.is_empty() {
-        return dest;
-    }
-    let is_header2 = raw[0] & 0x40 != 0;
-    let start = if is_header2 { 18 } else { 2 };
-    let end = start + 16;
-    if raw.len() >= end {
-        dest.copy_from_slice(&raw[start..end]);
-    }
-    dest
+    let Some(flags) = raw.first() else {
+        return [0; 16];
+    };
+    let start = if flags & 0x40 != 0 { 18 } else { 2 };
+    raw.get(start..)
+        .and_then(<[u8]>::first_chunk::<16>)
+        .copied()
+        .unwrap_or_default()
 }
 
 pub use crate::common::callbacks::Callbacks;

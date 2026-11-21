@@ -76,10 +76,11 @@ impl PacketProofs {
         dest_hash: &[u8; 16],
         proof_data: &'a [u8],
     ) -> Option<([u8; 32], &'a [u8])> {
-        if proof_data.len() >= 96 {
-            let mut tracked_hash = [0u8; 32];
-            tracked_hash.copy_from_slice(&proof_data[..32]);
-            Some((tracked_hash, &proof_data[32..96]))
+        if let Some((tracked_hash, rest)) = proof_data
+            .split_first_chunk::<32>()
+            .filter(|_| proof_data.len() >= 96)
+        {
+            Some((*tracked_hash, rest.get(..64)?))
         } else if proof_data.len() == 64 {
             let mut candidates = self
                 .sent_packets
@@ -125,7 +126,7 @@ impl PacketProofs {
                 );
             }
 
-            Some((candidates[0], &proof_data[..64]))
+            Some((*candidates.first()?, proof_data))
         } else {
             log::debug!("Unsupported proof length: {} bytes", proof_data.len());
             None

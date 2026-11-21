@@ -339,9 +339,11 @@ impl FoldedCompression {
             }
             let before = self.encoder.total_in();
             let input = self.prefixed.as_deref().unwrap_or(&self.data);
-            let status =
-                self.encoder
-                    .compress_vec(&input[self.consumed..end], &mut self.output, action)?;
+            let status = self.encoder.compress_vec(
+                input.get(self.consumed..end).unwrap_or_default(),
+                &mut self.output,
+                action,
+            )?;
             self.consumed += (self.encoder.total_in() - before) as usize;
             match (action, status) {
                 (bzip2::Action::Finish, bzip2::Status::StreamEnd) => return Ok(true),

@@ -300,7 +300,9 @@ impl BackbonePeerPool {
         if active < self.settings.max_connected {
             return Some((index, None));
         }
-        if self.candidates[index].config.source != BackbonePeerPoolCandidateSource::Configured {
+        if self.candidates.get(index).is_none_or(|candidate| {
+            candidate.config.source != BackbonePeerPoolCandidateSource::Configured
+        }) {
             return None;
         }
         let victim = self

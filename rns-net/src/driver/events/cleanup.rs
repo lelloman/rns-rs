@@ -9,7 +9,11 @@ impl Driver {
         };
         let end =
             (cleanup.cursor + KNOWN_DESTINATION_CLEANUP_BATCH_SIZE).min(cleanup.candidates.len());
-        for destination_hash in &cleanup.candidates[cleanup.cursor..end] {
+        let batch = cleanup
+            .candidates
+            .get(cleanup.cursor..end)
+            .unwrap_or_default();
+        for destination_hash in batch {
             let remove = self
                 .known
                 .entries

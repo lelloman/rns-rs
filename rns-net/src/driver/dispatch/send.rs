@@ -84,7 +84,7 @@ impl Driver {
             (raw, ratchet_lease)
         };
 
-        let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
+        let is_announce = raw.len() > 2 && raw.first().is_some_and(|flags| flags & 0x03 == 0x01);
         let is_path_request = is_outbound_path_request(&raw, &self.builtin.path_request);
         if is_path_request {
             let now = time::now();
@@ -189,12 +189,11 @@ impl Driver {
         Self::record_send_result(entry, &send_result, "send", interface);
         if sent_ok && is_announce {
             let sent_slice: &[u8] = if entry.ifac.is_some() { &data } else { &raw };
-            let header_type = (sent_slice[0] >> 6) & 0x03;
+            let header_type = sent_slice.first().map_or(0, |flags| (flags >> 6) & 0x03);
             let dest_start = if header_type == 1 { 18usize } else { 2usize };
-            let dest_preview = if sent_slice.len() >= dest_start + 4 {
-                format!("{:02x?}", &sent_slice[dest_start..dest_start + 4])
-            } else {
-                "??".into()
+            let dest_preview = match sent_slice.get(dest_start..dest_start + 4) {
+                Some(prefix) => format!("{:02x?}", prefix),
+                None => "??".into(),
             };
             log::debug!(
                 "Announce:SENT on iface {} (len={}, h={}, dest=[{}])",
@@ -252,7 +251,7 @@ impl Driver {
             (raw, ratchet_lease)
         };
 
-        let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
+        let is_announce = raw.len() > 2 && raw.first().is_some_and(|flags| flags & 0x03 == 0x01);
         let is_path_request = is_outbound_path_request(&raw, &self.builtin.path_request);
         let Ok(tracked) = Self::take_tracked_link_send(
             &mut self.tracked_link_send,

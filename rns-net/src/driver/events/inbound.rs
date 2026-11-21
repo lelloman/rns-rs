@@ -202,13 +202,15 @@ impl Driver {
         ingress_limited: bool,
     ) {
         let received_size = data.len();
-        if data.len() > 2 && (data[0] & 0x03) == 0x01 {
-            log::debug!(
-                "Announce:frame from iface {} (len={}, flags=0x{:02x})",
-                interface_id.0,
-                data.len(),
-                data[0]
-            );
+        if let (true, Some(&flags)) = (data.len() > 2, data.first()) {
+            if flags & 0x03 == 0x01 {
+                log::debug!(
+                    "Announce:frame from iface {} (len={}, flags=0x{:02x})",
+                    interface_id.0,
+                    data.len(),
+                    flags
+                );
+            }
         }
         let Some(packet) = self.unmask_inbound_frame(interface_id, data, received_size) else {
             return;
@@ -304,7 +306,7 @@ impl Driver {
                     }
                 }
             } else {
-                if data.len() > 2 && data[0] & 0x80 == 0x80 {
+                if data.len() > 2 && data.first().is_some_and(|flags| flags & 0x80 == 0x80) {
                     log::debug!(
                         "[{}] dropping packet with IFAC flag on non-IFAC interface",
                         interface_id.0
