@@ -81,10 +81,10 @@ pub use event::{
     BackbonePeerHookEvent, BackbonePeerPoolMemberStatus, BackbonePeerPoolStatus,
     BackbonePeerStateEntry, BlackholeInfo, DestinationStampInfo, Event, HookInfo, HookOpError,
     InterfaceStatsResponse, LinkDatagramError, LinkInfoEntry, LinkTraffic, LocalDestinationEntry,
-    NextHopResponse, PacketSignal, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
-    ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
-    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
-    TrafficDetail,
+    NextHopResponse, PacketSignal, PathTableEntry, Query, QueryRequest, QueryResponse,
+    RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
+    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
+    SingleInterfaceStat, TrafficDetail,
 };
 pub use ifac::IfacState;
 #[cfg(feature = "iface-auto")]

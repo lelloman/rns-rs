@@ -9,3 +9,6 @@ mod read;
 
 use super::*;
 use rns_core::encoding::hex;
+
+#[cfg(test)]
+mod tests;

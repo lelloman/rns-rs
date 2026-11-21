@@ -2,9 +2,119 @@
 
 use super::*;
 
-/// Queries that can be sent to the driver.
-#[derive(Debug)]
-pub enum QueryRequest {
+/// A query to the driver, paired with the type of its answer.
+///
+/// Each query is a struct in [`query`]. It goes to the driver as the
+/// [`QueryRequest`] it converts into, and the driver answers with a
+/// [`QueryResponse`], out of which [`Query::response`] takes the answer.
+/// [`RnsNode::query`](crate::RnsNode::query) does both, so a caller gets
+/// the answer's own type and never matches a response.
+pub trait Query: Into<QueryRequest> {
+    /// The driver's answer.
+    type Response;
+
+    /// The answer out of the driver's `response`, or `None` when it
+    /// answers another query.
+    fn response(response: QueryResponse) -> Option<Self::Response>;
+}
+
+/// Defines [`QueryRequest`] and, for each of its variants, the struct of the
+/// same name in [`query`] with the variant's fields, and its [`Query`]
+/// implementation: the type of the answer, and the pattern that takes it
+/// out of a [`QueryResponse`].
+macro_rules! queries {
+    ($(
+        $(#[$meta:meta])*
+        $name:ident
+        $({ $($(#[$field_meta:meta])* $field:ident: $field_ty:ty),* $(,)? })?
+        $(($inner:ty))?
+        => $response:ty { $pattern:pat => $answer:expr }
+    ),* $(,)?) => {
+        /// Queries that can be sent to the driver. Each variant has a struct
+        /// of the same name in [`query`], which pairs it with the type of its
+        /// answer.
+        #[derive(Debug)]
+        pub enum QueryRequest {
+            $(
+                $(#[$meta])*
+                $name
+                $({ $($(#[$field_meta])* $field: $field_ty),* })?
+                $(($inner))?,
+            )*
+        }
+
+        /// One struct per query to the driver, each a [`Query`] with the
+        /// type of its answer.
+        pub mod query {
+            use super::*;
+
+            $(
+                query_struct! {
+                    $(#[$meta])*
+                    $name
+                    $({ $($(#[$field_meta])* $field: $field_ty),* })?
+                    $(($inner))?
+                }
+            )*
+        }
+
+        $(
+            impl Query for query::$name {
+                type Response = $response;
+
+                fn response(response: QueryResponse) -> Option<$response> {
+                    match response {
+                        $pattern => Some($answer),
+                        _ => None,
+                    }
+                }
+            }
+        )*
+    };
+}
+
+/// One query struct of [`queries!`] and its conversion into a
+/// [`QueryRequest`].
+macro_rules! query_struct {
+    ($(#[$meta:meta])* $name:ident { $($(#[$field_meta:meta])* $field:ident: $field_ty:ty),* }) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone)]
+        pub struct $name {
+            $($(#[$field_meta])* pub $field: $field_ty,)*
+        }
+
+        impl From<$name> for QueryRequest {
+            fn from(query: $name) -> Self {
+                let $name { $($field),* } = query;
+                QueryRequest::$name { $($field),* }
+            }
+        }
+    };
+    ($(#[$meta:meta])* $name:ident ($inner:ty)) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone)]
+        pub struct $name(pub $inner);
+
+        impl From<$name> for QueryRequest {
+            fn from(query: $name) -> Self {
+                QueryRequest::$name(query.0)
+            }
+        }
+    };
+    ($(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy)]
+        pub struct $name;
+
+        impl From<$name> for QueryRequest {
+            fn from(_: $name) -> Self {
+                QueryRequest::$name
+            }
+        }
+    };
+}
+
+queries! {
     /// Attach, detach or reload an interface of the config file
     /// (upstream's interface management).
     ManageInterface {
@@ -13,59 +123,95 @@ pub enum QueryRequest {
         /// The interface's config name, or for a detach the hex id of a
         /// tunnel, naming the interface it runs on.
         name: String,
+    } => Option<bool> {
+        QueryResponse::InterfaceManagement(result) => result
     },
     /// Get interface statistics and transport info.
-    InterfaceStats,
+    InterfaceStats => InterfaceStatsResponse {
+        QueryResponse::InterfaceStats(stats) => stats
+    },
     /// Get path table entries, optionally filtered by max hops.
     PathTable {
         /// Leave out paths longer than this many hops.
         max_hops: Option<u8>,
+    } => Vec<PathTableEntry> {
+        QueryResponse::PathTable(entries) => entries
     },
     /// Get rate table entries.
-    RateTable,
+    RateTable => Vec<RateTableEntry> {
+        QueryResponse::RateTable(entries) => entries
+    },
     /// Get the slowest positive bitrate among online interfaces.
-    LowestInterfaceBitrate,
+    LowestInterfaceBitrate => Option<u64> {
+        QueryResponse::LowestInterfaceBitrate(bitrate) => bitrate
+    },
     /// Estimate an MTU round trip on the slowest interface plus hop grace.
-    MediumPathTimeout,
+    MediumPathTimeout => f64 {
+        QueryResponse::MediumPathTimeout(timeout) => timeout
+    },
     /// Estimate the first-hop timeout for a destination using its outbound bitrate.
     FirstHopTimeout {
         /// The destination.
         dest_hash: [u8; 16],
+    } => f64 {
+        QueryResponse::FirstHopTimeout(timeout) => timeout
     },
     /// Look up the next hop for a destination.
     NextHop {
         /// The destination.
         dest_hash: [u8; 16],
+    } => Option<NextHopResponse> {
+        QueryResponse::NextHop(next_hop) => next_hop
     },
     /// Look up the next hop interface name for a destination.
     NextHopIfName {
         /// The destination.
         dest_hash: [u8; 16],
+    } => Option<String> {
+        QueryResponse::NextHopIfName(name) => name
     },
     /// Get link table entry count.
-    LinkCount,
+    LinkCount => usize {
+        QueryResponse::LinkCount(count) => count
+    },
     /// Get validated or established link count.
-    ActiveLinkCount,
+    ActiveLinkCount => usize {
+        QueryResponse::ActiveLinkCount(count) => count
+    },
     /// Upstream's `Transport.link_distribution()`.
-    LinkDistribution,
+    LinkDistribution => Vec<LinkDistributionEntry> {
+        QueryResponse::LinkDistribution(entries) => entries
+    },
     /// Drop a specific path.
     DropPath {
         /// The destination.
         dest_hash: [u8; 16],
+    } => bool {
+        QueryResponse::DropPath(dropped) => dropped
     },
     /// Drop all paths that route via a given transport hash.
     DropAllVia {
         /// Transport id of the next hop.
         transport_hash: [u8; 16],
+    } => usize {
+        QueryResponse::DropAllVia(dropped) => dropped
     },
     /// Drop all announce queues.
-    DropAnnounceQueues,
+    DropAnnounceQueues => () {
+        QueryResponse::DropAnnounceQueues => ()
+    },
     /// Get the transport identity hash.
-    TransportIdentity,
+    TransportIdentity => Option<[u8; 16]> {
+        QueryResponse::TransportIdentity(hash) => hash
+    },
     /// Snapshot restart-relevant transport routing state.
-    TransportStateSnapshot,
+    TransportStateSnapshot => rns_core::transport::persistence::TransportStateSnapshot {
+        QueryResponse::TransportStateSnapshot(snapshot) => snapshot
+    },
     /// Get all blackholed identities.
-    GetBlackholed,
+    GetBlackholed => Vec<BlackholeInfo> {
+        QueryResponse::Blackholed(entries) => entries
+    },
     /// Add an identity to the blackhole list.
     BlackholeIdentity {
         /// The identity's hash.
@@ -75,11 +221,15 @@ pub enum QueryRequest {
         duration_hours: Option<f64>,
         /// Why it is blackholed.
         reason: Option<String>,
+    } => bool {
+        QueryResponse::BlackholeResult(added) => added
     },
     /// Remove an identity from the blackhole list.
     UnblackholeIdentity {
         /// The identity's hash.
         identity_hash: [u8; 16],
+    } => bool {
+        QueryResponse::UnblackholeResult(removed) => removed
     },
     /// `wants_destination_type`: a local application needs announces of
     /// this destination type (upstream 825c2e19).
@@ -88,6 +238,8 @@ pub enum QueryRequest {
         full_name: String,
         /// Who needs it, so each need is withdrawn on its own.
         requester: Vec<u8>,
+    } => bool {
+        QueryResponse::DestinationTypeRegistration(result) => result
     },
     /// `unwants_destination_type`: withdraw one such need.
     UnwantsDestinationType {
@@ -95,50 +247,70 @@ pub enum QueryRequest {
         full_name: String,
         /// Who registered the need.
         requester: Vec<u8>,
+    } => bool {
+        QueryResponse::DestinationTypeRegistration(result) => result
     },
     /// `unwants_all_destination_types`: withdraw every need of a requester.
     UnwantsAllDestinationTypes {
         /// Who registered the needs.
         requester: Vec<u8>,
+    } => bool {
+        QueryResponse::DestinationTypeRegistration(result) => result
     },
     /// `Reticulum.required_announces_only`: let only required destination
     /// types through.
     SetRequiredDestinationsOnly {
         /// Filter announces to required types, or let all through.
         enabled: bool,
+    } => bool {
+        QueryResponse::DestinationTypeRegistration(result) => result
     },
     /// Check if a path exists to a destination.
     HasPath {
         /// The destination.
         dest_hash: [u8; 16],
+    } => bool {
+        QueryResponse::HasPath(has_path) => has_path
     },
     /// RSSI, SNR and link quality a received packet arrived with
     /// (`Reticulum.get_packet_rssi`, `get_packet_snr`, `get_packet_q`).
     PacketSignal {
         /// Hash of the received packet.
         packet_hash: [u8; 32],
+    } => Option<PacketSignal> {
+        QueryResponse::PacketSignal(signal) => signal
     },
     /// Get hop count to a destination.
     HopsTo {
         /// The destination.
         dest_hash: [u8; 16],
+    } => Option<u8> {
+        QueryResponse::HopsTo(hops) => hops
     },
     /// Recall identity info for a destination.
     RecallIdentity {
         /// The destination.
         dest_hash: [u8; 16],
+    } => Option<crate::common::destination::AnnouncedIdentity> {
+        QueryResponse::RecallIdentity(identity) => identity
     },
     /// Stamp value and announced link request cost recorded for a known
     /// destination.
     RecallDestinationStamp {
         /// The destination.
         dest_hash: [u8; 16],
+    } => Option<DestinationStampInfo> {
+        QueryResponse::RecallDestinationStamp(stamp) => stamp
     },
     /// List known-destination lifecycle state.
-    KnownDestinations,
+    KnownDestinations => Vec<KnownDestinationEntry> {
+        QueryResponse::KnownDestinations(entries) => entries
+    },
     /// The known destinations that changed or went away since the last
     /// committed flush, compared by fingerprint.
-    KnownDestinationChanges,
+    KnownDestinationChanges => (Vec<(KnownDestinationEntry, u64)>, Vec<[u8; 16]>) {
+        QueryResponse::KnownDestinationChanges { changed, removed } => (changed, removed)
+    },
     /// Record what the known destinations flush stored: entries with their
     /// fingerprints, and removed hashes. `seed` replaces the record, as at
     /// start with what was loaded from storage.
@@ -149,16 +321,26 @@ pub enum QueryRequest {
         removed: Vec<[u8; 16]>,
         /// Replace the record instead of updating it.
         seed: bool,
+    } => () {
+        QueryResponse::KnownDestinationFlushRecorded => ()
     },
     /// Get locally registered destinations.
-    LocalDestinations,
+    LocalDestinations => Vec<LocalDestinationEntry> {
+        QueryResponse::LocalDestinations(entries) => entries
+    },
     /// Get active links.
-    Links,
+    Links => Vec<LinkInfoEntry> {
+        QueryResponse::Links(links) => links
+    },
     /// Get the state of Direct Link: node-wide counters and each link
     /// with Direct Link activity.
-    DirectLinks,
+    DirectLinks => DirectLinkStatus {
+        QueryResponse::DirectLinks(status) => status
+    },
     /// Get active resource transfers.
-    Resources,
+    Resources => Vec<ResourceInfoEntry> {
+        QueryResponse::Resources(resources) => resources
+    },
     /// Inject a path entry into the path table.
     InjectPath {
         /// The destination.
@@ -174,6 +356,8 @@ pub enum QueryRequest {
         interface_name: String,
         /// Hash recorded as that of the announce that set the path.
         packet_hash: [u8; 32],
+    } => bool {
+        QueryResponse::InjectPath(injected) => injected
     },
     /// Inject an identity into the known destinations cache.
     InjectIdentity {
@@ -189,28 +373,40 @@ pub enum QueryRequest {
         hops: u8,
         /// When it was received, as Unix time in seconds.
         received_at: f64,
+    } => bool {
+        QueryResponse::InjectIdentity(injected) => injected
     },
     /// Restore a known destination with full lifecycle state.
-    RestoreKnownDestination(KnownDestinationEntry),
+    RestoreKnownDestination(KnownDestinationEntry) => bool {
+        QueryResponse::RestoreKnownDestination(restored) => restored
+    },
     /// Mark a known destination as explicitly retained.
     RetainKnownDestination {
         /// The destination.
         dest_hash: [u8; 16],
+    } => bool {
+        QueryResponse::RetainKnownDestination(retained) => retained
     },
     /// Mark all known destinations announced by an identity as retained.
     RetainIdentity {
         /// The identity's hash.
         identity_hash: [u8; 16],
+    } => bool {
+        QueryResponse::RetainIdentity(retained) => retained
     },
     /// Clear the retained flag on a known destination.
     UnretainKnownDestination {
         /// The destination.
         dest_hash: [u8; 16],
+    } => bool {
+        QueryResponse::UnretainKnownDestination(unretained) => unretained
     },
     /// Mark a known destination as used.
     MarkKnownDestinationUsed {
         /// The destination.
         dest_hash: [u8; 16],
+    } => bool {
+        QueryResponse::MarkKnownDestinationUsed(marked) => marked
     },
     /// Get discovered interfaces.
     DiscoveredInterfaces {
@@ -218,6 +414,8 @@ pub enum QueryRequest {
         only_available: bool,
         /// Only interfaces of transport nodes.
         only_transport: bool,
+    } => Vec<crate::common::discovery::DiscoveredInterface> {
+        QueryResponse::DiscoveredInterfaces(interfaces) => interfaces
     },
     /// Send a probe packet to a destination and return (packet_hash, hops).
     SendProbe {
@@ -225,18 +423,26 @@ pub enum QueryRequest {
         dest_hash: [u8; 16],
         /// Bytes of random payload, at most [`MAX_PROBE_PAYLOAD_SIZE`].
         payload_size: usize,
+    } => Result<([u8; 32], u8), SendProbeError> {
+        QueryResponse::SendProbe(result) => result
     },
     /// Check if a proof was received for a probe packet.
     CheckProof {
         /// Hash of the probe packet.
         packet_hash: [u8; 32],
+    } => Option<f64> {
+        QueryResponse::CheckProof(rtt) => rtt
     },
     /// List runtime-config entries currently supported by the daemon.
-    ListRuntimeConfig,
+    ListRuntimeConfig => Vec<RuntimeConfigEntry> {
+        QueryResponse::RuntimeConfigList(entries) => entries
+    },
     /// Get a single runtime-config entry by key.
     GetRuntimeConfig {
         /// The entry's key.
         key: String,
+    } => Option<RuntimeConfigEntry> {
+        QueryResponse::RuntimeConfigEntry(entry) => entry
     },
     /// Set a runtime-config value by key.
     SetRuntimeConfig {
@@ -244,29 +450,43 @@ pub enum QueryRequest {
         key: String,
         /// The new value.
         value: RuntimeConfigValue,
+    } => Result<RuntimeConfigEntry, RuntimeConfigError> {
+        QueryResponse::RuntimeConfigSet(result) => result
     },
     /// Reset a runtime-config value to its startup/default value.
     ResetRuntimeConfig {
         /// The entry's key.
         key: String,
+    } => Result<RuntimeConfigEntry, RuntimeConfigError> {
+        QueryResponse::RuntimeConfigReset(result) => result
     },
     /// List live backbone peer state, optionally filtered to one interface.
     BackbonePeerState {
         /// Name of the backbone interface; all of them when `None`.
         interface_name: Option<String>,
+    } => Vec<BackbonePeerStateEntry> {
+        QueryResponse::BackbonePeerState(entries) => entries
     },
     /// List registered backbone server interfaces.
-    BackboneInterfaces,
+    BackboneInterfaces => Vec<BackboneInterfaceEntry> {
+        QueryResponse::BackboneInterfaces(entries) => entries
+    },
     /// Report live provider-bridge queue/drop state.
-    ProviderBridgeStats,
+    ProviderBridgeStats => Option<ProviderBridgeStats> {
+        QueryResponse::ProviderBridgeStats(stats) => stats
+    },
     /// Report current lifecycle/drain status.
-    DrainStatus,
+    DrainStatus => DrainStatus {
+        QueryResponse::DrainStatus(status) => status
+    },
     /// Clear live backbone peer state for one interface/IP pair.
     ClearBackbonePeerState {
         /// Name of the backbone interface.
         interface_name: String,
         /// The peer's IP address.
         peer_ip: IpAddr,
+    } => bool {
+        QueryResponse::ClearBackbonePeerState(cleared) => cleared
     },
     /// Blacklist a backbone peer IP for a duration.
     BlacklistBackbonePeer {
@@ -280,6 +500,8 @@ pub enum QueryRequest {
         reason: String,
         /// Penalty level, passed on to the `BackbonePeerPenalty` hook.
         penalty_level: u8,
+    } => bool {
+        QueryResponse::BlacklistBackbonePeer(blacklisted) => blacklisted
     },
 }
 
