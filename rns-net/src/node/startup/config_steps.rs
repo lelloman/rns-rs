@@ -108,17 +108,15 @@ pub(super) fn load_transport_identity(paths: &storage::StoragePaths) -> io::Resu
         return Ok(identity);
     }
     let node_identity_path = paths.identities.join("identity");
-    let identity = if node_identity_path.exists() {
+    if node_identity_path.exists() {
         let identity = storage::load_identity(&node_identity_path)?;
         log::info!("Loaded Transport Identity from storage");
-        identity
-    } else {
-        log::info!("No valid Transport Identity in storage, creating...");
-        let identity = create_identity();
-        storage::save_identity(&identity, &node_identity_path)?;
-        identity
-    };
-    storage::save_identity(&identity, &transport_identity_path)?;
+        return storage::store_new_identity(identity, &transport_identity_path);
+    }
+    log::info!("No valid Transport Identity in storage, creating...");
+    // A client started alongside may store one first; both keep that one.
+    let identity = storage::store_new_identity(create_identity(), &transport_identity_path)?;
+    storage::store_identity_if_absent(&identity, &node_identity_path)?;
     Ok(identity)
 }
 

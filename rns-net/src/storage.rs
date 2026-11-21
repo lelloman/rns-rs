@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -561,6 +562,34 @@ fn write_identity_temp(identity: &Identity, path: &Path) -> io::Result<PathBuf> 
     }
 }
 
+/// Store `identity` at `path` unless a file is there already, and return
+/// the identity `path` then holds: `identity`, or the one another process
+/// stored first. Processes creating the same identity file at once, such as
+/// an instance and a client started with it, thus end up with one identity.
+pub(crate) fn store_new_identity(identity: Identity, path: &Path) -> io::Result<Identity> {
+    if store_identity_if_absent(&identity, path)? {
+        Ok(identity)
+    } else {
+        load_identity(path)
+    }
+}
+
+/// Store `identity` at `path` unless a file is there already. Returns
+/// whether it was stored.
+pub(crate) fn store_identity_if_absent(identity: &Identity, path: &Path) -> io::Result<bool> {
+    let temp_path = write_identity_temp(identity, path)?;
+    // A hard link publishes the complete file, and fails if `path` exists.
+    let stored = match fs::hard_link(&temp_path, path) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        // A filesystem without hard links: rename, still whole.
+        Err(_) if !path.exists() => replace_file(&temp_path, path).map(|()| true),
+        Err(_) => Ok(false),
+    };
+    let _ = fs::remove_file(&temp_path);
+    stored
+}
+
 /// Load an identity from a private key file (64 bytes).
 pub fn load_identity(path: &Path) -> io::Result<Identity> {
     let data = fs::read(path)?;
@@ -645,11 +674,16 @@ fn temp_path_for(path: &Path) -> PathBuf {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("known_destinations");
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
-    parent.join(format!(".{file_name}.tmp.{}.{}", std::process::id(), nonce))
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    parent.join(format!(
+        ".{file_name}.tmp.{}.{nonce}.{sequence}",
+        std::process::id()
+    ))
 }
 
 fn replace_file(temp_path: &Path, path: &Path) -> io::Result<()> {
@@ -1275,9 +1309,7 @@ pub fn load_or_create_identity_file(path: &Path) -> io::Result<Identity> {
     if let Some(parent) = path.parent().filter(|path| !path.as_os_str().is_empty()) {
         fs::create_dir_all(parent)?;
     }
-    let identity = Identity::new(&mut OsRng);
-    save_identity(&identity, path)?;
-    Ok(identity)
+    store_new_identity(Identity::new(&mut OsRng), path)
 }
 
 /// Load or create an identity at the standard location.
@@ -1286,9 +1318,7 @@ pub fn load_or_create_identity(identities_dir: &Path) -> io::Result<Identity> {
     if id_path.exists() {
         load_identity(&id_path)
     } else {
-        let identity = Identity::new(&mut OsRng);
-        save_identity(&identity, &id_path)?;
-        Ok(identity)
+        store_new_identity(Identity::new(&mut OsRng), &id_path)
     }
 }
 
@@ -1437,6 +1467,35 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names.len(), 2, "temporary file left behind: {names:?}");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_identity_keeps_the_one_stored_first() {
+        let dir = temp_dir();
+        let path = dir.join("transport_identity");
+        let first = Identity::new(&mut OsRng);
+        let first_hash = *first.hash();
+        assert_eq!(
+            *store_new_identity(first, &path).unwrap().hash(),
+            first_hash
+        );
+
+        let second = Identity::new(&mut OsRng);
+        assert!(!store_identity_if_absent(&second, &path).unwrap());
+        let kept = store_new_identity(second, &path).unwrap();
+        assert_eq!(*kept.hash(), first_hash);
+        assert_eq!(*load_identity(&path).unwrap().hash(), first_hash);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
 
         let _ = fs::remove_dir_all(&dir);
     }
