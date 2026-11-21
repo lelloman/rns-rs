@@ -461,95 +461,6 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-backbone")]
-    pub(crate) fn list_backbone_peer_state(
-        &self,
-        interface_name: Option<&str>,
-    ) -> Vec<BackbonePeerStateEntry> {
-        let mut names: Vec<&String> = match interface_name {
-            Some(name) => self
-                .runtime_config
-                .backbone_peer_state
-                .keys()
-                .filter(|candidate| candidate.as_str() == name)
-                .collect(),
-            None => self.runtime_config.backbone_peer_state.keys().collect(),
-        };
-        names.sort();
-
-        let mut entries = Vec::new();
-        for name in names {
-            if let Some(handle) = self.runtime_config.backbone_peer_state.get(name) {
-                entries.extend(
-                    recover_mutex_guard(&handle.peer_state, "backbone peer state").list(name),
-                );
-            }
-        }
-        entries.sort_by(|a, b| {
-            a.interface_name
-                .cmp(&b.interface_name)
-                .then_with(|| a.peer_ip.cmp(&b.peer_ip))
-        });
-        entries
-    }
-
-    #[cfg(not(feature = "iface-backbone"))]
-    pub(crate) fn list_backbone_peer_state(
-        &self,
-        _interface_name: Option<&str>,
-    ) -> Vec<BackbonePeerStateEntry> {
-        Vec::new()
-    }
-
-    #[cfg(feature = "iface-backbone")]
-    pub(crate) fn list_backbone_interfaces(&self) -> Vec<crate::event::BackboneInterfaceEntry> {
-        let mut entries: Vec<_> = self
-            .runtime_config
-            .backbone_peer_state
-            .values()
-            .map(|handle| crate::event::BackboneInterfaceEntry {
-                interface_id: handle.interface_id,
-                interface_name: handle.interface_name.clone(),
-            })
-            .collect();
-        entries.sort_by(|a, b| a.interface_name.cmp(&b.interface_name));
-        entries
-    }
-
-    #[cfg(not(feature = "iface-backbone"))]
-    pub(crate) fn list_backbone_interfaces(&self) -> Vec<crate::event::BackboneInterfaceEntry> {
-        Vec::new()
-    }
-
-    #[cfg(feature = "iface-backbone")]
-    pub(crate) fn clear_backbone_peer_state(
-        &mut self,
-        interface_name: &str,
-        peer_ip: std::net::IpAddr,
-    ) -> bool {
-        self.runtime_config
-            .backbone_peer_state
-            .get(interface_name)
-            .map(|handle| {
-                let peer_cleared =
-                    recover_mutex_guard(&handle.peer_state, "backbone peer state").clear(peer_ip);
-                let flap_cleared =
-                    recover_mutex_guard(&handle.fast_flap_state, "backbone fast-flap state")
-                        .clear(peer_ip);
-                peer_cleared || flap_cleared
-            })
-            .unwrap_or(false)
-    }
-
-    #[cfg(not(feature = "iface-backbone"))]
-    pub(crate) fn clear_backbone_peer_state(
-        &mut self,
-        _interface_name: &str,
-        _peer_ip: std::net::IpAddr,
-    ) -> bool {
-        false
-    }
-
-    #[cfg(feature = "iface-backbone")]
     pub(crate) fn blacklist_backbone_peer(
         &mut self,
         interface_name: &str,
@@ -558,29 +469,13 @@ impl Driver {
         reason: String,
         penalty_level: u8,
     ) -> bool {
-        let capped_duration = self
-            .runtime_config
-            .backbone
-            .get(interface_name)
-            .and_then(|handle| {
-                handle
-                    .runtime
-                    .lock()
-                    .ok()
-                    .map(|runtime| runtime.abuse.max_penalty_duration)
-            })
-            .flatten()
-            .map(|max| duration.min(max))
-            .unwrap_or(duration);
-        let Some(handle) = self.runtime_config.backbone_peer_state.get(interface_name) else {
+        let Some(capped_duration) =
+            self.runtime_config
+                .blacklist_backbone_peer(interface_name, peer_ip, duration, reason)
+        else {
             return false;
         };
-        let ok = recover_mutex_guard(&handle.peer_state, "backbone peer state").blacklist(
-            peer_ip,
-            capped_duration,
-            reason,
-        );
-        if ok && self.hooks.attached(HookPoint::BackbonePeerPenalty) {
+        if self.hooks.attached(HookPoint::BackbonePeerPenalty) {
             let peer = BackbonePeerHookEvent {
                 server_interface_id: self
                     .interfaces
@@ -602,7 +497,7 @@ impl Driver {
                 InjectedActions::Dispatch,
             );
         }
-        ok
+        true
     }
 
     #[cfg(not(feature = "iface-backbone"))]
