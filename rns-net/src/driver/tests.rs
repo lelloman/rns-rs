@@ -1750,23 +1750,27 @@ fn register_test_backbone(driver: &mut Driver, name: &str) {
     let peer_state = Arc::new(std::sync::Mutex::new(
         crate::interface::backbone::BackbonePeerMonitor::new(),
     ));
-    driver.register_backbone_runtime(BackboneRuntimeConfigHandle {
-        interface_name: name.to_string(),
-        runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
-        startup,
-    });
-    driver.register_backbone_peer_state(BackbonePeerStateHandle {
-        interface_id: InterfaceId(1),
-        interface_name: name.to_string(),
-        mode: rns_core::constants::MODE_FULL,
-        gravity: 0,
-        announces_to_internal: None,
-        peer_state,
-        fast_flap: crate::interface::backbone::BackboneFastFlapConfig::default(),
-        fast_flap_state: Arc::new(std::sync::Mutex::new(
-            crate::interface::backbone::BackboneFastFlapMonitor::new(),
-        )),
-    });
+    driver
+        .runtime_config
+        .register_backbone_runtime(BackboneRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
+    driver
+        .runtime_config
+        .register_backbone_peer_state(BackbonePeerStateHandle {
+            interface_id: InterfaceId(1),
+            interface_name: name.to_string(),
+            mode: rns_core::constants::MODE_FULL,
+            gravity: 0,
+            announces_to_internal: None,
+            peer_state,
+            fast_flap: crate::interface::backbone::BackboneFastFlapConfig::default(),
+            fast_flap_state: Arc::new(std::sync::Mutex::new(
+                crate::interface::backbone::BackboneFastFlapMonitor::new(),
+            )),
+        });
 }
 
 #[cfg(feature = "iface-backbone")]
@@ -1776,11 +1780,13 @@ fn register_test_backbone_client(driver: &mut Driver, name: &str) {
         max_reconnect_tries: Some(3),
         connect_timeout: Duration::from_secs(5),
     };
-    driver.register_backbone_client_runtime(BackboneClientRuntimeConfigHandle {
-        interface_name: name.to_string(),
-        runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
-        startup,
-    });
+    driver
+        .runtime_config
+        .register_backbone_client_runtime(BackboneClientRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
 }
 
 #[cfg(feature = "iface-backbone")]
@@ -1808,11 +1814,13 @@ fn register_test_backbone_discovery(driver: &mut Driver, name: &str, discoverabl
         ifac_netname: None,
         ifac_netkey: None,
     };
-    driver.register_backbone_discovery_runtime(BackboneDiscoveryRuntimeHandle {
-        interface_name: name.to_string(),
-        current: startup.clone(),
-        startup,
-    });
+    driver
+        .runtime_config
+        .register_backbone_discovery_runtime(BackboneDiscoveryRuntimeHandle {
+            interface_name: name.to_string(),
+            current: startup.clone(),
+            startup,
+        });
 }
 
 #[cfg(feature = "iface-tcp")]
@@ -1820,11 +1828,13 @@ fn register_test_tcp_server(driver: &mut Driver, name: &str) {
     let startup = TcpServerRuntime {
         max_connections: Some(4),
     };
-    driver.register_tcp_server_runtime(TcpServerRuntimeConfigHandle {
-        interface_name: name.to_string(),
-        runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
-        startup,
-    });
+    driver
+        .runtime_config
+        .register_tcp_server_runtime(TcpServerRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
 }
 
 #[cfg(feature = "iface-tcp")]
@@ -1852,11 +1862,13 @@ fn register_test_tcp_server_discovery(driver: &mut Driver, name: &str, discovera
         ifac_netname: None,
         ifac_netkey: None,
     };
-    driver.register_tcp_server_discovery_runtime(TcpServerDiscoveryRuntimeHandle {
-        interface_name: name.to_string(),
-        current: startup.clone(),
-        startup,
-    });
+    driver
+        .runtime_config
+        .register_tcp_server_discovery_runtime(TcpServerDiscoveryRuntimeHandle {
+            interface_name: name.to_string(),
+            current: startup.clone(),
+            startup,
+        });
 }
 
 #[cfg(feature = "iface-tcp")]
@@ -1866,11 +1878,13 @@ fn register_test_tcp_client(driver: &mut Driver, name: &str) {
         max_reconnect_tries: Some(3),
         connect_timeout: Duration::from_secs(5),
     };
-    driver.register_tcp_client_runtime(crate::interface::tcp::TcpClientRuntimeConfigHandle {
-        interface_name: name.to_string(),
-        runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
-        startup,
-    });
+    driver.runtime_config.register_tcp_client_runtime(
+        crate::interface::tcp::TcpClientRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        },
+    );
 }
 
 #[cfg(feature = "iface-udp")]
@@ -1879,11 +1893,13 @@ fn register_test_udp(driver: &mut Driver, name: &str) {
         forward_ip: Some("127.0.0.1".into()),
         forward_port: Some(4242),
     };
-    driver.register_udp_runtime(UdpRuntimeConfigHandle {
-        interface_name: name.to_string(),
-        runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
-        startup,
-    });
+    driver
+        .runtime_config
+        .register_udp_runtime(UdpRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
 }
 
 fn register_test_generic_interface(driver: &mut Driver, id: u64, name: &str) {
@@ -1895,8 +1911,10 @@ fn register_test_generic_interface(driver: &mut Driver, id: u64, name: &str) {
     info.announce_rate_penalty = 0.25;
     info.announce_cap = 0.05;
     info.ingress_control.enabled = true;
-    driver.register_interface_runtime_defaults(&info);
-    driver.register_interface_ifac_runtime(
+    driver
+        .runtime_config
+        .register_interface_runtime_defaults(&info);
+    driver.runtime_config.register_interface_ifac_runtime(
         &info.name,
         IfacRuntimeConfig {
             netname: None,
@@ -1935,11 +1953,13 @@ fn register_test_auto(driver: &mut Driver, name: &str) {
         peer_timeout_secs: 22.0,
         peer_job_interval_secs: 4.0,
     };
-    driver.register_auto_runtime(AutoRuntimeConfigHandle {
-        interface_name: name.to_string(),
-        runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
-        startup,
-    });
+    driver
+        .runtime_config
+        .register_auto_runtime(AutoRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
 }
 
 #[cfg(feature = "iface-i2p")]
@@ -1947,11 +1967,13 @@ fn register_test_i2p(driver: &mut Driver, name: &str) {
     let startup = I2pRuntime {
         reconnect_wait: Duration::from_secs(15),
     };
-    driver.register_i2p_runtime(I2pRuntimeConfigHandle {
-        interface_name: name.to_string(),
-        runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
-        startup,
-    });
+    driver
+        .runtime_config
+        .register_i2p_runtime(I2pRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
 }
 
 #[cfg(feature = "iface-pipe")]
@@ -1959,11 +1981,13 @@ fn register_test_pipe(driver: &mut Driver, name: &str) {
     let startup = PipeRuntime {
         respawn_delay: Duration::from_secs(5),
     };
-    driver.register_pipe_runtime(PipeRuntimeConfigHandle {
-        interface_name: name.to_string(),
-        runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
-        startup,
-    });
+    driver
+        .runtime_config
+        .register_pipe_runtime(PipeRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
 }
 
 #[cfg(feature = "iface-rnode")]
@@ -1984,11 +2008,13 @@ fn register_test_rnode(driver: &mut Driver, name: &str) {
         },
         writer: None,
     };
-    driver.register_rnode_runtime(RNodeRuntimeConfigHandle {
-        interface_name: name.to_string(),
-        runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
-        startup,
-    });
+    driver
+        .runtime_config
+        .register_rnode_runtime(RNodeRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
 }
 
 impl Callbacks for MockCallbacks {
@@ -9617,7 +9643,9 @@ fn disabled_interface_drops_ingress_and_egress() {
         Box::new(cbs),
     );
     let info = make_interface_info(1);
-    driver.register_interface_runtime_defaults(&info);
+    driver
+        .runtime_config
+        .register_interface_runtime_defaults(&info);
     driver.engine.register_interface(info.clone());
     let (writer, sent) = MockWriter::new();
     driver.interfaces.insert(

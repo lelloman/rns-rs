@@ -263,8 +263,12 @@ pub(crate) fn register_started_interface(params: StartedInterface<'_>) {
     driver.apply_interface_defaults(&mut info);
     let (writer, async_writer_metrics) =
         crate::interface::wrap_async_writer(writer, id, &info.name, tx.clone(), queue_capacity);
-    driver.register_interface_runtime_defaults(&info);
-    driver.register_interface_ifac_runtime(&info.name, ifac_runtime.clone());
+    driver
+        .runtime_config
+        .register_interface_runtime_defaults(&info);
+    driver
+        .runtime_config
+        .register_interface_ifac_runtime(&info.name, ifac_runtime.clone());
     driver.engine.register_interface(info.clone());
     driver.interfaces.insert(
         id,

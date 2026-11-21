@@ -396,13 +396,16 @@ impl Driver {
         } else {
             None
         };
-        self.register_backbone_client_runtime(BackboneClientRuntimeConfigHandle {
-            interface_name: name.clone(),
-            runtime: Arc::clone(&client.runtime),
-            startup: BackboneClientRuntime::from_config(&client),
-        });
-        self.register_interface_runtime_defaults(&info);
-        self.register_interface_ifac_runtime(&name, ifac_runtime);
+        self.runtime_config
+            .register_backbone_client_runtime(BackboneClientRuntimeConfigHandle {
+                interface_name: name.clone(),
+                runtime: Arc::clone(&client.runtime),
+                startup: BackboneClientRuntime::from_config(&client),
+            });
+        self.runtime_config
+            .register_interface_runtime_defaults(&info);
+        self.runtime_config
+            .register_interface_ifac_runtime(&name, ifac_runtime);
         self.engine.register_interface(info.clone());
         // Upstream's `str()` of the BackboneClientInterface it starts.
         self.registry.display_names.insert(

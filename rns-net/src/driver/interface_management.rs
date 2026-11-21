@@ -247,7 +247,7 @@ impl Driver {
         let ifac_runtime =
             ifac_runtime_from_config(config.ifac.as_ref(), factory.default_ifac_size());
         #[cfg(runtime_config_ifaces)]
-        self.register_managed_runtime(
+        self.runtime_config.register_configured(
             &config,
             #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
             transport_enabled,
@@ -402,95 +402,6 @@ impl Driver {
         #[cfg(feature = "iface-rnode")]
         {
             self.runtime_config.rnode.remove(name);
-        }
-    }
-
-    #[cfg(runtime_config_ifaces)]
-    fn register_managed_runtime(
-        &mut self,
-        config: &crate::node::InterfaceConfig,
-        #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))] transport_enabled: bool,
-    ) {
-        use crate::interface::KnownConfig;
-
-        match config.config_data.known() {
-            #[cfg(feature = "iface-backbone")]
-            KnownConfig::Backbone(mode) => {
-                use crate::interface::backbone::{
-                    client_runtime_handle_from_mode, peer_state_handle_from_mode,
-                    runtime_handle_from_mode,
-                };
-                if let Some(handle) = runtime_handle_from_mode(mode) {
-                    self.register_backbone_runtime(handle);
-                }
-                if let Some(handle) = peer_state_handle_from_mode(mode, config) {
-                    self.register_backbone_peer_state(handle);
-                }
-                if let Some(handle) = client_runtime_handle_from_mode(mode) {
-                    self.register_backbone_client_runtime(handle);
-                }
-                if let Some(handle) = crate::node::backbone_discovery_runtime_from_interface(
-                    &config.name,
-                    mode,
-                    config.discovery.as_ref(),
-                    transport_enabled,
-                    config.ifac.as_ref(),
-                ) {
-                    self.register_backbone_discovery_runtime(handle);
-                }
-            }
-            #[cfg(feature = "iface-tcp")]
-            KnownConfig::TcpClient(value) => {
-                self.register_tcp_client_runtime(
-                    crate::interface::tcp::tcp_client_runtime_handle_from_config(value),
-                );
-            }
-            #[cfg(feature = "iface-tcp")]
-            KnownConfig::TcpServer(value) => {
-                self.register_tcp_server_runtime(
-                    crate::interface::tcp_server::runtime_handle_from_config(value),
-                );
-                self.register_tcp_server_discovery_runtime(
-                    crate::node::tcp_server_discovery_runtime_from_interface(
-                        &config.name,
-                        value,
-                        config.discovery.as_ref(),
-                        transport_enabled,
-                        config.ifac.as_ref(),
-                    ),
-                );
-            }
-            #[cfg(feature = "iface-udp")]
-            KnownConfig::Udp(value) => {
-                self.register_udp_runtime(crate::interface::udp::udp_runtime_handle_from_config(
-                    value,
-                ));
-            }
-            #[cfg(feature = "iface-auto")]
-            KnownConfig::Auto(value) => {
-                self.register_auto_runtime(
-                    crate::interface::auto::auto_runtime_handle_from_config(value),
-                );
-            }
-            #[cfg(feature = "iface-i2p")]
-            KnownConfig::I2p(value) => {
-                self.register_i2p_runtime(crate::interface::i2p::i2p_runtime_handle_from_config(
-                    value,
-                ));
-            }
-            #[cfg(feature = "iface-pipe")]
-            KnownConfig::Pipe(value) => {
-                self.register_pipe_runtime(
-                    crate::interface::pipe::pipe_runtime_handle_from_config(value),
-                );
-            }
-            #[cfg(feature = "iface-rnode")]
-            KnownConfig::RNode(value) => {
-                self.register_rnode_runtime(
-                    crate::interface::rnode::rnode_runtime_handle_from_config(value),
-                );
-            }
-            _ => {}
         }
     }
 }
