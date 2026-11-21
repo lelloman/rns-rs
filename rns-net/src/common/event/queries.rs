@@ -537,7 +537,10 @@ pub enum SendProbeError {
 
 /// Responses to queries.
 #[derive(Debug)]
-#[allow(clippy::large_enum_variant)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "boxing a variant would change this published response API; one is built per query"
+)]
 pub enum QueryResponse {
     /// Python-compatible tri-state result: success, failure, or missing name.
     InterfaceManagement(Option<bool>),
