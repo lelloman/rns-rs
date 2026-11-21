@@ -169,11 +169,16 @@ pub(super) fn build_interface_configs(
 
         let mut iface_mode = parse_interface_mode(&iface.mode);
 
-        let discoverable = iface
-            .params
-            .get("discoverable")
-            .and_then(|value| config::parse_bool_pub(value))
-            .unwrap_or(false);
+        let discoverable = discoverable_on_instance(
+            &iface.name,
+            iface
+                .params
+                .get("discoverable")
+                .and_then(|value| config::parse_bool_pub(value))
+                .unwrap_or(false),
+            rns_config.reticulum.enable_transport,
+            rns_config.reticulum.static_transport_identity,
+        );
         let ignore_config_warnings = iface
             .params
             .get("ignore_config_warnings")
@@ -200,8 +205,9 @@ pub(super) fn build_interface_configs(
 
         let default_ifac_size = factory.default_ifac_size();
         let ifac_config = extract_ifac_config(&iface.params, default_ifac_size);
-        let discovery_config =
-            extract_discovery_config(&iface.name, &iface.interface_type, &iface.params);
+        let discovery_config = discoverable
+            .then(|| extract_discovery_config(&iface.name, &iface.interface_type, &iface.params))
+            .flatten();
         let ingress_control =
             match parse_ingress_control_config(&iface.interface_type, &iface.params) {
                 Ok(config) => config,

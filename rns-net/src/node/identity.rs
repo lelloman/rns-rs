@@ -2,17 +2,6 @@
 
 use super::*;
 
-/// Upstream enables the static transport identity when a discoverable interface
-/// is configured on a non-transport instance, so the announced transport
-/// identity is stable across restarts instead of ephemeral.
-pub(super) fn effective_static_transport_identity(
-    configured: bool,
-    transport_enabled: bool,
-    has_discoverable_interface: bool,
-) -> bool {
-    configured || (!transport_enabled && has_discoverable_interface)
-}
-
 /// Load the `network_identity` configured at `path`, or create and save one
 /// there when the file is missing, logging as upstream's
 /// `Reticulum.__apply_config` does.

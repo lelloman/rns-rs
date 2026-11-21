@@ -52,7 +52,7 @@ error; see [Building](building.md#selecting-interfaces).
 | Key | Default | Notes |
 |-----|---------|-------|
 | `enable_transport` | `false` | Forward traffic for other nodes |
-| `static_transport_identity` | `false` | With transport disabled, the transport-facing identity is ephemeral unless this is set |
+| `static_transport_identity` | `false` | With transport disabled, the transport-facing identity is ephemeral unless this is set. Such an instance makes interfaces `discoverable` only with this set; without it, each discoverable interface comes up without discovery and the node logs a warning naming it, as upstream does since `606a1691` (before, a discoverable interface turned this on by itself) |
 | `network_identity` | unset | Path (`~` expanded) of an identity shared by a set of transport instances; created there when missing. It signs their interface discovery announces and keys `discovery_encrypt`. A node that is not a shared instance client also hosts the identity's `rnstransport.network` and `rnstransport.network.instance.<identity hash>` destinations: it announces them, stamped, with its other management destinations, answers path requests for them, and accepts links to them, on which requests go unanswered. The transport identity stays in `storage/transport_identity` |
 | `local_hops_delta` | `false` | Mask local zero-hop SINGLE/LINK traffic on external interfaces |
 | `enable_interface_management` | `true` | Set to `false` to block `rnstatus --attach/--detach/--reload` |

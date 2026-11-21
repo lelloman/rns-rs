@@ -211,14 +211,13 @@ impl Driver {
                 .next_dynamic_id
                 .fetch_add(reserved_ids, Ordering::Relaxed),
         );
-        let config =
-            match parse_managed_interface(iface, &parsed, &management.storage_dir, id, &registry) {
-                Ok(config) => config,
-                Err(error) => {
-                    log::error!("cannot attach interface '{name}': {error}");
-                    return Some(false);
-                }
-            };
+        let config = match parse_managed_interface(iface, &parsed, management, id, &registry) {
+            Ok(config) => config,
+            Err(error) => {
+                log::error!("cannot attach interface '{name}': {error}");
+                return Some(false);
+            }
+        };
         match self.start_managed_interface(config, id, &registry) {
             Ok(()) => {
                 log::info!("Interface '{name}' was attached");

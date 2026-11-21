@@ -2232,13 +2232,137 @@ fn non_transport_node_can_use_static_transport_identity() {
     node.shutdown();
 }
 
+/// Upstream 606a1691: an instance without transport makes no interface
+/// discoverable unless `static_transport_identity` is set, and setting it
+/// is no longer implied by a discoverable interface. The interface comes up
+/// all the same, neither discoverable nor moved to gateway mode, and its
+/// name is logged in upstream's warning block, both at startup and when
+/// the interface is attached later.
+#[cfg(feature = "iface-tcp")]
 #[test]
-fn discoverable_interface_forces_static_transport_identity_on_non_transport() {
-    assert!(!effective_static_transport_identity(false, false, false));
-    assert!(effective_static_transport_identity(true, false, false));
-    assert!(!effective_static_transport_identity(false, true, false));
-    assert!(effective_static_transport_identity(false, false, true));
-    assert!(effective_static_transport_identity(true, false, true));
+fn discoverable_interfaces_without_transport_need_static_transport_identity() {
+    use crate::event::InterfaceManagementOperation as Operation;
+
+    crate::test_support::logged();
+    for (case, reticulum, allowed) in [
+        ("Ephemeral", "enable_transport = no\n", false),
+        (
+            "Static",
+            "enable_transport = no\nstatic_transport_identity = yes\n",
+            true,
+        ),
+        ("Transport", "enable_transport = yes\n", true),
+    ] {
+        let dir = tempdir().unwrap();
+        let server = |name: &str, enabled: &str| {
+            format!(
+                "  [[{name}]]\n    type = TCPServerInterface\n    enabled = {enabled}\n    listen_ip = 127.0.0.1\n    listen_port = {}\n    discoverable = yes\n",
+                crate::test_support::port()
+            )
+        };
+        let startup = format!("{case} Startup");
+        let attached = format!("{case} Attached");
+        fs::write(
+            dir.path().join("config"),
+            format!(
+                "[reticulum]\nshare_instance = no\n{reticulum}\n[interfaces]\n{}{}",
+                server(&startup, "yes"),
+                server(&attached, "no"),
+            ),
+        )
+        .unwrap();
+        let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+        assert!(matches!(
+            node.query(QueryRequest::ManageInterface {
+                operation: Operation::Attach,
+                name: attached.clone(),
+            })
+            .unwrap(),
+            QueryResponse::InterfaceManagement(Some(true))
+        ));
+
+        let QueryResponse::InterfaceStats(stats) =
+            node.query(QueryRequest::InterfaceStats).unwrap()
+        else {
+            panic!("expected interface stats");
+        };
+        // The stored transport identity is used only when the instance is
+        // allowed to be discoverable; otherwise it is ephemeral.
+        let stored =
+            storage::load_identity(&dir.path().join("storage").join("transport_identity")).unwrap();
+        assert_eq!(
+            stats.transport_id == Some(*stored.hash()),
+            allowed,
+            "{case}"
+        );
+        for name in [&startup, &attached] {
+            let QueryResponse::RuntimeConfigEntry(Some(entry)) = node
+                .query(QueryRequest::GetRuntimeConfig {
+                    key: format!("tcp_server.{name}.discoverable"),
+                })
+                .unwrap()
+            else {
+                panic!("expected the discoverable entry of {name}");
+            };
+            assert_eq!(
+                entry.value,
+                crate::event::RuntimeConfigValue::Bool(allowed),
+                "{name}"
+            );
+            let stat = stats
+                .interfaces
+                .iter()
+                .find(|stat| stat.name == *name)
+                .unwrap_or_else(|| panic!("{name} is not up"));
+            let mode = if allowed {
+                rns_core::constants::MODE_GATEWAY
+            } else {
+                rns_core::constants::MODE_FULL
+            };
+            assert_eq!(stat.mode, mode, "{name}");
+        }
+        node.shutdown();
+
+        let lines = crate::test_support::logged().lock().unwrap().clone();
+        assert!(
+            !lines
+                .iter()
+                .any(|(_, _, line)| line.contains("enabling static transport identity")),
+            "{case}"
+        );
+        for name in [&startup, &attached] {
+            let header = format!(
+                "The interface \"{name}\" was configured discoverable, but this instance has transport disabled"
+            );
+            let logger = lines
+                .iter()
+                .find(|(_, _, line)| *line == header)
+                .map(|(thread, _, _)| *thread);
+            let Some(logger) = logger else {
+                assert!(allowed, "{name} logged no warning");
+                continue;
+            };
+            assert!(!allowed, "{name} was warned about");
+            let own: Vec<(log::Level, String)> = lines
+                .iter()
+                .filter(|(thread, _, _)| *thread == logger)
+                .map(|(_, level, line)| (*level, line.clone()))
+                .collect();
+            let at = own.iter().position(|(_, line)| *line == header).unwrap();
+            let block: Vec<(log::Level, String)> = [
+                "",
+                header.as_str(),
+                "and is using an ephemeral transport identity. To make interfaces discoverable for non-transport",
+                "instances, you will have explicitly enable using static transport identity in the config file,",
+                "by adding \"static_transport_identity = yes\" to the [reticulum] section.",
+                "",
+            ]
+            .into_iter()
+            .map(|line| (log::Level::Warn, line.to_string()))
+            .collect();
+            assert_eq!(own[at - 1..at + 5], block[..], "{name}");
+        }
+    }
 }
 
 #[test]
@@ -3681,10 +3805,19 @@ fn configured_display(name: &str, id: u64) -> ConfiguredDisplay {
         .iter()
         .find(|iface| iface.name == name)
         .unwrap();
+    let management = InterfaceManagementConfig {
+        config_file: std::path::PathBuf::from("/tmp/config"),
+        storage_dir: std::path::PathBuf::from("/tmp"),
+        initial_ids: HashMap::new(),
+        queue_capacity: 16,
+        transport_enabled: parsed.reticulum.enable_transport,
+        static_transport_identity: parsed.reticulum.static_transport_identity,
+        underlay_mark: None,
+    };
     let config = parse_managed_interface(
         iface,
         &parsed,
-        Path::new("/tmp"),
+        &management,
         rns_core::transport::types::InterfaceId(id),
         &registry,
     )

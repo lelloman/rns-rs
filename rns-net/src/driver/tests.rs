@@ -5227,6 +5227,7 @@ fn enable_interface_management(driver: &mut Driver) {
         initial_ids: HashMap::new(),
         queue_capacity: 16,
         transport_enabled: true,
+        static_transport_identity: false,
         underlay_mark: None,
     });
 }

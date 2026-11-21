@@ -9,6 +9,7 @@ pub(crate) struct InterfaceManagementConfig {
     pub(crate) initial_ids: HashMap<String, rns_core::transport::types::InterfaceId>,
     pub(crate) queue_capacity: usize,
     pub(crate) transport_enabled: bool,
+    pub(crate) static_transport_identity: bool,
     pub(crate) underlay_mark: Option<u32>,
 }
 

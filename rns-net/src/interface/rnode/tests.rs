@@ -2,6 +2,7 @@ use super::*;
 use crate::event;
 use crate::kiss;
 use crate::serial::open_pty_pair;
+use crate::test_support::logged;
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::path::PathBuf;
 use std::sync::mpsc::RecvTimeoutError;
@@ -1044,46 +1045,17 @@ fn rnode_reconnects_after_serial_disconnect() {
     assert!(rx.recv_timeout(Duration::from_millis(500)).is_err());
 }
 
-/// Every line logged while the tests run, as (level, message).
-fn logged() -> &'static Mutex<Vec<(log::Level, String)>> {
-    struct Capture;
-    static LINES: std::sync::OnceLock<Mutex<Vec<(log::Level, String)>>> =
-        std::sync::OnceLock::new();
-    impl log::Log for Capture {
-        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
-            true
-        }
-        fn log(&self, record: &log::Record<'_>) {
-            if let Some(lines) = LINES.get() {
-                lines
-                    .lock()
-                    .unwrap()
-                    .push((record.level(), record.args().to_string()));
-            }
-        }
-        fn flush(&self) {}
-    }
-    static CAPTURE: Capture = Capture;
-    let lines = LINES.get_or_init(|| Mutex::new(Vec::new()));
-    static INSTALLED: std::sync::Once = std::sync::Once::new();
-    INSTALLED.call_once(|| {
-        log::set_logger(&CAPTURE).expect("no other logger in these tests");
-        log::set_max_level(log::LevelFilter::Trace);
-    });
-    lines
-}
-
 /// The lines logged so far about `iface` reporting on its radio.
 fn radio_lines(iface: &str) -> Vec<(log::Level, String)> {
     logged()
         .lock()
         .unwrap()
         .iter()
-        .filter(|(_, line)| {
+        .filter(|(_, _, line)| {
             line.starts_with(iface)
                 && (line.contains(" Radio reporting ") || line.contains(" On-air bitrate "))
         })
-        .cloned()
+        .map(|(_, level, line)| (*level, line.clone()))
         .collect()
 }
 
