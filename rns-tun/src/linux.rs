@@ -283,12 +283,7 @@ impl LinuxConfigurator {
     fn run(&mut self, program: &str, args: Vec<String>) -> io::Result<String> {
         let output = self.runner.output(program, &args)?;
         if !output.status.success() {
-            return Err(io::Error::other(format!(
-                "{} {} failed: {}",
-                program,
-                args.join(" "),
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
+            return Err(CommandFailed::new(program, &args, &output.stderr).into());
         }
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
@@ -320,12 +315,8 @@ impl LinuxConfigurator {
                     ) => {}
                 Ok(output) => {
                     first_error.get_or_insert_with(|| {
-                        io::Error::other(format!(
-                            "{} {} failed: {}",
-                            command.program,
-                            command.remove_args.join(" "),
-                            String::from_utf8_lossy(&output.stderr).trim()
-                        ))
+                        CommandFailed::new(&command.program, &command.remove_args, &output.stderr)
+                            .into()
                     });
                 }
                 Err(error) => {
@@ -334,6 +325,45 @@ impl LinuxConfigurator {
             }
         }
         first_error.map_or(Ok(()), Err)
+    }
+}
+
+/// A configuration command that exited unsuccessfully.
+#[derive(Debug)]
+struct CommandFailed {
+    program: String,
+    args: Vec<String>,
+    /// The command's stderr, trimmed.
+    stderr: String,
+}
+
+impl CommandFailed {
+    fn new(program: &str, args: &[String], stderr: &[u8]) -> Self {
+        Self {
+            program: program.into(),
+            args: args.to_vec(),
+            stderr: String::from_utf8_lossy(stderr).trim().to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for CommandFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {} failed: {}",
+            self.program,
+            self.args.join(" "),
+            self.stderr
+        )
+    }
+}
+
+impl std::error::Error for CommandFailed {}
+
+impl From<CommandFailed> for io::Error {
+    fn from(error: CommandFailed) -> Self {
+        io::Error::other(error)
     }
 }
 
@@ -707,6 +737,16 @@ fn write_journal(path: &Path, journal: &OwnershipJournal) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_command_keeps_its_message() {
+        let args = vec!["link".to_string(), "add".to_string(), "rntun0".to_string()];
+        let error: io::Error =
+            CommandFailed::new("ip", &args, b"  RTNETLINK answers: File exists\n").into();
+        assert_eq!(
+            error.to_string(),
+            "ip link add rntun0 failed: RTNETLINK answers: File exists"
+        );
+    }
     #[test]
     fn only_real_pids_are_alive() {
         assert!(process_is_alive(std::process::id()));
