@@ -309,9 +309,9 @@ fn handle_ws_connection(
 
 fn handle_ws_text(text: &str, topics: &mut HashSet<String>, stream: &mut ConnStream) {
     if let Ok(msg) = serde_json::from_str::<serde_json::Value>(text) {
-        match msg["type"].as_str() {
+        match msg.get("type").and_then(serde_json::Value::as_str) {
             Some("subscribe") => {
-                if let Some(arr) = msg["topics"].as_array() {
+                if let Some(arr) = msg.get("topics").and_then(serde_json::Value::as_array) {
                     for t in arr {
                         if let Some(s) = t.as_str() {
                             topics.insert(s.to_string());
@@ -320,7 +320,7 @@ fn handle_ws_text(text: &str, topics: &mut HashSet<String>, stream: &mut ConnStr
                 }
             }
             Some("unsubscribe") => {
-                if let Some(arr) = msg["topics"].as_array() {
+                if let Some(arr) = msg.get("topics").and_then(serde_json::Value::as_array) {
                     for t in arr {
                         if let Some(s) = t.as_str() {
                             topics.remove(s);

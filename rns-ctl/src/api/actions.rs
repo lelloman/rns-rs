@@ -13,13 +13,14 @@ pub(super) fn handle_post_destination(
         Err(r) => return r,
     };
 
-    let dest_type_str = body["type"].as_str().unwrap_or("");
-    let app_name = match body["app_name"].as_str() {
+    let dest_type_str = body.get("type").and_then(Value::as_str).unwrap_or("");
+    let app_name = match body.get("app_name").and_then(Value::as_str) {
         Some(s) => s,
         None => return HttpResponse::bad_request("Missing app_name"),
     };
-    let aspects: Vec<&str> = body["aspects"]
-        .as_array()
+    let aspects: Vec<&str> = body
+        .get("aspects")
+        .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
         .unwrap_or_default();
 
@@ -33,7 +34,10 @@ pub(super) fn handle_post_destination(
 
     let (mut dest, signing_key) = match dest_type_str {
         "single" => {
-            let direction = body["direction"].as_str().unwrap_or("in");
+            let direction = body
+                .get("direction")
+                .and_then(Value::as_str)
+                .unwrap_or("in");
             match direction {
                 "in" => {
                     let ih = match identity_hash {
@@ -45,7 +49,7 @@ pub(super) fn handle_post_destination(
                     (dest, identity_prv_key)
                 }
                 "out" => {
-                    let dh_str = match body["dest_hash"].as_str() {
+                    let dh_str = match body.get("dest_hash").and_then(Value::as_str) {
                         Some(s) => s,
                         None => {
                             return HttpResponse::bad_request(
@@ -96,7 +100,7 @@ pub(super) fn handle_post_destination(
         "group" => {
             let mut dest = Destination::group(app_name, &aspects)
                 .set_proof_strategy(parse_proof_strategy(&body));
-            if let Some(key_b64) = body["group_key"].as_str() {
+            if let Some(key_b64) = body.get("group_key").and_then(Value::as_str) {
                 match from_base64(key_b64) {
                     Some(key) => {
                         if let Err(e) = dest.load_private_key(key) {
@@ -113,8 +117,8 @@ pub(super) fn handle_post_destination(
         _ => return HttpResponse::bad_request("type must be 'single', 'plain', or 'group'"),
     };
 
-    if !body["max_request_size"].is_null() {
-        let Some(max_request_size) = body["max_request_size"].as_i64() else {
+    if !body.get("max_request_size").is_none_or(Value::is_null) {
+        let Some(max_request_size) = body.get("max_request_size").and_then(Value::as_i64) else {
             return HttpResponse::bad_request("max_request_size must be an integer");
         };
         if dest.set_max_request_size(max_request_size).is_err() {
@@ -127,7 +131,13 @@ pub(super) fn handle_post_destination(
             Ok(()) => {
                 // For inbound single dests, also register with link manager
                 // so incoming LINKREQUEST packets are accepted.
-                if dest_type_str == "single" && body["direction"].as_str().unwrap_or("in") == "in" {
+                if dest_type_str == "single"
+                    && body
+                        .get("direction")
+                        .and_then(Value::as_str)
+                        .unwrap_or("in")
+                        == "in"
+                {
                     if let (Some(prv), Some(pubk)) = (identity_prv_key, identity_pub_key) {
                         let mut sig_prv = [0u8; 32];
                         sig_prv.copy_from_slice(&prv[32..64]);
@@ -162,7 +172,9 @@ pub(super) fn handle_post_destination(
                     "type": dest_type_str,
                 });
                 if let Some(gk) = group_key_b64 {
-                    resp["group_key"] = Value::String(gk);
+                    if let Some(resp) = resp.as_object_mut() {
+                        resp.insert("group_key".into(), Value::String(gk));
+                    }
                 }
                 HttpResponse::created(resp)
             }
@@ -181,7 +193,7 @@ pub(super) fn handle_post_announce(
         Err(r) => return r,
     };
 
-    let dh_str = match body["dest_hash"].as_str() {
+    let dh_str = match body.get("dest_hash").and_then(Value::as_str) {
         Some(s) => s,
         None => return HttpResponse::bad_request("Missing dest_hash"),
     };
@@ -190,7 +202,10 @@ pub(super) fn handle_post_announce(
         None => return HttpResponse::bad_request("Invalid dest_hash"),
     };
 
-    let app_data: Option<Vec<u8>> = body["app_data"].as_str().and_then(from_base64);
+    let app_data: Option<Vec<u8>> = body
+        .get("app_data")
+        .and_then(Value::as_str)
+        .and_then(from_base64);
 
     let (dest, identity) = {
         let s = read_state(state);
@@ -223,7 +238,7 @@ pub(super) fn handle_post_send(
         Err(r) => return r,
     };
 
-    let dh_str = match body["dest_hash"].as_str() {
+    let dh_str = match body.get("dest_hash").and_then(Value::as_str) {
         Some(s) => s,
         None => return HttpResponse::bad_request("Missing dest_hash"),
     };
@@ -231,7 +246,11 @@ pub(super) fn handle_post_send(
         Some(h) => h,
         None => return HttpResponse::bad_request("Invalid dest_hash"),
     };
-    let data = match body["data"].as_str().and_then(from_base64) {
+    let data = match body
+        .get("data")
+        .and_then(Value::as_str)
+        .and_then(from_base64)
+    {
         Some(d) => d,
         None => return HttpResponse::bad_request("Missing or invalid base64 data"),
     };
@@ -272,7 +291,7 @@ pub(super) fn handle_post_link(req: &HttpRequest, node: &NodeHandle) -> HttpResp
         Err(r) => return r,
     };
 
-    let dh_str = match body["dest_hash"].as_str() {
+    let dh_str = match body.get("dest_hash").and_then(Value::as_str) {
         Some(s) => s,
         None => return HttpResponse::bad_request("Missing dest_hash"),
     };
@@ -314,15 +333,23 @@ pub(super) fn handle_post_link_send(req: &HttpRequest, node: &NodeHandle) -> Htt
         Err(r) => return r,
     };
 
-    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(hex_to_array) {
+    let link_id: [u8; 16] = match body
+        .get("link_id")
+        .and_then(Value::as_str)
+        .and_then(hex_to_array)
+    {
         Some(h) => h,
         None => return HttpResponse::bad_request("Missing or invalid link_id"),
     };
-    let data = match body["data"].as_str().and_then(from_base64) {
+    let data = match body
+        .get("data")
+        .and_then(Value::as_str)
+        .and_then(from_base64)
+    {
         Some(d) => d,
         None => return HttpResponse::bad_request("Missing or invalid base64 data"),
     };
-    let context = body["context"].as_u64().unwrap_or(0) as u8;
+    let context = body.get("context").and_then(Value::as_u64).unwrap_or(0) as u8;
 
     // Release the node handle before waiting for a slow interface, so other
     // requests can still query, drain, or shut down the node.
@@ -354,7 +381,11 @@ pub(super) fn handle_post_link_close(req: &HttpRequest, node: &NodeHandle) -> Ht
         Err(r) => return r,
     };
 
-    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(hex_to_array) {
+    let link_id: [u8; 16] = match body
+        .get("link_id")
+        .and_then(Value::as_str)
+        .and_then(hex_to_array)
+    {
         Some(h) => h,
         None => return HttpResponse::bad_request("Missing or invalid link_id"),
     };
@@ -371,12 +402,20 @@ pub(super) fn handle_post_channel(req: &HttpRequest, node: &NodeHandle) -> HttpR
         Err(r) => return r,
     };
 
-    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(hex_to_array) {
+    let link_id: [u8; 16] = match body
+        .get("link_id")
+        .and_then(Value::as_str)
+        .and_then(hex_to_array)
+    {
         Some(h) => h,
         None => return HttpResponse::bad_request("Missing or invalid link_id"),
     };
-    let msgtype = body["msgtype"].as_u64().unwrap_or(0) as u16;
-    let payload = match body["payload"].as_str().and_then(from_base64) {
+    let msgtype = body.get("msgtype").and_then(Value::as_u64).unwrap_or(0) as u16;
+    let payload = match body
+        .get("payload")
+        .and_then(Value::as_str)
+        .and_then(from_base64)
+    {
         Some(d) => d,
         None => return HttpResponse::bad_request("Missing or invalid base64 payload"),
     };
@@ -395,15 +434,26 @@ pub(super) fn handle_post_resource(req: &HttpRequest, node: &NodeHandle) -> Http
         Err(r) => return r,
     };
 
-    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(hex_to_array) {
+    let link_id: [u8; 16] = match body
+        .get("link_id")
+        .and_then(Value::as_str)
+        .and_then(hex_to_array)
+    {
         Some(h) => h,
         None => return HttpResponse::bad_request("Missing or invalid link_id"),
     };
-    let data = match body["data"].as_str().and_then(from_base64) {
+    let data = match body
+        .get("data")
+        .and_then(Value::as_str)
+        .and_then(from_base64)
+    {
         Some(d) => d,
         None => return HttpResponse::bad_request("Missing or invalid base64 data"),
     };
-    let metadata = body["metadata"].as_str().and_then(from_base64);
+    let metadata = body
+        .get("metadata")
+        .and_then(Value::as_str)
+        .and_then(from_base64);
 
     with_active_node(node, |n| match n.send_resource(link_id, data, metadata) {
         Ok(()) => HttpResponse::ok(json!({"status": "sent"})),
@@ -417,7 +467,7 @@ pub(super) fn handle_post_path_request(req: &HttpRequest, node: &NodeHandle) -> 
         Err(r) => return r,
     };
 
-    let dh_str = match body["dest_hash"].as_str() {
+    let dh_str = match body.get("dest_hash").and_then(Value::as_str) {
         Some(s) => s,
         None => return HttpResponse::bad_request("Missing dest_hash"),
     };
@@ -438,7 +488,7 @@ pub(super) fn handle_post_direct_connect(req: &HttpRequest, node: &NodeHandle) -
         Err(r) => return r,
     };
 
-    let lid_str = match body["link_id"].as_str() {
+    let lid_str = match body.get("link_id").and_then(Value::as_str) {
         Some(s) => s,
         None => return HttpResponse::bad_request("Missing link_id"),
     };

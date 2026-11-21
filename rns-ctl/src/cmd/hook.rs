@@ -60,7 +60,7 @@ fn do_list(base_url: &str, token: Option<&str>) -> Status {
     match simple_get(&url, token) {
         Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
             Ok(val) => {
-                if let Some(hooks) = val["hooks"].as_array() {
+                if let Some(hooks) = val.get("hooks").and_then(serde_json::Value::as_array) {
                     if hooks.is_empty() {
                         println!("No hooks loaded");
                         return Ok(());

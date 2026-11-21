@@ -18,16 +18,16 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
 
     for chunk in padded.chunks_exact(64) {
         let mut w = [0u32; 80];
-        for i in 0..16 {
-            w[i] = u32::from_be_bytes([
-                chunk[i * 4],
-                chunk[i * 4 + 1],
-                chunk[i * 4 + 2],
-                chunk[i * 4 + 3],
-            ]);
+        for (word, bytes) in w.iter_mut().zip(chunk.as_chunks::<4>().0) {
+            *word = u32::from_be_bytes(*bytes);
         }
         for i in 16..80 {
-            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+            // i >= 16, so every word read is earlier in the schedule.
+            let back = |offset: usize| w.get(i - offset).copied().unwrap_or_default();
+            let next = (back(3) ^ back(8) ^ back(14) ^ back(16)).rotate_left(1);
+            if let Some(word) = w.get_mut(i) {
+                *word = next;
+            }
         }
 
         let (mut a, mut b, mut c, mut d, mut e) = (h0, h1, h2, h3, h4);

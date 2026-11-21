@@ -54,21 +54,22 @@ pub(super) fn handle_load_hook(
         Err(r) => return r,
     };
 
-    let name = match body["name"].as_str() {
+    let name = match body.get("name").and_then(Value::as_str) {
         Some(s) => s.to_string(),
         None => return HttpResponse::bad_request("Missing name"),
     };
-    let path = match body["path"].as_str() {
+    let path = match body.get("path").and_then(Value::as_str) {
         Some(s) => s,
         None => return HttpResponse::bad_request("Missing path"),
     };
-    let attach_point = match body["attach_point"].as_str() {
+    let attach_point = match body.get("attach_point").and_then(Value::as_str) {
         Some(s) => s.to_string(),
         None => return HttpResponse::bad_request("Missing attach_point"),
     };
-    let priority = body["priority"].as_i64().unwrap_or(0) as i32;
-    let hook_type = body["type"]
-        .as_str()
+    let priority = body.get("priority").and_then(Value::as_i64).unwrap_or(0) as i32;
+    let hook_type = body
+        .get("type")
+        .and_then(Value::as_str)
         .unwrap_or(DEFAULT_HOOK_TYPE)
         .to_string();
 
@@ -88,9 +89,10 @@ pub(super) fn handle_load_hook(
             }
         })
     } else if hook_type == "builtin" {
-        let builtin_id = body["builtin_id"]
-            .as_str()
-            .or_else(|| body["id"].as_str())
+        let builtin_id = body
+            .get("builtin_id")
+            .and_then(Value::as_str)
+            .or_else(|| body.get("id").and_then(Value::as_str))
             .unwrap_or(path)
             .to_string();
         with_node(node, |n| {
@@ -121,11 +123,11 @@ pub(super) fn handle_unload_hook(req: &HttpRequest, node: &NodeHandle) -> HttpRe
         Err(r) => return r,
     };
 
-    let name = match body["name"].as_str() {
+    let name = match body.get("name").and_then(Value::as_str) {
         Some(s) => s.to_string(),
         None => return HttpResponse::bad_request("Missing name"),
     };
-    let attach_point = match body["attach_point"].as_str() {
+    let attach_point = match body.get("attach_point").and_then(Value::as_str) {
         Some(s) => s.to_string(),
         None => return HttpResponse::bad_request("Missing attach_point"),
     };
@@ -147,20 +149,21 @@ pub(super) fn handle_reload_hook(
         Err(r) => return r,
     };
 
-    let name = match body["name"].as_str() {
+    let name = match body.get("name").and_then(Value::as_str) {
         Some(s) => s.to_string(),
         None => return HttpResponse::bad_request("Missing name"),
     };
-    let path = match body["path"].as_str() {
+    let path = match body.get("path").and_then(Value::as_str) {
         Some(s) => s,
         None => return HttpResponse::bad_request("Missing path"),
     };
-    let attach_point = match body["attach_point"].as_str() {
+    let attach_point = match body.get("attach_point").and_then(Value::as_str) {
         Some(s) => s.to_string(),
         None => return HttpResponse::bad_request("Missing attach_point"),
     };
-    let hook_type = body["type"]
-        .as_str()
+    let hook_type = body
+        .get("type")
+        .and_then(Value::as_str)
         .unwrap_or(DEFAULT_HOOK_TYPE)
         .to_string();
 
@@ -180,9 +183,10 @@ pub(super) fn handle_reload_hook(
             }
         })
     } else if hook_type == "builtin" {
-        let builtin_id = body["builtin_id"]
-            .as_str()
-            .or_else(|| body["id"].as_str())
+        let builtin_id = body
+            .get("builtin_id")
+            .and_then(Value::as_str)
+            .or_else(|| body.get("id").and_then(Value::as_str))
             .unwrap_or(path)
             .to_string();
         with_node(node, |n| {
@@ -217,11 +221,11 @@ pub(super) fn handle_set_hook_enabled(
         Err(r) => return r,
     };
 
-    let name = match body["name"].as_str() {
+    let name = match body.get("name").and_then(Value::as_str) {
         Some(s) => s.to_string(),
         None => return HttpResponse::bad_request("Missing name"),
     };
-    let attach_point = match body["attach_point"].as_str() {
+    let attach_point = match body.get("attach_point").and_then(Value::as_str) {
         Some(s) => s.to_string(),
         None => return HttpResponse::bad_request("Missing attach_point"),
     };
@@ -243,15 +247,15 @@ pub(super) fn handle_set_hook_priority(req: &HttpRequest, node: &NodeHandle) -> 
         Err(r) => return r,
     };
 
-    let name = match body["name"].as_str() {
+    let name = match body.get("name").and_then(Value::as_str) {
         Some(s) => s.to_string(),
         None => return HttpResponse::bad_request("Missing name"),
     };
-    let attach_point = match body["attach_point"].as_str() {
+    let attach_point = match body.get("attach_point").and_then(Value::as_str) {
         Some(s) => s.to_string(),
         None => return HttpResponse::bad_request("Missing attach_point"),
     };
-    let priority = match body["priority"].as_i64() {
+    let priority = match body.get("priority").and_then(Value::as_i64) {
         Some(v) => v as i32,
         None => return HttpResponse::bad_request("Missing priority"),
     };

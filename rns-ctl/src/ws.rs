@@ -92,8 +92,8 @@ pub fn read_frame(stream: &mut dyn Read) -> io::Result<WsFrame> {
 
     // Unmask
     if let Some(key) = mask_key {
-        for i in 0..payload.len() {
-            payload[i] ^= key[i % 4];
+        for (byte, mask) in payload.iter_mut().zip(key.iter().cycle()) {
+            *byte ^= mask;
         }
     }
 
@@ -173,57 +173,41 @@ pub fn run_ws_loop(
 /// Try to parse a complete WebSocket frame from a byte buffer.
 /// Returns `Some((frame, bytes_consumed))` if a complete frame is available.
 fn parse_frame_from_buf(buf: &[u8]) -> Option<(WsFrame, usize)> {
-    if buf.len() < 2 {
+    let [first, second, rest @ ..] = buf else {
         return None;
-    }
+    };
+    let mut rest = rest;
 
-    let opcode = buf[0] & 0x0F;
-    let masked = buf[1] & 0x80 != 0;
-    let len_byte = buf[1] & 0x7F;
-
-    let mut pos = 2;
+    let opcode = first & 0x0F;
+    let masked = second & 0x80 != 0;
+    let len_byte = second & 0x7F;
 
     let payload_len: usize = if len_byte <= 125 {
         len_byte as usize
     } else if len_byte == 126 {
-        if buf.len() < pos + 2 {
-            return None;
-        }
-        let len = u16::from_be_bytes([buf[pos], buf[pos + 1]]) as usize;
-        pos += 2;
-        len
+        let (len, after) = rest.split_first_chunk::<2>()?;
+        rest = after;
+        u16::from_be_bytes(*len) as usize
     } else {
-        if buf.len() < pos + 8 {
-            return None;
-        }
-        let mut arr = [0u8; 8];
-        arr.copy_from_slice(&buf[pos..pos + 8]);
-        let len = u64::from_be_bytes(arr) as usize;
-        pos += 8;
-        len
+        let (len, after) = rest.split_first_chunk::<8>()?;
+        rest = after;
+        u64::from_be_bytes(*len) as usize
     };
 
     let mask_key = if masked {
-        if buf.len() < pos + 4 {
-            return None;
-        }
-        let key = [buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]];
-        pos += 4;
-        Some(key)
+        let (key, after) = rest.split_first_chunk::<4>()?;
+        rest = after;
+        Some(*key)
     } else {
         None
     };
 
-    if buf.len() < pos + payload_len {
-        return None;
-    }
-
-    let mut payload = buf[pos..pos + payload_len].to_vec();
-    pos += payload_len;
+    let mut payload = rest.get(..payload_len)?.to_vec();
+    let pos = buf.len() - rest.len() + payload_len;
 
     if let Some(key) = mask_key {
-        for i in 0..payload.len() {
-            payload[i] ^= key[i % 4];
+        for (byte, mask) in payload.iter_mut().zip(key.iter().cycle()) {
+            *byte ^= mask;
         }
     }
 
@@ -273,7 +257,7 @@ impl WsBuf {
                 ));
             }
             Ok(n) => {
-                self.buf.extend_from_slice(&tmp[..n]);
+                self.buf.extend_from_slice(tmp.get(..n).unwrap_or_default());
             }
             Err(e)
                 if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
