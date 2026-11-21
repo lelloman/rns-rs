@@ -10,7 +10,7 @@ use crate::arena;
 use crate::engine_access::{EngineAccess, NullEngine};
 use crate::error::HookError;
 use crate::hooks::HookContext;
-use crate::program::{LoadedProgram, ProgramBackend};
+use crate::program::LoadedProgram;
 use crate::result::{ExecuteResult, Verdict};
 use crate::runtime::StoreData;
 use wasmtime::Store;
@@ -123,12 +123,10 @@ impl HookManager {
     ) -> Option<(Store<StoreData>, wasmtime::Instance)> {
         // Take the cached store+instance out of program (or create fresh).
         // We take ownership to avoid borrow-checker conflicts with program.record_*().
-        let cached = match &mut program.backend {
-            ProgramBackend::Builtin(_) => unreachable!(),
-            ProgramBackend::Wasm(wasm) => wasm.cached.take(),
-            #[cfg(feature = "native")]
-            ProgramBackend::Native(_) => unreachable!(),
-        };
+        let cached = program
+            .backend
+            .wasm_mut()
+            .and_then(|wasm| wasm.cached.take());
         if let Some(cached) = cached {
             let (mut s, i) = cached;
             // Reset per-call state: fuel, engine_access, injected_actions, log_messages
@@ -158,12 +156,7 @@ impl HookManager {
             }
         };
 
-        let module = match &program.backend {
-            ProgramBackend::Builtin(_) => unreachable!(),
-            ProgramBackend::Wasm(wasm) => wasm.module.clone(),
-            #[cfg(feature = "native")]
-            ProgramBackend::Native(_) => unreachable!(),
-        };
+        let module = program.backend.wasm()?.module.clone();
         let instance = match guard_guest_call(|| self.linker.instantiate(&mut store, &module)) {
             Ok(inst) => inst,
             Err(e) => {
@@ -215,12 +208,7 @@ impl HookManager {
         }
 
         // Call the exported hook function
-        let export_name = match &program.backend {
-            ProgramBackend::Builtin(_) => unreachable!(),
-            ProgramBackend::Wasm(wasm) => wasm.export_name.clone(),
-            #[cfg(feature = "native")]
-            ProgramBackend::Native(_) => unreachable!(),
-        };
+        let export_name = program.backend.wasm()?.export_name.clone();
         match instance.get_typed_func::<i32, i32>(&mut *store, &export_name) {
             Ok(f) => Some((memory, f)),
             Err(e) => {
@@ -337,11 +325,8 @@ impl HookManager {
         store: Store<StoreData>,
         instance: wasmtime::Instance,
     ) {
-        match &mut program.backend {
-            ProgramBackend::Builtin(_) => unreachable!(),
-            ProgramBackend::Wasm(wasm) => wasm.cached = Some((store, instance)),
-            #[cfg(feature = "native")]
-            ProgramBackend::Native(_) => unreachable!(),
+        if let Some(wasm) = program.backend.wasm_mut() {
+            wasm.cached = Some((store, instance));
         }
     }
 }
