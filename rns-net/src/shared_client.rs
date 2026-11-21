@@ -307,7 +307,10 @@ impl RnsNode {
     /// identity rather than an ephemeral one. `destination_type_names` are
     /// the names of destination types the client read with its config, as
     /// every upstream instance does.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per client setting the public connect functions pass through"
+    )]
     fn connect_shared_with_reconnect_wait(
         config: SharedClientConfig,
         callbacks: Box<dyn Callbacks>,

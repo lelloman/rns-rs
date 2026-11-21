@@ -61,11 +61,12 @@ pub fn build_linkrequest_data(
     data
 }
 
-/// Parse LINKREQUEST data. Returns `(x25519_pub, ed25519_pub, mtu, mode)`.
-#[allow(clippy::type_complexity)]
-pub fn parse_linkrequest_data(
-    data: &[u8],
-) -> Result<([u8; 32], [u8; 32], Option<u32>, LinkMode), LinkError> {
+/// The fields of LINKREQUEST data: `(x25519_pub, ed25519_pub, mtu, mode)`,
+/// with no MTU when the request signals none.
+pub type LinkRequestFields = ([u8; 32], [u8; 32], Option<u32>, LinkMode);
+
+/// Parse LINKREQUEST data.
+pub fn parse_linkrequest_data(data: &[u8]) -> Result<LinkRequestFields, LinkError> {
     // [x25519_pub:32][ed25519_pub:32][signalling:0 or 3]
     let Some((x25519_pub, rest)) = data.split_first_chunk::<32>() else {
         return Err(LinkError::InvalidData);

@@ -44,9 +44,11 @@ enum AesMode {
     Aes256(Aes256),
 }
 
-/// CBC chaining state carried across the pieces of one ciphertext. It lives
-/// on the stack for one call, so the variants' size difference is harmless.
-#[allow(clippy::large_enum_variant)]
+/// CBC chaining state carried across the pieces of one ciphertext.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one lives for one decryption, held inline to avoid an allocation per stream"
+)]
 enum CbcDecryptor {
     Aes128(cbc::Decryptor<aes::Aes128>),
     Aes256(cbc::Decryptor<aes::Aes256>),

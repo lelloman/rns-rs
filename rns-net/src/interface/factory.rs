@@ -12,8 +12,10 @@ use crate::ifac::IfacState;
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
 /// Result of starting an interface via a factory.
-// Boxing `Simple` would change the published factory result representation.
-#[allow(clippy::large_enum_variant)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "boxing Simple would change the published factory result; one exists per interface start"
+)]
 pub enum StartResult {
     /// One writer, registered immediately (TcpClient, Udp, Serial, etc.)
     Simple {

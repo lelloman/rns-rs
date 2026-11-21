@@ -5,7 +5,7 @@
 #![warn(missing_docs)]
 // Cryptographic logic lives in the RustCrypto/dalek crates. `unsafe` is
 // allowed only at FFI boundaries (OS randomness, the optional aws-lc
-// backends), each site opting in with `#[allow(unsafe_code)]`.
+// backends), each site opting in with a reasoned `#[allow(unsafe_code)]`.
 #![deny(unsafe_code)]
 // Inputs are untrusted: production code reads them with checked access.
 #![cfg_attr(not(test), deny(clippy::indexing_slicing))]
@@ -86,7 +86,7 @@ impl Rng for FixedRng {
 pub struct OsRng;
 
 #[cfg(feature = "std")]
-#[allow(unsafe_code)] // getrandom(3) / esp_fill_random FFI
+#[allow(unsafe_code, reason = "getrandom(3) / esp_fill_random FFI")]
 impl Rng for OsRng {
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         // ESP-IDF: use hardware RNG via esp_fill_random
@@ -187,7 +187,7 @@ mod tests {
     any(feature = "x25519-aws-lc", feature = "ed25519-aws-lc"),
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-#[allow(unsafe_code)] // aws-lc FFI
+#[allow(unsafe_code, reason = "aws-lc FFI")]
 pub(crate) fn aws_lc_init() {
     static INIT: std::sync::Once = std::sync::Once::new();
     // SAFETY: takes no arguments; sets up aws-lc's CPU feature detection.
