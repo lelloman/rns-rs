@@ -40,10 +40,10 @@ pub fn md5(data: &[u8]) -> [u8; 16] {
     msg.extend_from_slice(&orig_len_bits.to_le_bytes());
 
     // Process each 512-bit (64-byte) chunk
-    for chunk in msg.chunks_exact(64) {
+    for chunk in msg.as_chunks::<64>().0 {
         let mut m = [0u32; 16];
-        for (i, word) in chunk.chunks_exact(4).enumerate() {
-            m[i] = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
+        for (word, bytes) in m.iter_mut().zip(chunk.as_chunks::<4>().0) {
+            *word = u32::from_le_bytes(*bytes);
         }
 
         let mut a = a0;
@@ -51,7 +51,7 @@ pub fn md5(data: &[u8]) -> [u8; 16] {
         let mut c = c0;
         let mut d = d0;
 
-        for i in 0..64 {
+        for (i, (&k, &s)) in K.iter().zip(&S).enumerate() {
             let (f, g) = match i {
                 0..=15 => ((b & c) | ((!b) & d), i),
                 16..=31 => ((d & b) | ((!d) & c), (5 * i + 1) % 16),
@@ -59,11 +59,13 @@ pub fn md5(data: &[u8]) -> [u8; 16] {
                 _ => (c ^ (b | (!d)), (7 * i) % 16),
             };
 
-            let f = f.wrapping_add(a).wrapping_add(K[i]).wrapping_add(m[g]);
+            // g < 16, the length of m.
+            let word = m.get(g).copied().unwrap_or_default();
+            let f = f.wrapping_add(a).wrapping_add(k).wrapping_add(word);
             a = d;
             d = c;
             c = b;
-            b = b.wrapping_add(f.rotate_left(S[i]));
+            b = b.wrapping_add(f.rotate_left(s));
         }
 
         a0 = a0.wrapping_add(a);
@@ -92,16 +94,18 @@ pub fn hmac_md5(key: &[u8], message: &[u8]) -> [u8; 16] {
         k
     } else {
         let mut k = [0u8; BLOCK_SIZE];
-        k[..key.len()].copy_from_slice(key);
+        for (slot, byte) in k.iter_mut().zip(key) {
+            *slot = *byte;
+        }
         k
     };
 
     // Step 2: Create inner and outer padded keys
     let mut ipad = [0x36u8; BLOCK_SIZE];
     let mut opad = [0x5cu8; BLOCK_SIZE];
-    for i in 0..BLOCK_SIZE {
-        ipad[i] ^= key_block[i];
-        opad[i] ^= key_block[i];
+    for ((ipad, opad), key) in ipad.iter_mut().zip(opad.iter_mut()).zip(key_block) {
+        *ipad ^= key;
+        *opad ^= key;
     }
 
     // Step 3: Inner hash = MD5(ipad || message)

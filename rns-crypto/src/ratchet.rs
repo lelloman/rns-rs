@@ -113,7 +113,7 @@ impl RatchetRing {
         }
         let mut keys = Zeroizing::new(Vec::with_capacity((self.keys.len() + 1).min(retained)));
         keys.push(X25519PrivateKey::generate(rng).private_bytes());
-        keys.extend_from_slice(&self.keys[..self.keys.len().min(retained - 1)]);
+        keys.extend(self.keys.iter().take(retained - 1).copied());
         Some(Self {
             keys,
             last_rotation: Some(now),

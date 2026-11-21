@@ -439,18 +439,31 @@ impl StampCost {
         // and TAB[f] < 2^34, so the target fits in 256 bits.
         let rest = MAX_FP - self.0;
         let exponent = rest >> COST_FP_BITS;
-        let mantissa = TAB[(rest & (COST_FP - 1)) as usize];
+        // The index is below COST_FP, TAB's length; were it not, the zero
+        // target would admit no stamp.
+        let Some(&mantissa) = TAB.get((rest & (COST_FP - 1)) as usize) else {
+            return Some([0; 32]);
+        };
         // The cap keeps the exponent at 156 or more, so the shift is left.
         let shift = exponent - MANTISSA_BITS;
         let (limb, offset) = ((shift / 64) as usize, shift % 64);
         let mut limbs = [0u64; 4];
-        limbs[limb] = mantissa << offset;
-        if offset > 0 && limb + 1 < limbs.len() {
-            limbs[limb + 1] = mantissa >> (64 - offset);
+        if let Some(low) = limbs.get_mut(limb) {
+            *low = mantissa << offset;
+        }
+        if offset > 0 {
+            if let Some(high) = limbs.get_mut(limb + 1) {
+                *high = mantissa >> (64 - offset);
+            }
         }
         let mut target = [0u8; 32];
-        for (i, limb) in limbs.iter().rev().enumerate() {
-            target[i * 8..i * 8 + 8].copy_from_slice(&limb.to_be_bytes());
+        for (bytes, limb) in target
+            .as_chunks_mut::<8>()
+            .0
+            .iter_mut()
+            .zip(limbs.iter().rev())
+        {
+            *bytes = limb.to_be_bytes();
         }
         Some(target)
     }
@@ -490,8 +503,9 @@ pub fn value_of_product(product: &[u8; 32]) -> StampValue {
     // upstream left-shifting short products.
     let start = (lz / 8) as usize;
     let mut window = [0u8; 16];
-    let available = (32 - start).min(16);
-    window[..available].copy_from_slice(&product[start..start + available]);
+    for (slot, byte) in window.iter_mut().zip(product.iter().skip(start)) {
+        *slot = *byte;
+    }
     let aligned = u128::from_be_bytes(window) << (lz % 8);
     let mantissa = (aligned >> (128 - (MANTISSA_BITS + 1))) as u64;
     // Right-bisecting TAB counts the grid points at or below the mantissa,
