@@ -1,7 +1,8 @@
 //! HTTP/WebSocket control server subcommand.
 
-use std::io::{IsTerminal, Write};
-use std::net::SocketAddr;
+use std::fmt;
+use std::io::{self, IsTerminal, Write};
+use std::net::{AddrParseError, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -54,7 +55,99 @@ impl HttpRunOptions {
     }
 }
 
-fn run_embedded(args: Args, options: HttpRunOptions) -> Result<(), String> {
+/// Why the control plane could not be set up.
+///
+/// Its `Display` text is what `rns-ctl http` and `rns-server` print.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum HttpSetupError {
+    /// A generated auth token could not be written to its file while stdout
+    /// is not a terminal, so the operator would have no way to learn it.
+    TokenFile {
+        /// The token file.
+        path: PathBuf,
+        /// Why it could not be written.
+        source: io::Error,
+    },
+    /// The node could not be started.
+    StartNode(io::Error),
+    /// The TLS certificate or key could not be loaded.
+    #[cfg(feature = "tls")]
+    LoadTls(io::Error),
+    /// Only one of `--tls-cert` and `--tls-key` was given.
+    #[cfg(feature = "tls")]
+    IncompleteTls,
+    /// TLS options were given to a build without the `tls` feature.
+    #[cfg(not(feature = "tls"))]
+    TlsUnsupported,
+    /// The configured host and port do not form a socket address.
+    InvalidBindAddress(AddrParseError),
+}
+
+impl fmt::Display for HttpSetupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HttpSetupError::TokenFile { path, source } => write!(
+                f,
+                "failed to write auth token file {}: {}",
+                path.display(),
+                source
+            ),
+            HttpSetupError::StartNode(error) => write!(f, "failed to start node: {}", error),
+            #[cfg(feature = "tls")]
+            HttpSetupError::LoadTls(error) => write!(f, "failed to load TLS config: {}", error),
+            #[cfg(feature = "tls")]
+            HttpSetupError::IncompleteTls => {
+                f.write_str("both --tls-cert and --tls-key must be provided together")
+            }
+            #[cfg(not(feature = "tls"))]
+            HttpSetupError::TlsUnsupported => f.write_str(
+                "TLS options require the 'tls' feature. Rebuild with: cargo build --features tls",
+            ),
+            HttpSetupError::InvalidBindAddress(_) => f.write_str("invalid bind address"),
+        }
+    }
+}
+
+impl std::error::Error for HttpSetupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            HttpSetupError::TokenFile { source, .. } => Some(source),
+            HttpSetupError::StartNode(error) => Some(error),
+            #[cfg(feature = "tls")]
+            HttpSetupError::LoadTls(error) => Some(error),
+            #[cfg(feature = "tls")]
+            HttpSetupError::IncompleteTls => None,
+            #[cfg(not(feature = "tls"))]
+            HttpSetupError::TlsUnsupported => None,
+            HttpSetupError::InvalidBindAddress(error) => Some(error),
+        }
+    }
+}
+
+/// Why `rns-ctl http` stopped with an error.
+#[derive(Debug)]
+enum HttpRunError {
+    Setup(HttpSetupError),
+    Serve(io::Error),
+}
+
+impl From<HttpSetupError> for HttpRunError {
+    fn from(error: HttpSetupError) -> Self {
+        HttpRunError::Setup(error)
+    }
+}
+
+impl fmt::Display for HttpRunError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HttpRunError::Setup(error) => write!(f, "{}", error),
+            HttpRunError::Serve(error) => write!(f, "server error: {}", error),
+        }
+    }
+}
+
+fn run_embedded(args: Args, options: HttpRunOptions) -> Result<(), HttpRunError> {
     if args.has("help") {
         crate::cli::HTTP.print_help("rns-ctl http");
         return Ok(());
@@ -66,7 +159,7 @@ fn run_embedded(args: Args, options: HttpRunOptions) -> Result<(), String> {
     }
 
     let prepared = prepare_embedded_with_state(args, options, None)?;
-    server::run_server(prepared.addr, prepared.ctx).map_err(|e| format!("server error: {}", e))
+    server::run_server(prepared.addr, prepared.ctx).map_err(HttpRunError::Serve)
 }
 
 /// A control plane ready to serve: hand both parts to
@@ -97,7 +190,7 @@ pub fn prepare_embedded_with_state(
     args: Args,
     options: HttpRunOptions,
     shared_state_override: Option<state::SharedState>,
-) -> Result<PreparedHttpServer, String> {
+) -> Result<PreparedHttpServer, HttpSetupError> {
     if options.init_logging {
         // Init logging
         let log_level = match args.verbosity {
@@ -162,7 +255,7 @@ pub fn prepare_embedded_with_state(
         ));
         log::info!("Starting RNS node...");
         let node = rns_net::RnsNode::from_config(config_path, callbacks)
-            .map_err(|e| format!("failed to start node: {}", e))?;
+            .map_err(HttpSetupError::StartNode)?;
         *state::lock_node_handle(&node_handle) = Some(node);
     }
 
@@ -195,11 +288,11 @@ pub fn prepare_embedded_with_state(
                     Some(config)
                 }
                 Err(e) => {
-                    return Err(format!("failed to load TLS config: {}", e));
+                    return Err(HttpSetupError::LoadTls(e));
                 }
             },
             (Some(_), None) | (None, Some(_)) => {
-                return Err("both --tls-cert and --tls-key must be provided together".into());
+                return Err(HttpSetupError::IncompleteTls);
             }
             (None, None) => None,
         }
@@ -208,10 +301,7 @@ pub fn prepare_embedded_with_state(
     #[cfg(not(feature = "tls"))]
     {
         if cfg.tls_cert.is_some() || cfg.tls_key.is_some() {
-            return Err(
-                "TLS options require the 'tls' feature. Rebuild with: cargo build --features tls"
-                    .into(),
-            );
+            return Err(HttpSetupError::TlsUnsupported);
         }
     }
 
@@ -230,7 +320,7 @@ pub fn prepare_embedded_with_state(
     let cfg = state::read_control_plane_config(&config_handle);
     let addr: SocketAddr = format!("{}:{}", cfg.host, cfg.port)
         .parse()
-        .map_err(|_| "invalid bind address".to_string())?;
+        .map_err(HttpSetupError::InvalidBindAddress)?;
 
     Ok(PreparedHttpServer { addr, ctx })
 }
@@ -247,22 +337,20 @@ pub fn token_file_path(config_path: Option<&Path>) -> PathBuf {
 /// Make a generated token available to the operator without passing it
 /// through the logger: it is written to an owner-only file, and printed
 /// once when stdout is a terminal.
-fn publish_generated_token(token: &str, config_path: Option<&Path>) -> Result<(), String> {
+fn publish_generated_token(token: &str, config_path: Option<&Path>) -> Result<(), HttpSetupError> {
     let path = token_file_path(config_path);
     let interactive = std::io::stdout().is_terminal();
-    match write_token_file(&path, token) {
-        Ok(()) => log::info!("{}", token_file_log_message(&path)),
-        Err(err) => {
-            let msg = format!(
-                "failed to write auth token file {}: {}",
-                path.display(),
-                err
-            );
-            if !interactive {
-                return Err(msg);
-            }
-            log::warn!("{}", msg);
+    if let Err(source) = write_token_file(&path, token) {
+        let error = HttpSetupError::TokenFile {
+            path: path.clone(),
+            source,
+        };
+        if !interactive {
+            return Err(error);
         }
+        log::warn!("{}", error);
+    } else {
+        log::info!("{}", token_file_log_message(&path));
     }
     if interactive {
         println!(
@@ -416,6 +504,57 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn setup_errors_keep_their_messages() {
+        let io = || std::io::Error::other("denied");
+        let mut cases = vec![
+            (
+                HttpSetupError::TokenFile {
+                    path: PathBuf::from("/etc/rns/http-token"),
+                    source: io(),
+                }
+                .to_string(),
+                "failed to write auth token file /etc/rns/http-token: denied",
+            ),
+            (
+                HttpSetupError::StartNode(io()).to_string(),
+                "failed to start node: denied",
+            ),
+            (
+                HttpSetupError::InvalidBindAddress("x".parse::<SocketAddr>().unwrap_err())
+                    .to_string(),
+                "invalid bind address",
+            ),
+            (
+                HttpRunError::Serve(io()).to_string(),
+                "server error: denied",
+            ),
+            (
+                HttpRunError::Setup(HttpSetupError::StartNode(io())).to_string(),
+                "failed to start node: denied",
+            ),
+        ];
+        #[cfg(feature = "tls")]
+        cases.extend([
+            (
+                HttpSetupError::LoadTls(io()).to_string(),
+                "failed to load TLS config: denied",
+            ),
+            (
+                HttpSetupError::IncompleteTls.to_string(),
+                "both --tls-cert and --tls-key must be provided together",
+            ),
+        ]);
+        #[cfg(not(feature = "tls"))]
+        cases.push((
+            HttpSetupError::TlsUnsupported.to_string(),
+            "TLS options require the 'tls' feature. Rebuild with: cargo build --features tls",
+        ));
+        for (actual, expected) in cases {
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
