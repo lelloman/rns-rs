@@ -125,19 +125,9 @@ pub(crate) fn run(role: &str, port: u16, c: Case) -> Result<()> {
     let public = identity.get_public_key().unwrap();
     let signing: [u8; 32] = public[32..].try_into().unwrap();
     let config_data: Box<dyn rns_net::interface::InterfaceConfigData> = if listener {
-        Box::new(TcpServerConfig {
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(1),
-            ..Default::default()
-        })
+        Box::new(TcpServerConfig::new("", InterfaceId(1), "127.0.0.1", port))
     } else {
-        Box::new(TcpClientConfig {
-            target_host: "127.0.0.1".into(),
-            target_port: port,
-            interface_id: InterfaceId(1),
-            ..Default::default()
-        })
+        Box::new(TcpClientConfig::new("", InterfaceId(1), "127.0.0.1", port))
     };
     let node = RnsNode::start(
         NodeConfig {

@@ -1907,14 +1907,12 @@ fn start_test_pair() -> TestPair {
         announce_limits: Default::default(),
         name: String::new(),
         type_name: "TCPServerInterface".to_string(),
-        config_data: Box::new(TcpServerConfig {
-            name: "Test TCP Server".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: tcp_port,
-            interface_id: InterfaceId(1),
-            max_connections: None,
-            ..TcpServerConfig::default()
-        }),
+        config_data: Box::new(TcpServerConfig::new(
+            "Test TCP Server",
+            InterfaceId(1),
+            "127.0.0.1",
+            tcp_port,
+        )),
         mode: MODE_FULL,
         gravity: 0,
         hop_limiter: None,
@@ -1946,13 +1944,12 @@ fn start_test_pair() -> TestPair {
         announce_limits: Default::default(),
         name: String::new(),
         type_name: "TCPClientInterface".to_string(),
-        config_data: Box::new(TcpClientConfig {
-            name: "Test TCP Client".into(),
-            target_host: "127.0.0.1".into(),
-            target_port: tcp_port,
-            interface_id: InterfaceId(1),
-            ..Default::default()
-        }),
+        config_data: Box::new(TcpClientConfig::new(
+            "Test TCP Client",
+            InterfaceId(1),
+            "127.0.0.1",
+            tcp_port,
+        )),
         mode: MODE_FULL,
         gravity: 0,
         hop_limiter: None,

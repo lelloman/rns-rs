@@ -4,7 +4,7 @@ use super::*;
 
 /// Radio settings of a single RNode that can be changed while it runs.
 #[derive(Debug, Clone)]
-pub struct RNodeRuntime {
+pub(crate) struct RNodeRuntime {
     /// Current radio settings.
     pub sub: RNodeSubConfig,
     /// Write side of the open device, set once connected; changes are sent through it.
@@ -13,7 +13,7 @@ pub struct RNodeRuntime {
 
 impl RNodeRuntime {
     /// Settings from the first subinterface of `config`, or the defaults when it has none.
-    pub fn from_config(config: &RNodeConfig) -> Self {
+    pub(crate) fn from_config(config: &RNodeConfig) -> Self {
         Self {
             sub: config
                 .subinterfaces
