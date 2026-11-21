@@ -481,3 +481,121 @@ impl RuntimeConfigHandles {
         None
     }
 }
+
+impl RuntimeConfigHandles {
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) fn list_backbone_peer_state(
+        &self,
+        interface_name: Option<&str>,
+    ) -> Vec<BackbonePeerStateEntry> {
+        let mut names: Vec<&String> = match interface_name {
+            Some(name) => self
+                .backbone_peer_state
+                .keys()
+                .filter(|candidate| candidate.as_str() == name)
+                .collect(),
+            None => self.backbone_peer_state.keys().collect(),
+        };
+        names.sort();
+
+        let mut entries = Vec::new();
+        for name in names {
+            if let Some(handle) = self.backbone_peer_state.get(name) {
+                entries.extend(
+                    recover_mutex_guard(&handle.peer_state, "backbone peer state").list(name),
+                );
+            }
+        }
+        entries.sort_by(|a, b| {
+            a.interface_name
+                .cmp(&b.interface_name)
+                .then_with(|| a.peer_ip.cmp(&b.peer_ip))
+        });
+        entries
+    }
+
+    #[cfg(not(feature = "iface-backbone"))]
+    pub(crate) fn list_backbone_peer_state(
+        &self,
+        _interface_name: Option<&str>,
+    ) -> Vec<BackbonePeerStateEntry> {
+        Vec::new()
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) fn list_backbone_interfaces(&self) -> Vec<crate::event::BackboneInterfaceEntry> {
+        let mut entries: Vec<_> = self
+            .backbone_peer_state
+            .values()
+            .map(|handle| crate::event::BackboneInterfaceEntry {
+                interface_id: handle.interface_id,
+                interface_name: handle.interface_name.clone(),
+            })
+            .collect();
+        entries.sort_by(|a, b| a.interface_name.cmp(&b.interface_name));
+        entries
+    }
+
+    #[cfg(not(feature = "iface-backbone"))]
+    pub(crate) fn list_backbone_interfaces(&self) -> Vec<crate::event::BackboneInterfaceEntry> {
+        Vec::new()
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) fn clear_backbone_peer_state(
+        &mut self,
+        interface_name: &str,
+        peer_ip: std::net::IpAddr,
+    ) -> bool {
+        self.backbone_peer_state
+            .get(interface_name)
+            .map(|handle| {
+                let peer_cleared =
+                    recover_mutex_guard(&handle.peer_state, "backbone peer state").clear(peer_ip);
+                let flap_cleared =
+                    recover_mutex_guard(&handle.fast_flap_state, "backbone fast-flap state")
+                        .clear(peer_ip);
+                peer_cleared || flap_cleared
+            })
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(feature = "iface-backbone"))]
+    pub(crate) fn clear_backbone_peer_state(
+        &mut self,
+        _interface_name: &str,
+        _peer_ip: std::net::IpAddr,
+    ) -> bool {
+        false
+    }
+
+    /// Blacklist `peer_ip` on the backbone interface `interface_name` for
+    /// `duration`, capped at the interface's longest penalty. Returns the
+    /// capped duration, or `None` when the peer was not blacklisted.
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) fn blacklist_backbone_peer(
+        &self,
+        interface_name: &str,
+        peer_ip: std::net::IpAddr,
+        duration: std::time::Duration,
+        reason: String,
+    ) -> Option<std::time::Duration> {
+        let capped_duration = self
+            .backbone
+            .get(interface_name)
+            .and_then(|handle| {
+                handle
+                    .runtime
+                    .lock()
+                    .ok()
+                    .map(|runtime| runtime.abuse.max_penalty_duration)
+            })
+            .flatten()
+            .map(|max| duration.min(max))
+            .unwrap_or(duration);
+        let handle = self.backbone_peer_state.get(interface_name)?;
+        recover_mutex_guard(&handle.peer_state, "backbone peer state")
+            .blacklist(peer_ip, capped_duration, reason)
+            .then_some(capped_duration)
+    }
+}

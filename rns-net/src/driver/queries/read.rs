@@ -63,7 +63,7 @@ impl Driver {
             QueryRequest::ManageInterface { .. } => QueryResponse::InterfaceManagement(Some(false)),
             QueryRequest::InterfaceStats => self.handle_interface_stats_query(),
             QueryRequest::BackboneInterfaces => {
-                QueryResponse::BackboneInterfaces(self.list_backbone_interfaces())
+                QueryResponse::BackboneInterfaces(self.runtime_config.list_backbone_interfaces())
             }
             QueryRequest::ProviderBridgeStats => {
                 QueryResponse::ProviderBridgeStats(self.hooks.provider_bridge_stats())

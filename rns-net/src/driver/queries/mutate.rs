@@ -16,7 +16,8 @@ impl Driver {
             )),
             QueryRequest::BackbonePeerState { interface_name } => {
                 Some(QueryResponse::BackbonePeerState(
-                    self.list_backbone_peer_state(interface_name.as_deref()),
+                    self.runtime_config
+                        .list_backbone_peer_state(interface_name.as_deref()),
                 ))
             }
             QueryRequest::SetRuntimeConfig { .. } => {
@@ -67,7 +68,8 @@ impl Driver {
                 interface_name,
                 peer_ip,
             } => Some(QueryResponse::ClearBackbonePeerState(
-                self.clear_backbone_peer_state(&interface_name, peer_ip),
+                self.runtime_config
+                    .clear_backbone_peer_state(&interface_name, peer_ip),
             )),
             QueryRequest::BlacklistBackbonePeer {
                 interface_name,
