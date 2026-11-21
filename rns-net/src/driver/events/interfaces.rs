@@ -119,7 +119,8 @@ impl Driver {
         let wants_tunnel = info.wants_tunnel;
         let iface_type = infer_interface_type(&info.name);
         info.started = time::now();
-        self.register_interface_runtime_defaults(&info);
+        self.runtime_config
+            .register_interface_runtime_defaults(&info);
         self.engine.register_interface(info.clone());
         if let Some(writer) = new_writer {
             #[cfg(feature = "iface-local")]

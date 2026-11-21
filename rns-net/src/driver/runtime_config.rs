@@ -73,11 +73,13 @@ mod duration_value_tests {
             connect_timeout: Duration::from_secs(5),
         };
         let runtime = Arc::new(std::sync::Mutex::new(startup.clone()));
-        driver.register_backbone_client_runtime(BackboneClientRuntimeConfigHandle {
-            interface_name: name.to_string(),
-            runtime: runtime.clone(),
-            startup,
-        });
+        driver
+            .runtime_config
+            .register_backbone_client_runtime(BackboneClientRuntimeConfigHandle {
+                interface_name: name.to_string(),
+                runtime: runtime.clone(),
+                startup,
+            });
         (driver, runtime)
     }
 

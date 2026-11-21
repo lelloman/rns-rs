@@ -47,13 +47,15 @@ pub(super) fn register_interface_runtime(
         #[cfg(feature = "iface-backbone")]
         (Some(InterfaceKind::Backbone), KnownConfig::Backbone(mode)) => {
             if let Some(handle) = runtime_handle_from_mode(mode) {
-                driver.register_backbone_runtime(handle);
+                driver.runtime_config.register_backbone_runtime(handle);
             }
             if let Some(handle) = peer_state_handle_from_mode(mode, iface_config) {
-                driver.register_backbone_peer_state(handle);
+                driver.runtime_config.register_backbone_peer_state(handle);
             }
             if let Some(handle) = client_runtime_handle_from_mode(mode) {
-                driver.register_backbone_client_runtime(handle);
+                driver
+                    .runtime_config
+                    .register_backbone_client_runtime(handle);
             }
             if let Some(handle) = backbone_discovery_runtime_from_interface(
                 &iface_config.name,
@@ -62,17 +64,23 @@ pub(super) fn register_interface_runtime(
                 transport_enabled,
                 iface_config.ifac.as_ref(),
             ) {
-                driver.register_backbone_discovery_runtime(handle);
+                driver
+                    .runtime_config
+                    .register_backbone_discovery_runtime(handle);
             }
         }
         #[cfg(feature = "iface-tcp")]
         (Some(InterfaceKind::TcpClient), KnownConfig::TcpClient(tcp_config)) => {
-            driver.register_tcp_client_runtime(tcp_client_runtime_handle_from_config(tcp_config));
+            driver
+                .runtime_config
+                .register_tcp_client_runtime(tcp_client_runtime_handle_from_config(tcp_config));
         }
         #[cfg(feature = "iface-tcp")]
         (Some(InterfaceKind::TcpServer), KnownConfig::TcpServer(tcp_config)) => {
-            driver.register_tcp_server_runtime(tcp_runtime_handle_from_config(tcp_config));
-            driver.register_tcp_server_discovery_runtime(
+            driver
+                .runtime_config
+                .register_tcp_server_runtime(tcp_runtime_handle_from_config(tcp_config));
+            driver.runtime_config.register_tcp_server_discovery_runtime(
                 tcp_server_discovery_runtime_from_interface(
                     &iface_config.name,
                     tcp_config,
@@ -84,23 +92,33 @@ pub(super) fn register_interface_runtime(
         }
         #[cfg(feature = "iface-udp")]
         (Some(InterfaceKind::Udp), KnownConfig::Udp(udp_config)) => {
-            driver.register_udp_runtime(udp_runtime_handle_from_config(udp_config));
+            driver
+                .runtime_config
+                .register_udp_runtime(udp_runtime_handle_from_config(udp_config));
         }
         #[cfg(feature = "iface-auto")]
         (Some(InterfaceKind::Auto), KnownConfig::Auto(auto_config)) => {
-            driver.register_auto_runtime(auto_runtime_handle_from_config(auto_config));
+            driver
+                .runtime_config
+                .register_auto_runtime(auto_runtime_handle_from_config(auto_config));
         }
         #[cfg(feature = "iface-i2p")]
         (Some(InterfaceKind::I2p), KnownConfig::I2p(i2p_config)) => {
-            driver.register_i2p_runtime(i2p_runtime_handle_from_config(i2p_config));
+            driver
+                .runtime_config
+                .register_i2p_runtime(i2p_runtime_handle_from_config(i2p_config));
         }
         #[cfg(feature = "iface-pipe")]
         (Some(InterfaceKind::Pipe), KnownConfig::Pipe(pipe_config)) => {
-            driver.register_pipe_runtime(pipe_runtime_handle_from_config(pipe_config));
+            driver
+                .runtime_config
+                .register_pipe_runtime(pipe_runtime_handle_from_config(pipe_config));
         }
         #[cfg(feature = "iface-rnode")]
         (Some(InterfaceKind::RNode), KnownConfig::RNode(rnode_config)) => {
-            driver.register_rnode_runtime(rnode_runtime_handle_from_config(rnode_config));
+            driver
+                .runtime_config
+                .register_rnode_runtime(rnode_runtime_handle_from_config(rnode_config));
         }
         _ => {}
     }
