@@ -329,7 +329,7 @@ impl Driver {
         let stamp_costs = candidate.stamp_costs;
         let ifac_runtime = candidate.ifac_runtime.clone();
         let ifac_enabled = candidate.ifac_enabled;
-        let interface_type_name = candidate.interface_type_name.clone();
+        let interface_kind = candidate.interface_kind;
         let is_discovered = candidate.source == BackbonePeerPoolCandidateSource::Discovered;
         let wire_ifac_size = if ifac_enabled { ifac_runtime.size } else { 0 };
         let control = crate::interface::ListenerControl::new();
@@ -369,7 +369,7 @@ impl Driver {
             is_local_client: false,
             // Upstream's BackboneClientInterface, which discovery
             // auto-connects, synthesizes a tunnel on connect.
-            wants_tunnel: interface_type_name == "BackboneClientInterface",
+            wants_tunnel: interface_kind == crate::interface::InterfaceKind::BackboneClient,
             shared_medium: false,
             hop_limiter: None,
             tunnel_id: None,
@@ -424,7 +424,7 @@ impl Driver {
                     started: time::now(),
                     ..Default::default()
                 },
-                interface_type: interface_type_name,
+                interface_type: interface_kind.type_name().to_string(),
                 send_retry_at: None,
                 send_retry_backoff: Duration::ZERO,
             },

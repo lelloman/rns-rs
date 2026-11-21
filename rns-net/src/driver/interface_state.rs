@@ -62,19 +62,22 @@ pub(crate) struct I2pListener {
 /// Dynamic interfaces (TCP server clients, backbone peers, auto peers, local server clients)
 /// include their type in the name prefix set at construction.
 pub(super) fn infer_interface_type(name: &str) -> String {
-    if name.starts_with("TCPServerInterface") {
-        "TCPServerClientInterface".to_string()
-    } else if name.starts_with("BackboneInterface") {
-        "BackboneInterface".to_string()
-    } else if name.starts_with("LocalInterface") {
-        "LocalServerClientInterface".to_string()
+    use crate::interface::InterfaceKind;
+
+    let kind = if name.starts_with(InterfaceKind::TcpServer.type_name()) {
+        InterfaceKind::TcpServerClient
+    } else if name.starts_with(InterfaceKind::Backbone.type_name()) {
+        InterfaceKind::Backbone
+    } else if name.starts_with(InterfaceKind::Local.type_name()) {
+        InterfaceKind::LocalServerClient
     } else if name.starts_with("WeaveInterfacePeer[") {
-        "WeaveInterfacePeer".to_string()
+        InterfaceKind::WeavePeer
     } else {
         // AutoInterface peers use "{group_name}:{peer_addr}" format where
         // group_name is the config section name (typically "AutoInterface" or similar).
-        "AutoInterface".to_string()
-    }
+        InterfaceKind::Auto
+    };
+    kind.type_name().to_string()
 }
 
 #[derive(Debug, Clone, Copy)]

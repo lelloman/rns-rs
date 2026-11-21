@@ -46,10 +46,7 @@ impl Driver {
             return self.teardown_interface(id);
         }
         let managed = self.registry.managed.get(name)?;
-        if matches!(
-            managed.type_name.as_str(),
-            "I2PInterface" | "LocalClientInterface" | "LocalServerInterface"
-        ) {
+        if never_torn_down(&managed.type_name) {
             return Some(false);
         }
         let managed = self.registry.managed.remove(name)?;
@@ -125,11 +122,7 @@ impl Driver {
 
     pub(crate) fn teardown_interface(&mut self, id: InterfaceId) -> Option<bool> {
         let entry = self.interfaces.get(&id)?;
-        if matches!(
-            entry.interface_type.as_str(),
-            "I2PInterface" | "LocalClientInterface" | "LocalServerInterface"
-        ) || entry.info.is_local_client
-        {
+        if never_torn_down(&entry.interface_type) || entry.info.is_local_client {
             return Some(false);
         }
         if let Some(name) = self
@@ -500,6 +493,16 @@ impl Driver {
             _ => {}
         }
     }
+}
+
+/// Whether interfaces of this type stay up when asked to be torn down.
+fn never_torn_down(type_name: &str) -> bool {
+    use crate::interface::InterfaceKind;
+
+    matches!(
+        InterfaceKind::from_type_name(type_name),
+        Some(InterfaceKind::I2p | InterfaceKind::LocalClient | InterfaceKind::LocalServer)
+    )
 }
 
 /// A 32-byte tunnel id written as 64 hexadecimal digits.

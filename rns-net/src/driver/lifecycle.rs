@@ -258,8 +258,11 @@ impl Driver {
         for id in ids {
             if let Some(entry) = self.interfaces.get(&id) {
                 if matches!(
-                    entry.interface_type.as_str(),
-                    "TCPClientInterface" | "TCPServerClientInterface"
+                    crate::interface::InterfaceKind::from_type_name(&entry.interface_type),
+                    Some(
+                        crate::interface::InterfaceKind::TcpClient
+                            | crate::interface::InterfaceKind::TcpServerClient
+                    )
                 ) {
                     log::info!(
                         "The interface {} is being torn down.",
