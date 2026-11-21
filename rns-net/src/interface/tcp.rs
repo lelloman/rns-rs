@@ -49,7 +49,8 @@ pub struct TcpClientConfig {
     /// at the end of the driver's pass (`flush_after_us`; see
     /// [`super::DEFAULT_FLUSH_AFTER`]).
     pub flush_after: Option<Duration>,
-    /// Settings shared with the running interface, adjustable at runtime.
+    /// Settings shared with the running interface, adjustable at runtime;
+    /// loaded from the public fields when the interface starts.
     pub(crate) runtime: Arc<Mutex<TcpClientRuntime>>,
 }
 
@@ -113,6 +114,13 @@ impl Default for TcpClientConfig {
 }
 
 impl TcpClientConfig {
+    /// Load the reconnect settings of the public fields into the runtime
+    /// state shared with the driver, so the interface starts with them
+    /// however the config was built.
+    pub(crate) fn sync_runtime(&self) {
+        *lock_or_recover(&self.runtime, "tcp client runtime") = TcpClientRuntime::from_config(self);
+    }
+
     /// A client named `name` with id `interface_id` that connects to
     /// `target_host`:`target_port`, with the defaults otherwise. Change the
     /// other public fields on the result.
@@ -231,6 +239,7 @@ fn start_with_ifac_control(
     ifac_size: usize,
     underlay_mark: Option<u32>,
 ) -> io::Result<(Box<dyn Writer>, ListenerControl)> {
+    config.sync_runtime();
     let control = ListenerControl::new();
     let stream = match try_connect(&config, underlay_mark) {
         Ok(stream) => stream,
@@ -687,6 +696,32 @@ mod tests {
         assert!(matches!(
             rx.recv_timeout(Duration::from_secs(2)).unwrap(),
             Event::InterfaceUp(InterfaceId(77), Some(_), None)
+        ));
+    }
+
+    #[test]
+    fn reconnect_settings_set_on_a_new_config_reach_the_interface() {
+        // Set on the public fields after construction, as a library user
+        // does, the reconnect settings are the ones the interface runs with.
+        let port = find_free_port();
+        let (tx, rx) = crate::event::channel();
+        let mut config = TcpClientConfig::new("lib-tcp", InterfaceId(78), "127.0.0.1", port);
+        config.reconnect_wait = Duration::from_millis(50);
+        config.max_reconnect_tries = Some(1);
+        config.connect_timeout = Duration::from_millis(700);
+        let runtime = Arc::clone(&config.runtime);
+        let _writer = start(config, tx).unwrap();
+        {
+            let runtime = runtime.lock().unwrap();
+            assert_eq!(runtime.reconnect_wait, Duration::from_millis(50));
+            assert_eq!(runtime.max_reconnect_tries, Some(1));
+            assert_eq!(runtime.connect_timeout, Duration::from_millis(700));
+        }
+        // Nothing listens: one retry after 50 ms, then it gives up, long
+        // before the default 5 s wait would have passed.
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Event::InterfaceDown(InterfaceId(78))
         ));
     }
 
