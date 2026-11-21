@@ -19,6 +19,23 @@ use rns_core::transport::types::BlackholeEntry;
 /// Name of the file holding the entries made on this node.
 pub(crate) const LOCAL_FILE: &str = "local";
 
+/// Why a blackhole file could not be read.
+#[derive(Debug)]
+enum ReadError {
+    Io(io::Error),
+    Decode(msgpack::Error),
+}
+
+impl std::fmt::Display for ReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadError::Io(error) => error.fmt(f),
+            // Logged in its Debug form, as it always was.
+            ReadError::Decode(error) => write!(f, "{error:?}"),
+        }
+    }
+}
+
 /// The entries a blackhole directory holds, as `Transport.reload_blackhole`
 /// reads them: the local file, then the file of every source in
 /// `enabled_sources`. An entry from the local file is kept over a source's,
@@ -54,8 +71,8 @@ pub(crate) fn load(
     files.sort_by_key(|(source, _)| source.is_some());
     for (source, path) in files {
         let list = match std::fs::read(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|data| msgpack::unpack_exact(&data).map_err(|e| format!("{e:?}")))
+            .map_err(ReadError::Io)
+            .and_then(|data| msgpack::unpack_exact(&data).map_err(ReadError::Decode))
         {
             Ok(list) => list,
             Err(error) => {
