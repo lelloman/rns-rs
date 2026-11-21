@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
+
 /// Stream identifiers, compression trait and buffer errors.
 pub mod types;
 
@@ -63,16 +65,16 @@ impl StreamDataMessage {
         compressor: &dyn Compressor,
         max_decompressed_size: usize,
     ) -> Result<Self, BufferError> {
-        if raw.len() < 2 {
+        let Some((header, data)) = raw.split_first_chunk::<2>() else {
             return Err(BufferError::InvalidData);
-        }
+        };
 
-        let header = u16::from_be_bytes([raw[0], raw[1]]);
+        let header = u16::from_be_bytes(*header);
         let eof = (header & 0x8000) != 0;
         let compressed = (header & 0x4000) != 0;
         let stream_id = header & 0x3FFF;
 
-        let mut data = raw[2..].to_vec();
+        let mut data = data.to_vec();
 
         if compressed {
             data = compressor
@@ -128,12 +130,8 @@ impl BufferWriter {
         }
 
         let mut messages = Vec::new();
-        let mut offset = 0;
 
-        while offset < data.len() {
-            let end = (offset + max_data).min(data.len());
-            let chunk = &data[offset..end];
-
+        for chunk in data.chunks(max_data) {
             // Try compression for larger chunks
             let (msg_data, compressed) = if chunk.len() > 32 {
                 if let Some(compressed_data) = compressor.compress(chunk) {
@@ -155,8 +153,6 @@ impl BufferWriter {
                 false,
                 compressed,
             ));
-
-            offset = end;
         }
 
         messages

@@ -13,12 +13,11 @@ use crate::hash::truncated_hash;
 /// The signalling bytes (if present) are stripped from the end before hashing.
 /// `extra_bytes_len` is `data.len() - ECPUBSIZE` (0 or MTU_SIZE).
 pub fn compute_link_id(hashable_part: &[u8], extra_bytes_len: usize) -> LinkId {
-    let end = if extra_bytes_len > 0 && hashable_part.len() > extra_bytes_len {
-        hashable_part.len() - extra_bytes_len
-    } else {
-        hashable_part.len()
+    let hashed = match hashable_part.len().checked_sub(extra_bytes_len) {
+        Some(end) if end > 0 => hashable_part.get(..end).unwrap_or(hashable_part),
+        _ => hashable_part,
     };
-    truncated_hash(&hashable_part[..end])
+    truncated_hash(hashed)
 }
 
 /// Build signalling bytes: 3 big-endian bytes encoding MTU (21 bits) + mode (3 bits).
@@ -67,22 +66,21 @@ pub fn build_linkrequest_data(
 pub fn parse_linkrequest_data(
     data: &[u8],
 ) -> Result<([u8; 32], [u8; 32], Option<u32>, LinkMode), LinkError> {
-    if data.len() != LINK_ECPUBSIZE && data.len() != LINK_ECPUBSIZE + LINK_MTU_SIZE {
+    // [x25519_pub:32][ed25519_pub:32][signalling:0 or 3]
+    let Some((x25519_pub, rest)) = data.split_first_chunk::<32>() else {
         return Err(LinkError::InvalidData);
-    }
-
-    let mut x25519_pub = [0u8; 32];
-    let mut ed25519_pub = [0u8; 32];
-    x25519_pub.copy_from_slice(&data[..32]);
-    ed25519_pub.copy_from_slice(&data[32..64]);
-
-    if data.len() == LINK_ECPUBSIZE + LINK_MTU_SIZE {
-        let mut sig_bytes = [0u8; 3];
-        sig_bytes.copy_from_slice(&data[LINK_ECPUBSIZE..LINK_ECPUBSIZE + LINK_MTU_SIZE]);
-        let (mtu, mode) = parse_signalling_bytes(&sig_bytes)?;
-        Ok((x25519_pub, ed25519_pub, Some(mtu), mode))
-    } else {
-        Ok((x25519_pub, ed25519_pub, None, LinkMode::Aes256Cbc))
+    };
+    let Some((ed25519_pub, signalling)) = rest.split_first_chunk::<32>() else {
+        return Err(LinkError::InvalidData);
+    };
+    let (x25519_pub, ed25519_pub) = (*x25519_pub, *ed25519_pub);
+    match signalling.try_into() {
+        Ok(sig_bytes) => {
+            let (mtu, mode) = parse_signalling_bytes(sig_bytes)?;
+            Ok((x25519_pub, ed25519_pub, Some(mtu), mode))
+        }
+        Err(_) if signalling.is_empty() => Ok((x25519_pub, ed25519_pub, None, LinkMode::Aes256Cbc)),
+        Err(_) => Err(LinkError::InvalidData),
     }
 }
 
@@ -119,12 +117,11 @@ fn link_request_stamp_parts(dest_hash: &[u8; 16], data: &[u8]) -> Option<([u8; 3
     if data.len() != LINK_ECPUBSIZE && data.len() != LINK_ECPUBSIZE + LINK_MTU_SIZE {
         return None;
     }
-    let mut peer_pub = [0u8; 32];
-    peer_pub.copy_from_slice(&data[..32]);
+    let (peer_pub, rest) = data.split_first_chunk::<32>()?;
     let mut material = [0u8; 48];
     material[..16].copy_from_slice(dest_hash);
-    material[16..].copy_from_slice(&data[32..64]);
-    Some((peer_pub, material))
+    material[16..].copy_from_slice(rest.first_chunk::<32>()?);
+    Some((*peer_pub, material))
 }
 
 /// Build LRPROOF data: `[signature:64][x25519_pub:32][signalling:0-3]`.
@@ -179,18 +176,17 @@ pub fn validate_lrproof(
         return Err(LinkError::InvalidData);
     }
 
-    let mut signature = [0u8; 64];
-    signature.copy_from_slice(&proof_data[..sig_len]);
+    // [signature:64][x25519_pub:32][signalling:0 or 3]
+    let Some((signature, rest)) = proof_data.split_first_chunk::<64>() else {
+        return Err(LinkError::InvalidData);
+    };
+    let Some((peer_pub, signalling_bytes)) = rest.split_first_chunk::<32>() else {
+        return Err(LinkError::InvalidData);
+    };
+    let (signature, peer_pub) = (*signature, *peer_pub);
 
-    let mut peer_pub = [0u8; 32];
-    peer_pub.copy_from_slice(&proof_data[sig_len..sig_len + pub_len]);
-
-    let signalling_bytes = &proof_data[sig_len + pub_len..];
-
-    let (mtu, mode) = if signalling_bytes.len() == LINK_MTU_SIZE {
-        let mut sb = [0u8; 3];
-        sb.copy_from_slice(signalling_bytes);
-        let (m, md) = parse_signalling_bytes(&sb)?;
+    let (mtu, mode) = if let Ok(sb) = signalling_bytes.try_into() {
+        let (m, md) = parse_signalling_bytes(sb)?;
         (Some(m), md)
     } else {
         (None, LinkMode::Aes256Cbc)
@@ -248,10 +244,8 @@ pub fn pack_rtt(rtt: f64) -> Vec<u8> {
 /// Returns `None` for malformed input and for values that are not a finite,
 /// non-negative number of seconds.
 pub fn unpack_rtt(data: &[u8]) -> Option<f64> {
-    if data.len() == 9 && data[0] == 0xcb {
-        let mut bytes = [0u8; 8];
-        bytes.copy_from_slice(&data[1..9]);
-        let rtt = f64::from_be_bytes(bytes);
+    if let [0xcb, bytes @ ..] = data {
+        let rtt = f64::from_be_bytes(<[u8; 8]>::try_from(bytes).ok()?);
         (rtt.is_finite() && rtt >= 0.0).then_some(rtt)
     } else {
         None

@@ -956,13 +956,12 @@ fn encode_endpoint(ep: &Endpoint) -> Value {
 }
 
 fn decode_endpoint(val: &Value) -> Option<Endpoint> {
-    let arr = val.as_array()?;
-    if arr.len() < 2 {
+    let [addr, port, ..] = val.as_array()? else {
         return None;
-    }
-    let addr = arr[0].as_bin()?.to_vec();
+    };
+    let addr = addr.as_bin()?.to_vec();
     // A port beyond 16 bits is malformed, not to be truncated into another.
-    let port = u16::try_from(arr[1].as_uint()?).ok()?;
+    let port = u16::try_from(port.as_uint()?).ok()?;
     Some(Endpoint { addr, port })
 }
 

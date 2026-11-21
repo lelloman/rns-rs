@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
+
 pub mod channel_parts;
 pub mod engine;
 /// Direct Link signalling constants, states, actions and errors.

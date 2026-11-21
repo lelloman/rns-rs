@@ -7,6 +7,7 @@
 //! sending announces are the caller's job.
 //!
 //! Python reference: RNS/Discovery.py
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 
 use alloc::borrow::ToOwned;
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -437,8 +438,7 @@ pub fn parse_interface_announce_with_identity(
     }
 
     // Extract flags and payload
-    let flags = app_data[0];
-    let payload = &app_data[1..];
+    let (&flags, payload) = app_data.split_first()?;
     let payload_hash = sha256(payload);
 
     if cache.contains_invalid_hash(&payload_hash) {
@@ -451,63 +451,64 @@ pub fn parse_interface_announce_with_identity(
 
     let encrypted = (flags & FLAG_ENCRYPTED) != 0;
 
-    let (stamp, packed, stamp_value) =
-        if let Some(entry) = cache.valid_entry(&payload_hash).cloned() {
-            log::trace!(
-                target: crate::logging::PATHING_LOG_TARGET,
-                "Discovery announce cache hit"
-            );
-            if !entry.value.meets(required_stamp_value) {
-                log::debug!("{}", insufficient_stamp_diagnostic(entry.value));
+    let (stamp, packed, stamp_value) = if let Some(entry) =
+        cache.valid_entry(&payload_hash).cloned()
+    {
+        log::trace!(
+            target: crate::logging::PATHING_LOG_TARGET,
+            "Discovery announce cache hit"
+        );
+        if !entry.value.meets(required_stamp_value) {
+            log::debug!("{}", insufficient_stamp_diagnostic(entry.value));
+            return None;
+        }
+        (entry.stamp, entry.packed, entry.value)
+    } else {
+        let decrypted;
+        let payload = if encrypted {
+            let identity = network_identity?;
+            decrypted = identity.decrypt(payload).ok()?;
+            if decrypted.len() <= STAMP_SIZE {
                 return None;
             }
-            (entry.stamp, entry.packed, entry.value)
+            &decrypted[..]
         } else {
-            let decrypted;
-            let payload = if encrypted {
-                let identity = network_identity?;
-                decrypted = identity.decrypt(payload).ok()?;
-                if decrypted.len() <= STAMP_SIZE {
-                    return None;
-                }
-                &decrypted[..]
-            } else {
-                payload
-            };
-            // The driver owns this cache and processes events sequentially, so the
-            // upstream validation lock is implicit in Rust's ownership model.
-            let stamp = payload[payload.len() - STAMP_SIZE..].to_vec();
-            let packed = payload[..payload.len() - STAMP_SIZE].to_vec();
-            let infohash = sha256(&packed);
-            // Upstream aaf08e61, transitional: a stamp is valid against the
-            // unexpanded workblock (the infohash itself) or, failing that,
-            // the expanded one announcers use today, and its value comes
-            // from whichever it is valid against.
-            let unexpanded = stamp_workblock(&infohash, 0);
-            let (workblock, value) = if stamp_valid(&stamp, required_stamp_value, &unexpanded) {
-                let value = stamp_value(&unexpanded, &stamp);
-                (unexpanded, value)
-            } else {
-                let expanded = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
-                let value = stamp_value(&expanded, &stamp);
-                (expanded, value)
-            };
-
-            if !stamp_valid(&stamp, required_stamp_value, &workblock) {
-                log::debug!("{}", insufficient_stamp_diagnostic(value));
-                cache.insert_invalid_hash(payload_hash);
-                return None;
-            }
-            cache.insert_valid_hash(
-                payload_hash,
-                ValidStampEntry {
-                    stamp: stamp.clone(),
-                    packed: packed.clone(),
-                    value,
-                },
-            );
-            (stamp, packed, value)
+            payload
         };
+        // The driver owns this cache and processes events sequentially, so the
+        // upstream validation lock is implicit in Rust's ownership model.
+        let (packed, stamp) = payload.split_at_checked(payload.len().checked_sub(STAMP_SIZE)?)?;
+        let (packed, stamp) = (packed.to_vec(), stamp.to_vec());
+        let infohash = sha256(&packed);
+        // Upstream aaf08e61, transitional: a stamp is valid against the
+        // unexpanded workblock (the infohash itself) or, failing that,
+        // the expanded one announcers use today, and its value comes
+        // from whichever it is valid against.
+        let unexpanded = stamp_workblock(&infohash, 0);
+        let (workblock, value) = if stamp_valid(&stamp, required_stamp_value, &unexpanded) {
+            let value = stamp_value(&unexpanded, &stamp);
+            (unexpanded, value)
+        } else {
+            let expanded = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
+            let value = stamp_value(&expanded, &stamp);
+            (expanded, value)
+        };
+
+        if !stamp_valid(&stamp, required_stamp_value, &workblock) {
+            log::debug!("{}", insufficient_stamp_diagnostic(value));
+            cache.insert_invalid_hash(payload_hash);
+            return None;
+        }
+        cache.insert_valid_hash(
+            payload_hash,
+            ValidStampEntry {
+                stamp: stamp.clone(),
+                packed: packed.clone(),
+                value,
+            },
+        );
+        (stamp, packed, value)
+    };
 
     // Unpack the interface info
     let (value, _) = msgpack::unpack(&packed).ok()?;

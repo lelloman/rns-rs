@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
+
 /// Session token creation and link encryption and decryption.
 pub mod crypto;
 /// Link request and proof encoding, link ID derivation and key exchange.
@@ -242,8 +244,11 @@ impl LinkEngine {
         // one its `handshake()` raises "Invalid link mode N on <link>", and
         // for a defined mode outside `ENABLED_MODES` its `prove()` raises.
         // Either way the request is dropped and no proof is sent.
-        if linkrequest_data.len() == LINK_ECPUBSIZE + LINK_MTU_SIZE {
-            let mode = (linkrequest_data[LINK_ECPUBSIZE] & LINK_MODE_BYTEMASK) >> 5;
+        let signalling = linkrequest_data
+            .get(LINK_ECPUBSIZE)
+            .filter(|_| linkrequest_data.len() == LINK_ECPUBSIZE + LINK_MTU_SIZE);
+        if let Some(&signalling) = signalling {
+            let mode = (signalling & LINK_MODE_BYTEMASK) >> 5;
             if LinkMode::from_byte(mode).is_err() {
                 return Err(LinkError::InvalidMode {
                     mode,

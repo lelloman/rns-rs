@@ -139,7 +139,14 @@ impl ChannelPartAssembler {
             .iter()
             .position(|pending| pending.sequence == part.sequence)
         {
-            Some(position) if self.pending[position].parts.len() == part.count as usize => position,
+            Some(position)
+                if self
+                    .pending
+                    .get(position)
+                    .is_some_and(|pending| pending.parts.len() == part.count as usize) =>
+            {
+                position
+            }
             found => {
                 if let Some(position) = found {
                     self.pending.remove(position);
@@ -154,8 +161,9 @@ impl ChannelPartAssembler {
                 self.pending.len() - 1
             }
         };
-        let pending = &mut self.pending[position];
-        let slot = &mut pending.parts[part.index as usize];
+        // A parsed part's index is below its count, the envelope's part count.
+        let pending = self.pending.get_mut(position)?;
+        let slot = pending.parts.get_mut(part.index as usize)?;
         if slot.is_none() {
             pending.len += part.data.len();
             if pending.len > DIRECT_MAX_PACKET as usize {

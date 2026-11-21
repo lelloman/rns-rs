@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
+
 use rns_crypto::identity::Identity;
 
 use crate::constants;
@@ -25,15 +27,17 @@ pub enum ProofResult {
 pub fn validate_proof(proof: &[u8], packet_hash: &[u8; 32], identity: &Identity) -> ProofResult {
     if proof.len() == constants::EXPL_LENGTH {
         // Explicit proof: [proof_hash:32][signature:64]
-        let proof_hash = &proof[..constants::HASHLENGTH / 8];
-        if proof_hash != packet_hash.as_slice() {
+        let Some((proof_hash, signature)) =
+            proof.split_first_chunk::<{ constants::HASHLENGTH / 8 }>()
+        else {
+            return ProofResult::InvalidHash;
+        };
+        if proof_hash != packet_hash {
             return ProofResult::InvalidHash;
         }
-
-        let mut signature = [0u8; 64];
-        signature.copy_from_slice(
-            &proof[constants::HASHLENGTH / 8..constants::HASHLENGTH / 8 + constants::SIGLENGTH / 8],
-        );
+        let Ok(signature) = <[u8; constants::SIGLENGTH / 8]>::try_from(signature) else {
+            return ProofResult::InvalidSignature;
+        };
 
         if identity.verify(&signature, packet_hash) {
             ProofResult::Valid
@@ -42,8 +46,9 @@ pub fn validate_proof(proof: &[u8], packet_hash: &[u8; 32], identity: &Identity)
         }
     } else if proof.len() == constants::IMPL_LENGTH {
         // Implicit proof: [signature:64]
-        let mut signature = [0u8; 64];
-        signature.copy_from_slice(&proof[..constants::SIGLENGTH / 8]);
+        let Ok(signature) = <[u8; constants::SIGLENGTH / 8]>::try_from(proof) else {
+            return ProofResult::InvalidSignature;
+        };
 
         if identity.verify(&signature, packet_hash) {
             ProofResult::Valid

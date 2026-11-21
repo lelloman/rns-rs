@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
+
 /// Channel envelope packing and unpacking.
 pub mod envelope;
 /// Channel actions, errors and identifier types.
@@ -214,21 +216,25 @@ impl Channel {
             None => return Vec::new(),
         };
 
-        let envelope = &self.tx_ring[pos];
-        if envelope.tries >= self.max_tries && self.hold_on_exhaustion {
+        let Some(tries) = self.tx_ring.get(pos).map(|envelope| envelope.tries) else {
+            return Vec::new();
+        };
+        if tries >= self.max_tries && self.hold_on_exhaustion {
             self.hold_on_exhaustion = false;
             let mut actions = alloc::vec![ChannelAction::PathFailed];
             self.push_resends(now, &mut actions);
             return actions;
         }
-        if envelope.tries >= self.max_tries {
+        if tries >= self.max_tries {
             self.tx_ring.clear();
             self.rx_ring.clear();
             return alloc::vec![ChannelAction::TeardownLink];
         }
 
         // Retry
-        let envelope = &mut self.tx_ring[pos];
+        let Some(envelope) = self.tx_ring.get_mut(pos) else {
+            return Vec::new();
+        };
         envelope.tries += 1;
         envelope.sent_at = now;
         let raw = envelope.raw.clone();
