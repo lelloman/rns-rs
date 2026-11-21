@@ -139,4 +139,27 @@ impl Driver {
         // For now we use an internal sender that was set during construction.
         self.event_tx.clone()
     }
+
+    /// Handle one event as a turn of [`Self::run`] does, with the clock held
+    /// for the turn, then wake and flush the writers, as the loop does once
+    /// its queue is empty. For benchmarks, which drive the driver
+    /// synchronously without its loop. False after [`Event::Shutdown`].
+    #[doc(hidden)]
+    pub fn handle_event_for_bench(&mut self, event: Event) -> bool {
+        let _clock = time::hold();
+        let more = self.handle_event(crate::event::ReceivedEvent {
+            event,
+            ingress_limited: false,
+        });
+        self.wake_writers();
+        self.flush_writers();
+        more
+    }
+
+    /// The driver's transport engine. For benchmarks, which seed its tables,
+    /// inject paths and forget packet hashes to keep a steady state.
+    #[doc(hidden)]
+    pub fn transport_engine_for_bench(&mut self) -> &mut TransportEngine {
+        &mut self.engine
+    }
 }
