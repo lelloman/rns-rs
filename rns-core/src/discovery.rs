@@ -7,7 +7,6 @@
 //! sending announces are the caller's job.
 //!
 //! Python reference: RNS/Discovery.py
-#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 
 use alloc::borrow::ToOwned;
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};

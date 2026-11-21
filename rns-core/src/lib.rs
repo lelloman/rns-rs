@@ -5,6 +5,8 @@
 //! return actions for the caller to carry out. Without the default `std`
 //! feature it builds as `no_std` with `alloc`.
 #![warn(missing_docs)]
+// Wire input is untrusted: production code reads it with checked access.
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 #![cfg_attr(not(feature = "std"), no_std)]
 extern crate alloc;
 

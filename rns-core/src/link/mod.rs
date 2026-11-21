@@ -1,5 +1,3 @@
-#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
-
 /// Session token creation and link encryption and decryption.
 pub mod crypto;
 /// Link request and proof encoding, link ID derivation and key exchange.

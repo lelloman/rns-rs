@@ -6,7 +6,6 @@
 //! - bin8, bin16, bin32
 //! - fixarray, array16
 //! - fixmap, map16
-#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 
 use alloc::string::String;
 use alloc::vec::Vec;

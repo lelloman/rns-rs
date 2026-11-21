@@ -1,5 +1,3 @@
-#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
-
 /// Stream identifiers, compression trait and buffer errors.
 pub mod types;
 
