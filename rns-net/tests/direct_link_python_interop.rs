@@ -285,13 +285,12 @@ fn start_rust_node(python_port: u16, tx: Sender<RustEvent>) -> RnsNode {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".into(),
-                config_data: Box::new(TcpClientConfig {
-                    name: "Python peer".into(),
-                    target_host: "127.0.0.1".into(),
-                    target_port: python_port,
-                    interface_id: InterfaceId(1),
-                    ..Default::default()
-                }),
+                config_data: Box::new(TcpClientConfig::new(
+                    "Python peer",
+                    InterfaceId(1),
+                    "127.0.0.1",
+                    python_port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 hop_limiter: None,

@@ -231,12 +231,12 @@ fn start_transport_node(port: u16) -> RnsNode {
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
-                config_data: Box::new(TcpServerConfig {
-                    name: "Transport TCP".into(),
-                    listen_ip: "127.0.0.1".into(),
-                    listen_port: port,
-                    ..TcpServerConfig::default()
-                }),
+                config_data: Box::new(TcpServerConfig::new(
+                    "Transport TCP",
+                    InterfaceId(0),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 recursive_prs: false,
@@ -330,12 +330,12 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
                 announce_limits: Default::default(),
                 name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
-                config_data: Box::new(TcpClientConfig {
-                    name: "Client TCP".into(),
-                    target_host: "127.0.0.1".into(),
-                    target_port: port,
-                    ..Default::default()
-                }),
+                config_data: Box::new(TcpClientConfig::new(
+                    "Client TCP",
+                    InterfaceId(0),
+                    "127.0.0.1",
+                    port,
+                )),
                 mode: MODE_FULL,
                 gravity: 0,
                 recursive_prs: false,

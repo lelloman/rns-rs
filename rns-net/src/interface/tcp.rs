@@ -20,6 +20,9 @@ use crate::interface::{lock_or_recover, wait_while_active, ListenerControl, Writ
 const HW_MTU: usize = 262_144;
 
 /// Configuration for a TCP client interface.
+///
+/// Start from [`TcpClientConfig::new`] or `default()`: the config also
+/// carries crate-private state it shares with the running interface.
 #[derive(Debug, Clone)]
 pub struct TcpClientConfig {
     /// Interface name from the config section.
@@ -47,12 +50,12 @@ pub struct TcpClientConfig {
     /// [`super::DEFAULT_FLUSH_AFTER`]).
     pub flush_after: Option<Duration>,
     /// Settings shared with the running interface, adjustable at runtime.
-    pub runtime: Arc<Mutex<TcpClientRuntime>>,
+    pub(crate) runtime: Arc<Mutex<TcpClientRuntime>>,
 }
 
 /// TCP client settings that can be changed while it runs.
 #[derive(Debug, Clone)]
-pub struct TcpClientRuntime {
+pub(crate) struct TcpClientRuntime {
     /// Delay before each reconnection attempt.
     pub reconnect_wait: Duration,
     /// Reconnection attempts before the interface is reported down; `None` retries forever.
@@ -63,7 +66,7 @@ pub struct TcpClientRuntime {
 
 impl TcpClientRuntime {
     /// Runtime settings taken from `config`.
-    pub fn from_config(config: &TcpClientConfig) -> Self {
+    pub(crate) fn from_config(config: &TcpClientConfig) -> Self {
         Self {
             reconnect_wait: config.reconnect_wait,
             max_reconnect_tries: config.max_reconnect_tries,
@@ -106,6 +109,26 @@ impl Default for TcpClientConfig {
         let startup = TcpClientRuntime::from_config(&config);
         config.runtime = Arc::new(Mutex::new(startup));
         config
+    }
+}
+
+impl TcpClientConfig {
+    /// A client named `name` with id `interface_id` that connects to
+    /// `target_host`:`target_port`, with the defaults otherwise. Change the
+    /// other public fields on the result.
+    pub fn new(
+        name: impl Into<String>,
+        interface_id: InterfaceId,
+        target_host: impl Into<String>,
+        target_port: u16,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            interface_id,
+            target_host: target_host.into(),
+            target_port,
+            ..Self::default()
+        }
     }
 }
 

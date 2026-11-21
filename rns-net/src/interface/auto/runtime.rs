@@ -4,7 +4,7 @@ use super::*;
 
 /// AutoInterface timing settings that can be changed while it runs.
 #[derive(Debug, Clone)]
-pub struct AutoRuntime {
+pub(crate) struct AutoRuntime {
     /// Interval between multicast discovery announces, in seconds.
     pub announce_interval_secs: f64,
     /// How long a peer may stay silent before it is removed, in seconds.

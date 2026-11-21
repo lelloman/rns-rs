@@ -134,6 +134,9 @@ const ANDROID_IGNORE_IFS: &[&str] = &[
 // ── Configuration ──────────────────────────────────────────────────────────
 
 /// Configuration for an AutoInterface.
+///
+/// Start from `default()`: the config also carries crate-private state it
+/// shares with the running interface.
 #[derive(Debug, Clone)]
 pub struct AutoConfig {
     /// Interface name from the config section.
@@ -163,7 +166,7 @@ pub struct AutoConfig {
     /// Ingress control applied to each peer interface; set from the start context.
     pub ingress_control: rns_core::transport::types::IngressControlConfig,
     /// Timing settings shared with the running interface, adjustable at runtime.
-    pub runtime: Arc<Mutex<AutoRuntime>>,
+    pub(crate) runtime: Arc<Mutex<AutoRuntime>>,
 }
 
 impl Default for AutoConfig {
