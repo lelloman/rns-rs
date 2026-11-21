@@ -47,7 +47,7 @@ pub(super) struct FastFlapPeerState {
 
 /// Result of recording one short-lived connection.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct FastFlapRecord {
+pub(crate) struct FastFlapRecord {
     /// Flaps recorded for the address, this one included.
     pub flap_count: u64,
     /// Whether the address is blocked.
@@ -67,7 +67,7 @@ pub(crate) const STATIC_BLOCK_FLAP_COUNT: u64 = 0xFFFF;
 /// Process-wide fast-flap history. Policy remains per listener, while the IP
 /// history is shared like upstream's class-level `fast_flapping` table.
 #[derive(Debug, Default)]
-pub struct BackboneFastFlapMonitor {
+pub(crate) struct BackboneFastFlapMonitor {
     peers: HashMap<IpAddr, FastFlapPeerState>,
     /// Addresses from the `blocked_ips` file. Upstream stores them in the
     /// fast-flap table with a flap time 1000 years ahead; here they are
@@ -77,13 +77,13 @@ pub struct BackboneFastFlapMonitor {
 
 impl BackboneFastFlapMonitor {
     /// An empty monitor.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Record a disconnect of `peer_ip` after `connected_for`. `None` when
     /// fast-flap blocking is off or the connection lasted the threshold or longer.
-    pub fn record_disconnect(
+    pub(crate) fn record_disconnect(
         &mut self,
         peer_ip: IpAddr,
         connected_for: Duration,
@@ -117,7 +117,8 @@ impl BackboneFastFlapMonitor {
     }
 
     /// Whether `peer_ip` is blocked, by the `blocked_ips` file or by fast flapping.
-    pub fn is_blocked(
+    #[cfg(test)]
+    pub(crate) fn is_blocked(
         &mut self,
         peer_ip: IpAddr,
         config: &BackboneFastFlapConfig,
@@ -128,7 +129,7 @@ impl BackboneFastFlapMonitor {
     }
 
     /// Add addresses from the `blocked_ips` file.
-    pub fn load_static_blocked(&mut self, ips: impl IntoIterator<Item = IpAddr>) {
+    pub(crate) fn load_static_blocked(&mut self, ips: impl IntoIterator<Item = IpAddr>) {
         self.static_blocked
             .extend(ips.into_iter().map(|ip| ip.to_canonical()));
     }
@@ -136,7 +137,11 @@ impl BackboneFastFlapMonitor {
     /// Whether the `blocked_ips` file blocks `peer_ip` on a listener with
     /// this policy: only with fast-flap blocking on and a grace below the
     /// flap count upstream gives those addresses.
-    pub fn is_statically_blocked(&self, peer_ip: IpAddr, config: &BackboneFastFlapConfig) -> bool {
+    pub(crate) fn is_statically_blocked(
+        &self,
+        peer_ip: IpAddr,
+        config: &BackboneFastFlapConfig,
+    ) -> bool {
         self.static_block_applies(config) && self.static_blocked.contains(&peer_ip.to_canonical())
     }
 
@@ -146,7 +151,7 @@ impl BackboneFastFlapMonitor {
 
     /// When the fast-flap block on `peer_ip` ends; `None` if it has none.
     /// Ignores the `blocked_ips` file.
-    pub fn blocked_until(
+    pub(crate) fn blocked_until(
         &mut self,
         peer_ip: IpAddr,
         config: &BackboneFastFlapConfig,
@@ -163,7 +168,12 @@ impl BackboneFastFlapMonitor {
     }
 
     /// Number of blocked addresses; see [`Self::blocked_ip_list`].
-    pub fn blocked_ip_count(&mut self, config: &BackboneFastFlapConfig, now: Instant) -> usize {
+    #[cfg(test)]
+    pub(crate) fn blocked_ip_count(
+        &mut self,
+        config: &BackboneFastFlapConfig,
+        now: Instant,
+    ) -> usize {
         if !config.enabled {
             return 0;
         }
@@ -173,7 +183,7 @@ impl BackboneFastFlapMonitor {
     /// Blocked addresses, sorted: fast-flap blocks and, where they apply,
     /// `blocked_ips` file entries. Expired history is dropped first; empty when
     /// fast-flap blocking is off.
-    pub fn blocked_ip_list(
+    pub(crate) fn blocked_ip_list(
         &mut self,
         config: &BackboneFastFlapConfig,
         now: Instant,
@@ -197,7 +207,8 @@ impl BackboneFastFlapMonitor {
     }
 
     /// Flaps recorded for `peer_ip`; 0 if none.
-    pub fn flap_count(&self, peer_ip: IpAddr) -> u64 {
+    #[cfg(test)]
+    pub(crate) fn flap_count(&self, peer_ip: IpAddr) -> u64 {
         self.peers
             .get(&peer_ip)
             .map(|state| state.flap_count)
@@ -206,7 +217,7 @@ impl BackboneFastFlapMonitor {
 
     /// Forget an address, including a `blocked_ips` file entry; the file
     /// blocks it again at the next start.
-    pub fn clear(&mut self, peer_ip: IpAddr) -> bool {
+    pub(crate) fn clear(&mut self, peer_ip: IpAddr) -> bool {
         let dynamic = self.peers.remove(&peer_ip).is_some();
         let file = self.static_blocked.remove(&peer_ip.to_canonical());
         dynamic || file
@@ -298,13 +309,13 @@ impl PeerBehaviorState {
 /// Per-address state of a listener's peers: connections, rejections and
 /// blacklisting.
 #[derive(Debug, Clone, Default)]
-pub struct BackbonePeerMonitor {
+pub(crate) struct BackbonePeerMonitor {
     peers: HashMap<IpAddr, PeerBehaviorState>,
 }
 
 impl BackbonePeerMonitor {
     /// An empty monitor.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             peers: HashMap::new(),
         }
@@ -348,7 +359,7 @@ impl BackbonePeerMonitor {
     }
 
     /// Every tracked address, sorted, labelled with `interface_name`.
-    pub fn list(&self, interface_name: &str) -> Vec<BackbonePeerStateEntry> {
+    pub(crate) fn list(&self, interface_name: &str) -> Vec<BackbonePeerStateEntry> {
         let now = Instant::now();
         let mut entries: Vec<BackbonePeerStateEntry> = self
             .peers
@@ -369,13 +380,18 @@ impl BackbonePeerMonitor {
     }
 
     /// Forget `peer_ip`; `true` if it was tracked.
-    pub fn clear(&mut self, peer_ip: IpAddr) -> bool {
+    pub(crate) fn clear(&mut self, peer_ip: IpAddr) -> bool {
         self.peers.remove(&peer_ip).is_some()
     }
 
     /// Blacklist `peer_ip` for `duration` from now, recording `reason`.
     /// Always `true`.
-    pub fn blacklist(&mut self, peer_ip: IpAddr, duration: Duration, reason: String) -> bool {
+    pub(crate) fn blacklist(
+        &mut self,
+        peer_ip: IpAddr,
+        duration: Duration,
+        reason: String,
+    ) -> bool {
         let state = self
             .peers
             .entry(peer_ip)

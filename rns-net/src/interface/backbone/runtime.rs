@@ -4,7 +4,7 @@ use super::*;
 
 /// Live runtime state for a backbone server interface.
 #[derive(Debug, Clone)]
-pub struct BackboneServerRuntime {
+pub(crate) struct BackboneServerRuntime {
     /// Limit on concurrent clients; `None` for no limit.
     pub max_connections: Option<usize>,
     /// Disconnect a client that sends nothing this long after connecting;
@@ -19,7 +19,7 @@ pub struct BackboneServerRuntime {
 
 impl BackboneServerRuntime {
     /// The settings `config` starts with.
-    pub fn from_config(config: &BackboneConfig) -> Self {
+    pub(crate) fn from_config(config: &BackboneConfig) -> Self {
         Self {
             max_connections: config.max_connections,
             idle_timeout: config.idle_timeout,
@@ -63,7 +63,7 @@ pub(crate) struct BackbonePeerStateHandle {
 
 /// Live runtime settings of a backbone client interface.
 #[derive(Debug, Clone)]
-pub struct BackboneClientRuntime {
+pub(crate) struct BackboneClientRuntime {
     /// Wait between connection attempts, and the base of the backoff after a
     /// lost connection.
     pub reconnect_wait: Duration,
@@ -76,7 +76,7 @@ pub struct BackboneClientRuntime {
 impl BackboneClientRuntime {
     /// The settings `config` starts with: its `max_reconnect_tries`, and
     /// upstream's fixed reconnect wait and connect timeout.
-    pub fn from_config(config: &BackboneClientConfig) -> Self {
+    pub(crate) fn from_config(config: &BackboneClientConfig) -> Self {
         Self {
             reconnect_wait: RECONNECT_WAIT,
             max_reconnect_tries: config.max_reconnect_tries,

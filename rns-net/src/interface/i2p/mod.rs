@@ -41,6 +41,9 @@ pub(crate) const BITRATE_GUESS: u64 = 256_000;
 const RECONNECT_WAIT: Duration = Duration::from_secs(15);
 
 /// Configuration for the I2P interface.
+///
+/// Start from `default()`: the config also carries crate-private state it
+/// shares with the running interface and the driver.
 #[derive(Debug, Clone)]
 pub struct I2pConfig {
     /// Interface name.
@@ -62,10 +65,10 @@ pub struct I2pConfig {
     /// Socket mark for connections to the SAM bridge; set from the start context.
     pub underlay_mark: Option<u32>,
     /// Live settings the interface reads, which can be changed while it runs.
-    pub runtime: Arc<Mutex<I2pRuntime>>,
+    pub(crate) runtime: Arc<Mutex<I2pRuntime>>,
     /// The state of this interface's own endpoint, which interface
     /// statistics report.
-    pub endpoint: Arc<Mutex<I2pEndpoint>>,
+    pub(crate) endpoint: Arc<Mutex<I2pEndpoint>>,
 }
 
 /// The state of an I2P interface's own endpoint, as upstream's
@@ -73,7 +76,7 @@ pub struct I2pConfig {
 /// (`b32`) from its keys and is online once its session accepts
 /// connections; one that is not connectable stays offline.
 #[derive(Debug, Clone, Default)]
-pub struct I2pEndpoint {
+pub(crate) struct I2pEndpoint {
     /// Whether the session accepts connections.
     pub online: bool,
     /// `{base32}.b32.i2p`.
@@ -127,7 +130,7 @@ impl I2pEndpoint {
 
 /// Live runtime settings of an I2P interface.
 #[derive(Debug, Clone)]
-pub struct I2pRuntime {
+pub(crate) struct I2pRuntime {
     /// Wait before an outbound peer retries after a failed lookup, a failed
     /// connection or a disconnect; 15 seconds at start.
     pub reconnect_wait: Duration,
@@ -135,7 +138,7 @@ pub struct I2pRuntime {
 
 impl I2pRuntime {
     /// The settings an interface starts with.
-    pub fn from_config(_config: &I2pConfig) -> Self {
+    pub(crate) fn from_config(_config: &I2pConfig) -> Self {
         Self {
             reconnect_wait: RECONNECT_WAIT,
         }

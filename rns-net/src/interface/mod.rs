@@ -111,7 +111,8 @@ pub use ax25_kiss::{
 };
 #[cfg(feature = "iface-backbone")]
 pub use backbone::{
-    BackboneClientConfig, BackboneClientInterfaceFactory, BackboneConfig, BackboneInterfaceFactory,
+    BackboneAbuseConfig, BackboneClientConfig, BackboneClientInterfaceFactory, BackboneConfig,
+    BackboneFastFlapConfig, BackboneInterfaceFactory,
 };
 #[cfg(feature = "iface-i2p")]
 pub use i2p::{I2pConfig, I2pFactory};

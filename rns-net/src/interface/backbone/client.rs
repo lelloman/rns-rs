@@ -3,6 +3,9 @@
 use super::*;
 
 /// Configuration for a backbone client interface.
+///
+/// Start from `default()`: the config also carries crate-private state it
+/// shares with the running interface.
 #[derive(Debug, Clone)]
 pub struct BackboneClientConfig {
     /// Interface name.
@@ -26,7 +29,7 @@ pub struct BackboneClientConfig {
     /// configured, as for an auto-connected client.
     pub bitrate: u64,
     /// Live settings the client reads, which can be changed while it runs.
-    pub runtime: Arc<Mutex<BackboneClientRuntime>>,
+    pub(crate) runtime: Arc<Mutex<BackboneClientRuntime>>,
 }
 
 impl BackboneClientConfig {
