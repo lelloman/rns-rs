@@ -25,7 +25,7 @@ impl Driver {
                 let iface_display_name = self
                     .interfaces
                     .get(&entry.receiving_interface)
-                    .map(|e| self.interface_display_name(e));
+                    .map(|e| self.registry.interface_display_name(e));
                 let iface_name = self
                     .interfaces
                     .get(&entry.receiving_interface)
@@ -98,6 +98,7 @@ impl Driver {
                         .get(&id)
                         .and_then(|entry| entry.info.bitrate),
                     None if self.hosts_destination(&dest_hash) => self
+                        .registry
                         .shared_instance_listener()
                         .and_then(|listener| listener.bitrate),
                     None => None,
@@ -130,6 +131,7 @@ impl Driver {
                             next_hop: *identity.hash(),
                             hops: rns_core::constants::PATHFINDER_M,
                             interface: self
+                                .registry
                                 .shared_instance_listener()
                                 .map_or(InterfaceId(0), |listener| listener.id),
                         }),
@@ -143,10 +145,11 @@ impl Driver {
                     Some(id) => self
                         .interfaces
                         .get(&id)
-                        .map(|entry| self.interface_display_name(entry)),
+                        .map(|entry| self.registry.interface_display_name(entry)),
                     // Its own destinations are on the shared instance
                     // interface; without one, `str(None)`.
                     None if self.hosts_destination(&dest_hash) => self
+                        .registry
                         .shared_instance_listener()
                         .map(|listener| listener.display_name.clone()),
                     None => None,

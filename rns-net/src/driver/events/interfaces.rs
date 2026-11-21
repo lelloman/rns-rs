@@ -126,7 +126,7 @@ impl Driver {
         if let Some(writer) = new_writer {
             #[cfg(feature = "iface-local")]
             if info.is_local_client {
-                self.name_local_client(id);
+                self.registry.name_local_client(&self.interfaces, id);
             }
             let (writer, async_writer_metrics) = self.wrap_interface_writer(id, &info.name, writer);
             self.interfaces.insert(

@@ -112,7 +112,7 @@ impl Driver {
                 tx_pps += entry.stats.traffic_rates.txpps;
                 add_traffic(&mut total_traffic, traffic);
             }
-            if self.subinterface_without_device(entry) {
+            if self.registry.subinterface_without_device(entry) {
                 continue;
             }
             interfaces.push(self.single_interface_stat(entry, traffic, now));
@@ -198,8 +198,8 @@ impl Driver {
                 .get(&interface_id)
                 .cloned()
                 .unwrap_or_else(|| entry.info.name.clone()),
-            display_name: self.interface_display_name(entry),
-            parent_display_name: self.parent_display_name(entry),
+            display_name: self.registry.interface_display_name(entry),
+            parent_display_name: self.registry.parent_display_name(&self.interfaces, entry),
             tunnel_id: self
                 .engine
                 .interface_info(&interface_id)
@@ -278,7 +278,7 @@ impl Driver {
             blocked_ips: None,
             blocked_ip_list: None,
             i2p: None,
-            i2p_tunnel_state: self.i2p_tunnel_state(entry),
+            i2p_tunnel_state: self.registry.i2p_tunnel_state(entry),
             autoconnect_source: self.autoconnect_source(interface_id),
             announce_rate_target: entry.info.announce_rate_target,
             announce_rate_grace: entry.info.announce_rate_grace,
