@@ -322,13 +322,16 @@ impl Progress {
         while self.stats.len() > STATS_MAX {
             self.stats.remove(0);
         }
-        let span = now.duration_since(self.stats[0].0).as_secs_f64();
+        // Just pushed, so there is a first sample.
+        let (first_at, first_got, first_phy) =
+            self.stats.first().copied().unwrap_or((now, got, phy_got));
+        let span = now.duration_since(first_at).as_secs_f64();
         if span == 0.0 {
             self.speed = 0.0;
             self.phy_speed = 0.0;
         } else {
-            self.speed = (got - self.stats[0].1) / span;
-            let phy_diff = phy_got - self.stats[0].2;
+            self.speed = (got - first_got) / span;
+            let phy_diff = phy_got - first_phy;
             if phy_diff > 0.0 {
                 self.phy_speed = phy_diff / span;
             }
@@ -395,7 +398,7 @@ fn save_received(
             let at = e.utf8_error().valid_up_to();
             SaveError::Exception(format!(
                 "'utf-8' codec can't decode byte 0x{:02x} in position {at}: invalid start byte",
-                e.as_bytes()[at]
+                e.as_bytes().get(at).copied().unwrap_or_default()
             ))
         })?,
         Some(Value::Str(_)) => {
@@ -685,7 +688,7 @@ impl Rncp {
             return;
         }
         self.pump(Duration::from_millis(100));
-        print!("\u{8}\u{8}{} ", SYMS[*i]);
+        print!("\u{8}\u{8}{} ", SYMS.get(*i).copied().unwrap_or(' '));
         flush();
         *i = (*i + 1) % SYMS.len();
     }
@@ -1152,7 +1155,10 @@ impl Rncp {
         let ss = size_str(state.progress.speed, "b");
         let stat_str = format!("{}% - {cs} of {ts} - {ss}ps{phy_str}", percent(prg));
         if !done {
-            print!("{ERASE}Transferring file {} {stat_str}  ", SYMS[i]);
+            print!(
+                "{ERASE}Transferring file {} {stat_str}  ",
+                SYMS.get(i).copied().unwrap_or(' ')
+            );
         } else {
             print!("{ERASE}Transfer complete  {stat_str}  ");
         }
@@ -1327,7 +1333,7 @@ impl Rncp {
                     let ss = size_str(state.progress.speed, "b");
                     print!(
                         "{ERASE}Transferring file {} {}% - {ps} of {ts} - {ss}ps{phy_str}{ES}",
-                        SYMS[i],
+                        SYMS.get(i).copied().unwrap_or(' '),
                         percent(prg)
                     );
                 } else {
@@ -1345,7 +1351,10 @@ impl Rncp {
                     );
                 }
             } else {
-                print!("{ERASE}Waiting for transfer to start {} {ES}", SYMS[i]);
+                print!(
+                    "{ERASE}Waiting for transfer to start {} {ES}",
+                    SYMS.get(i).copied().unwrap_or(' ')
+                );
             }
             flush();
             i = (i + 1) % SYMS.len();

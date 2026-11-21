@@ -22,14 +22,15 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    if args.has("help") || args.positional.is_empty() {
+    let Some(subcommand) = args.positional.first().filter(|_| !args.has("help")) else {
         print_help();
         return ExitCode::SUCCESS;
-    }
+    };
+    let subcommand = subcommand.clone();
 
     init_logging(&args);
 
-    match args.positional[0].as_str() {
+    match subcommand.as_str() {
         "start" => run_start(args),
         other => {
             eprintln!("Unknown subcommand: {}", other);

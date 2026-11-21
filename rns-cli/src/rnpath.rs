@@ -1204,7 +1204,7 @@ fn lookup_path(
     let mut i = 0;
     while !has_path()? && std::time::Instant::now() < limit {
         std::thread::sleep(std::time::Duration::from_millis(100));
-        print!("\x08\x08{} ", syms[i]);
+        print!("\x08\x08{} ", syms.get(i).copied().unwrap_or(' '));
         let _ = std::io::stdout().flush();
         i = (i + 1) % syms.len();
     }

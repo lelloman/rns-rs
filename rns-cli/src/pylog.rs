@@ -478,13 +478,11 @@ pub fn fromhex(s: &str) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < chars.len() {
-        if is_space(chars[i]) {
-            while i < chars.len() && is_space(chars[i]) {
-                i += 1;
-            }
-            if i >= chars.len() {
-                break;
-            }
+        while chars.get(i).is_some_and(|&c| is_space(c)) {
+            i += 1;
+        }
+        if i >= chars.len() {
+            break;
         }
         let top = digit(chars.get(i)).ok_or_else(|| error(i))?;
         let bottom = digit(chars.get(i + 1)).ok_or_else(|| error(i + 1))?;
@@ -541,7 +539,7 @@ pub fn urlsafe_b64decode(s: &str) -> Option<Vec<u8>> {
             if quad >= 2 && quad + pads >= 4 {
                 // The partial quad's bytes: 2 characters give one, 3 two.
                 let bytes = (acc << (6 * (4 - quad))).to_be_bytes();
-                out.extend_from_slice(&bytes[1..quad]);
+                out.extend_from_slice(bytes.get(1..quad).unwrap_or_default());
                 quad = 0;
                 break;
             }

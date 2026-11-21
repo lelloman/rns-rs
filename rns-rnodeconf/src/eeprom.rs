@@ -42,7 +42,11 @@ pub(crate) struct TncConfig {
 }
 
 fn be32(eeprom: &[u8], at: usize) -> u32 {
-    u32::from_be_bytes([eeprom[at], eeprom[at + 1], eeprom[at + 2], eeprom[at + 3]])
+    // Callers read fields inside an EEPROM image of checked length.
+    eeprom
+        .get(at..)
+        .and_then(<[u8]>::first_chunk::<4>)
+        .map_or(0, |bytes| u32::from_be_bytes(*bytes))
 }
 
 /// The keys a signature is checked against: upstream's vendor keys, the

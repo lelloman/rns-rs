@@ -159,14 +159,14 @@ impl<'a> Formatter<'a> {
     }
 
     fn usage_part(action: &Action) -> String {
-        if action.opts.is_empty() {
+        let Some(opt) = action.opts.first() else {
             return Self::format_args(action, action.dest);
-        }
+        };
         let part = if action.nargs == Nargs::Zero {
-            action.opts[0].to_string()
+            opt.to_string()
         } else {
             let args = Self::format_args(action, &action.dest.to_uppercase());
-            format!("{} {args}", action.opts[0])
+            format!("{opt} {args}")
         };
         if action.required {
             part
@@ -402,31 +402,35 @@ fn is_word_punct(c: char) -> bool {
 /// hyphens between letters and before em-dashes, as `wordsep_re` does.
 fn split_chunks(text: &str) -> Vec<String> {
     let chars: Vec<char> = text.chars().collect();
-    let n = chars.len();
+    let at = |k: usize| chars.get(k).copied();
+    let letter = |k: Option<usize>| k.and_then(at).is_some_and(is_letter);
+    let text_of = |start: usize, end: usize| -> String {
+        chars.get(start..end).unwrap_or_default().iter().collect()
+    };
     let mut chunks = Vec::new();
     let mut i = 0;
-    while i < n {
-        if chars[i] == ' ' {
+    while let Some(c) = at(i) {
+        if c == ' ' {
             let start = i;
-            while i < n && chars[i] == ' ' {
+            while at(i) == Some(' ') {
                 i += 1;
             }
-            chunks.push(chars[start..i].iter().collect());
+            chunks.push(text_of(start, i));
             continue;
         }
         // An em-dash between words: (?<=wp) -{2,} (?=\w).
         let em_dash_at = |j: usize| {
-            if j == 0 || j >= n || chars[j] != '-' || !is_word_punct(chars[j - 1]) {
+            if j == 0 || at(j) != Some('-') || !at(j - 1).is_some_and(is_word_punct) {
                 return None;
             }
             let mut k = j;
-            while k < n && chars[k] == '-' {
+            while at(k) == Some('-') {
                 k += 1;
             }
-            (k - j >= 2 && k < n && is_word(chars[k])).then_some(k)
+            (k - j >= 2 && at(k).is_some_and(is_word)).then_some(k)
         };
         if let Some(end) = em_dash_at(i) {
-            chunks.push(chars[i..end].iter().collect());
+            chunks.push(text_of(i, end));
             i = end;
             continue;
         }
@@ -437,24 +441,20 @@ fn split_chunks(text: &str) -> Vec<String> {
         loop {
             // j is one past the last char taken (at least one).
             let last = j - 1;
-            let hyphen_split = chars[last] == '-'
-                && ((last >= 2 && is_letter(chars[last - 1]) && is_letter(chars[last - 2]))
-                    || (last >= 3
-                        && is_letter(chars[last - 1])
-                        && chars[last - 2] == '-'
-                        && is_letter(chars[last - 3])))
-                && j < n
-                && is_letter(chars[j])
-                && ((j + 1 < n && is_letter(chars[j + 1]))
-                    || (j + 2 < n && chars[j + 1] == '-' && is_letter(chars[j + 2])));
-            let word_end = j >= n || chars[j] == ' ';
-            let before_em_dash = is_word_punct(chars[last]) && em_dash_at(j).is_some();
+            let back = |d: usize| last.checked_sub(d);
+            let hyphen_split = at(last) == Some('-')
+                && ((letter(back(1)) && letter(back(2)))
+                    || (letter(back(1)) && back(2).and_then(at) == Some('-') && letter(back(3))))
+                && letter(Some(j))
+                && (letter(Some(j + 1)) || (at(j + 1) == Some('-') && letter(Some(j + 2))));
+            let word_end = matches!(at(j), None | Some(' '));
+            let before_em_dash = at(last).is_some_and(is_word_punct) && em_dash_at(j).is_some();
             if hyphen_split || word_end || before_em_dash {
                 break;
             }
             j += 1;
         }
-        chunks.push(chars[start..j].iter().collect());
+        chunks.push(text_of(start, j));
         i = j;
     }
     chunks
@@ -495,15 +495,18 @@ fn wrap(text: &str, width: usize, initial_indent: &str, subsequent_indent: &str)
             let chunk: Vec<char> = last.chars().collect();
             let mut end = space_left;
             if chunk.len() > space_left {
-                if let Some(hyphen) = chunk[..space_left].iter().rposition(|c| *c == '-') {
-                    if hyphen > 0 && chunk[..hyphen].iter().any(|c| *c != '-') {
+                let head = chunk.get(..space_left).unwrap_or_default();
+                if let Some(hyphen) = head.iter().rposition(|c| *c == '-') {
+                    if hyphen > 0 && head.iter().take(hyphen).any(|c| *c != '-') {
                         end = hyphen + 1;
                     }
                 }
             }
-            let end = end.min(chunk.len());
-            cur_line.push(chunk[..end].iter().collect());
-            *last = chunk[end..].iter().collect();
+            let (head, tail) = chunk
+                .split_at_checked(end)
+                .unwrap_or((chunk.as_slice(), &[]));
+            cur_line.push(head.iter().collect());
+            *last = tail.iter().collect();
             if chunks.last().is_some_and(|c| c.is_empty()) {
                 chunks.pop();
             }

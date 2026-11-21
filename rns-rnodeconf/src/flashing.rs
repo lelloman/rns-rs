@@ -64,15 +64,18 @@ pub(super) fn run_flasher(call: Option<Vec<String>>) -> Result<i32, String> {
     let Some(call) = call else {
         return Err("expected str, bytes or os.PathLike object, not NoneType".into());
     };
-    let status = std::process::Command::new(&call[0])
-        .args(&call[1..])
+    let Some((program, args)) = call.split_first() else {
+        return Err("list index out of range".into());
+    };
+    let status = std::process::Command::new(program)
+        .args(args)
         .status()
         .map_err(|e| {
             let errno = e.raw_os_error().unwrap_or(0);
             // SAFETY: strerror returns a static string for any errno.
             let reason =
                 unsafe { std::ffi::CStr::from_ptr(libc::strerror(errno)) }.to_string_lossy();
-            format!("[Errno {errno}] {reason}: '{}'", call[0])
+            format!("[Errno {errno}] {reason}: '{program}'")
         })?;
     use std::os::unix::process::ExitStatusExt;
     Ok(status
@@ -319,12 +322,14 @@ pub(super) fn extract_firmware(args: &Args) -> ! {
                 .map(str::to_string),
             );
             command.push(extracted.join(file).display().to_string());
-            let done = std::process::Command::new(&command[0])
-                .args(&command[1..])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_ok_and(|status| status.success());
+            let done = command.split_first().is_some_and(|(program, args)| {
+                std::process::Command::new(program)
+                    .args(args)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .is_ok_and(|status| status.success())
+            });
             if !done {
                 let shown: Vec<String> = command
                     .iter()

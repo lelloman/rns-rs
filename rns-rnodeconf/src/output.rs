@@ -35,7 +35,7 @@ pub(super) fn local_time(format: &str, timestamp: i64) -> String {
             format.as_ptr(),
             &tm,
         );
-        String::from_utf8_lossy(&buf[..len]).into_owned()
+        String::from_utf8_lossy(buf.get(..len).unwrap_or_default()).into_owned()
     }
 }
 

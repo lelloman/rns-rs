@@ -149,7 +149,7 @@ impl SignalPipe {
             if n <= 0 {
                 break;
             }
-            found |= buf[..n as usize].contains(&byte);
+            found |= buf.get(..n as usize).unwrap_or_default().contains(&byte);
         }
         found
     }

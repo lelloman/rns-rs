@@ -35,12 +35,11 @@ impl Section {
         self.scalars.iter().any(|(k, _)| k == key) || self.sections.iter().any(|(k, _)| k == key)
     }
 
-    fn section_mut(&mut self, path: &[usize]) -> &mut Section {
-        let mut section = self;
-        for &i in path {
-            section = &mut section.sections[i].1;
-        }
-        section
+    /// The section at `path`, a list of positions in nested sections.
+    fn section_mut(&mut self, path: &[usize]) -> Option<&mut Section> {
+        path.iter().try_fold(self, |section, &i| {
+            section.sections.get_mut(i).map(|(_, next)| next)
+        })
     }
 
     /// `dict()`: scalars, then sections.
@@ -62,13 +61,11 @@ fn is_space(c: char) -> bool {
 /// `_unquote`.
 fn unquote(value: &str) -> String {
     let chars: Vec<char> = value.chars().collect();
-    if chars.len() >= 2
-        && chars[0] == chars[chars.len() - 1]
-        && (chars[0] == '"' || chars[0] == '\'')
-    {
-        chars[1..chars.len() - 1].iter().collect()
-    } else {
-        value.to_string()
+    match chars.as_slice() {
+        [first, inner @ .., last] if first == last && (*first == '"' || *first == '\'') => {
+            inner.iter().collect()
+        }
+        _ => value.to_string(),
     }
 }
 
@@ -161,8 +158,9 @@ fn handle_value(value: &str) -> Result<Entry, ()> {
     let chars: Vec<char> = value.chars().collect();
     let mut items = Vec::new();
     let mut i = 0;
+    let at = |k: usize| chars.get(k).copied();
     let skip_space = |i: &mut usize| {
-        while *i < chars.len() && is_space(chars[*i]) {
+        while at(*i).is_some_and(is_space) {
             *i += 1;
         }
     };
@@ -172,56 +170,54 @@ fn handle_value(value: &str) -> Result<Entry, ()> {
         if chars.first() == Some(&',') {
             j += 1;
             skip_space(&mut j);
-            if j == chars.len() || chars[j] == '#' {
+            if matches!(at(j), None | Some('#')) {
                 return Ok(Entry::List(Vec::new()));
             }
         }
     }
     let mut commas = 0;
     let mut last: Option<String> = None;
-    loop {
-        if i >= chars.len() || chars[i] == '#' {
-            break;
-        }
+    while let Some(c) = at(i).filter(|&c| c != '#') {
         let item: String;
-        let c = chars[i];
         if c == '"' || c == '\'' {
             // The shortest quoted item the rest of the value still follows
             // (a comma, a comment or the end), as the regex backtracks.
-            let follows = |at: usize| {
-                let mut j = at;
-                while j < chars.len() && is_space(chars[j]) {
+            let follows = |from: usize| {
+                let mut j = from;
+                while at(j).is_some_and(is_space) {
                     j += 1;
                 }
-                j == chars.len() || chars[j] == ',' || chars[j] == '#'
+                matches!(at(j), None | Some(',' | '#'))
             };
             let close = (i + 1..chars.len())
-                .find(|&j| chars[j] == c && follows(j + 1))
+                .find(|&j| at(j) == Some(c) && follows(j + 1))
                 .ok_or(())?;
-            item = chars[i..=close].iter().collect();
+            item = chars.get(i..=close).unwrap_or_default().iter().collect();
             i = close + 1;
         } else if c == ',' {
             return Err(());
         } else {
             let start = i;
-            while i < chars.len() && chars[i] != ',' && chars[i] != '#' {
+            while at(i).is_some_and(|c| c != ',' && c != '#') {
                 i += 1;
             }
-            item = chars[start..i]
+            item = chars
+                .get(start..i)
+                .unwrap_or_default()
                 .iter()
                 .collect::<String>()
                 .trim_end()
                 .to_string();
         }
         skip_space(&mut i);
-        if i < chars.len() && chars[i] == ',' {
+        if at(i) == Some(',') {
             commas += 1;
             items.push(unquote(&item));
             i += 1;
             skip_space(&mut i);
             continue;
         }
-        if i < chars.len() && chars[i] != '#' {
+        if at(i).is_some_and(|c| c != '#') {
             return Err(());
         }
         last = Some(item);
@@ -270,7 +266,10 @@ pub fn parse(text: &str) -> Result<Section, String> {
                 continue;
             }
             path.truncate(parent_len);
-            let parent = root.section_mut(&path);
+            // The path is built from the positions of the sections pushed.
+            let Some(parent) = root.section_mut(&path) else {
+                continue;
+            };
             if parent.contains(&name) {
                 errors.push(format!("Duplicate section name at line {number}."));
                 continue;
@@ -290,7 +289,10 @@ pub fn parse(text: &str) -> Result<Section, String> {
             errors.push(format!("Parse error in value at line {number}."));
             continue;
         };
-        let section = root.section_mut(&path);
+        // The path is built from the positions of the sections pushed.
+        let Some(section) = root.section_mut(&path) else {
+            continue;
+        };
         if section.contains(&key) {
             errors.push(format!("Duplicate keyword name at line {number}."));
             continue;
@@ -302,8 +304,9 @@ pub fn parse(text: &str) -> Result<Section, String> {
         1 => Err(errors.remove(0)),
         _ => Err(format!(
             "Parsing failed with several errors.\nFirst error {}",
-            errors[0]
-                .rsplit_once(" at line ")
+            errors
+                .first()
+                .and_then(|first| first.rsplit_once(" at line "))
                 .map(|(_, l)| format!("at line {l}"))
                 .unwrap_or_default()
         )),
@@ -463,7 +466,9 @@ pub fn validate(section: &mut Section, spec: &Section) -> bool {
                 section.sections.len() - 1
             }
         };
-        ok &= validate(&mut section.sections[index].1, subspec);
+        if let Some((_, subsection)) = section.sections.get_mut(index) {
+            ok &= validate(subsection, subspec);
+        }
     }
     ok
 }

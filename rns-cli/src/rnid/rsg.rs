@@ -21,7 +21,7 @@ pub(super) fn rsg_hash(message: &RsgMessage) -> Result<[u8; 32], String> {
                 if n == 0 {
                     break;
                 }
-                hasher.update(&buf[..n]);
+                hasher.update(buf.get(..n).unwrap_or_default());
             }
             Ok(hasher.digest())
         }

@@ -399,7 +399,7 @@ fn read_loop(mut reader: std::fs::File, state: Arc<Mutex<Reported>>, stop: Arc<A
         };
         last_read = Instant::now();
         let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-        for &byte in &buf[..n] {
+        for &byte in buf.get(..n).unwrap_or_default() {
             if in_frame && byte == FEND && command == CMD_ROM_READ {
                 state.eeprom = Some(std::mem::take(&mut data_buffer));
                 in_frame = false;
@@ -427,13 +427,8 @@ fn read_loop(mut reader: std::fs::File, state: Arc<Mutex<Reported>>, stop: Arc<A
                     CMD_FREQUENCY | CMD_BANDWIDTH | CMD_BT_PIN | CMD_STAT_RX | CMD_STAT_TX => {
                         if let Some(b) = unescape(byte, &mut escape) {
                             command_buffer.push(b);
-                            if command_buffer.len() == 4 {
-                                let v = u32::from_be_bytes([
-                                    command_buffer[0],
-                                    command_buffer[1],
-                                    command_buffer[2],
-                                    command_buffer[3],
-                                ]);
+                            if let &[a, b, c, d] = command_buffer.as_slice() {
+                                let v = u32::from_be_bytes([a, b, c, d]);
                                 match command {
                                     CMD_FREQUENCY => {
                                         state.r_frequency = Some(v);
@@ -472,16 +467,13 @@ fn read_loop(mut reader: std::fs::File, state: Arc<Mutex<Reported>>, stop: Arc<A
                     CMD_HASHES => {
                         if let Some(b) = unescape(byte, &mut escape) {
                             command_buffer.push(b);
-                            if command_buffer.len() == 33 {
-                                match command_buffer[0] {
-                                    0x01 => {
-                                        state.firmware_hash_target =
-                                            Some(command_buffer[1..].to_vec())
+                            if let [selector, hash @ ..] = command_buffer.as_slice() {
+                                if hash.len() == 32 {
+                                    match selector {
+                                        0x01 => state.firmware_hash_target = Some(hash.to_vec()),
+                                        0x02 => state.firmware_hash = Some(hash.to_vec()),
+                                        _ => {}
                                     }
-                                    0x02 => {
-                                        state.firmware_hash = Some(command_buffer[1..].to_vec())
-                                    }
-                                    _ => {}
                                 }
                             }
                         }
@@ -489,9 +481,9 @@ fn read_loop(mut reader: std::fs::File, state: Arc<Mutex<Reported>>, stop: Arc<A
                     CMD_FW_VERSION => {
                         if let Some(b) = unescape(byte, &mut escape) {
                             command_buffer.push(b);
-                            if command_buffer.len() == 2 {
-                                state.major_version = Some(command_buffer[0]);
-                                state.minor_version = Some(command_buffer[1]);
+                            if let &[major, minor] = command_buffer.as_slice() {
+                                state.major_version = Some(major);
+                                state.minor_version = Some(minor);
                             }
                         }
                     }
