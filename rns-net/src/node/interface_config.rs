@@ -521,12 +521,35 @@ pub(crate) fn derive_ifac_state(
 
     ifac::derive_ifac(ifac.netname.as_deref(), ifac.netkey.as_deref(), ifac.size)
         .map(Some)
-        .map_err(|err| {
-            io::Error::other(format!(
-                "failed to derive IFAC for {}: {}",
-                interface_name, err
-            ))
+        .map_err(|source| {
+            io::Error::other(IfacSetupError {
+                interface_name: interface_name.to_string(),
+                source,
+            })
         })
+}
+
+/// An interface whose IFAC state could not be derived.
+#[derive(Debug)]
+struct IfacSetupError {
+    interface_name: String,
+    source: ifac::IfacError,
+}
+
+impl std::fmt::Display for IfacSetupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "failed to derive IFAC for {}: {}",
+            self.interface_name, self.source
+        )
+    }
+}
+
+impl std::error::Error for IfacSetupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
 }
 
 /// Parse the per-interface `destination_cost` and `pr_cost` options
