@@ -26,13 +26,13 @@ use rns_core::stamp::{
 
 /// Per-destination stamp files.
 #[derive(Debug, Clone)]
-pub struct DestinationStampStore {
+pub(crate) struct DestinationStampStore {
     dir: PathBuf,
 }
 
 impl DestinationStampStore {
     /// Store files under `stamps/` in `storage_dir`.
-    pub fn new(storage_dir: &Path) -> Self {
+    pub(crate) fn new(storage_dir: &Path) -> Self {
         Self {
             dir: storage_dir.join("stamps"),
         }
@@ -46,7 +46,7 @@ impl DestinationStampStore {
     }
 
     /// Load a persisted stamp when it still meets `required_value`.
-    pub fn load(
+    pub(crate) fn load(
         &self,
         destination_hash: &[u8; 16],
         material: &[u8],
@@ -78,7 +78,7 @@ impl DestinationStampStore {
     }
 
     /// Persist a destination stamp atomically.
-    pub fn store(
+    pub(crate) fn store(
         &self,
         destination_hash: &[u8; 16],
         stamp: &[u8],
@@ -115,7 +115,7 @@ impl DestinationStampStore {
 /// the node API, the announce builder and the link manager, so the cost a
 /// destination announces is the cost its responder requires.
 #[derive(Debug, Clone, Default)]
-pub struct LinkRequestCosts {
+pub(crate) struct LinkRequestCosts {
     inner: std::sync::Arc<LinkRequestCostsInner>,
 }
 
@@ -141,7 +141,7 @@ impl Default for LinkRequestCostsInner {
 
 impl LinkRequestCosts {
     /// `Destination.set_link_cost`: store the clamped cost and return it.
-    pub fn set(&self, destination_hash: [u8; 16], cost: f64) -> StampCost {
+    pub(crate) fn set(&self, destination_hash: [u8; 16], cost: f64) -> StampCost {
         let cost = rns_core::stamp::clamp_link_cost(cost);
         crate::sync::lock_or_recover(&self.inner.costs, "destination stamps costs")
             .insert(destination_hash, cost);
@@ -149,7 +149,7 @@ impl LinkRequestCosts {
     }
 
     /// `Destination.get_link_cost`: the announced and required cost.
-    pub fn get(&self, destination_hash: &[u8; 16]) -> StampCost {
+    pub(crate) fn get(&self, destination_hash: &[u8; 16]) -> StampCost {
         let configured =
             crate::sync::lock_or_recover(&self.inner.costs, "destination stamps costs")
                 .get(destination_hash)
@@ -160,7 +160,7 @@ impl LinkRequestCosts {
     /// `Transport.LR_COST`: the cost of destinations that set none, and the
     /// cost at which `ALWAYS_STAMP_LRS` stamps requests to destinations that
     /// announced none.
-    pub fn default_cost(&self) -> StampCost {
+    pub(crate) fn default_cost(&self) -> StampCost {
         StampCost::from_fp(
             self.inner
                 .default_cost
@@ -169,27 +169,28 @@ impl LinkRequestCosts {
     }
 
     /// Apply `[stamps] lr_cost`, already clamped by the config parser.
-    pub fn set_default_cost(&self, cost: StampCost) {
+    pub(crate) fn set_default_cost(&self, cost: StampCost) {
         self.inner
             .default_cost
             .store(cost.fp(), std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Forget the configured cost, reverting to the default.
-    pub fn remove(&self, destination_hash: &[u8; 16]) {
+    #[cfg(test)]
+    pub(crate) fn remove(&self, destination_hash: &[u8; 16]) {
         crate::sync::lock_or_recover(&self.inner.costs, "destination stamps costs")
             .remove(destination_hash);
     }
 
     /// `Transport.LR_STAMPS_ENFORCED`.
-    pub fn enforced(&self) -> bool {
+    pub(crate) fn enforced(&self) -> bool {
         self.inner
             .enforced
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Override `Transport.LR_STAMPS_ENFORCED`.
-    pub fn set_enforced(&self, enforced: bool) {
+    pub(crate) fn set_enforced(&self, enforced: bool) {
         self.inner
             .enforced
             .store(enforced, std::sync::atomic::Ordering::Relaxed);
