@@ -398,7 +398,9 @@ fn reconnect(
 
 // --- Factory implementation ---
 
-use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
+use super::{
+    InterfaceConfigData, InterfaceConfigError, InterfaceFactory, StartContext, StartResult,
+};
 use rns_core::transport::types::InterfaceInfo;
 use std::collections::HashMap;
 
@@ -419,11 +421,11 @@ impl InterfaceFactory for SerialFactory {
         name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         let port = params
             .get("port")
             .cloned()
-            .ok_or_else(|| "SerialInterface requires 'port'".to_string())?;
+            .ok_or_else(|| InterfaceConfigError::missing("SerialInterface", &["port"]))?;
 
         let speed = params
             .get("speed")

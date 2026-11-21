@@ -1441,7 +1441,8 @@ fn station_id_callsign_longer_than_32_bytes_is_refused() {
     let error = RNodeFactory
         .parse_config("radio", InterfaceId(1), &params)
         .err()
-        .unwrap();
+        .unwrap()
+        .to_string();
     assert!(
         error.contains("exceeds the max length of 32 bytes"),
         "{error}"

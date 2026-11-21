@@ -55,8 +55,8 @@ pub use entry::InterfaceEntry;
 #[cfg(all(test, any(feature = "iface-tcp", feature = "iface-backbone")))]
 pub(crate) use factory::test_start_context;
 pub use factory::{
-    ConfigSection, DynamicInterfaceTemplate, InterfaceConfigData, InterfaceFactory, StartContext,
-    StartResult, SubInterface,
+    ConfigSection, DynamicInterfaceTemplate, InterfaceConfigData, InterfaceConfigError,
+    InterfaceFactory, StartContext, StartResult, SubInterface,
 };
 pub use interface_map::{InterfaceIdHasher, InterfaceMap};
 #[cfg(any(feature = "iface-serial", feature = "iface-kiss"))]

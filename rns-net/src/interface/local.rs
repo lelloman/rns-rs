@@ -1012,7 +1012,9 @@ pub fn start_client(config: LocalClientConfig, tx: EventSender) -> io::Result<Bo
 
 // --- Factory implementations ---
 
-use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
+use super::{
+    InterfaceConfigData, InterfaceConfigError, InterfaceFactory, StartContext, StartResult,
+};
 use std::collections::HashMap;
 
 /// Factory for `LocalServerInterface`.
@@ -1028,7 +1030,7 @@ impl InterfaceFactory for LocalServerFactory {
         _name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         let instance_name = params
             .get("instance_name")
             .cloned()
@@ -1097,7 +1099,7 @@ impl InterfaceFactory for LocalClientFactory {
         _name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         let instance_name = params
             .get("instance_name")
             .cloned()

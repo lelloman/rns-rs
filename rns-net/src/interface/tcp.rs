@@ -440,7 +440,9 @@ fn reconnect(
 
 // --- Factory implementation ---
 
-use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
+use super::{
+    InterfaceConfigData, InterfaceConfigError, InterfaceFactory, StartContext, StartResult,
+};
 use rns_core::transport::types::InterfaceInfo;
 use std::collections::HashMap;
 
@@ -457,7 +459,7 @@ impl InterfaceFactory for TcpClientFactory {
         name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         let target_host = params
             .get("target_host")
             .cloned()

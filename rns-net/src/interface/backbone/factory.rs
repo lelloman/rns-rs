@@ -1,6 +1,7 @@
 //! Building backbone interfaces from their config.
 
 use super::*;
+use crate::interface::InterfaceConfigError;
 
 /// Internal enum used by [`BackboneInterfaceFactory`] to carry either a
 /// server or client config through the opaque `InterfaceConfigData` channel.
@@ -31,9 +32,12 @@ impl InterfaceFactory for BackboneClientInterfaceFactory {
         name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         if !params.contains_key("remote") && !params.contains_key("target_host") {
-            return Err("BackboneClientInterface requires 'remote' or 'target_host'".into());
+            return Err(InterfaceConfigError::missing(
+                "BackboneClientInterface",
+                &["remote", "target_host"],
+            ));
         }
         BackboneInterfaceFactory.parse_config(name, id, params)
     }
@@ -61,25 +65,32 @@ pub(super) fn parse_positive_duration_secs(
 
 pub(super) fn parse_nonnegative_duration(
     params: &HashMap<String, String>,
-    key: &str,
+    key: &'static str,
     multiplier: f64,
     default: Duration,
-) -> Result<Duration, String> {
+) -> Result<Duration, InterfaceConfigError> {
     let Some(raw) = params.get(key) else {
         return Ok(default);
     };
-    let value = raw
-        .parse::<f64>()
-        .map_err(|_| format!("invalid {key} '{raw}' (expected a non-negative number)"))?;
+    let value = raw.parse::<f64>().map_err(|_| {
+        InterfaceConfigError::invalid_value(
+            key,
+            format!("invalid {key} '{raw}' (expected a non-negative number)"),
+        )
+    })?;
     let seconds = value * multiplier;
     if !value.is_finite() || value < 0.0 || !seconds.is_finite() || seconds > u64::MAX as f64 {
-        return Err(format!(
-            "invalid {key} '{raw}' (expected a finite non-negative number)"
+        return Err(InterfaceConfigError::invalid_value(
+            key,
+            format!("invalid {key} '{raw}' (expected a finite non-negative number)"),
         ));
     }
     let duration = Duration::from_secs_f64(seconds);
     if Instant::now().checked_add(duration).is_none() {
-        return Err(format!("invalid {key} '{raw}' (duration is too large)"));
+        return Err(InterfaceConfigError::invalid_value(
+            key,
+            format!("invalid {key} '{raw}' (duration is too large)"),
+        ));
     }
     Ok(duration)
 }
@@ -90,10 +101,13 @@ pub(super) fn parse_nonnegative_duration(
 /// meaning: a positive limit, or 0 for none. `None` means unlimited.
 pub(super) fn parse_client_limit(
     params: &HashMap<String, String>,
-) -> Result<Option<usize>, String> {
+) -> Result<Option<usize>, InterfaceConfigError> {
     let client_limit = match params.get("client_limit") {
         Some(raw) => raw.trim().parse::<usize>().map_err(|_| {
-            format!("invalid client_limit '{raw}' (expected a non-negative integer)")
+            InterfaceConfigError::invalid_value(
+                "client_limit",
+                format!("invalid client_limit '{raw}' (expected a non-negative integer)"),
+            )
         })?,
         None => 0,
     };
@@ -114,11 +128,15 @@ pub(super) fn parse_client_limit(
 
 pub(super) fn parse_fast_flap_config(
     params: &HashMap<String, String>,
-) -> Result<BackboneFastFlapConfig, String> {
+) -> Result<BackboneFastFlapConfig, InterfaceConfigError> {
     let defaults = BackboneFastFlapConfig::default();
     let enabled = match params.get("block_fast_flapping") {
-        Some(raw) => crate::config::parse_bool_pub(raw)
-            .ok_or_else(|| format!("invalid block_fast_flapping '{raw}' (expected yes or no)"))?,
+        Some(raw) => crate::config::parse_bool_pub(raw).ok_or_else(|| {
+            InterfaceConfigError::invalid_value(
+                "block_fast_flapping",
+                format!("invalid block_fast_flapping '{raw}' (expected yes or no)"),
+            )
+        })?,
         None => defaults.enabled,
     };
     let connection_threshold = parse_nonnegative_duration(
@@ -129,7 +147,10 @@ pub(super) fn parse_fast_flap_config(
     )?;
     let grace = match params.get("fast_flapping_grace") {
         Some(raw) => raw.parse::<u64>().map_err(|_| {
-            format!("invalid fast_flapping_grace '{raw}' (expected a non-negative integer)")
+            InterfaceConfigError::invalid_value(
+                "fast_flapping_grace",
+                format!("invalid fast_flapping_grace '{raw}' (expected a non-negative integer)"),
+            )
         })?,
         None => defaults.grace,
     };
@@ -158,7 +179,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
         name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         if let Some(target_host) = params.get("remote").or_else(|| params.get("target_host")) {
             // Client mode
             let target_host = target_host.clone();
@@ -171,26 +192,35 @@ impl InterfaceFactory for BackboneInterfaceFactory {
             // Like Python, retry forever unless max_reconnect_tries is set.
             let max_reconnect_tries = match params.get("max_reconnect_tries") {
                 Some(value) => Some(value.trim().parse::<u32>().map_err(|_| {
-                    format!(
-                        "invalid Backbone max_reconnect_tries '{}' (expected a non-negative integer)",
-                        value
+                    InterfaceConfigError::invalid_value(
+                        "max_reconnect_tries",
+                        format!(
+                            "invalid Backbone max_reconnect_tries '{}' (expected a non-negative integer)",
+                            value
+                        ),
                     )
                 })?),
                 None => None,
             };
             let priority = match params.get("priority") {
                 Some(value) => value.parse::<u8>().map_err(|_| {
-                    format!(
-                        "invalid Backbone peer priority '{}' (expected 0..100)",
-                        value
+                    InterfaceConfigError::invalid_value(
+                        "priority",
+                        format!(
+                            "invalid Backbone peer priority '{}' (expected 0..100)",
+                            value
+                        ),
                     )
                 })?,
                 None => crate::driver::BACKBONE_PEER_POOL_CONFIGURED_DEFAULT_PRIORITY,
             };
             if priority > 100 {
-                return Err(format!(
-                    "invalid Backbone peer priority '{}' (expected 0..100)",
-                    priority
+                return Err(InterfaceConfigError::invalid_value(
+                    "priority",
+                    format!(
+                        "invalid Backbone peer priority '{}' (expected 0..100)",
+                        priority
+                    ),
                 ));
             }
             let mut client = BackboneClientConfig {

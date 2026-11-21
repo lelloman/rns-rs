@@ -496,7 +496,9 @@ impl LoopSource for ClientSource {
 
 // --- Factory implementation ---
 
-use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
+use super::{
+    InterfaceConfigData, InterfaceConfigError, InterfaceFactory, StartContext, StartResult,
+};
 use std::collections::HashMap;
 
 /// Factory for `TCPServerInterface`.
@@ -512,7 +514,7 @@ impl InterfaceFactory for TcpServerFactory {
         name: &str,
         id: InterfaceId,
         params: &HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, InterfaceConfigError> {
         let listen_ip = params
             .get("listen_ip")
             .cloned()

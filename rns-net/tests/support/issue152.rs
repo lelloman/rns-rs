@@ -46,7 +46,7 @@ impl InterfaceFactory for PausedTcpFactory {
         name: &str,
         id: InterfaceId,
         params: &std::collections::HashMap<String, String>,
-    ) -> Result<Box<dyn InterfaceConfigData>, String> {
+    ) -> Result<Box<dyn InterfaceConfigData>, rns_net::InterfaceConfigError> {
         TcpClientFactory.parse_config(name, id, params)
     }
 
