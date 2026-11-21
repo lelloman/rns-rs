@@ -115,9 +115,7 @@ impl Driver {
                 info.bitrate = Some(bitrate);
             }
         }
-        self.apply_interface_announce_limits(&mut info);
-        self.apply_announce_rate_defaults(&mut info);
-        self.apply_ingress_control_defaults(&mut info);
+        self.apply_interface_defaults(&mut info);
         let wants_tunnel = info.wants_tunnel;
         let iface_type = infer_interface_type(&info.name);
         info.started = time::now();

@@ -260,9 +260,7 @@ pub(crate) fn register_started_interface(params: StartedInterface<'_>) {
     }
     info.stamp_costs = stamp_costs;
     info.hop_limiter = hop_limiter;
-    driver.apply_interface_announce_limits(&mut info);
-    driver.apply_announce_rate_defaults(&mut info);
-    driver.apply_ingress_control_defaults(&mut info);
+    driver.apply_interface_defaults(&mut info);
     let (writer, async_writer_metrics) =
         crate::interface::wrap_async_writer(writer, id, &info.name, tx.clone(), queue_capacity);
     driver.register_interface_runtime_defaults(&info);

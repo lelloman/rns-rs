@@ -27,6 +27,78 @@ impl InterfaceSettings {
             forced_local_bitrate: None,
         }
     }
+
+    /// On a transport node, give an interface that sets no announce rate
+    /// target the default announce rate controls.
+    pub(crate) fn apply_announce_rate_defaults(
+        &self,
+        info: &mut rns_core::transport::types::InterfaceInfo,
+    ) {
+        if info.announce_rate_target.is_some() {
+            return;
+        }
+
+        let Some(target) = self.announce_rate.target else {
+            return;
+        };
+
+        info.announce_rate_target = Some(target);
+        if info.announce_rate_grace == 0 {
+            info.announce_rate_grace = self.announce_rate.grace;
+        }
+        if info.announce_rate_penalty == 0.0 {
+            info.announce_rate_penalty = self.announce_rate.penalty;
+        }
+    }
+
+    /// On a transport node, replace the built-in ingress control values an
+    /// interface left as they are with the configured defaults.
+    pub(crate) fn apply_ingress_control_defaults(
+        &self,
+        info: &mut rns_core::transport::types::InterfaceInfo,
+    ) {
+        let baseline = if info.ingress_control.enabled {
+            rns_core::transport::types::IngressControlConfig::enabled()
+        } else {
+            rns_core::transport::types::IngressControlConfig::disabled()
+        };
+        let defaults = self.ingress_control;
+        let ic = &mut info.ingress_control;
+
+        if ic.max_held_announces == baseline.max_held_announces {
+            ic.max_held_announces = defaults.max_held_announces;
+        }
+        if ic.burst_hold == baseline.burst_hold {
+            ic.burst_hold = defaults.burst_hold;
+        }
+        if ic.burst_freq_new == baseline.burst_freq_new {
+            ic.burst_freq_new = defaults.burst_freq_new;
+        }
+        if ic.burst_freq == baseline.burst_freq {
+            ic.burst_freq = defaults.burst_freq;
+        }
+        if ic.pr_burst_freq_new == baseline.pr_burst_freq_new {
+            ic.pr_burst_freq_new = defaults.pr_burst_freq_new;
+        }
+        if ic.pr_burst_freq == baseline.pr_burst_freq {
+            ic.pr_burst_freq = defaults.pr_burst_freq;
+        }
+        if ic.new_time == baseline.new_time {
+            ic.new_time = defaults.new_time;
+        }
+        if ic.burst_penalty == baseline.burst_penalty {
+            ic.burst_penalty = defaults.burst_penalty;
+        }
+        if ic.held_release_interval == baseline.held_release_interval {
+            ic.held_release_interval = defaults.held_release_interval;
+        }
+        if ic.egress_enabled == baseline.egress_enabled {
+            ic.egress_enabled = defaults.egress_enabled;
+        }
+        if ic.egress_pr_freq == baseline.egress_pr_freq {
+            ic.egress_pr_freq = defaults.egress_pr_freq;
+        }
+    }
 }
 
 impl Driver {
@@ -77,87 +149,17 @@ impl Driver {
         }
     }
 
-    /// Apply the interface's own configured announce options, before the
-    /// instance-wide defaults fill whatever it left unset. Interfaces a
-    /// listener spawns copy their parent's values instead.
-    pub(crate) fn apply_interface_announce_limits(
+    /// Apply the interface's own configured announce options, then, on a
+    /// transport node, the instance-wide announce rate and ingress control
+    /// defaults to whatever it left unset.
+    pub(crate) fn apply_interface_defaults(
         &self,
         info: &mut rns_core::transport::types::InterfaceInfo,
     ) {
-        if let Some(limits) = self.registry.announce_limits.get(&info.name) {
-            limits.apply(info);
-        }
-    }
-
-    pub(crate) fn apply_announce_rate_defaults(
-        &self,
-        info: &mut rns_core::transport::types::InterfaceInfo,
-    ) {
-        if !self.engine.transport_enabled() || info.announce_rate_target.is_some() {
-            return;
-        }
-
-        let Some(target) = self.interface_settings.announce_rate.target else {
-            return;
-        };
-
-        info.announce_rate_target = Some(target);
-        if info.announce_rate_grace == 0 {
-            info.announce_rate_grace = self.interface_settings.announce_rate.grace;
-        }
-        if info.announce_rate_penalty == 0.0 {
-            info.announce_rate_penalty = self.interface_settings.announce_rate.penalty;
-        }
-    }
-
-    pub(crate) fn apply_ingress_control_defaults(
-        &self,
-        info: &mut rns_core::transport::types::InterfaceInfo,
-    ) {
-        if !self.engine.transport_enabled() {
-            return;
-        }
-
-        let baseline = if info.ingress_control.enabled {
-            rns_core::transport::types::IngressControlConfig::enabled()
-        } else {
-            rns_core::transport::types::IngressControlConfig::disabled()
-        };
-        let defaults = self.interface_settings.ingress_control;
-        let ic = &mut info.ingress_control;
-
-        if ic.max_held_announces == baseline.max_held_announces {
-            ic.max_held_announces = defaults.max_held_announces;
-        }
-        if ic.burst_hold == baseline.burst_hold {
-            ic.burst_hold = defaults.burst_hold;
-        }
-        if ic.burst_freq_new == baseline.burst_freq_new {
-            ic.burst_freq_new = defaults.burst_freq_new;
-        }
-        if ic.burst_freq == baseline.burst_freq {
-            ic.burst_freq = defaults.burst_freq;
-        }
-        if ic.pr_burst_freq_new == baseline.pr_burst_freq_new {
-            ic.pr_burst_freq_new = defaults.pr_burst_freq_new;
-        }
-        if ic.pr_burst_freq == baseline.pr_burst_freq {
-            ic.pr_burst_freq = defaults.pr_burst_freq;
-        }
-        if ic.new_time == baseline.new_time {
-            ic.new_time = defaults.new_time;
-        }
-        if ic.burst_penalty == baseline.burst_penalty {
-            ic.burst_penalty = defaults.burst_penalty;
-        }
-        if ic.held_release_interval == baseline.held_release_interval {
-            ic.held_release_interval = defaults.held_release_interval;
-        }
-        if ic.egress_enabled == baseline.egress_enabled {
-            ic.egress_enabled = defaults.egress_enabled;
-        }
-        if ic.egress_pr_freq == baseline.egress_pr_freq {
-            ic.egress_pr_freq = defaults.egress_pr_freq;
+        self.registry.apply_announce_limits(info);
+        if self.engine.transport_enabled() {
+            self.interface_settings.apply_announce_rate_defaults(info);
+            self.interface_settings.apply_ingress_control_defaults(info);
         }
     }
 
