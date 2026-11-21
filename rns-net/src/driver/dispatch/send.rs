@@ -132,25 +132,15 @@ impl Driver {
             );
             return;
         }
-        if ratchet_lease.is_some() && self.tracked_link_send.is_none() {
-            let Ok(permit) = self.event_tx.link_send_pool().try_acquire() else {
-                return;
-            };
-            let (completion, _receipt) = crate::link_send::Completion::new(permit);
-            // The engine built `raw`, so it parses; were it not to, the send
-            // would go untracked rather than fail.
-            if let Ok(packet) = RawPacket::unpack(&raw) {
-                self.tracked_link_send = Some((packet.packet_hash, completion));
-            }
-        }
-        let tracked = if self.tracked_link_send.as_ref().is_some_and(|(hash, _)| {
-            RawPacket::unpack(&raw).is_ok_and(|packet| packet.packet_hash == *hash)
-        }) {
-            self.tracked_link_send.take()
-        } else {
-            None
+        let Ok(tracked) = Self::take_tracked_link_send(
+            &mut self.tracked_link_send,
+            &self.event_tx,
+            &raw,
+            ratchet_lease.is_some(),
+        ) else {
+            return;
         };
-        if let Some((_, mut completion)) = tracked {
+        if let Some(mut completion) = tracked {
             let data = if let Some(ref state) = entry.ifac {
                 ifac::mask_outbound(&raw, state)
             } else {
@@ -178,24 +168,13 @@ impl Driver {
         } else {
             raw.len()
         };
-        entry.stats.txb += send_len as u64;
-        entry.stats.tx_packets += 1;
-        if is_announce {
-            entry
-                .stats
-                .record_outgoing_announce_bytes(time::now(), send_len);
-        }
-        if is_path_request {
-            let now = time::now();
-            entry
-                .stats
-                .record_outgoing_path_request_bytes(now, send_len);
-            super::sync_interface_frequencies(
-                &mut self.engine,
-                interface,
-                entry.stats.frequencies(now),
-            );
-        }
+        Self::account_outbound(
+            &mut self.engine,
+            entry,
+            send_len,
+            is_announce,
+            is_path_request,
+        );
         // Forwarded frames postpone the writer wakeup; the driver wakes each
         // touched writer once before it next waits for events.
         let send_result = if entry.ifac.is_some() {
@@ -275,25 +254,15 @@ impl Driver {
 
         let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
         let is_path_request = is_outbound_path_request(&raw, &self.builtin.path_request);
-        if ratchet_lease.is_some() && self.tracked_link_send.is_none() {
-            let Ok(permit) = self.event_tx.link_send_pool().try_acquire() else {
-                return;
-            };
-            let (completion, _receipt) = crate::link_send::Completion::new(permit);
-            // The engine built `raw`, so it parses; were it not to, the send
-            // would go untracked rather than fail.
-            if let Ok(packet) = RawPacket::unpack(&raw) {
-                self.tracked_link_send = Some((packet.packet_hash, completion));
-            }
-        }
-        let tracked = if self.tracked_link_send.as_ref().is_some_and(|(hash, _)| {
-            RawPacket::unpack(&raw).is_ok_and(|packet| packet.packet_hash == *hash)
-        }) {
-            self.tracked_link_send.take()
-        } else {
-            None
+        let Ok(tracked) = Self::take_tracked_link_send(
+            &mut self.tracked_link_send,
+            &self.event_tx,
+            &raw,
+            ratchet_lease.is_some(),
+        ) else {
+            return;
         };
-        if let Some((_, mut completion)) = tracked {
+        if let Some(mut completion) = tracked {
             completion.retain_ratchet(ratchet_lease.clone());
             let mut selected = 0;
             for entry in self.interfaces.values() {
@@ -342,24 +311,13 @@ impl Driver {
                 } else {
                     raw.len()
                 };
-                entry.stats.txb += send_len as u64;
-                entry.stats.tx_packets += 1;
-                if is_announce {
-                    entry
-                        .stats
-                        .record_outgoing_announce_bytes(time::now(), send_len);
-                }
-                if is_path_request {
-                    let now = time::now();
-                    entry
-                        .stats
-                        .record_outgoing_path_request_bytes(now, send_len);
-                    super::sync_interface_frequencies(
-                        &mut self.engine,
-                        entry.id,
-                        entry.stats.frequencies(now),
-                    );
-                }
+                Self::account_outbound(
+                    &mut self.engine,
+                    entry,
+                    send_len,
+                    is_announce,
+                    is_path_request,
+                );
                 let send_result = if entry.ifac.is_some() {
                     entry.writer.send_frame(&data)
                 } else {
@@ -369,4 +327,65 @@ impl Driver {
             }
         }
     }
+
+    /// The confirmed link send `raw` completes, if it is the one tracked in
+    /// `tracked_link_send`.
+    /// A packet with a ratchet lease starts a tracked send when none is,
+    /// which fails when the link send pool has no permit left.
+    #[inline]
+    fn take_tracked_link_send(
+        tracked_link_send: &mut Option<([u8; 32], crate::link_send::Completion)>,
+        event_tx: &crate::event::EventSender,
+        raw: &[u8],
+        track_new: bool,
+    ) -> Result<Option<crate::link_send::Completion>, LinkSendPoolFull> {
+        if track_new && tracked_link_send.is_none() {
+            let Ok(permit) = event_tx.link_send_pool().try_acquire() else {
+                return Err(LinkSendPoolFull);
+            };
+            let (completion, _receipt) = crate::link_send::Completion::new(permit);
+            // The engine built `raw`, so it parses; were it not to, the send
+            // would go untracked rather than fail.
+            if let Ok(packet) = RawPacket::unpack(raw) {
+                *tracked_link_send = Some((packet.packet_hash, completion));
+            }
+        }
+        let tracked = if tracked_link_send.as_ref().is_some_and(|(hash, _)| {
+            RawPacket::unpack(raw).is_ok_and(|packet| packet.packet_hash == *hash)
+        }) {
+            tracked_link_send.take()
+        } else {
+            None
+        };
+        Ok(tracked.map(|(_, completion)| completion))
+    }
+
+    /// Count `send_len` bytes sent on `entry`, and the announce and path
+    /// request rates they feed, passing the new rates to the engine.
+    #[inline]
+    fn account_outbound(
+        engine: &mut TransportEngine,
+        entry: &mut InterfaceEntry,
+        send_len: usize,
+        is_announce: bool,
+        is_path_request: bool,
+    ) {
+        entry.stats.txb += send_len as u64;
+        entry.stats.tx_packets += 1;
+        if is_announce {
+            entry
+                .stats
+                .record_outgoing_announce_bytes(time::now(), send_len);
+        }
+        if is_path_request {
+            let now = time::now();
+            entry
+                .stats
+                .record_outgoing_path_request_bytes(now, send_len);
+            super::sync_interface_frequencies(engine, entry.id, entry.stats.frequencies(now));
+        }
+    }
 }
+
+/// The link send pool had no permit for a new confirmed link send.
+struct LinkSendPoolFull;
