@@ -593,10 +593,10 @@ pub struct ParsedSubinterface {
 }
 
 /// Configuration parse error.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum ConfigError {
     /// The config file could not be read.
-    Io(String),
+    Io(io::Error),
     /// The file is not valid ConfigObj.
     Parse(String),
     /// A key has a value of the wrong form.
@@ -620,8 +620,17 @@ impl fmt::Display for ConfigError {
     }
 }
 
+impl std::error::Error for ConfigError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ConfigError::Io(e) => Some(e),
+            ConfigError::Parse(_) | ConfigError::InvalidValue { .. } => None,
+        }
+    }
+}
+
 impl From<io::Error> for ConfigError {
     fn from(e: io::Error) -> Self {
-        ConfigError::Io(e.to_string())
+        ConfigError::Io(e)
     }
 }
