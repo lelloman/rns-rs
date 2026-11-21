@@ -297,7 +297,7 @@ impl Driver {
                 let mut interfaces = self.discovery.storage.list().unwrap_or_default();
                 // Upstream's list_discovered_interfaces leaves out the
                 // interfaces of networks that are not discovery sources.
-                interfaces.retain(|iface| self.discovery_source_allowed(&iface.network_id));
+                interfaces.retain(|iface| self.discovery.source_allowed(&iface.network_id));
                 crate::discovery::filter_and_sort_interfaces(
                     &mut interfaces,
                     only_available,

@@ -90,6 +90,89 @@ impl UpstreamAutoconnect {
     pub(crate) fn count(&self) -> usize {
         self.members.len()
     }
+
+    /// Whether interface `id` was auto-connected from a discovery.
+    pub(crate) fn is_member(&self, id: InterfaceId) -> bool {
+        self.members.iter().any(|member| member.id == id)
+    }
+
+    /// The network auto-connected interface `id` was discovered from.
+    fn member_source(&self, id: InterfaceId) -> Option<&str> {
+        self.members
+            .iter()
+            .find(|member| member.id == id)
+            .map(|member| member.source.as_str())
+    }
+
+    /// Keep an auto-connected interface, starting the monitor with the
+    /// first.
+    #[cfg(feature = "iface-backbone")]
+    fn add_member(&mut self, member: AutoconnectMember) {
+        self.members.push(member);
+        if !self.monitoring {
+            self.monitoring = true;
+            self.last_monitor = time::now();
+        }
+    }
+
+    /// Whether the monitor runs now, then not again for an interval.
+    fn monitor_due(&mut self, now: f64) -> bool {
+        if !self.monitoring || now < self.last_monitor + MONITOR_INTERVAL {
+            return false;
+        }
+        self.last_monitor = now;
+        true
+    }
+
+    /// Note which members are online and which went down, as the monitor
+    /// sees them in `interfaces`. Returns how many are online, and those
+    /// to detach: gone some other way, or down too long.
+    fn check_members(&mut self, interfaces: &Interfaces, now: f64) -> (usize, Vec<InterfaceId>) {
+        let mut online = 0usize;
+        let mut detach: Vec<InterfaceId> = Vec::new();
+        for member in &mut self.members {
+            match interfaces.get(&member.id) {
+                // Detached some other way.
+                None => detach.push(member.id),
+                Some(entry) if entry.online => {
+                    online += 1;
+                    if member.down_since.take().is_some() {
+                        log::info!("Auto-discovered interface {} reconnected", member.name);
+                    }
+                }
+                Some(_) => match member.down_since {
+                    None => {
+                        log::debug!("Auto-discovered interface {} disconnected", member.name);
+                        member.down_since = Some(now);
+                    }
+                    Some(since) if now - since >= DETACH_THRESHOLD => {
+                        log::debug!(
+                            "Auto-discovered interface {} has been down for {:.0}s, detaching",
+                            member.name,
+                            now - since
+                        );
+                        detach.push(member.id);
+                    }
+                    Some(_) => {}
+                },
+            }
+        }
+        (online, detach)
+    }
+
+    /// Whether an interface already reaches the discovered endpoint
+    /// (`interface_exists`).
+    #[cfg(feature = "iface-backbone")]
+    fn endpoint_exists(&self, reachable_on: &str, port: Option<u16>) -> bool {
+        let hash = endpoint_hash(reachable_on, port);
+        self.members.iter().any(|member| {
+            member.endpoint_hash == hash
+                || member.target.0 == reachable_on
+                    && port.is_none_or(|port| member.target.1 == port)
+        }) || self.configured_targets.iter().any(|(host, target_port)| {
+            host == reachable_on && port.is_none_or(|port| *target_port == port)
+        })
+    }
 }
 
 /// upstream `endpoint_hash`: the SHA-256 of `reachable_on` followed by
@@ -151,7 +234,7 @@ impl Driver {
         };
         let max = autoconnect.max;
         let mut interfaces = self.discovery.storage.list().unwrap_or_default();
-        interfaces.retain(|iface| self.discovery_source_allowed(&iface.network_id));
+        interfaces.retain(|iface| self.discovery.source_allowed(&iface.network_id));
         crate::discovery::filter_and_sort_interfaces(&mut interfaces, false, true);
         for iface in interfaces {
             if self
@@ -167,26 +250,6 @@ impl Driver {
         if let Some(autoconnect) = self.discovery.upstream_autoconnect.as_mut() {
             autoconnect.initial_ran = true;
         }
-    }
-
-    /// Whether an interface already reaches the discovered endpoint
-    /// (`interface_exists`).
-    #[cfg(feature = "iface-backbone")]
-    fn autoconnect_endpoint_exists(&self, reachable_on: &str, port: Option<u16>) -> bool {
-        let Some(autoconnect) = self.discovery.upstream_autoconnect.as_ref() else {
-            return false;
-        };
-        let hash = endpoint_hash(reachable_on, port);
-        autoconnect.members.iter().any(|member| {
-            member.endpoint_hash == hash
-                || member.target.0 == reachable_on
-                    && port.is_none_or(|port| member.target.1 == port)
-        }) || autoconnect
-            .configured_targets
-            .iter()
-            .any(|(host, target_port)| {
-                host == reachable_on && port.is_none_or(|port| *target_port == port)
-            })
     }
 
     /// upstream `autoconnect`: connect a discovered interface if a slot is
@@ -232,7 +295,7 @@ impl Driver {
         let Some(reachable_on) = iface.reachable_on.clone() else {
             return;
         };
-        if self.autoconnect_endpoint_exists(&reachable_on, iface.port) {
+        if autoconnect.endpoint_exists(&reachable_on, iface.port) {
             log::debug!(
                 "Discovered {} already exists, not auto-connecting",
                 iface.interface_type
@@ -337,7 +400,7 @@ impl Driver {
                     entry.dynamic = false;
                 }
                 if let Some(autoconnect) = self.discovery.upstream_autoconnect.as_mut() {
-                    autoconnect.members.push(AutoconnectMember {
+                    autoconnect.add_member(AutoconnectMember {
                         id,
                         name,
                         endpoint_hash: endpoint_hash(&reachable_on, iface.port),
@@ -346,10 +409,6 @@ impl Driver {
                         control: Some(control),
                         down_since: None,
                     });
-                    if !autoconnect.monitoring {
-                        autoconnect.monitoring = true;
-                        autoconnect.last_monitor = time::now();
-                    }
                 }
             }
             Err(error) => {
@@ -360,14 +419,14 @@ impl Driver {
 
     /// Run the monitor when it is due.
     pub(crate) fn tick_upstream_autoconnect(&mut self, now: f64) {
-        let Some(autoconnect) = self.discovery.upstream_autoconnect.as_mut() else {
-            return;
-        };
-        if !autoconnect.monitoring || now < autoconnect.last_monitor + MONITOR_INTERVAL {
-            return;
+        if self
+            .discovery
+            .upstream_autoconnect
+            .as_mut()
+            .is_some_and(|autoconnect| autoconnect.monitor_due(now))
+        {
+            self.run_autoconnect_monitor(now);
         }
-        autoconnect.last_monitor = now;
-        self.run_autoconnect_monitor(now);
     }
 
     /// upstream `__monitor_job`, one pass.
@@ -377,35 +436,7 @@ impl Driver {
         };
         let max = autoconnect.max;
         let autoconnected = autoconnect.members.len();
-        let mut online = 0usize;
-        let mut detach: Vec<InterfaceId> = Vec::new();
-        for member in &mut autoconnect.members {
-            match self.interfaces.get(&member.id) {
-                // Detached some other way.
-                None => detach.push(member.id),
-                Some(entry) if entry.online => {
-                    online += 1;
-                    if member.down_since.take().is_some() {
-                        log::info!("Auto-discovered interface {} reconnected", member.name);
-                    }
-                }
-                Some(_) => match member.down_since {
-                    None => {
-                        log::debug!("Auto-discovered interface {} disconnected", member.name);
-                        member.down_since = Some(now);
-                    }
-                    Some(since) if now - since >= DETACH_THRESHOLD => {
-                        log::debug!(
-                            "Auto-discovered interface {} has been down for {:.0}s, detaching",
-                            member.name,
-                            now - since
-                        );
-                        detach.push(member.id);
-                    }
-                    Some(_) => {}
-                },
-            }
-        }
+        let (online, detach) = autoconnect.check_members(&self.interfaces, now);
         let free_slots = max.saturating_sub(autoconnected);
         let reserved_slots = max / 4;
         let initial_ran = autoconnect.initial_ran;
@@ -445,7 +476,7 @@ impl Driver {
 
         if initial_ran && free_slots > reserved_slots {
             let mut candidates = self.discovery.storage.list().unwrap_or_default();
-            candidates.retain(|iface| self.discovery_source_allowed(&iface.network_id));
+            candidates.retain(|iface| self.discovery.source_allowed(&iface.network_id));
             crate::discovery::filter_and_sort_interfaces(&mut candidates, true, true);
             if !candidates.is_empty() {
                 let mut random = [0u8; 8];
@@ -465,27 +496,19 @@ impl Driver {
     /// upstream reports it (`autoconnect_source`): the hex of the
     /// announcing network's identity hash.
     pub(crate) fn autoconnect_source(&self, id: InterfaceId) -> Option<String> {
-        if let Some(member) = self
+        if let Some(source) = self
             .discovery
             .upstream_autoconnect
             .as_ref()
-            .and_then(|autoconnect| autoconnect.members.iter().find(|member| member.id == id))
+            .and_then(|autoconnect| autoconnect.member_source(id))
         {
-            return Some(member.source.clone());
+            return Some(source.to_string());
         }
         #[cfg(feature = "iface-backbone")]
         if let Some(network_id) = self.backbone_peer_pool_discovery_network(id) {
             return Some(rns_core::encoding::hex(&network_id));
         }
         None
-    }
-
-    /// Whether an interface was auto-connected from a discovery.
-    pub(crate) fn is_autoconnected(&self, id: InterfaceId) -> bool {
-        self.discovery
-            .upstream_autoconnect
-            .as_ref()
-            .is_some_and(|autoconnect| autoconnect.members.iter().any(|member| member.id == id))
     }
 
     /// Detach an auto-connected interface (`teardown_interface`).

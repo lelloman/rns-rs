@@ -328,7 +328,7 @@ impl Driver {
         hops: u8,
         app_data: Option<&[u8]>,
     ) {
-        if !self.discovery_source_allowed(identity_hash) {
+        if !self.discovery.source_allowed(identity_hash) {
             log::debug!(
                 "Interface discovered from non-authorized network identity {:02x?}, ignoring",
                 &identity_hash[..4]

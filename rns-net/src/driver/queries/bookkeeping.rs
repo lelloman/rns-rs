@@ -20,13 +20,6 @@ impl Driver {
         announcer
     }
 
-    /// Whether interfaces discovered from the network identity
-    /// `network_id` are accepted: any are without
-    /// `interface_discovery_sources`.
-    pub(crate) fn discovery_source_allowed(&self, network_id: &[u8; 16]) -> bool {
-        self.discovery.sources.is_empty() || self.discovery.sources.contains(network_id)
-    }
-
     /// Remember a received packet's readings, keeping the newest
     /// `PACKET_SIGNAL_CACHE_MAXSIZE`.
     pub(crate) fn record_packet_signal(

@@ -17886,7 +17886,7 @@ fn autoconnected_backbone_client_with_unreachable_target_is_kept_until_detached(
         .find(|(_, entry)| entry.info.name == "unreachable")
         .map(|(id, _)| *id)
         .expect("kept although its target cannot be reached");
-    assert!(driver.is_autoconnected(id));
+    assert!(driver.discovery.is_autoconnected(id));
     let stat = driver
         .interface_stats()
         .interfaces
@@ -17904,7 +17904,7 @@ fn autoconnected_backbone_client_with_unreachable_target_is_kept_until_detached(
     assert!(driver.interfaces.contains_key(&id));
     driver.tick_upstream_autoconnect(now + 20.0);
     assert!(!driver.interfaces.contains_key(&id));
-    assert!(!driver.is_autoconnected(id));
+    assert!(!driver.discovery.is_autoconnected(id));
 }
 
 /// Upstream auto-connects a discovered Backbone interface as a
