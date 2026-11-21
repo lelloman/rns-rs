@@ -92,3 +92,39 @@ impl std::error::Error for SupervisorError {
         }
     }
 }
+
+/// An RPC call the supervisor makes to `rnsd` that failed.
+#[derive(Debug)]
+pub(crate) enum RpcCallError {
+    /// Connecting to `rnsd` failed.
+    Connect(io::Error),
+    /// The named call failed.
+    Call {
+        call: &'static str,
+        source: io::Error,
+    },
+}
+
+impl RpcCallError {
+    /// A failure of `call`, for `map_err`.
+    pub(crate) fn call(call: &'static str) -> impl FnOnce(io::Error) -> Self {
+        move |source| RpcCallError::Call { call, source }
+    }
+}
+
+impl fmt::Display for RpcCallError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RpcCallError::Connect(error) => write!(f, "rpc connect failed: {}", error),
+            RpcCallError::Call { call, source } => write!(f, "{} failed: {}", call, source),
+        }
+    }
+}
+
+impl std::error::Error for RpcCallError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            RpcCallError::Connect(source) | RpcCallError::Call { source, .. } => Some(source),
+        }
+    }
+}

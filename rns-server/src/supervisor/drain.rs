@@ -1,3 +1,4 @@
+use super::error::RpcCallError;
 use super::*;
 
 impl Supervisor {
@@ -30,17 +31,20 @@ impl Supervisor {
     }
 }
 
-pub(crate) fn request_rnsd_drain(config: &RnsdDrainConfig, reason: &str) -> Result<(), String> {
+pub(crate) fn request_rnsd_drain(
+    config: &RnsdDrainConfig,
+    reason: &str,
+) -> Result<(), RpcCallError> {
     log::info!(
         "requesting rnsd drain before {} with {:.3}s timeout",
         reason,
         config.timeout.as_secs_f64()
     );
-    let mut client = RpcClient::connect(&config.rpc_addr, &config.auth_key)
-        .map_err(|err| format!("rpc connect failed: {}", err))?;
+    let mut client =
+        RpcClient::connect(&config.rpc_addr, &config.auth_key).map_err(RpcCallError::Connect)?;
     client
         .begin_drain(config.timeout)
-        .map_err(|err| format!("begin_drain failed: {}", err))?;
+        .map_err(RpcCallError::call("begin_drain"))?;
     Ok(())
 }
 
@@ -122,12 +126,12 @@ pub(crate) fn format_drain_status_detail(status: &DrainStatus) -> String {
     detail
 }
 
-fn fetch_rnsd_drain_status(config: &RnsdDrainConfig) -> Result<Option<DrainStatus>, String> {
-    let mut client = RpcClient::connect(&config.rpc_addr, &config.auth_key)
-        .map_err(|err| format!("rpc connect failed: {}", err))?;
+fn fetch_rnsd_drain_status(config: &RnsdDrainConfig) -> Result<Option<DrainStatus>, RpcCallError> {
+    let mut client =
+        RpcClient::connect(&config.rpc_addr, &config.auth_key).map_err(RpcCallError::Connect)?;
     client
         .drain_status()
-        .map_err(|err| format!("drain_status failed: {}", err))
+        .map_err(RpcCallError::call("drain_status"))
 }
 
 pub(crate) fn drain_complete_for_shutdown(status: &DrainStatus) -> bool {
