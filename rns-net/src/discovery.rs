@@ -618,50 +618,202 @@ pub struct InterfaceAnnouncer {
 const LOCATION_CMD_TIMEOUT: Duration = Duration::from_secs(5);
 const LOCATION_CMD_MAX_STDOUT: usize = 4096;
 
-fn parse_location_output(output: &[u8]) -> Result<(f64, f64, f64), String> {
-    if output.len() > LOCATION_CMD_MAX_STDOUT {
-        return Err(format!(
-            "location command output exceeds {} bytes",
-            LOCATION_CMD_MAX_STDOUT
-        ));
+/// Why an interface's `location_cmd` gave no coordinates.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum LocationError {
+    /// The command printed more than the output limit.
+    OutputTooLong,
+    /// The command's output is not UTF-8.
+    NotUtf8(std::str::Utf8Error),
+    /// The command printed more than one line.
+    MultipleLines,
+    /// The command printed this many comma-separated components, not 3.
+    ComponentCount(usize),
+    /// A component is not a number.
+    InvalidNumber {
+        /// Which coordinate: `latitude`, `longitude` or `height`.
+        label: &'static str,
+        /// The component as printed.
+        value: String,
+        /// Why it did not parse.
+        source: std::num::ParseFloatError,
+    },
+    /// A component is infinite or NaN.
+    NotFinite {
+        /// Which coordinate.
+        label: &'static str,
+    },
+    /// A coordinate is outside its valid range.
+    OutOfRange {
+        /// Which coordinate.
+        label: &'static str,
+        /// Its value.
+        value: f64,
+        /// The valid range, as shown to the operator.
+        range: &'static str,
+    },
+    /// The command starts with `~` (given as `prefix`) and `HOME` is unset.
+    HomeNotSet {
+        /// `~` or `~/`.
+        prefix: &'static str,
+    },
+    /// The command's file could not be inspected.
+    Inspect {
+        /// The command's path.
+        path: PathBuf,
+        /// Why it could not.
+        source: io::Error,
+    },
+    /// The command's path is not a regular file.
+    NotRegularFile(PathBuf),
+    /// The command's file is not executable.
+    NotExecutable(PathBuf),
+    /// The command could not be started.
+    Spawn {
+        /// The command's path.
+        path: PathBuf,
+        /// Why it could not.
+        source: io::Error,
+    },
+    /// The command's stdout pipe was not available.
+    StdoutUnavailable,
+    /// The command ran past its time limit and was killed.
+    TimedOut,
+    /// Waiting for the command failed.
+    Wait(io::Error),
+    /// The thread reading the command's stdout panicked.
+    ReaderPanicked,
+    /// Reading the command's stdout failed.
+    ReadStdout(io::Error),
+    /// The command exited unsuccessfully.
+    Failed(std::process::ExitStatus),
+    /// `location_cmd` is not supported on this platform.
+    Unsupported,
+}
+
+impl std::fmt::Display for LocationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LocationError::OutputTooLong => write!(
+                f,
+                "location command output exceeds {} bytes",
+                LOCATION_CMD_MAX_STDOUT
+            ),
+            LocationError::NotUtf8(error) => {
+                write!(f, "location command output is not UTF-8: {error}")
+            }
+            LocationError::MultipleLines => {
+                f.write_str("location command must output exactly one line")
+            }
+            LocationError::ComponentCount(count) => write!(
+                f,
+                "location command returned {count} components; expected 3"
+            ),
+            LocationError::InvalidNumber {
+                label,
+                value,
+                source,
+            } => write!(f, "invalid {label} '{value}': {source}"),
+            LocationError::NotFinite { label } => write!(f, "{label} must be finite"),
+            LocationError::OutOfRange {
+                label,
+                value,
+                range,
+            } => write!(f, "{label} {value} is outside {range}"),
+            LocationError::HomeNotSet { prefix } => write!(
+                f,
+                "cannot expand location command '{prefix}' because HOME is not set"
+            ),
+            LocationError::Inspect { path, source } => {
+                write!(f, "cannot inspect '{}': {source}", path.display())
+            }
+            LocationError::NotRegularFile(path) => {
+                write!(f, "'{}' is not a regular file", path.display())
+            }
+            LocationError::NotExecutable(path) => {
+                write!(f, "'{}' is not executable", path.display())
+            }
+            LocationError::Spawn { path, source } => {
+                write!(f, "cannot execute '{}': {source}", path.display())
+            }
+            LocationError::StdoutUnavailable => {
+                f.write_str("location command stdout was unavailable")
+            }
+            LocationError::TimedOut => f.write_str("location command timed out after 5 seconds"),
+            LocationError::Wait(error) => {
+                write!(f, "failed waiting for location command: {error}")
+            }
+            LocationError::ReaderPanicked => f.write_str("location command stdout reader panicked"),
+            LocationError::ReadStdout(error) => {
+                write!(f, "failed reading location command stdout: {error}")
+            }
+            LocationError::Failed(status) => write!(f, "location command exited with {status}"),
+            LocationError::Unsupported => f.write_str("location_cmd is not supported on Windows"),
+        }
     }
-    let line = std::str::from_utf8(output)
-        .map_err(|error| format!("location command output is not UTF-8: {error}"))?;
+}
+
+impl std::error::Error for LocationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            LocationError::NotUtf8(error) => Some(error),
+            LocationError::InvalidNumber { source, .. } => Some(source),
+            LocationError::Inspect { source, .. }
+            | LocationError::Spawn { source, .. }
+            | LocationError::Wait(source)
+            | LocationError::ReadStdout(source) => Some(source),
+            _ => None,
+        }
+    }
+}
+
+fn parse_location_output(output: &[u8]) -> Result<(f64, f64, f64), LocationError> {
+    if output.len() > LOCATION_CMD_MAX_STDOUT {
+        return Err(LocationError::OutputTooLong);
+    }
+    let line = std::str::from_utf8(output).map_err(LocationError::NotUtf8)?;
     let line = line.strip_suffix('\n').unwrap_or(line);
     let line = line.strip_suffix('\r').unwrap_or(line);
     if line.contains(['\n', '\r']) {
-        return Err("location command must output exactly one line".into());
+        return Err(LocationError::MultipleLines);
     }
     let values: Vec<&str> = line.split(',').map(str::trim).collect();
     if values.len() != 3 {
-        return Err(format!(
-            "location command returned {} components; expected 3",
-            values.len()
-        ));
+        return Err(LocationError::ComponentCount(values.len()));
     }
-    let parse = |value: &str, label: &str| {
+    let parse = |value: &str, label: &'static str| {
         value
             .parse::<f64>()
-            .map_err(|error| format!("invalid {label} '{value}': {error}"))
+            .map_err(|source| LocationError::InvalidNumber {
+                label,
+                value: value.to_string(),
+                source,
+            })
             .and_then(|number| {
                 number
                     .is_finite()
                     .then_some(number)
-                    .ok_or_else(|| format!("{label} must be finite"))
+                    .ok_or(LocationError::NotFinite { label })
             })
     };
     let latitude = parse(values[0], "latitude")?;
     let longitude = parse(values[1], "longitude")?;
     let height = parse(values[2], "height")?;
-    if !(-90.0..=90.0).contains(&latitude) {
-        return Err(format!("latitude {latitude} is outside -90..=90"));
-    }
-    if !(-180.0..=180.0).contains(&longitude) {
-        return Err(format!("longitude {longitude} is outside -180..=180"));
-    }
-    if !(-4000.0..=1_000_000.0).contains(&height) {
-        return Err(format!("height {height} is outside -4000..=1000000"));
-    }
+    let check = |label: &'static str, value: f64, valid: std::ops::RangeInclusive<f64>, range| {
+        if valid.contains(&value) {
+            Ok(())
+        } else {
+            Err(LocationError::OutOfRange {
+                label,
+                value,
+                range,
+            })
+        }
+    };
+    check("latitude", latitude, -90.0..=90.0, "-90..=90")?;
+    check("longitude", longitude, -180.0..=180.0, "-180..=180")?;
+    check("height", height, -4000.0..=1_000_000.0, "-4000..=1000000")?;
     Ok((latitude, longitude, height))
 }
 
@@ -669,15 +821,14 @@ fn parse_location_output(output: &[u8]) -> Result<(f64, f64, f64), String> {
 fn expand_location_path(
     command: &str,
     home: Option<std::ffi::OsString>,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, LocationError> {
     let path = if command == "~" {
-        home.map(PathBuf::from).ok_or_else(|| {
-            "cannot expand location command '~' because HOME is not set".to_string()
-        })?
+        home.map(PathBuf::from)
+            .ok_or(LocationError::HomeNotSet { prefix: "~" })?
     } else if let Some(suffix) = command.strip_prefix("~/") {
-        let home = home.map(PathBuf::from).ok_or_else(|| {
-            "cannot expand location command '~/' because HOME is not set".to_string()
-        })?;
+        let home = home
+            .map(PathBuf::from)
+            .ok_or(LocationError::HomeNotSet { prefix: "~/" })?;
         home.join(suffix)
     } else {
         PathBuf::from(command)
@@ -686,29 +837,34 @@ fn expand_location_path(
 }
 
 #[cfg(unix)]
-fn resolve_location(command: &str) -> Result<(f64, f64, f64), String> {
+fn resolve_location(command: &str) -> Result<(f64, f64, f64), LocationError> {
     use std::os::unix::fs::PermissionsExt;
 
     let path = expand_location_path(command, std::env::var_os("HOME"))?;
-    let metadata = fs::metadata(&path)
-        .map_err(|error| format!("cannot inspect '{}': {error}", path.display()))?;
+    let metadata = match fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(source) => return Err(LocationError::Inspect { path, source }),
+    };
     if !metadata.is_file() {
-        return Err(format!("'{}' is not a regular file", path.display()));
+        return Err(LocationError::NotRegularFile(path));
     }
     if metadata.permissions().mode() & 0o111 == 0 {
-        return Err(format!("'{}' is not executable", path.display()));
+        return Err(LocationError::NotExecutable(path));
     }
 
-    let mut child = Command::new(&path)
+    let child = Command::new(&path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("cannot execute '{}': {error}", path.display()))?;
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(source) => return Err(LocationError::Spawn { path, source }),
+    };
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| "location command stdout was unavailable".to_string())?;
+        .ok_or(LocationError::StdoutUnavailable)?;
     let reader = std::thread::spawn(move || {
         let mut output = Vec::new();
         stdout
@@ -726,28 +882,28 @@ fn resolve_location(command: &str) -> Result<(f64, f64, f64), String> {
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("location command timed out after 5 seconds".into());
+                return Err(LocationError::TimedOut);
             }
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("failed waiting for location command: {error}"));
+                return Err(LocationError::Wait(error));
             }
         }
     };
     let output = reader
         .join()
-        .map_err(|_| "location command stdout reader panicked".to_string())?
-        .map_err(|error| format!("failed reading location command stdout: {error}"))?;
+        .map_err(|_| LocationError::ReaderPanicked)?
+        .map_err(LocationError::ReadStdout)?;
     if !status.success() {
-        return Err(format!("location command exited with {status}"));
+        return Err(LocationError::Failed(status));
     }
     parse_location_output(&output)
 }
 
 #[cfg(windows)]
-fn resolve_location(_command: &str) -> Result<(f64, f64, f64), String> {
-    Err("location_cmd is not supported on Windows".into())
+fn resolve_location(_command: &str) -> Result<(f64, f64, f64), LocationError> {
+    Err(LocationError::Unsupported)
 }
 
 fn prepare_interface_info(
@@ -757,7 +913,8 @@ fn prepare_interface_info(
 ) -> Result<Vec<u8>, String> {
     let mut resolved = iface.clone();
     if let Some(command) = &resolved.config.location_cmd {
-        let (latitude, longitude, height) = resolve_location(command)?;
+        let (latitude, longitude, height) =
+            resolve_location(command).map_err(|error| error.to_string())?;
         resolved.config.latitude = Some(latitude);
         resolved.config.longitude = Some(longitude);
         resolved.config.height = Some(height);
@@ -1240,6 +1397,44 @@ mod tests {
     }
 
     #[test]
+    fn location_errors_keep_their_messages() {
+        let message = |output: &[u8]| parse_location_output(output).unwrap_err().to_string();
+        assert_eq!(
+            message(&vec![b'0'; LOCATION_CMD_MAX_STDOUT + 1]),
+            "location command output exceeds 4096 bytes"
+        );
+        assert!(message(&[0xff]).starts_with("location command output is not UTF-8: "));
+        assert_eq!(
+            message(b"1,2,3\n4,5,6\n"),
+            "location command must output exactly one line"
+        );
+        assert_eq!(
+            message(b"1,2"),
+            "location command returned 2 components; expected 3"
+        );
+        assert_eq!(
+            message(b"one,2,3"),
+            "invalid latitude 'one': invalid float literal"
+        );
+        assert_eq!(message(b"1,inf,3"), "longitude must be finite");
+        assert_eq!(message(b"91.5,2,3"), "latitude 91.5 is outside -90..=90");
+        assert_eq!(message(b"1,181,3"), "longitude 181 is outside -180..=180");
+        assert_eq!(
+            message(b"1,2,-4001"),
+            "height -4001 is outside -4000..=1000000"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            expand_location_path("~", None).unwrap_err().to_string(),
+            "cannot expand location command '~' because HOME is not set"
+        );
+        assert_eq!(
+            LocationError::TimedOut.to_string(),
+            "location command timed out after 5 seconds"
+        );
+    }
+
+    #[test]
     fn location_output_parser_enforces_shape_finiteness_and_ranges() {
         for valid in [
             "-90,-180,-4000",
@@ -1376,7 +1571,7 @@ mod tests {
         let command = executable_script("exec sleep 30");
         let started = Instant::now();
         let error = resolve_location(command.to_str().unwrap()).unwrap_err();
-        assert!(error.contains("timed out"));
+        assert!(error.to_string().contains("timed out"));
         assert!(started.elapsed() < Duration::from_secs(7));
         let _ = fs::remove_file(command);
     }
