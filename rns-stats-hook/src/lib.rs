@@ -5,6 +5,8 @@
     target_arch = "wasm32",
     allow(unsafe_code, reason = "the wasm guest side of the hook ABI")
 )]
+// Packet bytes are untrusted: read them with checked access.
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 
 #[cfg(any(target_arch = "wasm32", feature = "builtin"))]
 use rns_hooks_abi::stats::{
@@ -48,8 +50,20 @@ const PACKET_TYPE_ANNOUNCE: u8 = 0x01;
 fn identity_hash(public_key: &[u8]) -> [u8; 16] {
     let full_hash = Sha256::digest(public_key);
     let mut identity_hash = [0u8; 16];
-    identity_hash.copy_from_slice(&full_hash[..16]);
+    for (out, byte) in identity_hash.iter_mut().zip(full_hash) {
+        *out = byte;
+    }
     identity_hash
+}
+
+/// The public key, name hash and random hash at the start of an announce's
+/// data, which begins `data_offset` bytes into `raw`.
+#[cfg(any(target_arch = "wasm32", feature = "builtin"))]
+fn announce_fields(raw: &[u8], data_offset: usize) -> Option<(&[u8; 64], &[u8; 10], &[u8; 10])> {
+    let (public_key, rest) = raw.get(data_offset..)?.split_first_chunk::<64>()?;
+    let (name_hash, rest) = rest.split_first_chunk::<10>()?;
+    let random_hash = rest.first_chunk::<10>()?;
+    Some((public_key, name_hash, random_hash))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -115,23 +129,17 @@ fn emit_announce_stats(ctx: &PacketContext) {
         return;
     }
 
-    let announce_data = &raw[data_offset..];
-    let public_key = &announce_data[..64];
-    let name_hash = &announce_data[64..74];
-    let random_hash = &announce_data[74..84];
+    let Some((public_key, name_hash, random_hash)) = announce_fields(raw, data_offset) else {
+        return;
+    };
 
     let identity_hash = identity_hash(public_key);
-
-    let mut nh = [0u8; 10];
-    nh.copy_from_slice(name_hash);
-    let mut rh = [0u8; 10];
-    rh.copy_from_slice(random_hash);
 
     let payload = AnnounceStatsPayload {
         identity_hash,
         destination_hash: ctx.destination_hash,
-        name_hash: nh,
-        random_hash: rh,
+        name_hash: *name_hash,
+        random_hash: *random_hash,
         hops: ctx.hops,
         interface_id: ctx.interface_id,
     }
@@ -198,23 +206,17 @@ fn emit_builtin_announce_stats(
         return Ok(());
     }
 
-    let announce_data = &raw[data_offset..];
-    let public_key = &announce_data[..64];
-    let name_hash = &announce_data[64..74];
-    let random_hash = &announce_data[74..84];
+    let Some((public_key, name_hash, random_hash)) = announce_fields(raw, data_offset) else {
+        return Ok(());
+    };
 
     let identity_hash = identity_hash(public_key);
-
-    let mut nh = [0u8; 10];
-    nh.copy_from_slice(name_hash);
-    let mut rh = [0u8; 10];
-    rh.copy_from_slice(random_hash);
 
     let payload = AnnounceStatsPayload {
         identity_hash,
         destination_hash: ctx.destination_hash,
-        name_hash: nh,
-        random_hash: rh,
+        name_hash: *name_hash,
+        random_hash: *random_hash,
         hops: ctx.hops,
         interface_id: ctx.interface_id,
     }

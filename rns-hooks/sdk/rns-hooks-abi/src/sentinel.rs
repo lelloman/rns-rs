@@ -100,9 +100,7 @@ impl BackbonePeerPayload {
     /// Decodes a payload; `None` unless `bytes` is exactly
     /// [`BACKBONE_PEER_ENCODED_LEN`] long. The name length is clamped.
     pub fn decode(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() != BACKBONE_PEER_ENCODED_LEN {
-            return None;
-        }
+        let bytes: &[u8; BACKBONE_PEER_ENCODED_LEN] = bytes.try_into().ok()?;
         let mut peer_ip = [0u8; 16];
         peer_ip.copy_from_slice(&bytes[1..17]);
         let mut peer_port = [0u8; 2];
@@ -153,7 +151,7 @@ impl BackbonePeerPayload {
     /// (a truncation can split a character).
     pub fn server_interface_name(&self) -> Option<&str> {
         let len = self.server_interface_name_len as usize;
-        core::str::from_utf8(&self.server_interface_name[..len]).ok()
+        core::str::from_utf8(self.server_interface_name.get(..len)?).ok()
     }
 }
 

@@ -5,6 +5,8 @@
     target_arch = "wasm32",
     allow(unsafe_code, reason = "the wasm guest side of the hook ABI")
 )]
+// Packet bytes are untrusted: read them with checked access.
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 
 #[cfg(target_arch = "wasm32")]
 use rns_hooks_abi::context::{self, BackbonePeerContext, CTX_TYPE_BACKBONE_PEER};
@@ -132,8 +134,11 @@ fn builtin_sentinel_hook(
         .interface_name(*server_interface_id)
         .map(|name| {
             let bytes = name.as_bytes();
-            let len = bytes.len().min(BACKBONE_PEER_INTERFACE_NAME_MAX);
-            server_interface_name[..len].copy_from_slice(&bytes[..len]);
+            let mut len = 0;
+            for (slot, byte) in server_interface_name.iter_mut().zip(bytes) {
+                *slot = *byte;
+                len += 1;
+            }
             len as u8
         })
         .unwrap_or(0);

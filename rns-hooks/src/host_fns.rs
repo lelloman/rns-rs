@@ -105,7 +105,7 @@ fn host_log(mut caller: Caller<'_, StoreData>, ptr: i32, len: i32) {
     let Some(bytes) = read_bytes(data, ptr, len) else {
         return;
     };
-    let bytes = &bytes[..bytes.len().min(MAX_LOG_MESSAGE_BYTES)];
+    let bytes = bytes.get(..MAX_LOG_MESSAGE_BYTES).unwrap_or(bytes);
     let msg = String::from_utf8_lossy(bytes).into_owned();
     if !charge_fuel(&mut caller, msg.len()) {
         return;
@@ -212,8 +212,9 @@ fn host_get_interface_name(
         return -1;
     };
     let bytes = name.as_bytes();
-    let write_len = bytes.len().min(out_len as usize);
-    if !write_bytes(memory.data_mut(&mut caller), out_ptr, &bytes[..write_len]) {
+    let written = bytes.get(..out_len as usize).unwrap_or(bytes);
+    let write_len = written.len();
+    if !write_bytes(memory.data_mut(&mut caller), out_ptr, written) {
         return -1;
     }
     write_len as i32
