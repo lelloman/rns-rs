@@ -117,13 +117,16 @@ pub fn collision_destination(
     if overwrite || !candidate.exists() {
         return Ok(candidate);
     }
-    for suffix in 1u64.. {
+    for suffix in 1..=u64::MAX {
         let candidate = directory.join(format!("{filename}.{suffix}"));
         if !candidate.exists() {
             return Ok(candidate);
         }
     }
-    unreachable!()
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "no free resource filename",
+    ))
 }
 
 /// Decodes a request payload that is a single msgpack string or UTF-8 bytes.
