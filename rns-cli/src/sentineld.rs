@@ -558,6 +558,24 @@ struct BlacklistAction {
     reason: String,
 }
 
+/// Why an action could not be handed to the blacklist worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlacklistSubmitError {
+    /// The worker was shut down.
+    ShutDown,
+    /// The worker thread has exited.
+    ChannelClosed,
+}
+
+impl std::fmt::Display for BlacklistSubmitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            BlacklistSubmitError::ShutDown => "blacklist worker is shut down",
+            BlacklistSubmitError::ChannelClosed => "blacklist worker channel closed",
+        })
+    }
+}
+
 struct BlacklistWorker {
     tx: Option<mpsc::Sender<BlacklistAction>>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -579,12 +597,12 @@ impl BlacklistWorker {
         }
     }
 
-    fn submit(&self, action: BlacklistAction) -> Result<(), String> {
+    fn submit(&self, action: BlacklistAction) -> Result<(), BlacklistSubmitError> {
         self.tx
             .as_ref()
-            .ok_or_else(|| "blacklist worker is shut down".to_string())?
+            .ok_or(BlacklistSubmitError::ShutDown)?
             .send(action)
-            .map_err(|_| "blacklist worker channel closed".to_string())
+            .map_err(|_| BlacklistSubmitError::ChannelClosed)
     }
 }
 
@@ -852,6 +870,18 @@ fn install_signal_handlers() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blacklist_submit_errors_keep_their_messages() {
+        assert_eq!(
+            BlacklistSubmitError::ShutDown.to_string(),
+            "blacklist worker is shut down"
+        );
+        assert_eq!(
+            BlacklistSubmitError::ChannelClosed.to_string(),
+            "blacklist worker channel closed"
+        );
+    }
 
     #[test]
     fn help_states_the_defaults() {
