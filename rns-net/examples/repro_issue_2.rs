@@ -1,3 +1,6 @@
+//! Connects to a running shared instance as a local client and reports the
+//! interface it comes up as.
+
 use std::time::Duration;
 
 use rns_net::event;

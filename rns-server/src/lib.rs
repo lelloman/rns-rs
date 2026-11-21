@@ -2,8 +2,6 @@
 //! in hook-enabled builds, the `rns-sentineld` and `rns-statsd` sidecars as
 //! child processes, with an embedded HTTP control plane from `rns-ctl`.
 
-#![warn(missing_docs)]
-
 /// Command-line parsing for `rns-server`.
 pub mod args;
 /// Server configuration: command-line flags merged with `rns-server.json`.

@@ -1,7 +1,5 @@
 //! Authenticated IPv4 tunnelling over a private Reticulum node.
 
-#![warn(missing_docs)]
-
 #[cfg(target_os = "linux")]
 pub mod client;
 pub mod config;

@@ -1,3 +1,6 @@
+//! rns-server - supervises rnsd and its sidecars behind an embedded HTTP
+//! control plane.
+
 use std::net::TcpListener;
 use std::process::ExitCode;
 use std::thread;

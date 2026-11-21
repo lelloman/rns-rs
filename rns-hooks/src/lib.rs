@@ -19,8 +19,6 @@
 //! plain `u64`s and hashes plain byte arrays. The binary layouts shared with
 //! hook programs live in the `rns-hooks-abi` crate.
 
-#![warn(missing_docs)]
-
 #[cfg(any(feature = "wasm", feature = "native"))]
 mod arena;
 /// Built-in hooks: Rust functions linked into the host and registered by id.

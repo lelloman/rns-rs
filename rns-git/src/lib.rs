@@ -8,8 +8,6 @@
 //! Nomad Network pages. Each command's entry point is a `main` function taking
 //! its arguments.
 
-#![warn(missing_docs)]
-
 /// Access control: who may read, write, create, release and administer repositories.
 pub mod acl;
 /// The `git-remote-rns` remote helper that lets git fetch from and push to `rns://` URLs.

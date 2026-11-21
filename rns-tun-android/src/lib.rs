@@ -7,7 +7,6 @@
     unsafe_code,
     reason = "the crate is the C and JNI boundary of the Android tunnel"
 )]
-#![warn(missing_docs)]
 #![allow(
     unreachable_pub,
     reason = "the JNI entry points are found by their exported names, not by Rust paths"

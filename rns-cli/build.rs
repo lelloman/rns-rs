@@ -1,3 +1,7 @@
+//! Build script: the version string with the commit it was built from and,
+//! with the `rns-hooks-wasm` feature, the stats and sentinel hooks compiled to
+//! WebAssembly for embedding.
+
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;

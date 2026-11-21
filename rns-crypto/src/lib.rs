@@ -2,7 +2,6 @@
 //! tokens authenticated with HMAC-SHA256, HKDF, ratchets and stamps.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-#![warn(missing_docs)]
 // Cryptographic logic lives in the RustCrypto/dalek crates. `unsafe` is
 // allowed only at FFI boundaries (OS randomness, the optional aws-lc
 // backends), each site opting in with a reasoned `#[allow(unsafe_code)]`.
