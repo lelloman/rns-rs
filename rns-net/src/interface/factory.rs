@@ -193,6 +193,26 @@ impl dyn InterfaceConfigData {
         let _ = any;
         KnownConfig::Other(std::marker::PhantomData)
     }
+
+    /// Take this config back as `T`, the config type of the factory that
+    /// parsed it, as that factory starts its interface.
+    #[cfg(any(
+        feature = "iface-auto",
+        feature = "iface-i2p",
+        feature = "iface-kiss",
+        feature = "iface-local",
+        feature = "iface-pipe",
+        feature = "iface-rnode",
+        feature = "iface-serial",
+        feature = "iface-tcp",
+        feature = "iface-udp"
+    ))]
+    pub(crate) fn into_own<T: Any>(self: Box<Self>) -> io::Result<T> {
+        self.into_any()
+            .downcast::<T>()
+            .map(|config| *config)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))
+    }
 }
 
 /// ConfigObj section passed to factories that need nested `[[[sections]]]`.

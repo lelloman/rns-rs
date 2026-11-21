@@ -837,10 +837,7 @@ impl InterfaceFactory for I2pFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> io::Result<StartResult> {
-        let mut cfg = *config
-            .into_any()
-            .downcast::<I2pConfig>()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
+        let mut cfg = config.into_own::<I2pConfig>()?;
         cfg.ingress_control = ctx.ingress_control;
         cfg.underlay_mark = ctx.underlay_mark;
         let parent_id = cfg.interface_id;

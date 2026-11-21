@@ -431,10 +431,7 @@ impl InterfaceFactory for PipeFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> io::Result<StartResult> {
-        let pipe_config = *config
-            .into_any()
-            .downcast::<PipeConfig>()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
+        let pipe_config = config.into_own::<PipeConfig>()?;
 
         let id = pipe_config.interface_id;
         let info = InterfaceInfo {

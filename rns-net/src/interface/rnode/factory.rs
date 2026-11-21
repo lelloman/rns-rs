@@ -143,9 +143,7 @@ impl InterfaceFactory for RNodeFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> std::io::Result<StartResult> {
-        let mut rnode_config = *config.into_any().downcast::<RNodeConfig>().map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
-        })?;
+        let mut rnode_config = config.into_own::<RNodeConfig>()?;
         rnode_config.underlay_mark = ctx.underlay_mark;
 
         let sub_bitrates: Vec<u64> = rnode_config

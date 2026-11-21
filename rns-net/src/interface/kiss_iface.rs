@@ -596,12 +596,7 @@ impl InterfaceFactory for KissFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> std::io::Result<StartResult> {
-        let kiss_config = *config
-            .into_any()
-            .downcast::<KissIfaceConfig>()
-            .map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
-            })?;
+        let kiss_config = config.into_own::<KissIfaceConfig>()?;
 
         let id = kiss_config.interface_id;
         let name = kiss_config.name.clone();
