@@ -48,6 +48,36 @@ pub(crate) fn parse_interface_hop_limiter(value: Option<&str>) -> Option<u8> {
     (limit > 0).then_some(limit)
 }
 
+/// Whether an interface configured with `discoverable` is made
+/// discoverable. As upstream's `Reticulum._synthesize_interface` (since
+/// 606a1691), an instance with transport disabled makes none discoverable
+/// unless `static_transport_identity` is set, since its transport identity
+/// is otherwise ephemeral; the interface is set up without discovery and
+/// upstream's warning tells the operator how to allow it.
+pub(super) fn discoverable_on_instance(
+    interface_name: &str,
+    discoverable: bool,
+    transport_enabled: bool,
+    static_transport_identity: bool,
+) -> bool {
+    if discoverable && !static_transport_identity && !transport_enabled {
+        log::warn!("");
+        log::warn!(
+            "The interface \"{interface_name}\" was configured discoverable, but this instance has transport disabled"
+        );
+        log::warn!(
+            "and is using an ephemeral transport identity. To make interfaces discoverable for non-transport"
+        );
+        log::warn!(
+            "instances, you will have explicitly enable using static transport identity in the config file,"
+        );
+        log::warn!("by adding \"static_transport_identity = yes\" to the [reticulum] section.");
+        log::warn!("");
+        return false;
+    }
+    discoverable
+}
+
 /// Apply Reticulum's mode normalization for discoverable interfaces.
 pub(super) fn normalize_discovery_mode(
     interface_type: &str,
@@ -552,10 +582,13 @@ pub(crate) fn reserved_interface_ids(data: &dyn crate::interface::InterfaceConfi
     1
 }
 
+/// The config of the interface `iface` of `parsed`, the config file reread
+/// to attach it. As upstream, whether it may be discoverable follows the
+/// running instance (`management`), not the file reread.
 pub(crate) fn parse_managed_interface(
     iface: &config::ParsedInterface,
     parsed: &config::RnsConfig,
-    storage_dir: &Path,
+    management: &InterfaceManagementConfig,
     id: rns_core::transport::types::InterfaceId,
     registry: &crate::interface::registry::InterfaceRegistry,
 ) -> io::Result<InterfaceConfig> {
@@ -565,11 +598,16 @@ pub(crate) fn parse_managed_interface(
             format!("unsupported interface type '{}'", iface.interface_type),
         )
     })?;
-    let discoverable = iface
-        .params
-        .get("discoverable")
-        .and_then(|value| config::parse_bool_pub(value))
-        .unwrap_or(false);
+    let discoverable = discoverable_on_instance(
+        &iface.name,
+        iface
+            .params
+            .get("discoverable")
+            .and_then(|value| config::parse_bool_pub(value))
+            .unwrap_or(false),
+        management.transport_enabled,
+        management.static_transport_identity,
+    );
     let ignore_warnings = iface
         .params
         .get("ignore_config_warnings")
@@ -582,7 +620,9 @@ pub(crate) fn parse_managed_interface(
         ignore_warnings,
     );
     let ifac = extract_ifac_config(&iface.params, factory.default_ifac_size());
-    let discovery = extract_discovery_config(&iface.name, &iface.interface_type, &iface.params);
+    let discovery = discoverable
+        .then(|| extract_discovery_config(&iface.name, &iface.interface_type, &iface.params))
+        .flatten();
     let ingress_control = parse_ingress_control_config(&iface.interface_type, &iface.params)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     let stamp_costs = parse_interface_stamp_costs(&iface.params)
@@ -610,7 +650,7 @@ pub(crate) fn parse_managed_interface(
     let mut params = iface.params.clone();
     params
         .entry("storage_dir".to_string())
-        .or_insert_with(|| storage_dir.to_string_lossy().to_string());
+        .or_insert_with(|| management.storage_dir.to_string_lossy().to_string());
     if let Some(device) = &parsed.reticulum.device {
         params
             .entry("device".to_string())

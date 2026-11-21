@@ -96,6 +96,7 @@ pub(super) fn interface_management_config(
             initial_ids,
             queue_capacity: rns_config.reticulum.interface_writer_queue_capacity,
             transport_enabled: rns_config.reticulum.enable_transport,
+            static_transport_identity: rns_config.reticulum.static_transport_identity,
             underlay_mark: underlay_mark.or(rns_config.reticulum.underlay_mark),
         })
     }

@@ -41,6 +41,13 @@ These per-interface keys work as upstream's:
     discovery_encrypt = no
 ```
 
+- On an instance with transport disabled, an interface is made discoverable
+  only with `static_transport_identity = yes` in `[reticulum]`, so that the
+  transport identity it announces is not an ephemeral one. Without it, the
+  interface comes up without discovery (and keeps its configured mode) and
+  the node logs upstream's warning, which says to add that option. Upstream
+  requires it since `606a1691`; before, a discoverable interface turned the
+  static transport identity on by itself.
 - `publish_ifac = yes` puts the interface's IFAC network name and passphrase
   in its discovery announces, so nodes that discover it can join. Without it
   they are left out, as upstream does; before this, rns-rs announced them

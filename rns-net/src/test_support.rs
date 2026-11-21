@@ -32,3 +32,40 @@ pub(crate) fn port() -> u16 {
 pub(crate) fn instance_name(prefix: &str) -> String {
     format!("{prefix}-{}", std::process::id())
 }
+
+/// A line the tests' logger captured: the thread that logged it, its level
+/// and its message.
+#[cfg(any(feature = "iface-tcp", feature = "iface-rnode"))]
+pub(crate) type LoggedLine = (std::thread::ThreadId, log::Level, String);
+
+/// Every line logged while this crate's unit tests run. The first call
+/// installs the capturing logger, the only one these tests install.
+#[cfg(any(feature = "iface-tcp", feature = "iface-rnode"))]
+pub(crate) fn logged() -> &'static std::sync::Mutex<Vec<LoggedLine>> {
+    use std::sync::{Mutex, Once, OnceLock};
+    struct Capture;
+    static LINES: OnceLock<Mutex<Vec<LoggedLine>>> = OnceLock::new();
+    impl log::Log for Capture {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record<'_>) {
+            if let Some(lines) = LINES.get() {
+                lines.lock().unwrap().push((
+                    std::thread::current().id(),
+                    record.level(),
+                    record.args().to_string(),
+                ));
+            }
+        }
+        fn flush(&self) {}
+    }
+    static CAPTURE: Capture = Capture;
+    let lines = LINES.get_or_init(|| Mutex::new(Vec::new()));
+    static INSTALLED: Once = Once::new();
+    INSTALLED.call_once(|| {
+        log::set_logger(&CAPTURE).expect("no other logger in these tests");
+        log::set_max_level(log::LevelFilter::Trace);
+    });
+    lines
+}

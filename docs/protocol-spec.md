@@ -915,7 +915,9 @@ For an interactive view of these rules, see the
 When transport is disabled, nodes use an ephemeral transport-facing identity by
 default while retaining the configured/stored identity for local state. The
 `static_transport_identity` option restores the older behavior of reusing the
-stored identity as the transport-facing identity for every instance start.
+stored identity as the transport-facing identity for every instance start. A
+node with transport disabled makes interfaces discoverable only with that
+option set; a discoverable interface does not set it.
 
 The `local_hops_delta` option masks locally originated zero-hop SINGLE and LINK
 traffic by writing a random hop byte in the range 2 through 7 on external interfaces.

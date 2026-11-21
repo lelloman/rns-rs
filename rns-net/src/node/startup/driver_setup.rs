@@ -70,21 +70,11 @@ impl NodeIdentities {
             .rpc_key
             .or(queue_config.rpc_auth_key)
             .unwrap_or_else(|| crate::rpc::derive_auth_key(&private_key));
-        let has_discoverable_interface = config
-            .interfaces
-            .iter()
-            .any(|iface| iface.discovery.is_some());
-        let static_transport_identity = effective_static_transport_identity(
-            config.static_transport_identity,
-            config.transport_enabled,
-            has_discoverable_interface,
-        );
-        if static_transport_identity && !config.static_transport_identity {
-            log::warn!(
-                "Discoverable interface was configured, enabling static transport identity on non-transport instance"
-            );
-        }
-        let transport_identity = if config.transport_enabled || static_transport_identity {
+        // Since upstream 606a1691 a discoverable interface no longer
+        // implies `static_transport_identity`: such an interface is not made
+        // discoverable on an instance without either, see
+        // `discoverable_on_instance`.
+        let transport_identity = if config.transport_enabled || config.static_transport_identity {
             Identity::from_private_key(&private_key)
         } else {
             let identity = create_identity();
