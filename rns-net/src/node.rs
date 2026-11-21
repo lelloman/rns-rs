@@ -42,27 +42,12 @@ use crate::driver::{AnnounceRateDefaults, Callbacks, Driver};
 use crate::driver::{BackbonePeerPoolCandidateConfig, BackbonePeerPoolSettings};
 use crate::event::{self, Event, EventSender};
 use crate::ifac;
-#[cfg(feature = "iface-auto")]
-use crate::interface::auto::auto_runtime_handle_from_config;
 #[cfg(feature = "iface-backbone")]
 use crate::interface::backbone::{
-    client_config_from_mode, client_priority_from_mode, client_runtime_handle_from_mode,
-    peer_state_handle_from_mode, runtime_handle_from_mode, BackboneMode,
+    client_config_from_mode, client_priority_from_mode, BackboneMode,
 };
-#[cfg(feature = "iface-i2p")]
-use crate::interface::i2p::i2p_runtime_handle_from_config;
 #[cfg(feature = "iface-local")]
 use crate::interface::local::LocalServerConfig;
-#[cfg(feature = "iface-pipe")]
-use crate::interface::pipe::pipe_runtime_handle_from_config;
-#[cfg(feature = "iface-rnode")]
-use crate::interface::rnode::rnode_runtime_handle_from_config;
-#[cfg(feature = "iface-tcp")]
-use crate::interface::tcp::tcp_client_runtime_handle_from_config;
-#[cfg(feature = "iface-tcp")]
-use crate::interface::tcp_server::runtime_handle_from_config as tcp_runtime_handle_from_config;
-#[cfg(feature = "iface-udp")]
-use crate::interface::udp::udp_runtime_handle_from_config;
 use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::storage;
 use crate::time;

@@ -33,7 +33,9 @@ pub(super) fn log_restored_tables(
 }
 
 /// Register the runtime settings of a configured interface with the driver,
-/// for the interface types that have them.
+/// for the interface types that have them. At startup only an interface
+/// whose type is its config's own type registers them, so a
+/// `BackboneClientInterface` or an `RNodeMultiInterface` does not.
 #[cfg(runtime_config_ifaces)]
 pub(super) fn register_interface_runtime(
     driver: &mut Driver,
@@ -43,84 +45,31 @@ pub(super) fn register_interface_runtime(
 ) {
     use crate::interface::{InterfaceKind, KnownConfig};
 
-    match (kind, iface_config.config_data.known()) {
+    let own_type = match (kind, iface_config.config_data.known()) {
         #[cfg(feature = "iface-backbone")]
-        (Some(InterfaceKind::Backbone), KnownConfig::Backbone(mode)) => {
-            if let Some(handle) = runtime_handle_from_mode(mode) {
-                driver.runtime_config.register_backbone_runtime(handle);
-            }
-            if let Some(handle) = peer_state_handle_from_mode(mode, iface_config) {
-                driver.runtime_config.register_backbone_peer_state(handle);
-            }
-            if let Some(handle) = client_runtime_handle_from_mode(mode) {
-                driver
-                    .runtime_config
-                    .register_backbone_client_runtime(handle);
-            }
-            if let Some(handle) = backbone_discovery_runtime_from_interface(
-                &iface_config.name,
-                mode,
-                iface_config.discovery.as_ref(),
-                transport_enabled,
-                iface_config.ifac.as_ref(),
-            ) {
-                driver
-                    .runtime_config
-                    .register_backbone_discovery_runtime(handle);
-            }
-        }
+        (Some(InterfaceKind::Backbone), KnownConfig::Backbone(_)) => true,
         #[cfg(feature = "iface-tcp")]
-        (Some(InterfaceKind::TcpClient), KnownConfig::TcpClient(tcp_config)) => {
-            driver
-                .runtime_config
-                .register_tcp_client_runtime(tcp_client_runtime_handle_from_config(tcp_config));
-        }
+        (Some(InterfaceKind::TcpClient), KnownConfig::TcpClient(_)) => true,
         #[cfg(feature = "iface-tcp")]
-        (Some(InterfaceKind::TcpServer), KnownConfig::TcpServer(tcp_config)) => {
-            driver
-                .runtime_config
-                .register_tcp_server_runtime(tcp_runtime_handle_from_config(tcp_config));
-            driver.runtime_config.register_tcp_server_discovery_runtime(
-                tcp_server_discovery_runtime_from_interface(
-                    &iface_config.name,
-                    tcp_config,
-                    iface_config.discovery.as_ref(),
-                    transport_enabled,
-                    iface_config.ifac.as_ref(),
-                ),
-            );
-        }
+        (Some(InterfaceKind::TcpServer), KnownConfig::TcpServer(_)) => true,
         #[cfg(feature = "iface-udp")]
-        (Some(InterfaceKind::Udp), KnownConfig::Udp(udp_config)) => {
-            driver
-                .runtime_config
-                .register_udp_runtime(udp_runtime_handle_from_config(udp_config));
-        }
+        (Some(InterfaceKind::Udp), KnownConfig::Udp(_)) => true,
         #[cfg(feature = "iface-auto")]
-        (Some(InterfaceKind::Auto), KnownConfig::Auto(auto_config)) => {
-            driver
-                .runtime_config
-                .register_auto_runtime(auto_runtime_handle_from_config(auto_config));
-        }
+        (Some(InterfaceKind::Auto), KnownConfig::Auto(_)) => true,
         #[cfg(feature = "iface-i2p")]
-        (Some(InterfaceKind::I2p), KnownConfig::I2p(i2p_config)) => {
-            driver
-                .runtime_config
-                .register_i2p_runtime(i2p_runtime_handle_from_config(i2p_config));
-        }
+        (Some(InterfaceKind::I2p), KnownConfig::I2p(_)) => true,
         #[cfg(feature = "iface-pipe")]
-        (Some(InterfaceKind::Pipe), KnownConfig::Pipe(pipe_config)) => {
-            driver
-                .runtime_config
-                .register_pipe_runtime(pipe_runtime_handle_from_config(pipe_config));
-        }
+        (Some(InterfaceKind::Pipe), KnownConfig::Pipe(_)) => true,
         #[cfg(feature = "iface-rnode")]
-        (Some(InterfaceKind::RNode), KnownConfig::RNode(rnode_config)) => {
-            driver
-                .runtime_config
-                .register_rnode_runtime(rnode_runtime_handle_from_config(rnode_config));
-        }
-        _ => {}
+        (Some(InterfaceKind::RNode), KnownConfig::RNode(_)) => true,
+        _ => false,
+    };
+    if own_type {
+        driver.runtime_config.register_configured(
+            iface_config,
+            #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
+            transport_enabled,
+        );
     }
 }
 
