@@ -103,9 +103,18 @@ impl Channel {
     }
 
     /// Check if channel is ready to send (has window capacity).
+    ///
+    /// Besides the window, which counts unacknowledged messages, the next
+    /// sequence must be within the receiver's window of the oldest
+    /// unacknowledged one. The receiver drops a message further ahead than
+    /// that, but the link still proves its packet: sent past a lost message,
+    /// it would count as delivered and never be resent.
     pub fn is_ready_to_send(&self) -> bool {
         let outstanding = self.tx_ring.iter().filter(|e| !e.delivered).count() as u16;
         outstanding < self.window
+            && self.tx_ring.front().is_none_or(|oldest| {
+                self.next_sequence.wrapping_sub(oldest.sequence) <= CHANNEL_WINDOW_MAX_FAST
+            })
     }
 
     /// Send a message. Returns `SendOnLink` action with packed envelope.
@@ -896,6 +905,50 @@ mod tests {
             }
             _ => panic!("Expected MessageReceived"),
         }
+    }
+
+    #[test]
+    fn test_lost_message_is_not_overtaken_beyond_the_receive_window() {
+        // The link proves every channel packet the receiver gets, also one
+        // its channel drops as too far ahead. The first send of message 0
+        // is lost, and the sender keeps the window full until it is resent.
+        let mut sender = Channel::new(0.05);
+        let mut receiver = Channel::new(0.05);
+        let total = 300u16;
+        let mut sent = 0u16;
+        let mut received = Vec::new();
+        let mut now = 0.0;
+        while received.len() < total as usize && now < 100.0 {
+            now += 0.01;
+            let mut wire = sender.tick(now);
+            while sent < total {
+                match sender.send(0x01, &sent.to_be_bytes(), now, 500) {
+                    Ok(actions) => wire.extend(actions),
+                    Err(_) => break,
+                }
+                sent += 1;
+            }
+            for action in wire {
+                let ChannelAction::SendOnLink {
+                    raw,
+                    sequence,
+                    resend,
+                } = action
+                else {
+                    panic!("Expected SendOnLink");
+                };
+                if sequence == 0 && !resend {
+                    continue;
+                }
+                for action in receiver.receive(&raw, now) {
+                    if let ChannelAction::MessageReceived { payload, .. } = action {
+                        received.push(u16::from_be_bytes([payload[0], payload[1]]));
+                    }
+                }
+                sender.packet_delivered(sequence);
+            }
+        }
+        assert_eq!(received, (0..total).collect::<Vec<_>>());
     }
 
     #[test]
