@@ -12,6 +12,11 @@ impl RnsNode {
         resp_rx.recv().map_err(|_| SendError)
     }
 
+    /// Ask the driver `query` and wait for its answer.
+    pub(crate) fn ask<Q: Query>(&self, query: Q) -> Result<Q::Response, SendError> {
+        ask_driver(&self.tx, query)
+    }
+
     /// Attach a named interface from the current on-disk configuration.
     pub fn attach_interface(&self, name: &str) -> Result<Option<bool>, SendError> {
         self.manage_interface(crate::event::InterfaceManagementOperation::Attach, name)
@@ -32,13 +37,10 @@ impl RnsNode {
         operation: crate::event::InterfaceManagementOperation,
         name: &str,
     ) -> Result<Option<bool>, SendError> {
-        match self.query(QueryRequest::ManageInterface {
+        self.ask(query::ManageInterface {
             operation,
             name: name.to_string(),
-        })? {
-            QueryResponse::InterfaceManagement(result) => Ok(result),
-            _ => Err(SendError),
-        }
+        })
     }
 
     /// The state of Direct Link: node-wide counters and each link with
@@ -46,18 +48,12 @@ impl RnsNode {
     /// one), the direct path's candidate, MTU and RTT, and its upgrade
     /// attempts and failures.
     pub fn direct_links(&self) -> Result<crate::event::DirectLinkStatus, SendError> {
-        match self.query(QueryRequest::DirectLinks)? {
-            QueryResponse::DirectLinks(status) => Ok(status),
-            _ => Err(SendError),
-        }
+        self.ask(query::DirectLinks)
     }
 
     /// Snapshot active Link metadata, including the negotiated direct-data MDU.
     pub fn links(&self) -> Result<Vec<crate::event::LinkInfoEntry>, SendError> {
-        match self.query(QueryRequest::Links)? {
-            QueryResponse::Links(links) => Ok(links),
-            _ => Err(SendError),
-        }
+        self.ask(query::Links)
     }
 
     /// Snapshot one Link, including local send backlog, or None if unknown.
@@ -121,10 +117,7 @@ impl RnsNode {
     /// Returns `Ok(None)` when no registered interface advertises a usable
     /// bitrate.
     pub fn lowest_interface_bitrate(&self) -> Result<Option<u64>, SendError> {
-        match self.query(QueryRequest::LowestInterfaceBitrate)? {
-            QueryResponse::LowestInterfaceBitrate(bitrate) => Ok(bitrate),
-            _ => Err(SendError),
-        }
+        self.ask(query::LowestInterfaceBitrate)
     }
 
     /// Return the adaptive medium path timeout advertised by the transport engine.
@@ -133,10 +126,7 @@ impl RnsNode {
     /// positive-bitrate interface plus the per-hop allowance, or is zero when
     /// no usable bitrate is known.
     pub fn medium_path_timeout(&self) -> Result<f64, SendError> {
-        match self.query(QueryRequest::MediumPathTimeout)? {
-            QueryResponse::MediumPathTimeout(timeout) => Ok(timeout),
-            _ => Err(SendError),
-        }
+        self.ask(query::MediumPathTimeout)
     }
 
     /// Enter drain mode and stop admitting new work.
@@ -151,10 +141,7 @@ impl RnsNode {
 
     /// Query current drain/lifecycle status.
     pub fn drain_status(&self) -> Result<crate::event::DrainStatus, SendError> {
-        match self.query(QueryRequest::DrainStatus)? {
-            QueryResponse::DrainStatus(status) => Ok(status),
-            _ => Err(SendError),
-        }
+        self.ask(query::DrainStatus)
     }
 
     pub(super) fn reject_new_work_if_draining(&self) -> Result<(), SendError> {

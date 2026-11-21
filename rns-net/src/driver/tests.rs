@@ -6459,16 +6459,12 @@ fn query_path_table() {
     let known = driver.known.entries.get_mut(&dest_hash).unwrap();
     known.stamp_value = rns_core::stamp::StampValue::from_fp(25 * 256 + 64);
     known.lr_cost = Some(rns_core::stamp::StampCost::from_fp(4915));
-    let QueryResponse::PathTable(entries) = driver.handle_path_table_query(None) else {
-        panic!("unexpected response");
-    };
+    let entries = driver.path_table(None);
     assert_eq!(entries[0].stamp_value.map(|v| v.as_f64()), Some(25.25));
     assert_eq!(entries[0].lr_cost.map(|c| c.fp()), Some(4915));
 
     driver.known.entries.remove(&dest_hash);
-    let QueryResponse::PathTable(entries) = driver.handle_path_table_query(None) else {
-        panic!("unexpected response");
-    };
+    let entries = driver.path_table(None);
     assert_eq!(entries[0].stamp_value, None);
     assert_eq!(entries[0].lr_cost, None);
 
@@ -6476,14 +6472,10 @@ fn query_path_table() {
     // unknown until the path is marked.
     assert_eq!(entries[0].state, rns_core::constants::STATE_UNKNOWN);
     driver.engine.mark_path_unresponsive(&dest_hash, None);
-    let QueryResponse::PathTable(entries) = driver.handle_path_table_query(None) else {
-        panic!("unexpected response");
-    };
+    let entries = driver.path_table(None);
     assert_eq!(entries[0].state, rns_core::constants::STATE_UNRESPONSIVE);
     driver.engine.mark_path_responsive(&dest_hash, 0.0);
-    let QueryResponse::PathTable(entries) = driver.handle_path_table_query(None) else {
-        panic!("unexpected response");
-    };
+    let entries = driver.path_table(None);
     assert_eq!(entries[0].state, rns_core::constants::STATE_RESPONSIVE);
 }
 

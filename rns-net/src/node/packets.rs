@@ -262,12 +262,9 @@ impl RnsNode {
 
     /// Check if a path exists to a destination (synchronous query).
     pub fn has_path(&self, dest_hash: &rns_core::types::DestHash) -> Result<bool, SendError> {
-        match self.query(QueryRequest::HasPath {
+        self.ask(query::HasPath {
             dest_hash: dest_hash.0,
-        })? {
-            QueryResponse::HasPath(v) => Ok(v),
-            _ => Ok(false),
-        }
+        })
     }
 
     /// The RSSI a received packet arrived with, when its interface reports
@@ -292,21 +289,15 @@ impl RnsNode {
         &self,
         packet_hash: &[u8; 32],
     ) -> Result<Option<crate::event::PacketSignal>, SendError> {
-        match self.query(QueryRequest::PacketSignal {
+        self.ask(query::PacketSignal {
             packet_hash: *packet_hash,
-        })? {
-            QueryResponse::PacketSignal(signal) => Ok(signal),
-            _ => Ok(None),
-        }
+        })
     }
 
     /// Get hop count to a destination (synchronous query).
     pub fn hops_to(&self, dest_hash: &rns_core::types::DestHash) -> Result<Option<u8>, SendError> {
-        match self.query(QueryRequest::HopsTo {
+        self.ask(query::HopsTo {
             dest_hash: dest_hash.0,
-        })? {
-            QueryResponse::HopsTo(v) => Ok(v),
-            _ => Ok(None),
-        }
+        })
     }
 }

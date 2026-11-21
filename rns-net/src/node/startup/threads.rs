@@ -113,14 +113,17 @@ pub(super) fn spawn_transport_state_persister(
                     let (response_tx, response_rx) = std::sync::mpsc::channel();
                     if persist_tx
                         .send(Event::query(
-                            QueryRequest::TransportStateSnapshot,
+                            query::TransportStateSnapshot.into(),
                             response_tx,
                         ))
                         .is_err()
                     {
                         break;
                     }
-                    let Ok(QueryResponse::TransportStateSnapshot(snapshot)) = response_rx.recv()
+                    let Some(snapshot) = response_rx
+                        .recv()
+                        .ok()
+                        .and_then(query::TransportStateSnapshot::response)
                     else {
                         continue;
                     };

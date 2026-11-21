@@ -57,10 +57,6 @@ pub(super) fn add_traffic(total: &mut TrafficDetail, detail: TrafficDetail) {
 }
 
 impl Driver {
-    pub(crate) fn handle_interface_stats_query(&self) -> QueryResponse {
-        QueryResponse::InterfaceStats(self.interface_stats())
-    }
-
     /// Upstream's `Transport.prioritize_interfaces`, run with its interface
     /// jobs every 5 seconds: a stable sort of the current order by bitrate,
     /// highest first.

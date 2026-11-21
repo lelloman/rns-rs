@@ -414,14 +414,8 @@ impl Driver {
         } else if path_hash == management::path_path_hash() {
             management::handle_path_request(
                 &data,
-                || match self.handle_path_table_query(None) {
-                    QueryResponse::PathTable(entries) => crate::rpc::path_table_msgpack(&entries),
-                    _ => Vec::new(),
-                },
-                || match self.handle_query(QueryRequest::RateTable) {
-                    QueryResponse::RateTable(entries) => crate::rpc::rate_table_msgpack(&entries),
-                    _ => Vec::new(),
-                },
+                || crate::rpc::path_table_msgpack(&self.path_table(None)),
+                || crate::rpc::rate_table_msgpack(&self.rate_table()),
             )
         } else if path_hash == management::list_path_hash() {
             management::handle_blackhole_list_request(&self.engine)
