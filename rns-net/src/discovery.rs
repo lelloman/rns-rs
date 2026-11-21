@@ -26,6 +26,9 @@ use rns_crypto::sha256::sha256;
 
 use crate::time;
 
+mod error;
+pub use error::{AnnounceError, LocationError};
+
 // ============================================================================
 // Storage
 // ============================================================================
@@ -587,7 +590,7 @@ pub struct AnnounceResult {
     pub interface_name: String,
     /// The complete app_data (`[flags][packed][stamp]`), or the reason this
     /// announce was suppressed while preparing its metadata.
-    pub app_data: Result<Vec<u8>, String>,
+    pub app_data: Result<Vec<u8>, AnnounceError>,
 }
 
 /// Manages periodic announcing of discoverable interfaces.
@@ -617,156 +620,6 @@ pub struct InterfaceAnnouncer {
 
 const LOCATION_CMD_TIMEOUT: Duration = Duration::from_secs(5);
 const LOCATION_CMD_MAX_STDOUT: usize = 4096;
-
-/// Why an interface's `location_cmd` gave no coordinates.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum LocationError {
-    /// The command printed more than the output limit.
-    OutputTooLong,
-    /// The command's output is not UTF-8.
-    NotUtf8(std::str::Utf8Error),
-    /// The command printed more than one line.
-    MultipleLines,
-    /// The command printed this many comma-separated components, not 3.
-    ComponentCount(usize),
-    /// A component is not a number.
-    InvalidNumber {
-        /// Which coordinate: `latitude`, `longitude` or `height`.
-        label: &'static str,
-        /// The component as printed.
-        value: String,
-        /// Why it did not parse.
-        source: std::num::ParseFloatError,
-    },
-    /// A component is infinite or NaN.
-    NotFinite {
-        /// Which coordinate.
-        label: &'static str,
-    },
-    /// A coordinate is outside its valid range.
-    OutOfRange {
-        /// Which coordinate.
-        label: &'static str,
-        /// Its value.
-        value: f64,
-        /// The valid range, as shown to the operator.
-        range: &'static str,
-    },
-    /// The command starts with `~` (given as `prefix`) and `HOME` is unset.
-    HomeNotSet {
-        /// `~` or `~/`.
-        prefix: &'static str,
-    },
-    /// The command's file could not be inspected.
-    Inspect {
-        /// The command's path.
-        path: PathBuf,
-        /// Why it could not.
-        source: io::Error,
-    },
-    /// The command's path is not a regular file.
-    NotRegularFile(PathBuf),
-    /// The command's file is not executable.
-    NotExecutable(PathBuf),
-    /// The command could not be started.
-    Spawn {
-        /// The command's path.
-        path: PathBuf,
-        /// Why it could not.
-        source: io::Error,
-    },
-    /// The command's stdout pipe was not available.
-    StdoutUnavailable,
-    /// The command ran past its time limit and was killed.
-    TimedOut,
-    /// Waiting for the command failed.
-    Wait(io::Error),
-    /// The thread reading the command's stdout panicked.
-    ReaderPanicked,
-    /// Reading the command's stdout failed.
-    ReadStdout(io::Error),
-    /// The command exited unsuccessfully.
-    Failed(std::process::ExitStatus),
-    /// `location_cmd` is not supported on this platform.
-    Unsupported,
-}
-
-impl std::fmt::Display for LocationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LocationError::OutputTooLong => write!(
-                f,
-                "location command output exceeds {} bytes",
-                LOCATION_CMD_MAX_STDOUT
-            ),
-            LocationError::NotUtf8(error) => {
-                write!(f, "location command output is not UTF-8: {error}")
-            }
-            LocationError::MultipleLines => {
-                f.write_str("location command must output exactly one line")
-            }
-            LocationError::ComponentCount(count) => write!(
-                f,
-                "location command returned {count} components; expected 3"
-            ),
-            LocationError::InvalidNumber {
-                label,
-                value,
-                source,
-            } => write!(f, "invalid {label} '{value}': {source}"),
-            LocationError::NotFinite { label } => write!(f, "{label} must be finite"),
-            LocationError::OutOfRange {
-                label,
-                value,
-                range,
-            } => write!(f, "{label} {value} is outside {range}"),
-            LocationError::HomeNotSet { prefix } => write!(
-                f,
-                "cannot expand location command '{prefix}' because HOME is not set"
-            ),
-            LocationError::Inspect { path, source } => {
-                write!(f, "cannot inspect '{}': {source}", path.display())
-            }
-            LocationError::NotRegularFile(path) => {
-                write!(f, "'{}' is not a regular file", path.display())
-            }
-            LocationError::NotExecutable(path) => {
-                write!(f, "'{}' is not executable", path.display())
-            }
-            LocationError::Spawn { path, source } => {
-                write!(f, "cannot execute '{}': {source}", path.display())
-            }
-            LocationError::StdoutUnavailable => {
-                f.write_str("location command stdout was unavailable")
-            }
-            LocationError::TimedOut => f.write_str("location command timed out after 5 seconds"),
-            LocationError::Wait(error) => {
-                write!(f, "failed waiting for location command: {error}")
-            }
-            LocationError::ReaderPanicked => f.write_str("location command stdout reader panicked"),
-            LocationError::ReadStdout(error) => {
-                write!(f, "failed reading location command stdout: {error}")
-            }
-            LocationError::Failed(status) => write!(f, "location command exited with {status}"),
-            LocationError::Unsupported => f.write_str("location_cmd is not supported on Windows"),
-        }
-    }
-}
-
-impl std::error::Error for LocationError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            LocationError::NotUtf8(error) => Some(error),
-            LocationError::InvalidNumber { source, .. } => Some(source),
-            LocationError::Inspect { source, .. }
-            | LocationError::Spawn { source, .. }
-            | LocationError::Wait(source)
-            | LocationError::ReadStdout(source) => Some(source),
-            _ => None,
-        }
-    }
-}
 
 fn parse_location_output(output: &[u8]) -> Result<(f64, f64, f64), LocationError> {
     if output.len() > LOCATION_CMD_MAX_STDOUT {
@@ -910,11 +763,11 @@ fn prepare_interface_info(
     transport_id: &[u8; 16],
     iface: &DiscoverableInterface,
     requirements: &rns_core::transport::types::StampRequirements,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, AnnounceError> {
     let mut resolved = iface.clone();
     if let Some(command) = &resolved.config.location_cmd {
         let (latitude, longitude, height) =
-            resolve_location(command).map_err(|error| error.to_string())?;
+            resolve_location(command).map_err(AnnounceError::Location)?;
         resolved.config.latitude = Some(latitude);
         resolved.config.longitude = Some(longitude);
         resolved.config.height = Some(height);
@@ -1016,9 +869,7 @@ impl InterfaceAnnouncer {
                     let Some(public_key) = network_public_key else {
                         let _ = tx.send(AnnounceResult {
                             interface_name,
-                            app_data: Err(format!(
-                                "Discovery encryption requested for {name}, but no network identity configured"
-                            )),
+                            app_data: Err(AnnounceError::NoNetworkIdentity { name }),
                         });
                         return;
                     };
@@ -1029,7 +880,7 @@ impl InterfaceAnnouncer {
                         Err(error) => {
                             let _ = tx.send(AnnounceResult {
                                 interface_name,
-                                app_data: Err(format!("Discovery encryption failed: {error:?}")),
+                                app_data: Err(AnnounceError::Encryption(error)),
                             });
                             return;
                         }
@@ -1106,16 +957,15 @@ impl InterfaceAnnouncer {
         transport_id: &[u8; 16],
         iface: &DiscoverableInterface,
         requirements: &rns_core::transport::types::StampRequirements,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u8>, AnnounceError> {
         if matches!(
             iface.config.interface_type.as_str(),
             "BackboneInterface" | "TCPServerInterface"
         ) && iface.config.reachable_on.is_none()
         {
-            return Err(format!(
-                "{} discovery requires a reachable_on address",
-                iface.config.interface_type
-            ));
+            return Err(AnnounceError::NoReachableAddress {
+                interface_type: iface.config.interface_type.clone(),
+            });
         }
         let mut entries: Vec<(msgpack::Value, msgpack::Value)> = vec![
             (
@@ -1369,7 +1219,10 @@ mod tests {
         // Without a network identity the announce is not sent.
         let mut announcer = InterfaceAnnouncer::new([0x77; 16], vec![iface.clone()]);
         announcer.maybe_start(10.0);
-        let error = wait_for_announce(&mut announcer).app_data.unwrap_err();
+        let error = wait_for_announce(&mut announcer)
+            .app_data
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("no network identity"), "{error}");
 
         let mut announcer = InterfaceAnnouncer::new([0x77; 16], vec![iface]);
@@ -1662,12 +1515,15 @@ mod tests {
             .stamp_tx
             .send(AnnounceResult {
                 interface_name: "failed".into(),
-                app_data: Err("metadata failed".into()),
+                app_data: Err(AnnounceError::Location(LocationError::TimedOut)),
             })
             .unwrap();
 
         let result = announcer.poll_ready().unwrap();
-        assert_eq!(result.app_data.unwrap_err(), "metadata failed");
+        assert!(matches!(
+            result.app_data,
+            Err(AnnounceError::Location(LocationError::TimedOut))
+        ));
         assert!(!announcer.stamp_pending);
     }
 
@@ -1762,7 +1618,8 @@ mod tests {
             iface.config.reachable_on = None;
 
             assert_eq!(
-                InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface, &Default::default()),
+                InterfaceAnnouncer::pack_interface_info(&[0x24; 16], &iface, &Default::default())
+                    .map_err(|error| error.to_string()),
                 Err(format!(
                     "{interface_type} discovery requires a reachable_on address"
                 ))
