@@ -59,4 +59,18 @@ impl InterfaceDiscovery {
             cleanup_interval_ticks,
         }
     }
+
+    /// Whether interfaces discovered from the network identity
+    /// `network_id` are accepted: any are without
+    /// `interface_discovery_sources`.
+    pub(crate) fn source_allowed(&self, network_id: &[u8; 16]) -> bool {
+        self.sources.is_empty() || self.sources.contains(network_id)
+    }
+
+    /// Whether an interface was auto-connected from a discovery.
+    pub(crate) fn is_autoconnected(&self, id: InterfaceId) -> bool {
+        self.upstream_autoconnect
+            .as_ref()
+            .is_some_and(|autoconnect| autoconnect.is_member(id))
+    }
 }

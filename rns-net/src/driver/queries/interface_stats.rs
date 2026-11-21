@@ -261,7 +261,7 @@ impl Driver {
             modulation: entry.stats.modulation.clone(),
             radio: entry.stats.radio,
             bitrate: entry.info.bitrate,
-            bitrate_is_float: self.is_autoconnected(interface_id),
+            bitrate_is_float: self.discovery.is_autoconnected(interface_id),
             mtu: Some(entry.info.mtu),
             ifac_size: entry.ifac.as_ref().map(|s| s.size),
             started: entry.stats.started,

@@ -141,7 +141,7 @@ impl Driver {
         {
             return self.detach_interface(&name);
         }
-        if self.is_autoconnected(id) {
+        if self.discovery.is_autoconnected(id) {
             self.teardown_autoconnected(id);
             return Some(true);
         }
