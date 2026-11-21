@@ -35,7 +35,7 @@ pub(super) fn resolve_api_hook_file(
     let hooks_dir = read_control_plane_config(config).resolved_hooks_dir();
     crate::hook_path::resolve_native_hook_path(&hooks_dir, path)
         .map(|p| p.to_string_lossy().into_owned())
-        .map_err(|e| HttpResponse::bad_request(&e))
+        .map_err(|e| HttpResponse::bad_request(&e.to_string()))
 }
 
 /// Load a hook from a filesystem path.
