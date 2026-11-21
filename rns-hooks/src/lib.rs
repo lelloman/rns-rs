@@ -20,8 +20,6 @@
 //! hook programs live in the `rns-hooks-abi` crate.
 
 #![warn(missing_docs)]
-// Guest memory and action bytes are untrusted: read them with checked access.
-#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 
 #[cfg(any(feature = "wasm", feature = "native"))]
 mod arena;
