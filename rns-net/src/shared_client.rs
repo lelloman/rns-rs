@@ -25,7 +25,7 @@ use rns_crypto::identity::Identity;
 
 use crate::driver::{Callbacks, Driver};
 use crate::event;
-use crate::event::{Event, QueryRequest, QueryResponse};
+use crate::event::{query, Event, Query};
 use crate::interface::local::LocalClientConfig;
 use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::node::RnsNode;
@@ -208,7 +208,7 @@ impl RnsNode {
     /// instance client, with the shared instance, whose answer is returned.
     /// Returns `false` for a blocked type.
     pub fn wants_destination_type(&self, full_name: &str) -> bool {
-        let local = self.destination_type_query(QueryRequest::WantsDestinationType {
+        let local = self.destination_type_query(query::WantsDestinationType {
             full_name: full_name.into(),
             requester: self.destination_types.requester.to_vec(),
         });
@@ -230,7 +230,7 @@ impl RnsNode {
     /// `Reticulum.unwants_destination_type`: withdraw a need registered with
     /// [`Self::wants_destination_type`]. Returns whether it was registered.
     pub fn unwants_destination_type(&self, full_name: &str) -> bool {
-        let local = self.destination_type_query(QueryRequest::UnwantsDestinationType {
+        let local = self.destination_type_query(query::UnwantsDestinationType {
             full_name: full_name.into(),
             requester: self.destination_types.requester.to_vec(),
         });
@@ -246,7 +246,7 @@ impl RnsNode {
     /// `Reticulum.unwants_all_destination_types`: withdraw every destination
     /// type this application registered.
     pub fn unwants_all_destination_types(&self) -> bool {
-        let local = self.destination_type_query(QueryRequest::UnwantsAllDestinationTypes {
+        let local = self.destination_type_query(query::UnwantsAllDestinationTypes {
             requester: self.destination_types.requester.to_vec(),
         });
         if !self.destination_types.shared_client || self.destination_types.shared_rpc.is_none() {
@@ -267,14 +267,13 @@ impl RnsNode {
         if !self.destination_types.shared_client {
             return false;
         }
-        self.destination_type_query(QueryRequest::SetRequiredDestinationsOnly { enabled })
+        self.destination_type_query(query::SetRequiredDestinationsOnly { enabled })
     }
 
-    fn destination_type_query(&self, request: QueryRequest) -> bool {
-        matches!(
-            self.query(request),
-            Ok(QueryResponse::DestinationTypeRegistration(true))
-        )
+    /// The driver's answer to a destination type query; `false` when the
+    /// driver is gone.
+    fn destination_type_query(&self, query: impl Query<Response = bool>) -> bool {
+        self.ask(query).unwrap_or(false)
     }
 
     /// Connect to an existing shared instance as a client.
@@ -1005,6 +1004,7 @@ fn load_or_create_transport_identity(storage_dir: &std::path::Path) -> io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::{QueryRequest, QueryResponse};
     use crate::rpc::{RpcAddr, RpcClient};
     use rns_core::packet::RawPacket;
     use rns_core::types::{DestHash, IdentityHash};

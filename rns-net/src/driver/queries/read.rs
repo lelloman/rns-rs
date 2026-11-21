@@ -16,9 +16,9 @@ impl Driver {
         links
     }
 
-    pub(crate) fn handle_path_table_query(&self, max_hops: Option<u8>) -> QueryResponse {
-        let entries: Vec<PathTableEntry> = self
-            .engine
+    /// The path table, without the paths longer than `max_hops`.
+    pub(crate) fn path_table(&self, max_hops: Option<u8>) -> Vec<PathTableEntry> {
+        self.engine
             .path_table_entries()
             .filter(|(_, entry)| max_hops.is_none_or(|max| entry.hops <= max))
             .map(|(hash, entry)| {
@@ -53,15 +53,29 @@ impl Driver {
                     state: self.engine.path_state(hash),
                 }
             })
-            .collect();
-        QueryResponse::PathTable(entries)
+            .collect()
+    }
+
+    /// The announce rate table.
+    pub(crate) fn rate_table(&self) -> Vec<RateTableEntry> {
+        self.engine
+            .rate_limiter()
+            .entries()
+            .map(|(hash, entry)| RateTableEntry {
+                hash: *hash,
+                last: entry.last,
+                rate_violations: entry.rate_violations,
+                blocked_until: entry.blocked_until,
+                timestamps: entry.timestamps.clone(),
+            })
+            .collect()
     }
 
     /// Handle a query request and produce a response.
     pub(crate) fn handle_query(&self, request: QueryRequest) -> QueryResponse {
         match request {
             QueryRequest::ManageInterface { .. } => QueryResponse::InterfaceManagement(Some(false)),
-            QueryRequest::InterfaceStats => self.handle_interface_stats_query(),
+            QueryRequest::InterfaceStats => QueryResponse::InterfaceStats(self.interface_stats()),
             QueryRequest::BackboneInterfaces => {
                 QueryResponse::BackboneInterfaces(self.runtime_config.list_backbone_interfaces())
             }
@@ -69,22 +83,10 @@ impl Driver {
                 QueryResponse::ProviderBridgeStats(self.hooks.provider_bridge_stats())
             }
             QueryRequest::DrainStatus => QueryResponse::DrainStatus(self.drain_status()),
-            QueryRequest::PathTable { max_hops } => self.handle_path_table_query(max_hops),
-            QueryRequest::RateTable => {
-                let entries: Vec<RateTableEntry> = self
-                    .engine
-                    .rate_limiter()
-                    .entries()
-                    .map(|(hash, entry)| RateTableEntry {
-                        hash: *hash,
-                        last: entry.last,
-                        rate_violations: entry.rate_violations,
-                        blocked_until: entry.blocked_until,
-                        timestamps: entry.timestamps.clone(),
-                    })
-                    .collect();
-                QueryResponse::RateTable(entries)
+            QueryRequest::PathTable { max_hops } => {
+                QueryResponse::PathTable(self.path_table(max_hops))
             }
+            QueryRequest::RateTable => QueryResponse::RateTable(self.rate_table()),
             QueryRequest::LowestInterfaceBitrate => {
                 QueryResponse::LowestInterfaceBitrate(self.engine.lowest_interface_bitrate())
             }

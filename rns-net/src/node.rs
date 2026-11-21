@@ -58,7 +58,17 @@ static NEXT_RESOURCE_TRANSFER_ID: AtomicU64 = AtomicU64::new(1);
 const DEFAULT_KNOWN_DESTINATIONS_TTL: Duration = Duration::from_secs(48 * 60 * 60);
 const DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES: usize = 8192;
 
-use crate::event::{QueryRequest, QueryResponse};
+use crate::event::{query, Query, QueryRequest, QueryResponse};
+
+/// Ask the driver `query` through `tx` and wait for its answer. Fails when
+/// the driver has shut down, or answers with another query's response.
+pub(crate) fn ask_driver<Q: Query>(tx: &EventSender, query: Q) -> Result<Q::Response, SendError> {
+    let (response_tx, response_rx) = std::sync::mpsc::channel();
+    tx.send(Event::query(query.into(), response_tx))
+        .map_err(|_| SendError)?;
+    let response = response_rx.recv().map_err(|_| SendError)?;
+    Q::response(response).ok_or(SendError)
+}
 
 /// Error returned when the driver thread has shut down.
 #[derive(Debug)]

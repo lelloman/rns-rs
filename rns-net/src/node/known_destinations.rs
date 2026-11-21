@@ -27,60 +27,36 @@ pub(super) fn stored_known_destination(
 }
 
 /// The known destinations changed since the last recorded flush.
-#[allow(clippy::type_complexity)]
 pub(super) fn known_destination_changes(
     tx: &EventSender,
-) -> Option<(
-    Vec<(crate::event::KnownDestinationEntry, u64)>,
-    Vec<[u8; 16]>,
-)> {
-    let (response_tx, response_rx) = std::sync::mpsc::channel();
-    tx.send(Event::query(
-        QueryRequest::KnownDestinationChanges,
-        response_tx,
-    ))
-    .ok()?;
-    match response_rx.recv().ok()? {
-        QueryResponse::KnownDestinationChanges { changed, removed } => Some((changed, removed)),
-        _ => None,
-    }
+) -> Option<<query::KnownDestinationChanges as Query>::Response> {
+    ask_driver(tx, query::KnownDestinationChanges).ok()
 }
 
 /// Tell the driver what the flush stored (see
-/// `QueryRequest::RecordKnownDestinationFlush`).
+/// [`query::RecordKnownDestinationFlush`]).
 pub(super) fn record_known_destination_flush(
     tx: &EventSender,
     stored: Vec<([u8; 16], u64)>,
     removed: Vec<[u8; 16]>,
     seed: bool,
 ) -> Option<()> {
-    let (response_tx, response_rx) = std::sync::mpsc::channel();
-    tx.send(Event::query(
-        QueryRequest::RecordKnownDestinationFlush {
+    ask_driver(
+        tx,
+        query::RecordKnownDestinationFlush {
             stored,
             removed,
             seed,
         },
-        response_tx,
-    ))
-    .ok()?;
-    matches!(
-        response_rx.recv().ok()?,
-        QueryResponse::KnownDestinationFlushRecorded
     )
-    .then_some(())
+    .ok()
 }
 
 /// The driver's known destinations, as storage keeps them.
 pub(super) fn known_destinations_snapshot(
     tx: &EventSender,
 ) -> Option<std::collections::HashMap<[u8; 16], storage::KnownDestination>> {
-    let (response_tx, response_rx) = std::sync::mpsc::channel();
-    tx.send(Event::query(QueryRequest::KnownDestinations, response_tx))
-        .ok()?;
-    let QueryResponse::KnownDestinations(entries) = response_rx.recv().ok()? else {
-        return None;
-    };
+    let entries = ask_driver(tx, query::KnownDestinations).ok()?;
     Some(
         entries
             .iter()
@@ -95,12 +71,9 @@ impl RnsNode {
         &self,
         dest_hash: &rns_core::types::DestHash,
     ) -> Result<Option<crate::destination::AnnouncedIdentity>, SendError> {
-        match self.query(QueryRequest::RecallIdentity {
+        self.ask(query::RecallIdentity {
             dest_hash: dest_hash.0,
-        })? {
-            QueryResponse::RecallIdentity(v) => Ok(v),
-            _ => Ok(None),
-        }
+        })
     }
 
     /// Stamp value and announced link request cost recorded from a known
@@ -109,22 +82,16 @@ impl RnsNode {
         &self,
         dest_hash: &rns_core::types::DestHash,
     ) -> Result<Option<crate::event::DestinationStampInfo>, SendError> {
-        match self.query(QueryRequest::RecallDestinationStamp {
+        self.ask(query::RecallDestinationStamp {
             dest_hash: dest_hash.0,
-        })? {
-            QueryResponse::RecallDestinationStamp(v) => Ok(v),
-            _ => Ok(None),
-        }
+        })
     }
 
     /// List known destinations and their lifecycle state.
     pub fn known_destinations(
         &self,
     ) -> Result<Vec<crate::event::KnownDestinationEntry>, SendError> {
-        match self.query(QueryRequest::KnownDestinations)? {
-            QueryResponse::KnownDestinations(entries) => Ok(entries),
-            _ => Ok(Vec::new()),
-        }
+        self.ask(query::KnownDestinations)
     }
 
     /// Mark a known destination as retained.
@@ -132,12 +99,9 @@ impl RnsNode {
         &self,
         dest_hash: &rns_core::types::DestHash,
     ) -> Result<bool, SendError> {
-        match self.query(QueryRequest::RetainKnownDestination {
+        self.ask(query::RetainKnownDestination {
             dest_hash: dest_hash.0,
-        })? {
-            QueryResponse::RetainKnownDestination(ok) => Ok(ok),
-            _ => Ok(false),
-        }
+        })
     }
 
     /// Mark all known destinations announced by an identity as retained.
@@ -166,12 +130,9 @@ impl RnsNode {
                 .and_then(|r| r.as_bool())
                 .unwrap_or(false));
         }
-        match self.query(QueryRequest::RetainIdentity {
+        self.ask(query::RetainIdentity {
             identity_hash: identity_hash.0,
-        })? {
-            QueryResponse::RetainIdentity(ok) => Ok(ok),
-            _ => Ok(false),
-        }
+        })
     }
 
     /// Put known destinations loaded from storage back into the driver.
@@ -180,7 +141,7 @@ impl RnsNode {
         known_destinations: impl IntoIterator<Item = ([u8; 16], storage::KnownDestination)>,
     ) {
         for (dest_hash, known) in known_destinations {
-            let _ = self.query(QueryRequest::RestoreKnownDestination(
+            let _ = self.ask(query::RestoreKnownDestination(
                 crate::event::KnownDestinationEntry {
                     packet_hash: known.packet_hash,
                     dest_hash,
@@ -211,12 +172,9 @@ impl RnsNode {
         &self,
         dest_hash: &rns_core::types::DestHash,
     ) -> Result<bool, SendError> {
-        match self.query(QueryRequest::UnretainKnownDestination {
+        self.ask(query::UnretainKnownDestination {
             dest_hash: dest_hash.0,
-        })? {
-            QueryResponse::UnretainKnownDestination(ok) => Ok(ok),
-            _ => Ok(false),
-        }
+        })
     }
 
     /// Mark a known destination as used.
@@ -224,12 +182,9 @@ impl RnsNode {
         &self,
         dest_hash: &rns_core::types::DestHash,
     ) -> Result<bool, SendError> {
-        match self.query(QueryRequest::MarkKnownDestinationUsed {
+        self.ask(query::MarkKnownDestinationUsed {
             dest_hash: dest_hash.0,
-        })? {
-            QueryResponse::MarkKnownDestinationUsed(ok) => Ok(ok),
-            _ => Ok(false),
-        }
+        })
     }
 
     /// Save the known destinations at shutdown.
@@ -334,9 +289,7 @@ impl RnsNode {
         let Some(storage_dir) = self.transport_state_dir.as_ref() else {
             return;
         };
-        let Ok(QueryResponse::TransportStateSnapshot(snapshot)) =
-            self.query(QueryRequest::TransportStateSnapshot)
-        else {
+        let Ok(snapshot) = self.ask(query::TransportStateSnapshot) else {
             return;
         };
         if let Err(err) = storage::save_transport_state(&snapshot, storage_dir, true) {
