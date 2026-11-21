@@ -305,7 +305,9 @@ pub(super) fn parse_rpc_key(value: &str) -> Option<[u8; 32]> {
     match rns_core::encoding::hex_decode(value) {
         Some(bytes) if !bytes.is_empty() && bytes.len() <= 32 => {
             let mut key = [0u8; 32];
-            key[..bytes.len()].copy_from_slice(&bytes);
+            for (slot, byte) in key.iter_mut().zip(&bytes) {
+                *slot = *byte;
+            }
             Some(key)
         }
         Some(bytes) if bytes.len() > 32 => {
