@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use rns_core::transport::types::InterfaceId;
 
-pub use crate::common::event::direct_link_reason_name;
+pub use crate::common::event::{direct_link_reason_name, query};
 pub use crate::common::event::{
     BackboneInterfaceEntry, BackbonePeerHookEvent, BackbonePeerPoolMemberStatus,
     BackbonePeerPoolStatus, BackbonePeerStateEntry, BlackholeInfo, DestinationStampInfo,
@@ -19,10 +19,10 @@ pub use crate::common::event::{
     InterfaceStatsResponse, InterfaceTelemetry, KnownDestinationEntry, LifecycleState,
     LinkDatagramError, LinkDistributionEntry, LinkInfoEntry, LinkTraffic, LocalDestinationEntry,
     NextHopResponse, PacketSignal, PathTableEntry, ProbeRateLimit, ProbeServerReport,
-    ProviderBridgeConsumerStats, ProviderBridgeStats, QueryRequest, QueryResponse, RateTableEntry,
-    ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
-    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SendProbeError,
-    SingleInterfaceStat, TrafficDetail, MAX_PROBE_PAYLOAD_SIZE,
+    ProviderBridgeConsumerStats, ProviderBridgeStats, Query, QueryRequest, QueryResponse,
+    RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
+    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
+    SendProbeError, SingleInterfaceStat, TrafficDetail, MAX_PROBE_PAYLOAD_SIZE,
 };
 
 /// Concrete Event type using boxed sync Writer.
