@@ -120,6 +120,17 @@ impl RnsNode {
             Some(ref path) => Some(load_network_identity(path)?),
             None => None,
         };
+        // Upstream 1.6.1 (25cce0a8) runs `Transport.ensure_identity()`
+        // before it brings up the interfaces: the transport identity, the
+        // ephemeral one used instead on an instance without transport, and
+        // the application identity.
+        let identity = load_transport_identity(&paths)?;
+        let rpc_auth_key = shared_rpc_auth_key(&rns_config, &identity, private);
+        let identities = NodeIdentities::new(
+            Some(identity),
+            rns_config.reticulum.enable_transport,
+            rns_config.reticulum.static_transport_identity,
+        )?;
         // Upstream brings up the configured interfaces while it reads the
         // config; here they start with the node, from the configs built
         // below.
@@ -136,8 +147,6 @@ impl RnsNode {
             &known_destinations_path,
             rns_config.reticulum.ratchet_expiry,
         );
-        let identity = load_transport_identity(&paths)?;
-        let rpc_auth_key = shared_rpc_auth_key(&rns_config, &identity, private);
 
         let (interface_configs, initial_ids) =
             build_interface_configs(&rns_config, &paths, private)?;
@@ -167,7 +176,6 @@ impl RnsNode {
                 config_dir,
                 private,
                 underlay_mark,
-                identity,
                 network_identity,
                 cache_dir: paths.cache,
                 ratchet_store: Arc::clone(&ratchet_store),
@@ -189,6 +197,7 @@ impl RnsNode {
             callbacks,
             queue_config,
             interface_management,
+            Some(identities),
         )?;
         node.adopt_known_destinations(
             &known_destinations_path,
@@ -213,14 +222,18 @@ impl RnsNode {
                 ..NodeQueueConfig::default()
             },
             None,
+            None,
         )
     }
 
-    pub(super) fn start_with_queue_config(
+    /// Start the node from `config`, with `identities` when startup created
+    /// them already, else with ones made from `config`.
+    fn start_with_queue_config(
         mut config: NodeConfig,
         callbacks: Box<dyn Callbacks>,
         queue_config: NodeQueueConfig,
         interface_management: Option<InterfaceManagementConfig>,
+        identities: Option<NodeIdentities>,
     ) -> io::Result<Self> {
         let storage_dir = node_storage_dir(config.cache_dir.as_deref());
         create_state_dirs(config.cache_dir.as_deref(), storage_dir.as_deref())?;
@@ -229,12 +242,20 @@ impl RnsNode {
         } else {
             None
         };
+        let identities = match identities {
+            Some(identities) => identities,
+            None => NodeIdentities::new(
+                config.identity.take(),
+                config.transport_enabled,
+                config.static_transport_identity,
+            )?,
+        };
+        let rpc_auth_key = identities.rpc_auth_key(&config, &queue_config)?;
         let NodeIdentities {
             identity,
             transport_identity,
             application_identity,
-            rpc_auth_key,
-        } = NodeIdentities::new(config.identity.take(), &config, &queue_config)?;
+        } = identities;
         let transport_config = transport_config(&config, &queue_config, transport_identity.hash());
 
         let (tx, rx) = event::try_channel_with_queue_capacities(

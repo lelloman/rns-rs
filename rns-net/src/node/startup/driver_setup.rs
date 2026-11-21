@@ -35,7 +35,7 @@ pub(super) fn create_state_dirs(
     Ok(())
 }
 
-/// The identities a node starts with, and the key of its RPC server.
+/// The identities a node starts with.
 pub(super) struct NodeIdentities {
     /// The node identity.
     pub(super) identity: Identity,
@@ -45,36 +45,26 @@ pub(super) struct NodeIdentities {
     /// `Transport.application_identity`, which names this application's
     /// registrations with a shared instance.
     pub(super) application_identity: Identity,
-    pub(super) rpc_auth_key: [u8; 32],
 }
 
 impl NodeIdentities {
     /// Take the node identity, or a new one, and derive the transport
-    /// identity, the application identity and the RPC key from the config.
+    /// identity and the application identity from it, logging them as
+    /// upstream's `Transport.ensure_identity` does.
     pub(super) fn new(
         identity: Option<Identity>,
-        config: &NodeConfig,
-        queue_config: &NodeQueueConfig,
+        transport_enabled: bool,
+        static_transport_identity: bool,
     ) -> io::Result<Self> {
         let identity = identity.unwrap_or_else(|| Identity::new(&mut OsRng));
         // The node signs and decrypts with its identity: one without a
         // private key cannot run a node.
-        let private_key = identity.get_private_key().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "the node identity has no private key",
-            )
-        })?;
-        let rpc_auth_key = config
-            .shared_instance
-            .rpc_key
-            .or(queue_config.rpc_auth_key)
-            .unwrap_or_else(|| crate::rpc::derive_auth_key(&private_key));
+        let private_key = identity.get_private_key().ok_or_else(no_node_private_key)?;
         // Since upstream 606a1691 a discoverable interface no longer
         // implies `static_transport_identity`: such an interface is not made
         // discoverable on an instance without either, see
         // `discoverable_on_instance`.
-        let transport_identity = if config.transport_enabled || config.static_transport_identity {
+        let transport_identity = if transport_enabled || static_transport_identity {
             Identity::from_private_key(&private_key)
         } else {
             let identity = create_identity();
@@ -89,9 +79,32 @@ impl NodeIdentities {
             identity,
             transport_identity,
             application_identity,
-            rpc_auth_key,
         })
     }
+
+    /// The key of the node's RPC server: the configured one, else the one
+    /// derived from the node identity.
+    pub(super) fn rpc_auth_key(
+        &self,
+        config: &NodeConfig,
+        queue_config: &NodeQueueConfig,
+    ) -> io::Result<[u8; 32]> {
+        match config.shared_instance.rpc_key.or(queue_config.rpc_auth_key) {
+            Some(key) => Ok(key),
+            None => self
+                .identity
+                .get_private_key()
+                .map(|key| crate::rpc::derive_auth_key(&key))
+                .ok_or_else(no_node_private_key),
+        }
+    }
+}
+
+fn no_node_private_key() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "the node identity has no private key",
+    )
 }
 
 /// The transport engine's settings, with a random local hop delta when the
