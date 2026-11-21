@@ -221,10 +221,11 @@ impl Driver {
                     .collect();
                 QueryResponse::Blackholed(entries)
             }
-            QueryRequest::BlackholeIdentity { .. } | QueryRequest::UnblackholeIdentity { .. } => {
+            QueryRequest::BlackholeIdentity { .. } => {
                 // Mutating queries handled by handle_query_mut
                 QueryResponse::BlackholeResult(false)
             }
+            QueryRequest::UnblackholeIdentity { .. } => QueryResponse::UnblackholeResult(false),
             QueryRequest::InjectPath { .. } => {
                 // Mutating queries handled by handle_query_mut
                 QueryResponse::InjectPath(false)
