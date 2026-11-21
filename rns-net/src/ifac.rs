@@ -134,9 +134,9 @@ pub fn derive_ifac(
 /// 3. New packet: `[flags|0x80, hops] + ifac + raw[2:]`
 /// 4. XOR mask: flags byte masked BUT 0x80 forced on; hops masked; IFAC NOT masked; payload masked
 pub fn mask_outbound(raw: &[u8], state: &IfacState) -> Vec<u8> {
-    if raw.len() < 2 {
+    let [flags, hops, rest @ ..] = raw else {
         return raw.to_vec();
-    }
+    };
 
     // Calculate IFAC: last `size` bytes of the Ed25519 signature
     let sig = match state.identity.sign(raw) {
@@ -146,7 +146,10 @@ pub fn mask_outbound(raw: &[u8], state: &IfacState) -> Vec<u8> {
             return raw.to_vec();
         }
     };
-    let ifac = &sig[64 - state.size..];
+    let Some(ifac) = signature_tail(&sig, state.size) else {
+        log::warn!("IFAC size {} exceeds the signature", state.size);
+        return raw.to_vec();
+    };
 
     // Generate mask
     let mask = match hkdf::hkdf(raw.len() + state.size, ifac, Some(&state.key), None) {
@@ -159,21 +162,22 @@ pub fn mask_outbound(raw: &[u8], state: &IfacState) -> Vec<u8> {
 
     // Build new_raw: [flags|0x80, hops] + ifac + raw[2..]
     let mut new_raw = Vec::with_capacity(raw.len() + state.size);
-    new_raw.push(raw[0] | 0x80); // Set IFAC flag
-    new_raw.push(raw[1]);
+    new_raw.push(flags | 0x80); // Set IFAC flag
+    new_raw.push(*hops);
     new_raw.extend_from_slice(ifac);
-    new_raw.extend_from_slice(&raw[2..]);
+    new_raw.extend_from_slice(rest);
 
     // Apply the mask in one linear pass while copying the clear IFAC tag and
     // forcing the flag bit. Native code therefore needs no legacy slow path.
     let mut masked = Vec::with_capacity(new_raw.len());
-    for (i, &byte) in new_raw.iter().enumerate() {
+    // The mask is longer than new_raw.
+    for (i, (&byte, &mask)) in new_raw.iter().zip(mask.iter()).enumerate() {
         if i == 0 {
             // Mask first header byte, but force IFAC flag on
-            masked.push((byte ^ mask[i]) | 0x80);
+            masked.push((byte ^ mask) | 0x80);
         } else if i == 1 || i > state.size + 1 {
             // Mask second header byte and payload (after IFAC)
-            masked.push(byte ^ mask[i]);
+            masked.push(byte ^ mask);
         } else {
             // Don't mask the IFAC itself (positions 2..2+ifac_size)
             masked.push(byte);
@@ -181,6 +185,11 @@ pub fn mask_outbound(raw: &[u8], state: &IfacState) -> Vec<u8> {
     }
 
     masked
+}
+
+/// The last `size` bytes of an IFAC signature, or `None` if it is shorter.
+fn signature_tail(signature: &[u8], size: usize) -> Option<&[u8]> {
+    signature.get(signature.len().checked_sub(size)?..)
 }
 
 /// Unmask an inbound packet. Returns original packet without IFAC, or None if invalid.
@@ -193,12 +202,12 @@ pub fn unmask_inbound(raw: &[u8], state: &IfacState) -> Option<Vec<u8>> {
     }
 
     // Check IFAC flag
-    if raw[0] & 0x80 != 0x80 {
+    if raw.first()? & 0x80 != 0x80 {
         return None;
     }
 
     // Extract IFAC
-    let ifac = &raw[2..2 + state.size];
+    let ifac = raw.get(2..2 + state.size)?;
 
     // Generate mask
     let mask = match hkdf::hkdf(raw.len(), ifac, Some(&state.key), None) {
@@ -213,10 +222,11 @@ pub fn unmask_inbound(raw: &[u8], state: &IfacState) -> Option<Vec<u8>> {
     // clear IFAC tag is copied unchanged. This is the native equivalent of
     // Reticulum's optimized integer-XOR handler without a legacy slow path.
     let mut unmasked = Vec::with_capacity(raw.len());
-    for (i, &byte) in raw.iter().enumerate() {
+    // The mask is as long as raw.
+    for (i, (&byte, &mask)) in raw.iter().zip(mask.iter()).enumerate() {
         if i <= 1 || i > state.size + 1 {
             // Unmask header bytes and payload
-            unmasked.push(byte ^ mask[i]);
+            unmasked.push(byte ^ mask);
         } else {
             // Don't unmask IFAC itself
             unmasked.push(byte);
@@ -224,14 +234,16 @@ pub fn unmask_inbound(raw: &[u8], state: &IfacState) -> Option<Vec<u8>> {
     }
 
     // Clear IFAC flag
-    let flags_cleared = unmasked[0] & 0x7F;
-    let hops = unmasked[1];
+    let [flags, hops, rest @ ..] = unmasked.as_slice() else {
+        return None;
+    };
+    let flags_cleared = flags & 0x7F;
 
     // Re-assemble packet without IFAC
     let mut new_raw = Vec::with_capacity(raw.len() - state.size);
     new_raw.push(flags_cleared);
-    new_raw.push(hops);
-    new_raw.extend_from_slice(&unmasked[2 + state.size..]);
+    new_raw.push(*hops);
+    new_raw.extend_from_slice(rest.get(state.size..)?);
 
     // Verify IFAC: expected = identity.sign(new_raw)[-ifac_size:]
     let expected_sig = match state.identity.sign(&new_raw) {
@@ -241,7 +253,7 @@ pub fn unmask_inbound(raw: &[u8], state: &IfacState) -> Option<Vec<u8>> {
             return None;
         }
     };
-    let expected_ifac = &expected_sig[64 - state.size..];
+    let expected_ifac = signature_tail(&expected_sig, state.size)?;
 
     if ifac == expected_ifac {
         Some(new_raw)
