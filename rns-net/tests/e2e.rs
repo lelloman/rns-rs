@@ -1034,6 +1034,92 @@ fn config_file_ingress_control_knobs_apply_to_runtime_interface() {
     node.shutdown();
 }
 
+#[test]
+fn config_file_tcp_client_reconnect_settings_apply_to_runtime_interface() {
+    let dir = tempfile::tempdir().unwrap();
+    // Nothing listens there: the client starts unconnected and retries.
+    let port = find_free_port();
+    let config = format!(
+        r#"[reticulum]
+  enable_transport = No
+  share_instance = No
+  panic_on_interface_error = Yes
+
+[interfaces]
+  [[Uplink]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = 127.0.0.1
+    target_port = {}
+    max_reconnect_tries = 4
+    connect_timeout = 9
+"#,
+        port
+    );
+    fs::write(dir.path().join("config"), config).unwrap();
+
+    let node = RnsNode::from_config(Some(dir.path()), Box::new(TransportCallbacks))
+        .expect("node should start from config with TCP client reconnect settings");
+
+    // The running interface's settings, and the defaults a reset restores.
+    for (key, expected) in [
+        (
+            "tcp_client.Uplink.max_reconnect_tries",
+            RuntimeConfigValue::Int(4),
+        ),
+        (
+            // Read but not applied, as upstream.
+            "tcp_client.Uplink.connect_timeout_secs",
+            RuntimeConfigValue::Float(5.0),
+        ),
+        (
+            "tcp_client.Uplink.reconnect_wait_secs",
+            RuntimeConfigValue::Float(5.0),
+        ),
+    ] {
+        let entry = match node.query(query::GetRuntimeConfig { key: key.into() }) {
+            Ok(Some(entry)) => entry,
+            other => panic!("expected runtime config entry for {}, got {:?}", key, other),
+        };
+        assert_eq!(entry.value, expected, "{key}");
+        assert_eq!(entry.default, expected, "{key}");
+    }
+
+    node.shutdown();
+}
+
+#[test]
+fn config_file_rejects_an_invalid_tcp_client_max_reconnect_tries() {
+    // Upstream fails to create the interface, as its value is no integer.
+    // The node skips it, as any interface whose config does not parse.
+    let dir = tempfile::tempdir().unwrap();
+    let config = r#"[reticulum]
+  enable_transport = No
+  share_instance = No
+  panic_on_interface_error = Yes
+
+[interfaces]
+  [[Uplink]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = 127.0.0.1
+    target_port = 4242
+    max_reconnect_tries = many
+"#;
+    fs::write(dir.path().join("config"), config).unwrap();
+
+    let node = RnsNode::from_config(Some(dir.path()), Box::new(TransportCallbacks))
+        .expect("node should start without the invalid interface");
+    assert!(matches!(
+        node.query(query::GetRuntimeConfig {
+            key: "tcp_client.Uplink.max_reconnect_tries".into(),
+        }),
+        Ok(None)
+    ));
+
+    node.shutdown();
+}
+
 /// Set up a two-peer topology: Transport(TCP server) + Alice(TCP client) + Bob(TCP client).
 /// Returns (transport, alice_node, alice_rx, bob_node, bob_rx, alice_identity, bob_identity, alice_dest, bob_dest).
 #[allow(clippy::type_complexity)]
