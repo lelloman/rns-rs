@@ -88,7 +88,10 @@ impl ServerSession {
             };
             match self.phase {
                 SessionPhase::Auth => {
-                    let challenged = &self.challenge[CHALLENGE_PREFIX.len()..];
+                    let challenged = self
+                        .challenge
+                        .strip_prefix(CHALLENGE_PREFIX)
+                        .unwrap_or_default();
                     if verify_response(&self.auth_key, challenged, &message) {
                         self.queue(WELCOME);
                         self.phase = SessionPhase::ClientChallenge;
@@ -146,7 +149,7 @@ impl ServerSession {
 
     /// Bytes waiting to be sent.
     pub(crate) fn pending(&self) -> &[u8] {
-        &self.output[self.sent..]
+        self.output.get(self.sent..).unwrap_or_default()
     }
 
     /// `count` bytes of [`Self::pending`] were sent.
@@ -191,10 +194,10 @@ pub(super) fn take_message(input: &mut Vec<u8>, max: usize) -> io::Result<Option
         ));
     }
     let end = header + len as usize;
-    if input.len() < end {
+    let Some(message) = input.get(header..end) else {
         return Ok(None);
-    }
-    let message = input[header..end].to_vec();
+    };
+    let message = message.to_vec();
     input.drain(..end);
     Ok(Some(message))
 }
@@ -288,7 +291,9 @@ pub(super) fn server_auth<S: Read + Write>(stream: &mut S, auth_key: &[u8; 32]) 
 
     // Verify response
     // The message to HMAC is everything after #CHALLENGE# (i.e. {sha256}<random>)
-    let message = &challenge_message[CHALLENGE_PREFIX.len()..];
+    let message = challenge_message
+        .strip_prefix(CHALLENGE_PREFIX)
+        .unwrap_or_default();
 
     if verify_response(auth_key, message, &response) {
         send_bytes(stream, WELCOME)?;
@@ -305,8 +310,7 @@ pub(super) fn server_auth<S: Read + Write>(stream: &mut S, auth_key: &[u8; 32]) 
 /// Verify a client's HMAC response.
 pub(super) fn verify_response(auth_key: &[u8; 32], message: &[u8], response: &[u8]) -> bool {
     // Modern protocol: response = {sha256}<hmac-sha256 digest>
-    if response.starts_with(b"{sha256}") {
-        let digest = &response[8..];
+    if let Some(digest) = response.strip_prefix(b"{sha256}") {
         let expected = hmac_sha256(auth_key, message);
         constant_time_eq(digest, &expected)
     }
@@ -316,8 +320,7 @@ pub(super) fn verify_response(auth_key: &[u8; 32], message: &[u8], response: &[u
         constant_time_eq(response, &expected)
     }
     // Legacy with {md5} prefix
-    else if response.starts_with(b"{md5}") {
-        let digest = &response[5..];
+    else if let Some(digest) = response.strip_prefix(b"{md5}") {
         let expected = hmac_md5(auth_key, message);
         constant_time_eq(digest, &expected)
     } else {
@@ -392,14 +395,12 @@ pub(super) fn answer_challenge<S: Read + Write>(
     // Read challenge
     let challenge = recv_bytes(stream)?;
 
-    if !challenge.starts_with(CHALLENGE_PREFIX) {
+    let Some(message) = challenge.strip_prefix(CHALLENGE_PREFIX) else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "expected challenge",
         ));
-    }
-
-    let message = &challenge[CHALLENGE_PREFIX.len()..];
+    };
 
     // Create HMAC response
     let response = create_response(auth_key, message);

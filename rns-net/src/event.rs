@@ -349,6 +349,10 @@ impl QueueShared {
         Ok(())
     }
 
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "the per-class queue arrays are INBOUND_QUEUE_COUNT long, indexed by QueueClass discriminants"
+    )]
     fn data_has_room(&self, state: &QueueState) -> bool {
         let data = QueueClass::Data as usize;
         state.inbound[data].len() < self.inbound_capacities[data]
@@ -518,6 +522,10 @@ impl EventSender {
     /// drop-on-full policy; control events are always queued. Returns
     /// whether inbound data still has room, so a source stops reading once
     /// it does not.
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "the per-class queue arrays are INBOUND_QUEUE_COUNT long, indexed by QueueClass discriminants"
+    )]
     pub(crate) fn push_from_loop(
         &self,
         events: impl IntoIterator<Item = Event>,
@@ -663,6 +671,10 @@ impl EventSender {
     /// permitted) release and reacquire the lock; before waiting, any thread
     /// already waiting is woken so events pushed earlier in a batch are seen.
     #[allow(clippy::result_large_err)]
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "the per-class queue arrays are INBOUND_QUEUE_COUNT long, indexed by QueueClass discriminants"
+    )]
     fn enqueue_locked<'a>(
         &'a self,
         mut state: std::sync::MutexGuard<'a, QueueState>,
@@ -822,6 +834,10 @@ impl EventSender {
         state.dynamic_interface_parents.remove(&interface_id);
     }
 
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "the per-class queue arrays are INBOUND_QUEUE_COUNT long, indexed by QueueClass discriminants"
+    )]
     pub(crate) fn inbound_queue_snapshot(&self) -> InboundQueueSnapshot {
         let state = crate::sync::lock_or_recover(&self.shared.state, "event queue state");
         InboundQueueSnapshot {

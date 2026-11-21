@@ -317,9 +317,7 @@ fn handle_request_path(
 ) -> io::Result<Option<PickleValue>> {
     if let Some(hash_val) = request.get("request_path") {
         if let Some(hash_bytes) = hash_val.as_bytes() {
-            if hash_bytes.len() >= 16 {
-                let mut dest_hash = [0u8; 16];
-                dest_hash.copy_from_slice(&hash_bytes[..16]);
+            if let Some(&dest_hash) = hash_bytes.first_chunk::<16>() {
                 try_send_event(event_tx, crate::event::Event::RequestPath { dest_hash })?;
                 return Ok(Some(PickleValue::Bool(true)));
             }
@@ -336,11 +334,9 @@ fn handle_send_probe(
     let Some(hash_bytes) = request.get("send_probe").and_then(|v| v.as_bytes()) else {
         return Ok(None);
     };
-    if hash_bytes.len() < 16 {
+    let Some(&dest_hash) = hash_bytes.first_chunk::<16>() else {
         return Ok(None);
-    }
-    let mut dest_hash = [0u8; 16];
-    dest_hash.copy_from_slice(&hash_bytes[..16]);
+    };
     // Missing or non-positive sizes fall back to the default;
     // oversize requests are rejected rather than silently
     // replaced, so the caller learns the real limit.
@@ -385,9 +381,7 @@ fn handle_check_proof(
 ) -> io::Result<Option<PickleValue>> {
     if let Some(hash_val) = request.get("check_proof") {
         if let Some(hash_bytes) = hash_val.as_bytes() {
-            if hash_bytes.len() >= 32 {
-                let mut packet_hash = [0u8; 32];
-                packet_hash.copy_from_slice(&hash_bytes[..32]);
+            if let Some(&packet_hash) = hash_bytes.first_chunk::<32>() {
                 let rtt = send_query(event_tx, query::CheckProof { packet_hash })?;
                 return Ok(Some(rtt.map_or(PickleValue::None, PickleValue::Float)));
             }
@@ -465,9 +459,7 @@ fn handle_blackhole(
 ) -> io::Result<Option<PickleValue>> {
     if let Some(hash_val) = request.get("blackhole") {
         if let Some(hash_bytes) = hash_val.as_bytes() {
-            if hash_bytes.len() >= 16 {
-                let mut identity_hash = [0u8; 16];
-                identity_hash.copy_from_slice(&hash_bytes[..16]);
+            if let Some(&identity_hash) = hash_bytes.first_chunk::<16>() {
                 let duration_hours = request.get("duration").and_then(|v| v.as_float());
                 let reason = request
                     .get("reason")
@@ -547,9 +539,7 @@ fn handle_unblackhole(
 ) -> io::Result<Option<PickleValue>> {
     if let Some(hash_val) = request.get("unblackhole") {
         if let Some(hash_bytes) = hash_val.as_bytes() {
-            if hash_bytes.len() >= 16 {
-                let mut identity_hash = [0u8; 16];
-                identity_hash.copy_from_slice(&hash_bytes[..16]);
+            if let Some(&identity_hash) = hash_bytes.first_chunk::<16>() {
                 let lifted = send_query(event_tx, query::UnblackholeIdentity { identity_hash })?;
                 return Ok(Some(PickleValue::Bool(lifted)));
             }
@@ -795,12 +785,10 @@ pub(super) fn extract_dest_hash(request: &PickleValue, key: &str) -> io::Result<
         .get(key)
         .and_then(|v| v.as_bytes())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing destination_hash"))?;
-    if bytes.len() < 16 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "hash too short"));
-    }
-    let mut hash = [0u8; 16];
-    hash.copy_from_slice(&bytes[..16]);
-    Ok(hash)
+    bytes
+        .first_chunk::<16>()
+        .copied()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "hash too short"))
 }
 
 pub(super) fn required_string(request: &PickleValue, key: &str) -> io::Result<String> {

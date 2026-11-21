@@ -210,8 +210,8 @@ pub(super) fn rpc_server_loop(
 
 pub(super) fn reap_finished_rpc_workers(workers: &mut Vec<thread::JoinHandle<()>>) {
     let mut index = 0;
-    while index < workers.len() {
-        if workers[index].is_finished() {
+    while let Some(worker) = workers.get(index) {
+        if worker.is_finished() {
             let worker = workers.swap_remove(index);
             let _ = worker.join();
         } else {

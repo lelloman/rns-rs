@@ -193,7 +193,10 @@ impl RpcService {
 
     fn accept(&mut self, index: usize, driver: &mut dyn RpcDriver) {
         loop {
-            let accepted = self.listeners[index].1.accept();
+            let Some((_, listener)) = self.listeners.get(index) else {
+                return;
+            };
+            let accepted = listener.accept();
             let stream = match accepted {
                 Ok(stream) => stream,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
@@ -234,7 +237,9 @@ impl RpcService {
                 self.close(connection);
             }
         }
-        let (key, listener) = &self.listeners[index];
+        let Some((key, listener)) = self.listeners.get(index) else {
+            return;
+        };
         if let Err(error) = self.poller.modify(listener.fd(), Interest::readable(*key)) {
             log::error!("cannot watch an RPC listener again: {error}");
         }
@@ -278,7 +283,10 @@ impl RpcService {
                 }
             };
             connection.last_progress = Instant::now();
-            match connection.session.receive(&buf[..read]) {
+            match connection
+                .session
+                .receive(buf.get(..read).unwrap_or_default())
+            {
                 Ok(Some(request)) => match crate::rpc::answer_request(&request, driver) {
                     Ok(response) => connection.session.answer(&response),
                     Err(error) => {
