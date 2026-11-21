@@ -326,7 +326,10 @@ impl QueueShared {
     }
 
     /// Like `add_source`, handing the source back if it was not registered.
-    #[allow(clippy::type_complexity)]
+    #[allow(
+        clippy::type_complexity,
+        reason = "the error pairs the failure with the source it hands back"
+    )]
     fn try_add_source(
         &self,
         registry: &mut SourceRegistry,
@@ -652,8 +655,10 @@ impl EventSender {
         Some(QueueClass::Data)
     }
 
-    // Preserve the former SyncSender-compatible error contract at this public boundary.
-    #[allow(clippy::result_large_err)]
+    #[allow(
+        clippy::result_large_err,
+        reason = "the error hands back the unsent Event, as std's channel errors do"
+    )]
     fn enqueue(
         &self,
         event: Event,
@@ -670,7 +675,10 @@ impl EventSender {
     /// Enqueue one event while holding the state lock. Waits for space (when
     /// permitted) release and reacquire the lock; before waiting, any thread
     /// already waiting is woken so events pushed earlier in a batch are seen.
-    #[allow(clippy::result_large_err)]
+    #[allow(
+        clippy::result_large_err,
+        reason = "the error hands back the unsent Event, as std's channel errors do"
+    )]
     #[allow(
         clippy::indexing_slicing,
         reason = "the per-class queue arrays are INBOUND_QUEUE_COUNT long, indexed by QueueClass discriminants"
@@ -753,7 +761,10 @@ impl EventSender {
     /// same per-event semantics as [`EventSender::send`]. Interface readers
     /// use this for all frames decoded from one socket read. Stops at the
     /// first event that cannot be delivered because the receiver is gone.
-    #[allow(clippy::result_large_err)]
+    #[allow(
+        clippy::result_large_err,
+        reason = "the error hands back the unsent Event, as std's channel errors do"
+    )]
     pub fn send_batch(
         &self,
         events: impl IntoIterator<Item = Event>,
@@ -780,7 +791,10 @@ impl EventSender {
     /// Enqueue `event`, waiting while its queue is full; a received
     /// announce or path request finding its queue full is dropped instead.
     /// Fails only when the receiver is gone.
-    #[allow(clippy::result_large_err)]
+    #[allow(
+        clippy::result_large_err,
+        reason = "the error hands back the unsent Event, as std's channel errors do"
+    )]
     pub fn send(&self, event: Event) -> Result<(), std::sync::mpsc::SendError<Event>> {
         self.enqueue(event, true, true)
             .map_err(|error| match error {
@@ -793,7 +807,10 @@ impl EventSender {
 
     /// Enqueue `event` without waiting; fails with `Full` when its queue is
     /// full.
-    #[allow(clippy::result_large_err)]
+    #[allow(
+        clippy::result_large_err,
+        reason = "the error hands back the unsent Event, as std's channel errors do"
+    )]
     pub fn try_send(&self, event: Event) -> Result<(), std::sync::mpsc::TrySendError<Event>> {
         self.enqueue(event, false, false)
     }
@@ -1258,7 +1275,10 @@ pub(crate) fn channel_with_queue_capacities(
     control_capacity: usize,
     inbound_capacities: InboundQueueCapacities,
 ) -> (EventSender, EventReceiver) {
-    #[allow(clippy::expect_used)]
+    #[allow(
+        clippy::expect_used,
+        reason = "documented to panic when the poller cannot be created"
+    )]
     try_channel_with_queue_capacities(control_capacity, inbound_capacities)
         .expect("create the driver event poller")
 }

@@ -270,8 +270,10 @@ impl DeferredSend {
 ///
 /// `W` is the writer type (e.g. `Box<dyn Writer>` for sync,
 /// or a channel sender for async).
-// Boxing the large registration variant would change this published event API.
-#[allow(clippy::large_enum_variant)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "boxing the large registration variant would change this published event API"
+)]
 pub enum Event<W: Send> {
     /// A decoded frame arrived from an interface. Its bytes are shared, so
     /// the packet decoded from them is delivered without copying them.
