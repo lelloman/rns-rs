@@ -205,13 +205,9 @@ impl Driver {
                         snr: rx.snr,
                     };
                     self.upsert_known_destination(destination_hash, announced.clone());
-                    self.record_known_destination_packet_hash(destination_hash, packet_hash);
-                    self.record_known_destination_stamp(
-                        destination_hash,
-                        stamp,
-                        stamp_value,
-                        lr_cost,
-                    );
+                    self.known.record_packet_hash(destination_hash, packet_hash);
+                    self.known
+                        .record_stamp(destination_hash, stamp, stamp_value, lr_cost);
                     // Upstream d5891fde adds the stamp value to the valid
                     // announce line, `n` when there is none.
                     let value_str = if stamp_value == rns_core::stamp::StampValue::ZERO {
@@ -236,7 +232,7 @@ impl Driver {
                     next_hop,
                     interface,
                 } => {
-                    let stamp_value = self.recall_stamp_value(&destination_hash);
+                    let stamp_value = self.known.stamp_value(&destination_hash);
                     let value_str = match stamp_value
                         .filter(|value| *value != rns_core::stamp::StampValue::ZERO)
                     {
@@ -264,7 +260,7 @@ impl Driver {
                         InjectedActions::Collect(&mut hook_injected),
                     );
 
-                    let _ = self.mark_known_destination_used(&destination_hash);
+                    let _ = self.known.mark_used(&destination_hash);
                     self.callbacks
                         .on_path_updated(rns_core::types::DestHash(destination_hash), hops);
                 }

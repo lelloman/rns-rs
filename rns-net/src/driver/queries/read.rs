@@ -260,11 +260,9 @@ impl Driver {
             QueryRequest::RecallDestinationStamp { .. } => {
                 QueryResponse::RecallDestinationStamp(None)
             }
-            QueryRequest::KnownDestinations => {
-                QueryResponse::KnownDestinations(self.known_destination_entries())
-            }
+            QueryRequest::KnownDestinations => QueryResponse::KnownDestinations(self.known.list()),
             QueryRequest::KnownDestinationChanges => {
-                let (changed, removed) = self.known_destination_changes();
+                let (changed, removed) = self.known.changes();
                 QueryResponse::KnownDestinationChanges { changed, removed }
             }
             // Mutating queries are handled by handle_query_mut

@@ -345,7 +345,7 @@ impl Driver {
             return;
         }
         self.proofs.sent_packet_keys.remove(&packet_hash);
-        let _ = self.mark_known_destination_used(&destination);
+        let _ = self.known.mark_used(&destination);
         self.packet_proof_accepted(destination, packet_hash, rtt, proof_packet);
     }
 

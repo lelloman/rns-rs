@@ -57,7 +57,7 @@ impl Driver {
     /// `ALWAYS_STAMP_LRS` is set. An announced cost of 0 is kept, so the
     /// request goes unstamped.
     pub(crate) fn outbound_link_stamp_cost(&self, dest_hash: &[u8; 16]) -> Option<StampCost> {
-        match self.recall_link_cost(dest_hash) {
+        match self.known.link_cost(dest_hash) {
             Some(cost) => Some(cost),
             None if self.stamps.settings.always_stamp_lrs => {
                 Some(self.link_manager.link_request_costs().default_cost())
@@ -144,7 +144,7 @@ impl Driver {
             None
         };
         if recalled_route_hint.is_some() {
-            let _ = self.mark_known_destination_used(&dest_hash);
+            let _ = self.known.mark_used(&dest_hash);
         }
         let attached_interface = next_hop_interface.or(recalled_route_hint.map(|(iface, _)| iface));
         let hops = self

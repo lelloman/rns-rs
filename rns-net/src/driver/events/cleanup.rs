@@ -18,7 +18,7 @@ impl Driver {
                     !self.engine.has_path(destination_hash)
                         && !self.local_destinations.contains_key(destination_hash)
                         && !state.retained
-                        && now - Self::known_destination_relevance_time(state) >= self.known.ttl
+                        && now - state.relevance_time() >= self.known.ttl
                 });
             if remove && self.known.entries.remove(destination_hash).is_some() {
                 cleanup.removed += 1;
@@ -30,7 +30,9 @@ impl Driver {
             return;
         }
 
-        let evicted = self.enforce_known_destination_cap(false);
+        let evicted = self
+            .known
+            .enforce_cap(false, &self.engine, &self.local_destinations);
         let active_destinations = self.engine.active_destination_hashes();
         let rate_limiters =
             self.engine

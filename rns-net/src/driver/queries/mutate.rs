@@ -167,21 +167,17 @@ impl Driver {
                 Some(QueryResponse::RestoreKnownDestination(true))
             }
             QueryRequest::RetainKnownDestination { dest_hash } => Some(
-                QueryResponse::RetainKnownDestination(self.retain_known_destination(&dest_hash)),
+                QueryResponse::RetainKnownDestination(self.known.retain(&dest_hash)),
             ),
             QueryRequest::RetainIdentity { identity_hash } => Some(QueryResponse::RetainIdentity(
-                self.retain_identity(&identity_hash),
+                self.known.retain_identity(&identity_hash),
             )),
-            QueryRequest::UnretainKnownDestination { dest_hash } => {
-                Some(QueryResponse::UnretainKnownDestination(
-                    self.unretain_known_destination(&dest_hash),
-                ))
-            }
-            QueryRequest::MarkKnownDestinationUsed { dest_hash } => {
-                Some(QueryResponse::MarkKnownDestinationUsed(
-                    self.mark_known_destination_used(&dest_hash),
-                ))
-            }
+            QueryRequest::UnretainKnownDestination { dest_hash } => Some(
+                QueryResponse::UnretainKnownDestination(self.known.unretain(&dest_hash)),
+            ),
+            QueryRequest::MarkKnownDestinationUsed { dest_hash } => Some(
+                QueryResponse::MarkKnownDestinationUsed(self.known.mark_used(&dest_hash)),
+            ),
             _ => None,
         }
     }
@@ -258,7 +254,10 @@ impl Driver {
                 stored,
                 removed,
                 seed,
-            } => self.record_known_destination_flush(stored, removed, seed),
+            } => {
+                self.known.record_flush(stored, removed, seed);
+                QueryResponse::KnownDestinationFlushRecorded
+            }
             QueryRequest::WantsDestinationType {
                 full_name,
                 requester,
@@ -326,24 +325,6 @@ impl Driver {
         }
     }
 
-    /// Record which known destinations the store now holds: `stored` added,
-    /// `removed` dropped, after forgetting the rest when `seed`.
-    fn record_known_destination_flush(
-        &mut self,
-        stored: Vec<([u8; 16], u64)>,
-        removed: Vec<[u8; 16]>,
-        seed: bool,
-    ) -> QueryResponse {
-        if seed {
-            self.known.flushed.clear();
-        }
-        self.known.flushed.extend(stored);
-        for dest_hash in removed {
-            self.known.flushed.remove(&dest_hash);
-        }
-        QueryResponse::KnownDestinationFlushRecorded
-    }
-
     /// Drop every destination type requirement of `requester`.
     fn unwant_all_destination_types(&mut self, requester: &[u8]) -> QueryResponse {
         // Upstream withdraws each type with `_unwants_destination_type`,
@@ -375,9 +356,9 @@ impl Driver {
 
     /// The identity announced for `dest_hash`, marking it used when known.
     fn recall_identity(&mut self, dest_hash: &[u8; 16]) -> QueryResponse {
-        let recalled = self.known_destination_announced(dest_hash);
+        let recalled = self.known.announced(dest_hash);
         if recalled.is_some() {
-            let _ = self.mark_known_destination_used(dest_hash);
+            let _ = self.known.mark_used(dest_hash);
         }
         QueryResponse::RecallIdentity(recalled)
     }
@@ -397,10 +378,10 @@ impl Driver {
             }));
         }
         // Look up the identity for this destination hash
-        let announced = self.known_destination_announced(&dest_hash);
+        let announced = self.known.announced(&dest_hash);
         match announced {
             Some(recalled) => {
-                let _ = self.mark_known_destination_used(&dest_hash);
+                let _ = self.known.mark_used(&dest_hash);
                 // Encrypt random payload to the destination's ratchet
                 // when it announced one, else to its public key.
                 let ratchet = self.single_ratchet_for(&dest_hash);
