@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -470,7 +471,9 @@ pub(crate) fn ensure_config_file(config_dir: &Path) -> io::Result<bool> {
         "Could not load config file, creating default configuration file..."
     );
     fs::create_dir_all(config_dir)?;
-    fs::write(&config_file, DEFAULT_CONFIG)?;
+    // Written whole and renamed into place: a process starting alongside
+    // reads no partial config.
+    atomic_write(&config_file, DEFAULT_CONFIG)?;
     log::info!(
         target: crate::logging::NOTICE_TARGET,
         "Default config file created. Make any necessary changes in {}/config and restart Reticulum if needed.",
@@ -522,19 +525,69 @@ pub(crate) fn full_hash_prefix(public_key: &[u8; 64]) -> [u8; 16] {
     hash
 }
 
-/// Save an identity's private key to a file (64 bytes).
+/// Save an identity's private key to a file (64 bytes), readable by its
+/// owner only. The key is written to a temporary file in the same directory
+/// and renamed over `path`, so a process reading `path` meanwhile, such as
+/// a client starting with its instance, sees the old file or the new one
+/// and never a partly written one.
 pub fn save_identity(identity: &Identity, path: &Path) -> io::Result<()> {
+    let temp_path = write_identity_temp(identity, path)?;
+    replace_file(&temp_path, path).inspect_err(|_| {
+        let _ = fs::remove_file(&temp_path);
+    })
+}
+
+/// Write `identity`'s private key to a new temporary file next to `path`
+/// and flush it to disk, returning the temporary file's path.
+fn write_identity_temp(identity: &Identity, path: &Path) -> io::Result<PathBuf> {
     let private_key = identity
         .get_private_key()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Identity has no private key"))?;
+    let temp_path = temp_path_for(path);
     let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    options.open(path)?.write_all(&private_key)
+    let mut file = options.open(&temp_path)?;
+    match file.write_all(&private_key).and_then(|()| file.sync_all()) {
+        Ok(()) => Ok(temp_path),
+        Err(err) => {
+            drop(file);
+            let _ = fs::remove_file(&temp_path);
+            Err(err)
+        }
+    }
+}
+
+/// Store `identity` at `path` unless a file is there already, and return
+/// the identity `path` then holds: `identity`, or the one another process
+/// stored first. Processes creating the same identity file at once, such as
+/// an instance and a client started with it, thus end up with one identity.
+pub(crate) fn store_new_identity(identity: Identity, path: &Path) -> io::Result<Identity> {
+    if store_identity_if_absent(&identity, path)? {
+        Ok(identity)
+    } else {
+        load_identity(path)
+    }
+}
+
+/// Store `identity` at `path` unless a file is there already. Returns
+/// whether it was stored.
+fn store_identity_if_absent(identity: &Identity, path: &Path) -> io::Result<bool> {
+    let temp_path = write_identity_temp(identity, path)?;
+    // A hard link publishes the complete file, and fails if `path` exists.
+    let stored = match fs::hard_link(&temp_path, path) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        // A filesystem without hard links: rename, still whole.
+        Err(_) if !path.exists() => replace_file(&temp_path, path).map(|()| true),
+        Err(_) => Ok(false),
+    };
+    let _ = fs::remove_file(&temp_path);
+    stored
 }
 
 /// Load an identity from a private key file (64 bytes).
@@ -603,16 +656,7 @@ pub(crate) fn save_known_destinations(
 }
 
 fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("known_destinations");
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    let temp_path = parent.join(format!(".{file_name}.tmp.{}.{}", std::process::id(), nonce));
+    let temp_path = temp_path_for(path);
     match fs::write(&temp_path, data).and_then(|_| replace_file(&temp_path, path)) {
         Ok(()) => Ok(()),
         Err(err) => {
@@ -620,6 +664,26 @@ fn atomic_write(path: &Path, data: &[u8]) -> io::Result<()> {
             Err(err)
         }
     }
+}
+
+/// A temporary file name next to `path`, unique to this process and moment,
+/// for writing a file that then replaces `path` in one rename.
+fn temp_path_for(path: &Path) -> PathBuf {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("known_destinations");
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    parent.join(format!(
+        ".{file_name}.tmp.{}.{nonce}.{sequence}",
+        std::process::id()
+    ))
 }
 
 fn replace_file(temp_path: &Path, path: &Path) -> io::Result<()> {
@@ -1245,9 +1309,7 @@ pub fn load_or_create_identity_file(path: &Path) -> io::Result<Identity> {
     if let Some(parent) = path.parent().filter(|path| !path.as_os_str().is_empty()) {
         fs::create_dir_all(parent)?;
     }
-    let identity = Identity::new(&mut OsRng);
-    save_identity(&identity, path)?;
-    Ok(identity)
+    store_new_identity(Identity::new(&mut OsRng), path)
 }
 
 /// Load or create an identity at the standard location.
@@ -1256,9 +1318,7 @@ pub fn load_or_create_identity(identities_dir: &Path) -> io::Result<Identity> {
     if id_path.exists() {
         load_identity(&id_path)
     } else {
-        let identity = Identity::new(&mut OsRng);
-        save_identity(&identity, &id_path)?;
-        Ok(identity)
+        store_new_identity(Identity::new(&mut OsRng), &id_path)
     }
 }
 
@@ -1269,19 +1329,41 @@ pub fn transport_identity_path(paths: &StoragePaths) -> PathBuf {
     paths.storage.join("transport_identity")
 }
 
+/// The transport identity, in `storage/transport_identity` as upstream
+/// keeps it, so a config directory keeps its transport identity whichever
+/// implementation runs it. Directories written before only hold
+/// `storage/identities/identity`: that one is carried over. With neither,
+/// the identity `create` makes is stored in both places.
+///
+/// Upstream's `Transport.ensure_identity` runs in every program, so an
+/// instance and its clients, started on a new directory at once, may each
+/// create one: all of them keep the one stored first.
+pub fn load_or_create_transport_identity(
+    paths: &StoragePaths,
+    create: impl FnOnce() -> Identity,
+) -> io::Result<Identity> {
+    let path = transport_identity_path(paths);
+    if path.exists() {
+        return load_identity(&path);
+    }
+    let node_identity_path = paths.identities.join("identity");
+    if node_identity_path.exists() {
+        let identity = load_identity(&node_identity_path)?;
+        return store_new_identity(identity, &path);
+    }
+    let identity = store_new_identity(create(), &path)?;
+    store_identity_if_absent(&identity, &node_identity_path)?;
+    Ok(identity)
+}
+
 /// Load the identity whose private key keys the shared-instance RPC socket.
 ///
 /// The daemon (like Python's `Reticulum.rpc_key`) derives the RPC auth key
-/// from the persisted transport identity. A config dir the daemon has not yet
-/// initialized may lack it; the daemon then seeds it from the node identity,
-/// so fall back to `storage/identities/identity`.
+/// from the persisted transport identity. A client finding none creates it
+/// as the daemon does, as upstream's clients do, so a daemon starting at
+/// the same time ends up with the same one.
 pub fn load_rpc_identity(paths: &StoragePaths) -> io::Result<Identity> {
-    let path = transport_identity_path(paths);
-    if path.exists() {
-        load_identity(&path)
-    } else {
-        load_or_create_identity(&paths.identities)
-    }
+    load_or_create_transport_identity(paths, || Identity::new(&mut OsRng))
 }
 
 #[cfg(test)]
@@ -1382,6 +1464,60 @@ mod tests {
         let loaded = load_identity(&path).unwrap();
 
         assert_eq!(*loaded.hash(), original_hash);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_identity_replaces_the_file_whole() {
+        let dir = temp_dir();
+        let path = dir.join("identity");
+        let first = Identity::new(&mut OsRng);
+        save_identity(&first, &path).unwrap();
+        // A second name for the first file: rewriting the file in place
+        // would show the new key through it too.
+        let reader_view = dir.join("reader_view");
+        fs::hard_link(&path, &reader_view).unwrap();
+
+        let second = Identity::new(&mut OsRng);
+        save_identity(&second, &path).unwrap();
+
+        assert_eq!(*load_identity(&reader_view).unwrap().hash(), *first.hash());
+        assert_eq!(*load_identity(&path).unwrap().hash(), *second.hash());
+        let names: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 2, "temporary file left behind: {names:?}");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_identity_keeps_the_one_stored_first() {
+        let dir = temp_dir();
+        let path = dir.join("transport_identity");
+        let first = Identity::new(&mut OsRng);
+        let first_hash = *first.hash();
+        assert_eq!(
+            *store_new_identity(first, &path).unwrap().hash(),
+            first_hash
+        );
+
+        let second = Identity::new(&mut OsRng);
+        assert!(!store_identity_if_absent(&second, &path).unwrap());
+        let kept = store_new_identity(second, &path).unwrap();
+        assert_eq!(*kept.hash(), first_hash);
+        assert_eq!(*load_identity(&path).unwrap().hash(), first_hash);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2021,14 +2157,39 @@ mod tests {
     }
 
     #[test]
+    fn a_transport_identity_carries_over_the_node_identity() {
+        let dir = temp_dir();
+        let paths = ensure_storage_dirs(&dir).unwrap();
+        let node = Identity::new(&mut OsRng);
+        save_identity(&node, &paths.identities.join("identity")).unwrap();
+
+        let rpc = load_rpc_identity(&paths).unwrap();
+        assert_eq!(*rpc.hash(), *node.hash());
+        assert_eq!(
+            *load_identity(&transport_identity_path(&paths))
+                .unwrap()
+                .hash(),
+            *node.hash()
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn load_rpc_identity_prefers_transport_identity() {
         let dir = temp_dir();
         let paths = ensure_storage_dirs(&dir).unwrap();
 
-        // Without transport_identity, fall back to identities/identity.
+        // Without transport_identity, create it as the daemon does.
         let node = load_rpc_identity(&paths).unwrap();
         assert_eq!(
             *load_identity(&paths.identities.join("identity"))
+                .unwrap()
+                .hash(),
+            *node.hash()
+        );
+        assert_eq!(
+            *load_identity(&transport_identity_path(&paths))
                 .unwrap()
                 .hash(),
             *node.hash()

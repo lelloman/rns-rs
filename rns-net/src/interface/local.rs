@@ -884,17 +884,10 @@ fn try_connect_local_client(config: &LocalClientConfig) -> io::Result<LocalClien
     if !config.use_af_unix {
         return try_connect_tcp(config).map(LocalClientStream::Tcp);
     }
-    match unix_socket::try_connect_unix(&config.instance_name) {
-        Ok(stream) => Ok(LocalClientStream::Unix(stream)),
-        Err(e) => {
-            log::debug!(
-                "[{}] Unix socket connect failed ({}), trying TCP",
-                config.name,
-                e
-            );
-            try_connect_tcp(config).map(LocalClientStream::Tcp)
-        }
-    }
+    // As upstream (`LocalClientInterface.connect`), a client of an instance
+    // on an abstract Unix socket never tries the TCP port: something else
+    // listening on it is not that instance.
+    unix_socket::try_connect_unix(&config.instance_name).map(LocalClientStream::Unix)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -983,8 +976,9 @@ fn local_client_reader_loop(
     }
 }
 
-/// Start a local client (connect to shared instance).
-/// Tries Unix socket first on Linux, falls back to TCP.
+/// Start a local client (connect to shared instance): on the abstract Unix
+/// socket on Linux unless `use_af_unix` is off, the localhost TCP port
+/// otherwise.
 /// Returns the writer for the driver.
 pub fn start_client(config: LocalClientConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
     let id = config.interface_id;
@@ -1704,7 +1698,7 @@ mod tests {
             port,
             interface_id: InterfaceId(76),
             reconnect_wait: Duration::from_millis(50),
-            use_af_unix: true,
+            use_af_unix: false,
         };
 
         let _writer = start_client(client_config, client_tx).unwrap();
@@ -1748,6 +1742,26 @@ mod tests {
         let mut buf = [0u8; 64];
         let n = stream2.read(&mut buf).unwrap();
         assert!(n > 0, "expected bytes from refreshed writer");
+    }
+
+    /// Whatever listens on the shared instance port is not the instance when
+    /// it serves on its abstract socket: a client finds none there.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unix_client_ignores_a_listener_on_the_tcp_port() {
+        let port = find_free_port();
+        let _listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+        let (tx, _rx) = crate::event::channel();
+        let config = LocalClientConfig {
+            name: "test-client".into(),
+            instance_name: crate::test_support::instance_name("test-no-tcp"),
+            port,
+            interface_id: InterfaceId(77),
+            reconnect_wait: Duration::from_millis(50),
+            use_af_unix: true,
+        };
+        let error = start_client(config, tx).err().expect("connected over TCP");
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
     }
 
     #[cfg(target_os = "linux")]

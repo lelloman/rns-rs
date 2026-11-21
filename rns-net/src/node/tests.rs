@@ -141,6 +141,129 @@ fn interface_ids_stay_unique_after_a_multi_interface() {
     assert_eq!(after, multi + 3, "{ids:?}");
 }
 
+/// An RNodeInterface exposes its radio settings, at startup and when
+/// attached; an RNodeMultiInterface exposes none, as its settings would
+/// reach only its first subinterface. Neither device exists: the
+/// interfaces come up offline.
+#[cfg(feature = "iface-rnode")]
+#[test]
+fn only_a_single_rnode_interface_exposes_rnode_runtime_keys() {
+    use crate::event::InterfaceManagementOperation as Operation;
+
+    let dir = tempdir().unwrap();
+    let missing = dir.path().join("missing-rnode-port");
+    let radio = "frequency = 868000000\n      bandwidth = 125000\n      txpower = 7\n      spreadingfactor = 8\n      codingrate = 5\n";
+    let single = |name: &str, enabled: &str| {
+        format!(
+            "  [[{name}]]\n    type = RNodeInterface\n    enabled = {enabled}\n    port = {}\n    {}",
+            missing.display(),
+            radio.replace("      ", "    "),
+        )
+    };
+    let multi = |name: &str, enabled: &str| {
+        format!(
+            "  [[{name}]]\n    type = RNodeMultiInterface\n    enabled = {enabled}\n    port = {}\n    [[[{name}A]]]\n      interface_enabled = yes\n      vport = 0\n      {radio}    [[[{name}B]]]\n      interface_enabled = yes\n      vport = 1\n      {radio}",
+            missing.display(),
+        )
+    };
+    fs::write(
+        dir.path().join("config"),
+        format!(
+            "[reticulum]\nshare_instance = no\n\n[interfaces]\n{}{}{}{}",
+            single("Single", "yes"),
+            multi("Multi", "yes"),
+            single("ManagedSingle", "no"),
+            multi("ManagedMulti", "no"),
+        ),
+    )
+    .unwrap();
+    let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+    for name in ["ManagedSingle", "ManagedMulti"] {
+        let attached = node
+            .query(query::ManageInterface {
+                operation: Operation::Attach,
+                name: name.into(),
+            })
+            .unwrap();
+        assert!(matches!(attached, Some(true)), "{name}: {attached:?}");
+    }
+    let entries: Vec<_> = node
+        .query(query::ListRuntimeConfig)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.key.starts_with("rnode."))
+        .collect();
+    node.shutdown();
+
+    for name in ["Single", "ManagedSingle"] {
+        let key = format!("rnode.{name}.frequency_hz");
+        let entry = entries.iter().find(|entry| entry.key == key);
+        assert_eq!(
+            entry.map(|entry| &entry.value),
+            Some(&crate::event::RuntimeConfigValue::Int(868_000_000)),
+            "{key}"
+        );
+    }
+    let keys: Vec<&str> = entries.iter().map(|entry| entry.key.as_str()).collect();
+    assert!(
+        keys.iter()
+            .all(|key| key.starts_with("rnode.Single.") || key.starts_with("rnode.ManagedSingle.")),
+        "{keys:?}"
+    );
+}
+
+/// A BackboneClientInterface exposes its client settings whether it starts
+/// from the config file or is attached later.
+#[cfg(feature = "iface-backbone")]
+#[test]
+fn a_backbone_client_interface_exposes_its_runtime_keys() {
+    use crate::event::InterfaceManagementOperation as Operation;
+    use crate::event::RuntimeConfigValue;
+
+    let dir = tempdir().unwrap();
+    // Nothing listens there: the clients start unconnected and retry.
+    let port = crate::test_support::port();
+    let client = |name: &str, enabled: &str| {
+        format!(
+            "  [[{name}]]\n    type = BackboneClientInterface\n    enabled = {enabled}\n    remote = 127.0.0.1\n    target_port = {port}\n    max_reconnect_tries = 4\n"
+        )
+    };
+    fs::write(
+        dir.path().join("config"),
+        format!(
+            "[reticulum]\nshare_instance = no\n\n[interfaces]\n{}{}",
+            client("Uplink", "yes"),
+            client("ManagedUplink", "no"),
+        ),
+    )
+    .unwrap();
+    let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
+    let attached = node
+        .query(query::ManageInterface {
+            operation: Operation::Attach,
+            name: "ManagedUplink".into(),
+        })
+        .unwrap();
+    assert!(matches!(attached, Some(true)), "{attached:?}");
+    let get = |key: String| {
+        node.query(query::GetRuntimeConfig { key: key.clone() })
+            .unwrap()
+            .unwrap_or_else(|| panic!("no runtime config entry {key}"))
+    };
+    for name in ["Uplink", "ManagedUplink"] {
+        for (setting, expected) in [
+            ("max_reconnect_tries", RuntimeConfigValue::Int(4)),
+            ("reconnect_wait_secs", RuntimeConfigValue::Float(5.0)),
+            ("connect_timeout_secs", RuntimeConfigValue::Float(5.0)),
+        ] {
+            let entry = get(format!("backbone_client.{name}.{setting}"));
+            assert_eq!(entry.value, expected, "{name}.{setting}");
+            assert_eq!(entry.default, expected, "{name}.{setting}");
+        }
+    }
+    node.shutdown();
+}
+
 #[test]
 fn interface_management_can_be_disabled() {
     use crate::event::InterfaceManagementOperation as Operation;

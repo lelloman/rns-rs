@@ -95,30 +95,18 @@ pub(super) fn open_known_destinations(
     }
 }
 
-/// The transport identity. It lives in storage/transport_identity, as
-/// upstream keeps it, so a config directory keeps its transport identity
-/// whichever implementation runs it. Directories written before only hold
-/// storage/identities/identity: carry that over, or create one when
-/// neither exists.
+/// The transport identity, as [`storage::load_or_create_transport_identity`]
+/// finds or creates it, logged as upstream's `Transport.ensure_identity`.
 pub(super) fn load_transport_identity(paths: &storage::StoragePaths) -> io::Result<Identity> {
-    let transport_identity_path = storage::transport_identity_path(paths);
-    if transport_identity_path.exists() {
-        let identity = storage::load_identity(&transport_identity_path)?;
-        log::info!("Loaded Transport Identity from storage");
-        return Ok(identity);
-    }
-    let node_identity_path = paths.identities.join("identity");
-    let identity = if node_identity_path.exists() {
-        let identity = storage::load_identity(&node_identity_path)?;
-        log::info!("Loaded Transport Identity from storage");
-        identity
-    } else {
+    let mut created = false;
+    let identity = storage::load_or_create_transport_identity(paths, || {
         log::info!("No valid Transport Identity in storage, creating...");
-        let identity = create_identity();
-        storage::save_identity(&identity, &node_identity_path)?;
-        identity
-    };
-    storage::save_identity(&identity, &transport_identity_path)?;
+        created = true;
+        create_identity()
+    })?;
+    if !created {
+        log::info!("Loaded Transport Identity from storage");
+    }
     Ok(identity)
 }
 

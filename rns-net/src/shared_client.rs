@@ -994,12 +994,20 @@ fn load_transport_identity(storage_dir: &std::path::Path) -> Option<Identity> {
 /// client loads it, or a new one stored there when it holds none.
 fn load_or_create_transport_identity(storage_dir: &std::path::Path) -> io::Result<Identity> {
     let path = storage_dir.join("transport_identity");
-    if let Ok(identity) = storage::load_identity(&path) {
-        log::info!("Loaded Transport Identity from storage");
-        return Ok(identity);
-    }
+    let missing = match storage::load_identity(&path) {
+        Ok(identity) => {
+            log::info!("Loaded Transport Identity from storage");
+            return Ok(identity);
+        }
+        Err(err) => err.kind() == io::ErrorKind::NotFound,
+    };
     log::info!("No valid Transport Identity in storage, creating...");
     let identity = crate::node::create_identity();
+    if missing {
+        // The instance may be creating it at the same moment: keep the
+        // identity whichever stores it first.
+        return storage::store_new_identity(identity, &path);
+    }
     storage::save_identity(&identity, &path)?;
     Ok(identity)
 }
@@ -1286,7 +1294,7 @@ mod tests {
                 instance_name,
                 port,
                 rpc_port: 0,
-                use_af_unix: true,
+                use_af_unix: false,
                 force_bitrate: None,
             },
             Box::new(NoopCallbacks),
@@ -1358,7 +1366,7 @@ mod tests {
                     instance_name: format!("test-client-identity-{port}"),
                     port,
                     rpc_port: 0,
-                    use_af_unix: true,
+                    use_af_unix: false,
                     force_bitrate: None,
                 },
                 Box::new(NoopCallbacks),
@@ -1405,7 +1413,7 @@ mod tests {
                 instance_name: format!("test-shared-stamps-{port}"),
                 port,
                 rpc_port: 0,
-                use_af_unix: true,
+                use_af_unix: false,
                 force_bitrate: None,
             },
             Box::new(NoopCallbacks),

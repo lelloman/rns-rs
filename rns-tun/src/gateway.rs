@@ -103,7 +103,7 @@ pub fn run_linux_gateway(
         let packet_rx = spawn_tun_reader(&device, stop)?;
         let mut server = GatewayLoop {
             gateway,
-            private: &private,
+            node: &private,
             status: &status,
             device: &mut device,
             policy,
@@ -163,19 +163,70 @@ type Pass = ControlFlow<()>;
 
 const NEXT_PASS: Pass = ControlFlow::Break(());
 
+/// The node operations the gateway needs while it serves clients, apart
+/// from announcing and receiving events: the seam that lets the session
+/// handling run against a fake node in tests.
+trait GatewayNode {
+    /// The MDU of `link_id`, `None` when the node does not list the Link.
+    fn link_mdu(&self, link_id: [u8; 16]) -> Result<Option<usize>, rns_net::SendError>;
+    /// Send an rntun control frame on the Link's Channel.
+    fn send_control_frame(
+        &self,
+        link_id: [u8; 16],
+        frame: Vec<u8>,
+    ) -> Result<(), rns_net::SendError>;
+    /// Offer a packet fragment to the Link, waiting up to `timeout` for
+    /// queue space; false when it was not admitted.
+    fn try_send_fragment(&self, link_id: [u8; 16], frame: Vec<u8>, timeout: Duration) -> bool;
+    /// Close the Link.
+    fn teardown_link(&self, link_id: [u8; 16]) -> Result<(), rns_net::SendError>;
+    /// Node events dropped so far because the queue was full.
+    fn dropped_callbacks(&self) -> u64;
+}
+
+impl GatewayNode for PrivateNode {
+    fn link_mdu(&self, link_id: [u8; 16]) -> Result<Option<usize>, rns_net::SendError> {
+        Ok(self
+            .node
+            .links()?
+            .into_iter()
+            .find(|link| link.link_id == link_id)
+            .map(|link| link.mdu))
+    }
+    fn send_control_frame(
+        &self,
+        link_id: [u8; 16],
+        frame: Vec<u8>,
+    ) -> Result<(), rns_net::SendError> {
+        self.node
+            .send_channel_message(link_id, RNTUN_CHANNEL_MSGTYPE, frame)
+    }
+    fn try_send_fragment(&self, link_id: [u8; 16], frame: Vec<u8>, timeout: Duration) -> bool {
+        self.node
+            .try_send_link_datagram(link_id, frame, RNTUN_LINK_CONTEXT, timeout)
+            .is_ok()
+    }
+    fn teardown_link(&self, link_id: [u8; 16]) -> Result<(), rns_net::SendError> {
+        self.node.teardown_link(link_id)
+    }
+    fn dropped_callbacks(&self) -> u64 {
+        PrivateNode::dropped_callbacks(self)
+    }
+}
+
 /// The gateway's state while it serves clients.
-struct GatewayLoop<'a> {
+struct GatewayLoop<'a, N, D> {
     gateway: &'a GatewayConfig,
-    private: &'a PrivateNode,
+    node: &'a N,
     status: &'a SharedStatus,
-    device: &'a mut TunDevice,
+    device: &'a mut D,
     policy: GatewayPolicy,
     policy_modified: Option<SystemTime>,
     sessions: HashMap<[u8; 16], SessionEntry>,
     started: Instant,
 }
 
-impl GatewayLoop<'_> {
+impl GatewayLoop<'_, PrivateNode, TunDevice> {
     fn run(
         &mut self,
         stop: &AtomicBool,
@@ -187,7 +238,7 @@ impl GatewayLoop<'_> {
         let mut next_policy_check = Instant::now() + Duration::from_secs(2);
         while !stop.load(Ordering::Relaxed) {
             if Instant::now() >= next_announce {
-                self.private.announce_gateway(destination)?;
+                self.node.announce_gateway(destination)?;
                 next_announce = Instant::now() + announce_interval;
             }
             if Instant::now() >= next_policy_check {
@@ -196,7 +247,7 @@ impl GatewayLoop<'_> {
             }
             self.forward_tun_packets(packet_rx)?;
 
-            let pass = match self.private.events.recv_timeout(Duration::from_millis(20)) {
+            let pass = match self.node.events.recv_timeout(Duration::from_millis(20)) {
                 Ok(event) => self.handle_event(event)?,
                 Err(mpsc::RecvTimeoutError::Timeout) => ControlFlow::Continue(()),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -214,7 +265,9 @@ impl GatewayLoop<'_> {
         }
         Ok(())
     }
+}
 
+impl<N: GatewayNode, D: PacketDevice> GatewayLoop<'_, N, D> {
     /// Adopts the policy file when it changed, revoking sessions whose grant
     /// changed. A policy that moves the gateway, or that fails to load, is
     /// ignored.
@@ -233,7 +286,7 @@ impl GatewayLoop<'_> {
                 if replacement.gateway == self.policy.gateway
                     && replacement.gateway_address == self.policy.gateway_address =>
             {
-                let private = self.private;
+                let node = self.node;
                 self.sessions.retain(|link_id, entry| {
                     let unchanged = entry.identity.is_some_and(|identity| {
                         replacement.grant(&identity) == entry.grant.as_ref()
@@ -243,7 +296,7 @@ impl GatewayLoop<'_> {
                             "rntun gateway session revoked by policy reload: link={}",
                             hex(link_id)
                         );
-                        let _ = private.node.teardown_link(*link_id);
+                        let _ = node.teardown_link(*link_id);
                     }
                     unchanged
                 });
@@ -299,12 +352,7 @@ impl GatewayLoop<'_> {
             };
         let mut admitted = true;
         for frame in frames {
-            if self
-                .private
-                .node
-                .try_send_link_datagram(*link_id, frame, RNTUN_LINK_CONTEXT, SEND_TIMEOUT)
-                .is_err()
-            {
+            if !self.node.try_send_fragment(*link_id, frame, SEND_TIMEOUT) {
                 admitted = false;
                 self.status.update(|value| value.counters.queue_drops += 1);
                 break;
@@ -347,17 +395,13 @@ impl GatewayLoop<'_> {
         );
         if self.sessions.len() >= self.gateway.max_pending_links + self.gateway.max_active_sessions
         {
-            let _ = self.private.node.teardown_link(link_id);
+            let _ = self.node.teardown_link(link_id);
             return Ok(NEXT_PASS);
         }
         let link_mdu = self
-            .private
             .node
-            .links()
+            .link_mdu(link_id)
             .map_err(node_error)?
-            .into_iter()
-            .find(|link| link.link_id == link_id)
-            .map(|link| link.mdu)
             .unwrap_or(384);
         self.sessions.insert(
             link_id,
@@ -399,7 +443,7 @@ impl GatewayLoop<'_> {
             .map_err(session_error)
             .and_then(|buffered| match buffered {
                 Some(buffered) => process_hello(
-                    self.private,
+                    self.node,
                     &self.policy,
                     self.gateway,
                     link_id,
@@ -451,11 +495,11 @@ impl GatewayLoop<'_> {
                     hex(&link_id)
                 );
                 let _ = send_control(
-                    self.private,
+                    self.node,
                     link_id,
                     ControlMessage::CloseAck { session_epoch },
                 );
-                let _ = self.private.node.teardown_link(link_id);
+                let _ = self.node.teardown_link(link_id);
                 self.sessions.remove(&link_id);
                 ControlFlow::Continue(())
             }
@@ -475,7 +519,7 @@ impl GatewayLoop<'_> {
                 .map_err(session_error)
         } else {
             process_hello(
-                self.private,
+                self.node,
                 &self.policy,
                 self.gateway,
                 link_id,
@@ -515,7 +559,7 @@ impl GatewayLoop<'_> {
             );
             return self.reject_session(link_id, 3, "DNS configuration mismatch");
         }
-        let result = start_transport(self.private, &self.policy, link_id, entry, session_epoch);
+        let result = start_transport(self.node, &self.policy, link_id, entry, session_epoch);
         self.keep_or_drop(link_id, result)
     }
 
@@ -551,7 +595,7 @@ impl GatewayLoop<'_> {
 
     /// Rejects and forgets a session.
     fn reject_session(&mut self, link_id: [u8; 16], reason: u16, diagnostic: &str) -> Pass {
-        reject(self.private, link_id, reason, diagnostic);
+        reject(self.node, link_id, reason, diagnostic);
         self.sessions.remove(&link_id);
         NEXT_PASS
     }
@@ -576,7 +620,7 @@ impl GatewayLoop<'_> {
     /// Tears down sessions past their idle timeout or a protocol deadline.
     fn expire_sessions(&mut self) {
         let now = self.started.elapsed();
-        let private = self.private;
+        let node = self.node;
         self.sessions.retain(|link_id, entry| {
             let idle_expired = entry.machine.state() == GatewayState::Active
                 && entry
@@ -593,7 +637,7 @@ impl GatewayLoop<'_> {
                     "rntun gateway session expired: idle_expired={idle_expired} protocol_expired={protocol_expired} state={:?}",
                     entry.machine.state()
                 );
-                let _ = private.node.teardown_link(*link_id);
+                let _ = node.teardown_link(*link_id);
                 false
             } else {
                 true
@@ -605,7 +649,7 @@ impl GatewayLoop<'_> {
         self.status.update(|value| {
             value.queue_depths.insert(
                 "dropped_node_callbacks".into(),
-                self.private.dropped_callbacks() as usize,
+                self.node.dropped_callbacks() as usize,
             );
             value.sessions = self
                 .sessions
@@ -632,7 +676,7 @@ impl GatewayLoop<'_> {
 /// Moves a session whose client is ready to active: sets up its packet
 /// transport and confirms to the client.
 fn start_transport(
-    private: &PrivateNode,
+    node: &impl GatewayNode,
     policy: &GatewayPolicy,
     link_id: [u8; 16],
     entry: &mut SessionEntry,
@@ -656,11 +700,11 @@ fn start_transport(
     )
     .map_err(io::Error::other)?;
     entry.transport = Some(transport);
-    send_control(private, link_id, ready)
+    send_control(node, link_id, ready)
 }
 
 fn process_hello(
-    private: &PrivateNode,
+    node: &impl GatewayNode,
     policy: &GatewayPolicy,
     gateway: &GatewayConfig,
     link_id: [u8; 16],
@@ -684,7 +728,7 @@ fn process_hello(
         ));
     };
     if !versions.contains(&VERSION) || maximum_packet_size < 576 {
-        reject(private, link_id, 4, "no compatible protocol or MTU");
+        reject(node, link_id, 4, "no compatible protocol or MTU");
         return Ok(());
     }
     let identity = entry
@@ -701,12 +745,7 @@ fn process_hello(
         Vec::new()
     };
     if accepted_routes.iter().any(|route| route.prefix_len() == 0) && dns.is_empty() {
-        reject(
-            private,
-            link_id,
-            5,
-            "gateway has no full-tunnel DNS servers",
-        );
+        reject(node, link_id, 5, "gateway has no full-tunnel DNS servers");
         return Ok(());
     }
     let epoch = random_nonzero();
@@ -722,7 +761,7 @@ fn process_hello(
         setup_timeout_secs: SETUP_TIMEOUT.as_secs() as u16,
         idle_timeout_secs: grant.idle_timeout_secs.unwrap_or(0),
     };
-    send_control(private, link_id, accept)?;
+    send_control(node, link_id, accept)?;
     entry
         .machine
         .accepted(epoch, now, SETUP_TIMEOUT)
@@ -744,29 +783,23 @@ fn random_nonzero() -> u64 {
     }
 }
 fn send_control(
-    private: &PrivateNode,
+    node: &impl GatewayNode,
     link_id: [u8; 16],
     message: ControlMessage,
 ) -> io::Result<()> {
-    private
-        .node
-        .send_channel_message(
-            link_id,
-            RNTUN_CHANNEL_MSGTYPE,
-            message.encode().map_err(io::Error::other)?,
-        )
+    node.send_control_frame(link_id, message.encode().map_err(io::Error::other)?)
         .map_err(node_error)
 }
-fn reject(private: &PrivateNode, link_id: [u8; 16], reason: u16, diagnostic: &str) {
+fn reject(node: &impl GatewayNode, link_id: [u8; 16], reason: u16, diagnostic: &str) {
     let _ = send_control(
-        private,
+        node,
         link_id,
         ControlMessage::ServerReject {
             reason,
             diagnostic: diagnostic.into(),
         },
     );
-    let _ = private.node.teardown_link(link_id);
+    let _ = node.teardown_link(link_id);
 }
 fn node_error(error: rns_net::SendError) -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, error)
@@ -784,3 +817,6 @@ fn record_transport_error(status: &SharedStatus, error: &crate::TransportError) 
         _ => value.counters.malformed += 1,
     });
 }
+
+#[cfg(test)]
+mod tests;
