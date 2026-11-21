@@ -77,7 +77,7 @@ pub(crate) use tcp_params::auto_mtu_for_bitrate;
 pub(crate) use tcp_params::{
     parse_flush_after, parse_tcp_rate_params, tcp_bitrate, tcp_hardware_mtu, DEFAULT_FLUSH_AFTER,
 };
-pub use type_hints::{shared_medium_hint, tunnels_allowed};
+pub use type_hints::{shared_medium_hint, tunnels_allowed, InterfaceKind};
 pub use underlay::{
     apply_underlay_mark, install_socket_protector, validate_underlay_mark, SocketProtector,
     SocketProtectorGuard,

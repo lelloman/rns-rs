@@ -324,6 +324,13 @@ pub struct InterfaceConfig {
     pub discovery: Option<crate::discovery::DiscoveryConfig>,
 }
 
+impl InterfaceConfig {
+    /// The interface type `type_name` names, if it is one of this stack's.
+    pub fn kind(&self) -> Option<crate::interface::InterfaceKind> {
+        crate::interface::InterfaceKind::from_type_name(&self.type_name)
+    }
+}
+
 /// An interface section's `announce_rate_target`, `announce_rate_grace`,
 /// `announce_rate_penalty` and `announce_cap` (Reticulum.py
 /// `_synthesize_interface`). Unset options leave the interface to the

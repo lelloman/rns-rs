@@ -38,13 +38,14 @@ pub(super) fn log_restored_tables(
 pub(super) fn register_interface_runtime(
     driver: &mut Driver,
     iface_config: &InterfaceConfig,
+    kind: Option<crate::interface::InterfaceKind>,
     #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))] transport_enabled: bool,
 ) {
-    use crate::interface::KnownConfig;
+    use crate::interface::{InterfaceKind, KnownConfig};
 
-    #[cfg(feature = "iface-backbone")]
-    if iface_config.type_name == "BackboneInterface" {
-        if let KnownConfig::Backbone(mode) = iface_config.config_data.known() {
+    match (kind, iface_config.config_data.known()) {
+        #[cfg(feature = "iface-backbone")]
+        (Some(InterfaceKind::Backbone), KnownConfig::Backbone(mode)) => {
             if let Some(handle) = runtime_handle_from_mode(mode) {
                 driver.register_backbone_runtime(handle);
             }
@@ -64,16 +65,12 @@ pub(super) fn register_interface_runtime(
                 driver.register_backbone_discovery_runtime(handle);
             }
         }
-    }
-    #[cfg(feature = "iface-tcp")]
-    if iface_config.type_name == "TCPClientInterface" {
-        if let KnownConfig::TcpClient(tcp_config) = iface_config.config_data.known() {
+        #[cfg(feature = "iface-tcp")]
+        (Some(InterfaceKind::TcpClient), KnownConfig::TcpClient(tcp_config)) => {
             driver.register_tcp_client_runtime(tcp_client_runtime_handle_from_config(tcp_config));
         }
-    }
-    #[cfg(feature = "iface-tcp")]
-    if iface_config.type_name == "TCPServerInterface" {
-        if let KnownConfig::TcpServer(tcp_config) = iface_config.config_data.known() {
+        #[cfg(feature = "iface-tcp")]
+        (Some(InterfaceKind::TcpServer), KnownConfig::TcpServer(tcp_config)) => {
             driver.register_tcp_server_runtime(tcp_runtime_handle_from_config(tcp_config));
             driver.register_tcp_server_discovery_runtime(
                 tcp_server_discovery_runtime_from_interface(
@@ -85,36 +82,27 @@ pub(super) fn register_interface_runtime(
                 ),
             );
         }
-    }
-    #[cfg(feature = "iface-udp")]
-    if iface_config.type_name == "UDPInterface" {
-        if let KnownConfig::Udp(udp_config) = iface_config.config_data.known() {
+        #[cfg(feature = "iface-udp")]
+        (Some(InterfaceKind::Udp), KnownConfig::Udp(udp_config)) => {
             driver.register_udp_runtime(udp_runtime_handle_from_config(udp_config));
         }
-    }
-    #[cfg(feature = "iface-auto")]
-    if iface_config.type_name == "AutoInterface" {
-        if let KnownConfig::Auto(auto_config) = iface_config.config_data.known() {
+        #[cfg(feature = "iface-auto")]
+        (Some(InterfaceKind::Auto), KnownConfig::Auto(auto_config)) => {
             driver.register_auto_runtime(auto_runtime_handle_from_config(auto_config));
         }
-    }
-    #[cfg(feature = "iface-i2p")]
-    if iface_config.type_name == "I2PInterface" {
-        if let KnownConfig::I2p(i2p_config) = iface_config.config_data.known() {
+        #[cfg(feature = "iface-i2p")]
+        (Some(InterfaceKind::I2p), KnownConfig::I2p(i2p_config)) => {
             driver.register_i2p_runtime(i2p_runtime_handle_from_config(i2p_config));
         }
-    }
-    #[cfg(feature = "iface-pipe")]
-    if iface_config.type_name == "PipeInterface" {
-        if let KnownConfig::Pipe(pipe_config) = iface_config.config_data.known() {
+        #[cfg(feature = "iface-pipe")]
+        (Some(InterfaceKind::Pipe), KnownConfig::Pipe(pipe_config)) => {
             driver.register_pipe_runtime(pipe_runtime_handle_from_config(pipe_config));
         }
-    }
-    #[cfg(feature = "iface-rnode")]
-    if iface_config.type_name == "RNodeInterface" {
-        if let KnownConfig::RNode(rnode_config) = iface_config.config_data.known() {
+        #[cfg(feature = "iface-rnode")]
+        (Some(InterfaceKind::RNode), KnownConfig::RNode(rnode_config)) => {
             driver.register_rnode_runtime(rnode_runtime_handle_from_config(rnode_config));
         }
+        _ => {}
     }
 }
 

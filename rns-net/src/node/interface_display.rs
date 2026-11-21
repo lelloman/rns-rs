@@ -22,6 +22,13 @@ impl ConfiguredDisplay {
     pub(crate) fn of(config: &InterfaceConfig, ifac: Option<&ifac::IfacState>) -> Self {
         #[cfg(any(
             feature = "iface-tcp",
+            feature = "iface-auto",
+            feature = "iface-rnode",
+            feature = "iface-i2p"
+        ))]
+        use crate::interface::InterfaceKind;
+        #[cfg(any(
+            feature = "iface-tcp",
             feature = "iface-udp",
             feature = "iface-local",
             feature = "iface-auto",
@@ -50,7 +57,7 @@ impl ConfiguredDisplay {
                     id: tcp.interface_id,
                     name: config.name.clone(),
                     display_name,
-                    interface_type: "TCPServerInterface".into(),
+                    interface_type: InterfaceKind::TcpServer.type_name().into(),
                     mode: config.mode,
                     gravity: config.gravity,
                     announces_to_internal: config.announces_to_internal,
@@ -69,8 +76,8 @@ impl ConfiguredDisplay {
                 listener_stat: Some(crate::driver::ListenerStat {
                     id: auto.interface_id,
                     name: config.name.clone(),
-                    display_name: display::typed("AutoInterface", name),
-                    interface_type: "AutoInterface".into(),
+                    display_name: display::typed(InterfaceKind::Auto.type_name(), name),
+                    interface_type: InterfaceKind::Auto.type_name().into(),
                     mode: config.mode,
                     gravity: config.gravity,
                     announces_to_internal: config.announces_to_internal,
@@ -88,8 +95,8 @@ impl ConfiguredDisplay {
                 listener_stat: Some(crate::driver::ListenerStat {
                     id: i2p.interface_id,
                     name: config.name.clone(),
-                    display_name: display::typed("I2PInterface", name),
-                    interface_type: "I2PInterface".into(),
+                    display_name: display::typed(InterfaceKind::I2p.type_name(), name),
+                    interface_type: InterfaceKind::I2p.type_name().into(),
                     mode: config.mode,
                     gravity: config.gravity,
                     announces_to_internal: config.announces_to_internal,
@@ -113,8 +120,8 @@ impl ConfiguredDisplay {
                         // Its subinterfaces take the ids after its own.
                         id: rnode.interface_id,
                         name: config.name.clone(),
-                        display_name: display::typed("RNodeMultiInterface", name),
-                        interface_type: "RNodeMultiInterface".into(),
+                        display_name: display::typed(InterfaceKind::RNodeMulti.type_name(), name),
+                        interface_type: InterfaceKind::RNodeMulti.type_name().into(),
                         mode: config.mode,
                         gravity: config.gravity,
                         announces_to_internal: config.announces_to_internal,
@@ -207,7 +214,7 @@ pub(crate) fn subinterface_display_name(
     config_name: &str,
     sub: &crate::interface::SubInterface,
 ) -> Option<String> {
-    (sub.interface_type_name == "RNodeMultiInterface")
+    (sub.interface_type_name == crate::interface::InterfaceKind::RNodeMulti.type_name())
         .then(|| crate::interface::display::rnode_multi_sub(config_name, &sub.info.name))
 }
 

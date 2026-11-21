@@ -583,6 +583,13 @@ pub struct ParsedInterface {
     pub subinterfaces: Vec<ParsedSubinterface>,
 }
 
+impl ParsedInterface {
+    /// The interface type `type` names, if it is one of this stack's.
+    pub fn kind(&self) -> Option<crate::interface::InterfaceKind> {
+        crate::interface::InterfaceKind::from_type_name(&self.interface_type)
+    }
+}
+
 /// A `[[[subinterface]]]` nested under an interface section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedSubinterface {

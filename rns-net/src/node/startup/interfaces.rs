@@ -94,9 +94,12 @@ impl InterfaceStarter<'_> {
             .set_interface_announce_limits(&iface_config.name, iface_config.announce_limits);
         let managed_id = self.initial_managed_ids.get(&iface_config.name).copied();
         #[cfg(runtime_config_ifaces)]
+        let kind = iface_config.kind();
+        #[cfg(runtime_config_ifaces)]
         register_interface_runtime(
             self.driver,
             &iface_config,
+            kind,
             #[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
             transport_enabled,
         );
@@ -121,8 +124,12 @@ impl InterfaceStarter<'_> {
             ifac_runtime_from_config(iface_config.ifac.as_ref(), factory.default_ifac_size());
 
         #[cfg(feature = "iface-backbone")]
-        if self.add_backbone_peer_pool_candidate(&iface_config, &ifac_runtime, ifac_state.is_some())
-        {
+        if self.add_backbone_peer_pool_candidate(
+            &iface_config,
+            kind,
+            &ifac_runtime,
+            ifac_state.is_some(),
+        ) {
             return Ok(());
         }
 
@@ -192,10 +199,12 @@ impl InterfaceStarter<'_> {
     fn add_backbone_peer_pool_candidate(
         &mut self,
         iface_config: &InterfaceConfig,
+        kind: Option<crate::interface::InterfaceKind>,
         ifac_runtime: &crate::driver::IfacRuntimeConfig,
         ifac_enabled: bool,
     ) -> bool {
-        if self.config.backbone_peer_pool.is_none() || iface_config.type_name != "BackboneInterface"
+        if self.config.backbone_peer_pool.is_none()
+            || kind != Some(crate::interface::InterfaceKind::Backbone)
         {
             return false;
         }
