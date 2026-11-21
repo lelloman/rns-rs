@@ -817,3 +817,6 @@ fn record_transport_error(status: &SharedStatus, error: &crate::TransportError) 
         _ => value.counters.malformed += 1,
     });
 }
+
+#[cfg(test)]
+mod tests;
