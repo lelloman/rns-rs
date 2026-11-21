@@ -454,8 +454,8 @@ pub(super) fn handle_post_direct_connect(req: &HttpRequest, node: &NodeHandle) -
 }
 
 pub(super) fn handle_post_clear_announce_queues(node: &NodeHandle) -> HttpResponse {
-    with_node(node, |n| match n.query(QueryRequest::DropAnnounceQueues) {
-        Ok(QueryResponse::DropAnnounceQueues) => HttpResponse::ok(json!({"status": "ok"})),
-        _ => HttpResponse::internal_error("Query failed"),
+    with_node(node, |n| match n.query(query::DropAnnounceQueues) {
+        Ok(()) => HttpResponse::ok(json!({"status": "ok"})),
+        Err(_) => HttpResponse::internal_error("Query failed"),
     })
 }

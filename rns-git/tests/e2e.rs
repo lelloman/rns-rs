@@ -947,16 +947,13 @@ fn rngit_work_document_local_permissions_work_over_rns_link() {
 /// by default, and grinding a 25-bit stamp in a debug build takes minutes.
 /// The config file can only turn stamping on, so this uses the runtime keys.
 fn unstamped(node: &RnsNode) {
-    use rns_net::event::{QueryRequest, QueryResponse, RuntimeConfigValue};
+    use rns_net::event::{query, RuntimeConfigValue};
     for key in ["global.stamp_destinations", "global.stamp_path_requests"] {
-        let response = node.query(QueryRequest::SetRuntimeConfig {
+        let response = node.query(query::SetRuntimeConfig {
             key: key.into(),
             value: RuntimeConfigValue::Bool(false),
         });
-        assert!(
-            matches!(response, Ok(QueryResponse::RuntimeConfigSet(Ok(_)))),
-            "{key}: {response:?}"
-        );
+        assert!(matches!(response, Ok(Ok(_))), "{key}: {response:?}");
     }
 }
 

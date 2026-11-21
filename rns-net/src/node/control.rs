@@ -3,17 +3,13 @@
 use super::*;
 
 impl RnsNode {
-    /// Query the driver for state information.
-    pub fn query(&self, request: QueryRequest) -> Result<QueryResponse, SendError> {
-        let (resp_tx, resp_rx) = std::sync::mpsc::channel();
-        self.tx
-            .send(Event::query(request, resp_tx))
-            .map_err(|_| SendError)?;
-        resp_rx.recv().map_err(|_| SendError)
-    }
-
-    /// Ask the driver `query` and wait for its answer.
-    pub(crate) fn ask<Q: Query>(&self, query: Q) -> Result<Q::Response, SendError> {
+    /// Query the driver for state information: one of the structs of
+    /// [`crate::event::query`], answered with the type its [`Query`]
+    /// implementation names.
+    ///
+    /// Fails when the driver has shut down, or answers with another
+    /// query's response.
+    pub fn query<Q: Query>(&self, query: Q) -> Result<Q::Response, SendError> {
         ask_driver(&self.tx, query)
     }
 
@@ -37,7 +33,7 @@ impl RnsNode {
         operation: crate::event::InterfaceManagementOperation,
         name: &str,
     ) -> Result<Option<bool>, SendError> {
-        self.ask(query::ManageInterface {
+        self.query(query::ManageInterface {
             operation,
             name: name.to_string(),
         })
@@ -48,12 +44,12 @@ impl RnsNode {
     /// one), the direct path's candidate, MTU and RTT, and its upgrade
     /// attempts and failures.
     pub fn direct_links(&self) -> Result<crate::event::DirectLinkStatus, SendError> {
-        self.ask(query::DirectLinks)
+        self.query(query::DirectLinks)
     }
 
     /// Snapshot active Link metadata, including the negotiated direct-data MDU.
     pub fn links(&self) -> Result<Vec<crate::event::LinkInfoEntry>, SendError> {
-        self.ask(query::Links)
+        self.query(query::Links)
     }
 
     /// Snapshot one Link, including local send backlog, or None if unknown.
@@ -107,7 +103,7 @@ impl RnsNode {
     /// [`state_snapshot`](Self::state_snapshot).
     ///
     /// May lag by up to one tick and is not ordered after earlier events; use
-    /// `query(QueryRequest::InterfaceStats)` for an exact, ordered answer.
+    /// `query(query::InterfaceStats)` for an exact, ordered answer.
     pub fn snapshot_interfaces(&self) -> crate::event::InterfaceStatsResponse {
         self.state_snapshot().interfaces.clone()
     }
@@ -117,7 +113,7 @@ impl RnsNode {
     /// Returns `Ok(None)` when no registered interface advertises a usable
     /// bitrate.
     pub fn lowest_interface_bitrate(&self) -> Result<Option<u64>, SendError> {
-        self.ask(query::LowestInterfaceBitrate)
+        self.query(query::LowestInterfaceBitrate)
     }
 
     /// Return the adaptive medium path timeout advertised by the transport engine.
@@ -126,7 +122,7 @@ impl RnsNode {
     /// positive-bitrate interface plus the per-hop allowance, or is zero when
     /// no usable bitrate is known.
     pub fn medium_path_timeout(&self) -> Result<f64, SendError> {
-        self.ask(query::MediumPathTimeout)
+        self.query(query::MediumPathTimeout)
     }
 
     /// Enter drain mode and stop admitting new work.
@@ -141,7 +137,7 @@ impl RnsNode {
 
     /// Query current drain/lifecycle status.
     pub fn drain_status(&self) -> Result<crate::event::DrainStatus, SendError> {
-        self.ask(query::DrainStatus)
+        self.query(query::DrainStatus)
     }
 
     pub(super) fn reject_new_work_if_draining(&self) -> Result<(), SendError> {

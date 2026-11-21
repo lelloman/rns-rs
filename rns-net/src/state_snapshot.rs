@@ -36,7 +36,7 @@ pub struct StateSnapshot {
     /// Every link the driver manages, as [`crate::RnsNode::links`] reports
     /// them at publish time.
     pub links: Vec<LinkInfoEntry>,
-    /// Interface statistics, as [`crate::QueryRequest::InterfaceStats`]
+    /// Interface statistics, as [`crate::event::query::InterfaceStats`]
     /// reports them at publish time.
     pub interfaces: InterfaceStatsResponse,
 }

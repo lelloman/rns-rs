@@ -262,7 +262,7 @@ impl RnsNode {
 
     /// Check if a path exists to a destination (synchronous query).
     pub fn has_path(&self, dest_hash: &rns_core::types::DestHash) -> Result<bool, SendError> {
-        self.ask(query::HasPath {
+        self.query(query::HasPath {
             dest_hash: dest_hash.0,
         })
     }
@@ -289,14 +289,14 @@ impl RnsNode {
         &self,
         packet_hash: &[u8; 32],
     ) -> Result<Option<crate::event::PacketSignal>, SendError> {
-        self.ask(query::PacketSignal {
+        self.query(query::PacketSignal {
             packet_hash: *packet_hash,
         })
     }
 
     /// Get hop count to a destination (synchronous query).
     pub fn hops_to(&self, dest_hash: &rns_core::types::DestHash) -> Result<Option<u8>, SendError> {
-        self.ask(query::HopsTo {
+        self.query(query::HopsTo {
             dest_hash: dest_hash.0,
         })
     }

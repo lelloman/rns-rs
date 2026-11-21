@@ -4,8 +4,8 @@
 use super::*;
 
 pub(super) fn handle_interfaces(node: &NodeHandle) -> HttpResponse {
-    with_node(node, |n| match n.query(QueryRequest::InterfaceStats) {
-        Ok(QueryResponse::InterfaceStats(stats)) => {
+    with_node(node, |n| match n.query(query::InterfaceStats) {
+        Ok(stats) => {
             let ifaces: Vec<Value> = stats
                 .interfaces
                 .iter()
@@ -74,13 +74,13 @@ pub(super) fn handle_interfaces(node: &NodeHandle) -> HttpResponse {
                 "backbone_peer_pool": backbone_peer_pool,
             }))
         }
-        _ => HttpResponse::internal_error("Query failed"),
+        Err(_) => HttpResponse::internal_error("Query failed"),
     })
 }
 
 pub(super) fn handle_destinations(node: &NodeHandle, state: &SharedState) -> HttpResponse {
-    with_node(node, |n| match n.query(QueryRequest::LocalDestinations) {
-        Ok(QueryResponse::LocalDestinations(dests)) => {
+    with_node(node, |n| match n.query(query::LocalDestinations) {
+        Ok(dests) => {
             let s = read_state(state);
             let list: Vec<Value> = dests
                 .iter()
@@ -99,7 +99,7 @@ pub(super) fn handle_destinations(node: &NodeHandle, state: &SharedState) -> Htt
                 .collect();
             HttpResponse::ok(json!({"destinations": list}))
         }
-        _ => HttpResponse::internal_error("Query failed"),
+        Err(_) => HttpResponse::internal_error("Query failed"),
     })
 }
 
@@ -108,8 +108,8 @@ pub(super) fn handle_paths(req: &HttpRequest, node: &NodeHandle) -> HttpResponse
     let filter_hash: Option<[u8; 16]> = params.get("dest_hash").and_then(|s| hex_to_array(s));
 
     with_node(node, |n| {
-        match n.query(QueryRequest::PathTable { max_hops: None }) {
-            Ok(QueryResponse::PathTable(paths)) => {
+        match n.query(query::PathTable { max_hops: None }) {
+            Ok(paths) => {
                 let list: Vec<Value> = paths
                     .iter()
                     .filter(|p| filter_hash.is_none_or(|h| p.hash == h))
@@ -129,7 +129,7 @@ pub(super) fn handle_paths(req: &HttpRequest, node: &NodeHandle) -> HttpResponse
                     .collect();
                 HttpResponse::ok(json!({"paths": list}))
             }
-            _ => HttpResponse::internal_error("Query failed"),
+            Err(_) => HttpResponse::internal_error("Query failed"),
         }
     })
 }
@@ -156,8 +156,8 @@ pub(super) fn direct_counters_json(counters: &rns_net::event::DirectLinkCounters
 }
 
 pub(super) fn handle_direct_links(node: &NodeHandle) -> HttpResponse {
-    with_node(node, |n| match n.query(QueryRequest::DirectLinks) {
-        Ok(QueryResponse::DirectLinks(status)) => {
+    with_node(node, |n| match n.query(query::DirectLinks) {
+        Ok(status) => {
             let links: Vec<Value> = status
                 .links
                 .iter()
@@ -222,13 +222,13 @@ pub(super) fn handle_direct_links(node: &NodeHandle) -> HttpResponse {
                 "links": links,
             }))
         }
-        _ => HttpResponse::internal_error("Query failed"),
+        Err(_) => HttpResponse::internal_error("Query failed"),
     })
 }
 
 pub(super) fn handle_links(node: &NodeHandle) -> HttpResponse {
-    with_node(node, |n| match n.query(QueryRequest::Links) {
-        Ok(QueryResponse::Links(links)) => {
+    with_node(node, |n| match n.query(query::Links) {
+        Ok(links) => {
             let list: Vec<Value> = links
                 .iter()
                 .map(|l| {
@@ -262,13 +262,13 @@ pub(super) fn handle_links(node: &NodeHandle) -> HttpResponse {
                 .collect();
             HttpResponse::ok(json!({"links": list}))
         }
-        _ => HttpResponse::internal_error("Query failed"),
+        Err(_) => HttpResponse::internal_error("Query failed"),
     })
 }
 
 pub(super) fn handle_resources(node: &NodeHandle) -> HttpResponse {
-    with_node(node, |n| match n.query(QueryRequest::Resources) {
-        Ok(QueryResponse::Resources(resources)) => {
+    with_node(node, |n| match n.query(query::Resources) {
+        Ok(resources) => {
             let list: Vec<Value> = resources
                 .iter()
                 .map(|r| {
@@ -283,7 +283,7 @@ pub(super) fn handle_resources(node: &NodeHandle) -> HttpResponse {
                 .collect();
             HttpResponse::ok(json!({"resources": list}))
         }
-        _ => HttpResponse::internal_error("Query failed"),
+        Err(_) => HttpResponse::internal_error("Query failed"),
     })
 }
 
@@ -392,8 +392,8 @@ pub(super) fn handle_backbone_peers(req: &HttpRequest, node: &NodeHandle) -> Htt
     let params = parse_query(&req.path);
     let interface_name = params.get("interface").map(|s| s.to_string());
     with_node(node, |n| {
-        match n.query(QueryRequest::BackbonePeerState { interface_name }) {
-            Ok(QueryResponse::BackbonePeerState(entries)) => {
+        match n.query(query::BackbonePeerState { interface_name }) {
+            Ok(entries) => {
                 let peers: Vec<Value> = entries
                     .iter()
                     .map(|e| {
@@ -409,7 +409,7 @@ pub(super) fn handle_backbone_peers(req: &HttpRequest, node: &NodeHandle) -> Htt
                     .collect();
                 HttpResponse::ok(json!({ "peers": peers }))
             }
-            _ => HttpResponse::internal_error("Query failed"),
+            Err(_) => HttpResponse::internal_error("Query failed"),
         }
     })
 }
@@ -445,18 +445,16 @@ pub(super) fn handle_backbone_blacklist(req: &HttpRequest, node: &NodeHandle) ->
         .unwrap_or(0)
         .min(u8::MAX as u64) as u8;
     with_node(node, |n| {
-        match n.query(QueryRequest::BlacklistBackbonePeer {
+        match n.query(query::BlacklistBackbonePeer {
             interface_name,
             peer_ip: ip,
             duration: std::time::Duration::from_secs(duration_secs),
             reason,
             penalty_level,
         }) {
-            Ok(QueryResponse::BlacklistBackbonePeer(true)) => {
-                HttpResponse::ok(json!({"status": "ok"}))
-            }
-            Ok(QueryResponse::BlacklistBackbonePeer(false)) => HttpResponse::not_found(),
-            _ => HttpResponse::internal_error("Query failed"),
+            Ok(true) => HttpResponse::ok(json!({"status": "ok"})),
+            Ok(false) => HttpResponse::not_found(),
+            Err(_) => HttpResponse::internal_error("Query failed"),
         }
     })
 }

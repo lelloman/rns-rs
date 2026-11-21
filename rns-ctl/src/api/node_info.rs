@@ -8,14 +8,8 @@ pub(super) fn handle_node(node: &NodeHandle, state: &SharedState) -> HttpRespons
         let Some(node) = guard.as_ref() else {
             return HttpResponse::internal_error("Node is shutting down");
         };
-        let transport_id = match node.query(QueryRequest::TransportIdentity) {
-            Ok(QueryResponse::TransportIdentity(id)) => id,
-            _ => None,
-        };
-        let drain_status = match node.query(QueryRequest::DrainStatus) {
-            Ok(QueryResponse::DrainStatus(status)) => Some(status),
-            _ => None,
-        };
+        let transport_id = node.query(query::TransportIdentity).ok().flatten();
+        let drain_status = node.query(query::DrainStatus).ok();
         (transport_id, drain_status)
     };
 
@@ -100,10 +94,7 @@ pub(super) fn handle_config_mutation(
 
 pub(super) fn handle_info(node: &NodeHandle, state: &SharedState) -> HttpResponse {
     with_node(node, |n| {
-        let transport_id = match n.query(QueryRequest::TransportIdentity) {
-            Ok(QueryResponse::TransportIdentity(id)) => id,
-            _ => None,
-        };
+        let transport_id = n.query(query::TransportIdentity).ok().flatten();
         let s = read_state(state);
         HttpResponse::ok(json!({
             "transport_id": transport_id.map(|h| to_hex(&h)),

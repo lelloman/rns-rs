@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use rns_core::destination::destination_hash;
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
-use rns_net::{Callbacks, QueryRequest, QueryResponse, RnsNode};
+use rns_net::{event::query, Callbacks, RnsNode};
 
 struct NoopCallbacks;
 
@@ -98,7 +98,7 @@ fn wait_for_rpc(port: u16) {
 
 fn inject_identity(node: &RnsNode, dest_hash: [u8; 16], identity: &Identity) {
     let response = node
-        .query(QueryRequest::InjectIdentity {
+        .query(query::InjectIdentity {
             dest_hash,
             identity_hash: *identity.hash(),
             public_key: identity.get_public_key().unwrap(),
@@ -107,7 +107,7 @@ fn inject_identity(node: &RnsNode, dest_hash: [u8; 16], identity: &Identity) {
             received_at: 1.0,
         })
         .unwrap();
-    assert!(matches!(response, QueryResponse::InjectIdentity(true)));
+    assert!(response);
 }
 
 /// Wait for the instance's periodic flush to write `dest_hash` to its

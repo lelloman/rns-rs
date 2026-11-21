@@ -58,7 +58,7 @@ static NEXT_RESOURCE_TRANSFER_ID: AtomicU64 = AtomicU64::new(1);
 const DEFAULT_KNOWN_DESTINATIONS_TTL: Duration = Duration::from_secs(48 * 60 * 60);
 const DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES: usize = 8192;
 
-use crate::event::{query, Query, QueryRequest, QueryResponse};
+use crate::event::{query, Query};
 
 /// Ask the driver `query` through `tx` and wait for its answer. Fails when
 /// the driver has shut down, or answers with another query's response.

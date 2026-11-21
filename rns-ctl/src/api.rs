@@ -27,8 +27,8 @@ const DEFAULT_HOOK_TYPE: &str = {
 
 use rns_crypto::identity::Identity;
 use rns_net::{
-    event::LifecycleState, DestHash, Destination, IdentityHash, ProofStrategy, QueryRequest,
-    QueryResponse, RnsNode,
+    event::{query, LifecycleState},
+    DestHash, Destination, IdentityHash, ProofStrategy, RnsNode,
 };
 
 use crate::auth::check_auth;
@@ -64,17 +64,13 @@ fn with_active_node<F>(node: &NodeHandle, f: F) -> HttpResponse
 where
     F: FnOnce(&RnsNode) -> HttpResponse,
 {
-    with_node(node, |n| match n.query(QueryRequest::DrainStatus) {
-        Ok(QueryResponse::DrainStatus(status))
-            if !matches!(status.state, LifecycleState::Active) =>
-        {
-            HttpResponse::conflict(
-                status
-                    .detail
-                    .as_deref()
-                    .unwrap_or("Node is draining and not accepting new work"),
-            )
-        }
+    with_node(node, |n| match n.query(query::DrainStatus) {
+        Ok(status) if !matches!(status.state, LifecycleState::Active) => HttpResponse::conflict(
+            status
+                .detail
+                .as_deref()
+                .unwrap_or("Node is draining and not accepting new work"),
+        ),
         _ => f(n),
     })
 }

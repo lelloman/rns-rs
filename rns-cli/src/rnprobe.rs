@@ -14,7 +14,7 @@ use crate::exit::{self, Exit, Status};
 use crate::format::python_float;
 use crate::pyfmt::{prettyhexrep, round_float, str_of};
 use rns_core::types::{DestHash, PacketHash};
-use rns_net::event::{QueryRequest, QueryResponse, MAX_PROBE_PAYLOAD_SIZE};
+use rns_net::event::{query, MAX_PROBE_PAYLOAD_SIZE};
 use rns_net::pickle::PickleValue;
 use rns_net::{config, storage, Callbacks, Destination, RnsNode, SharedInstanceRpc};
 
@@ -254,12 +254,12 @@ impl Prober<'_> {
     fn first_hop_timeout(&self, dest_hash: &[u8; 16]) -> f64 {
         match self.instance {
             Some(rpc) => rpc.first_hop_timeout(dest_hash),
-            None => match self.node.query(QueryRequest::FirstHopTimeout {
-                dest_hash: *dest_hash,
-            }) {
-                Ok(QueryResponse::FirstHopTimeout(timeout)) => Some(timeout),
-                _ => None,
-            },
+            None => self
+                .node
+                .query(query::FirstHopTimeout {
+                    dest_hash: *dest_hash,
+                })
+                .ok(),
         }
         .unwrap_or(rns_core::constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP)
     }
@@ -302,18 +302,20 @@ impl Prober<'_> {
                     .unwrap_or_else(|| "None".into()),
             ),
             None => (
-                match self.node.query(QueryRequest::NextHop {
-                    dest_hash: *dest_hash,
-                }) {
-                    Ok(QueryResponse::NextHop(Some(hop))) => Some(hop.next_hop.to_vec()),
-                    _ => None,
-                },
-                match self.node.query(QueryRequest::NextHopIfName {
-                    dest_hash: *dest_hash,
-                }) {
-                    Ok(QueryResponse::NextHopIfName(Some(name))) => name,
-                    _ => "None".into(),
-                },
+                self.node
+                    .query(query::NextHop {
+                        dest_hash: *dest_hash,
+                    })
+                    .ok()
+                    .flatten()
+                    .map(|hop| hop.next_hop.to_vec()),
+                self.node
+                    .query(query::NextHopIfName {
+                        dest_hash: *dest_hash,
+                    })
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "None".into()),
             ),
         };
         let via = next_hop

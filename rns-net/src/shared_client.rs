@@ -273,7 +273,7 @@ impl RnsNode {
     /// The driver's answer to a destination type query; `false` when the
     /// driver is gone.
     fn destination_type_query(&self, query: impl Query<Response = bool>) -> bool {
-        self.ask(query).unwrap_or(false)
+        self.query(query).unwrap_or(false)
     }
 
     /// Connect to an existing shared instance as a client.
@@ -1004,7 +1004,6 @@ fn load_or_create_transport_identity(storage_dir: &std::path::Path) -> io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{QueryRequest, QueryResponse};
     use crate::rpc::{RpcAddr, RpcClient};
     use rns_core::packet::RawPacket;
     use rns_core::types::{DestHash, IdentityHash};
@@ -1109,7 +1108,7 @@ mod tests {
         let identity = Identity::new(&mut OsRng);
         let dest_hash = [0x5d; 16];
         let response = daemon
-            .query(QueryRequest::InjectIdentity {
+            .query(query::InjectIdentity {
                 dest_hash,
                 identity_hash: *identity.hash(),
                 public_key: identity.get_public_key().unwrap(),
@@ -1118,7 +1117,7 @@ mod tests {
                 received_at: 1_700_000_000.0,
             })
             .unwrap();
-        assert!(matches!(response, QueryResponse::InjectIdentity(true)));
+        assert!(response);
         assert!(daemon
             .retain_known_destination(&DestHash(dest_hash))
             .unwrap());

@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
+use rns_net::event::query;
 use rns_net::interface::weave::{WeaveConfig, WeaveState};
 use rns_net::{
-    Callbacks, Destination, IdentityHash, InterfaceConfig, InterfaceId, NodeConfig, QueryRequest,
-    QueryResponse, RnsNode, MODE_FULL,
+    Callbacks, Destination, IdentityHash, InterfaceConfig, InterfaceId, NodeConfig, RnsNode,
+    MODE_FULL,
 };
 
 struct HilCallbacks;
@@ -67,9 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Weave HIL timed out before bidirectional peer traffic was observed".into(),
             );
         }
-        let QueryResponse::InterfaceStats(stats) = node.query(QueryRequest::InterfaceStats)? else {
-            return Err("unexpected interface statistics response".into());
-        };
+        let stats = node.query(query::InterfaceStats)?;
         let parent = stats
             .interfaces
             .iter()
