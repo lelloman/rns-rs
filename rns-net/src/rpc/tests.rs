@@ -233,6 +233,24 @@ fn oversized_challenge_is_refused_by_the_client() {
 }
 
 #[test]
+fn lengths_past_i32_max_use_the_extended_frame() {
+    // Upstream switches to -1 plus an 8-byte length above 0x7fffffff;
+    // a plain `as i32` would have sent a negative length instead.
+    let (header, len) = frame_header(i32::MAX as usize);
+    assert_eq!(header.get(..len).unwrap(), i32::MAX.to_be_bytes());
+    let big = i32::MAX as usize + 1;
+    let (header, len) = frame_header(big);
+    let mut expected = (-1i32).to_be_bytes().to_vec();
+    expected.extend_from_slice(&(big as u64).to_be_bytes());
+    assert_eq!(header.get(..len).unwrap(), expected);
+    // The reader parses that frame (and refuses it as over its limit).
+    let mut input = io::Cursor::new(expected);
+    let error = recv_bytes(&mut input).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(input.position(), 12);
+}
+
+#[test]
 fn handshake_accepts_messages_up_to_the_upstream_limit() {
     let message = vec![7u8; MAX_HANDSHAKE_MESSAGE];
     let mut input = (message.len() as i32).to_be_bytes().to_vec();

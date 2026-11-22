@@ -60,8 +60,9 @@ impl ServerSession {
     }
 
     pub(super) fn queue(&mut self, message: &[u8]) {
+        let (header, header_len) = frame_header(message.len());
         self.output
-            .extend_from_slice(&(message.len() as i32).to_be_bytes());
+            .extend_from_slice(header.get(..header_len).unwrap_or_default());
         self.output.extend_from_slice(message);
     }
 
@@ -342,10 +343,28 @@ pub(super) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// Send bytes with 4-byte big-endian length prefix.
+/// The length prefix of a `len`-byte message and how many of its bytes are
+/// used: a 4-byte big-endian length, or, past `i32::MAX`, -1 followed by an
+/// 8-byte length, as upstream's `multiprocessing.connection` frames it.
+pub(super) fn frame_header(len: usize) -> ([u8; 12], usize) {
+    let mut header = [0u8; 12];
+    match i32::try_from(len) {
+        Ok(len) => {
+            header[..4].copy_from_slice(&len.to_be_bytes());
+            (header, 4)
+        }
+        Err(_) => {
+            header[..4].copy_from_slice(&(-1i32).to_be_bytes());
+            header[4..].copy_from_slice(&(len as u64).to_be_bytes());
+            (header, 12)
+        }
+    }
+}
+
+/// Send bytes with a length prefix (see [`frame_header`]).
 pub(super) fn send_bytes<S: Write>(stream: &mut S, data: &[u8]) -> io::Result<()> {
-    let len = data.len() as i32;
-    stream.write_all(&len.to_be_bytes())?;
+    let (header, header_len) = frame_header(data.len());
+    stream.write_all(header.get(..header_len).unwrap_or_default())?;
     stream.write_all(data)?;
     stream.flush()
 }
