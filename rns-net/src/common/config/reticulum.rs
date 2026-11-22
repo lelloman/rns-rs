@@ -221,6 +221,7 @@ pub(super) fn build_reticulum_section(
             "max_tunnel_destinations_total",
             &mut s.max_tunnel_destinations_total,
         ),
+        ("max_reverse_entries", &mut s.max_reverse_entries),
     ] {
         if let Some(n) = keys.parse::<usize>(key)? {
             *field = n.max(1);

@@ -199,6 +199,7 @@ packet_hashlist_max_entries = 321
 max_discovery_pr_tags = 222
 max_path_destinations = 111
 max_tunnel_destinations_total = 99
+max_reverse_entries = 77
 announce_signature_cache_enabled = false
 announce_signature_cache_max_entries = 500
 announce_signature_cache_ttl = 300
@@ -238,6 +239,7 @@ backbone_peer_pool_cooldown = 300
     assert_eq!(config.reticulum.max_discovery_pr_tags, 222);
     assert_eq!(config.reticulum.max_path_destinations, 111);
     assert_eq!(config.reticulum.max_tunnel_destinations_total, 99);
+    assert_eq!(config.reticulum.max_reverse_entries, 77);
     assert!(!config.reticulum.announce_sig_cache_enabled);
     assert_eq!(config.reticulum.announce_sig_cache_max_entries, 500);
     assert_eq!(config.reticulum.announce_sig_cache_ttl, 300);

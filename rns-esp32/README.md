@@ -217,6 +217,7 @@ The ESP32 firmware now uses an explicit constrained `TransportConfig` profile in
 - `max_discovery_pr_tags = 256`
 - `max_path_destinations = 256`
 - `max_tunnel_destinations_total = 128`
+- `max_reverse_entries = 512`
 - `known_destinations_ttl = 24h`
 - `max_paths_per_destination = 2`
 - `announce_signature_cache_max_entries = 256`

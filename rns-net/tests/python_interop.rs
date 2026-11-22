@@ -528,6 +528,7 @@ fn start_rust_node_on(
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
+            max_reverse_entries: rns_core::transport::types::DEFAULT_MAX_REVERSE_ENTRIES,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             known_destinations_max_entries: 8192,
             announce_table_ttl: std::time::Duration::from_secs(

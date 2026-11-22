@@ -108,6 +108,11 @@ impl TransportEngine {
         self.routes.reverse.len()
     }
 
+    /// Number of reverse entries evicted because the reverse table was full.
+    pub fn reverse_cap_evict_count(&self) -> usize {
+        self.routes.reverse_cap_evict_count
+    }
+
     /// Number of announce table entries held aside (upstream `Transport.held_announces`).
     pub fn held_announces_count(&self) -> usize {
         self.announces.held.len()
