@@ -20,8 +20,8 @@ impl TransportEngine {
                 cap_evict_count: 0,
             },
             announces: AnnounceState {
-                table: BTreeMap::new(),
-                held: BTreeMap::new(),
+                table: tables::AnnounceMap::new(),
+                held: tables::AnnounceMap::new(),
                 sig_cache: AnnounceSignatureCache::new(sig_cache_max, sig_cache_ttl),
                 rate_limiter: AnnounceRateLimiter::new(),
                 queues: AnnounceQueues::new(announce_queue_max_interfaces),

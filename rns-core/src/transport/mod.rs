@@ -35,7 +35,6 @@ pub mod types;
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::mem::size_of;
 
 use rns_crypto::Rng;
 
@@ -299,9 +298,9 @@ struct PathTables {
 /// per-interface announce bookkeeping.
 struct AnnounceState {
     /// Announces awaiting retransmission (`Transport.announce_table`).
-    table: BTreeMap<[u8; 16], AnnounceEntry>,
+    table: tables::AnnounceMap,
     /// Announce table entries held aside (`Transport.held_announces`).
-    held: BTreeMap<[u8; 16], AnnounceEntry>,
+    held: tables::AnnounceMap,
     sig_cache: AnnounceSignatureCache,
     rate_limiter: AnnounceRateLimiter,
     /// Per-interface outbound announce queues.

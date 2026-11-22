@@ -226,6 +226,10 @@ impl TransportEngine {
         }
         self.cull_expired_announce_entries(ctx.now);
         self.enforce_announce_retention_cap(ctx.now);
+        debug_assert!(
+            self.announces.table.retained_bytes_consistent()
+                && self.announces.held.retained_bytes_consistent()
+        );
         self.timers.announces_last_checked = ctx.now;
     }
 

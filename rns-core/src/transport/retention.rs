@@ -5,6 +5,11 @@ use super::*;
 /// cull.
 const PATH_CAP_EVICT_BATCH_DIVISOR: usize = 32;
 
+/// Over the announce retention cap, evict down to
+/// `max - max / DIVISOR` bytes, so the next inserts fit without another
+/// cull and sort.
+const ANNOUNCE_CAP_EVICT_BATCH_DIVISOR: usize = 32;
+
 impl TransportEngine {
     pub(crate) fn insert_discovery_pr_tag(&mut self, unique_tag: [u8; 32]) -> bool {
         self.path_requests
@@ -130,82 +135,63 @@ impl TransportEngine {
     }
 
     pub(crate) fn announce_entry_size_bytes(entry: &AnnounceEntry) -> usize {
-        size_of::<AnnounceEntry>()
-            + entry.packet_raw.capacity()
-            + entry.packet_data.capacity()
-            + entry.blocked_interfaces.len() * size_of::<InterfaceId>()
+        entry.retained_bytes()
     }
 
     pub(crate) fn announce_retained_bytes_total(&self) -> usize {
-        self.announces
-            .table
-            .values()
-            .chain(self.announces.held.values())
-            .map(Self::announce_entry_size_bytes)
-            .sum()
+        self.announces.table.retained_bytes() + self.announces.held.retained_bytes()
+    }
+
+    /// Whether an announce entry has outlived the announce table TTL.
+    fn announce_expired(&self, entry: &AnnounceEntry, now: f64) -> bool {
+        now > entry.timestamp + self.config.announce_table_ttl_secs
     }
 
     pub(crate) fn cull_expired_announce_entries(&mut self, now: f64) -> usize {
         let ttl = self.config.announce_table_ttl_secs;
-        let mut removed = 0usize;
-
-        self.announces.table.retain(|_, entry| {
-            let keep = now <= entry.timestamp + ttl;
-            if !keep {
-                removed += 1;
-            }
-            keep
-        });
-
-        self.announces.held.retain(|_, entry| {
-            let keep = now <= entry.timestamp + ttl;
-            if !keep {
-                removed += 1;
-            }
-            keep
-        });
-
-        removed
+        let keep = |_: &[u8; 16], entry: &AnnounceEntry| now <= entry.timestamp + ttl;
+        self.announces.table.retain(keep) + self.announces.held.retain(keep)
     }
 
-    fn oldest_retained_announce(&self) -> Option<([u8; 16], bool)> {
-        let oldest_active = self
+    /// Bring the bytes retained by the announce table and held announces
+    /// back under `announce_table_max_bytes`; under the cap this does
+    /// nothing, and expiry is left to the periodic announce job.
+    ///
+    /// Over the cap, expired entries are culled, then the oldest entries
+    /// (held before active on a tie) are evicted until the total is at the
+    /// low-water mark, so a flood at the cap culls and sorts once per batch
+    /// instead of on every insert.
+    pub(crate) fn enforce_announce_retention_cap(&mut self, now: f64) {
+        let max_bytes = self.config.announce_table_max_bytes;
+        if self.announce_retained_bytes_total() <= max_bytes {
+            return;
+        }
+        self.cull_expired_announce_entries(now);
+        let low_water = max_bytes - max_bytes / ANNOUNCE_CAP_EVICT_BATCH_DIVISOR;
+        if self.announce_retained_bytes_total() <= low_water {
+            return;
+        }
+        let mut oldest: Vec<(f64, bool, [u8; 16])> = self
             .announces
             .table
             .iter()
-            .map(|(dest_hash, entry)| (*dest_hash, false, entry.timestamp))
-            .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(core::cmp::Ordering::Equal));
-        let oldest_held = self
-            .announces
-            .held
-            .iter()
-            .map(|(dest_hash, entry)| (*dest_hash, true, entry.timestamp))
-            .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(core::cmp::Ordering::Equal));
-
-        match (oldest_active, oldest_held) {
-            (Some(active), Some(held)) => {
-                let ordering = active
-                    .2
-                    .partial_cmp(&held.2)
-                    .unwrap_or(core::cmp::Ordering::Equal);
-                if ordering == core::cmp::Ordering::Less {
-                    Some((active.0, active.1))
-                } else {
-                    Some((held.0, held.1))
-                }
-            }
-            (Some(active), None) => Some((active.0, active.1)),
-            (None, Some(held)) => Some((held.0, held.1)),
-            (None, None) => None,
-        }
-    }
-
-    pub(crate) fn enforce_announce_retention_cap(&mut self, now: f64) {
-        self.cull_expired_announce_entries(now);
-        while self.announce_retained_bytes_total() > self.config.announce_table_max_bytes {
-            let Some((dest_hash, is_held)) = self.oldest_retained_announce() else {
+            .map(|(dest_hash, entry)| (entry.timestamp, false, *dest_hash))
+            .chain(
+                self.announces
+                    .held
+                    .iter()
+                    .map(|(dest_hash, entry)| (entry.timestamp, true, *dest_hash)),
+            )
+            .collect();
+        oldest.sort_unstable_by(|a, b| {
+            a.0.total_cmp(&b.0)
+                .then_with(|| b.1.cmp(&a.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
+        for (_, is_held, dest_hash) in oldest {
+            if self.announce_retained_bytes_total() <= low_water {
                 break;
-            };
+            }
             if is_held {
                 self.announces.held.remove(&dest_hash);
             } else {
@@ -220,15 +206,16 @@ impl TransportEngine {
         mut entry: AnnounceEntry,
         now: f64,
     ) -> bool {
-        self.cull_expired_announce_entries(now);
-        if Self::announce_entry_size_bytes(&entry) > self.config.announce_table_max_bytes {
+        if Self::announce_entry_size_bytes(&entry) > self.config.announce_table_max_bytes
+            || self.announce_expired(&entry, now)
+        {
             return false;
         }
         // Refresh the payload without letting incoming traffic repeatedly move
-        // pending work beyond the next maintenance tick. Completed entries no
-        // longer have a send to preserve; expired entries were culled above.
+        // pending work beyond the next maintenance tick. Completed and expired
+        // entries no longer have a send to preserve.
         if let Some(pending) = self.announces.table.get(&dest_hash) {
-            if pending.retries <= constants::PATHFINDER_R {
+            if pending.retries <= constants::PATHFINDER_R && !self.announce_expired(pending, now) {
                 entry.retransmit_timeout = entry.retransmit_timeout.min(pending.retransmit_timeout);
             }
         }
@@ -243,8 +230,9 @@ impl TransportEngine {
         entry: AnnounceEntry,
         now: f64,
     ) -> bool {
-        self.cull_expired_announce_entries(now);
-        if Self::announce_entry_size_bytes(&entry) > self.config.announce_table_max_bytes {
+        if Self::announce_entry_size_bytes(&entry) > self.config.announce_table_max_bytes
+            || self.announce_expired(&entry, now)
+        {
             return false;
         }
         self.announces.held.insert(dest_hash, entry);
