@@ -269,8 +269,9 @@ impl GatewayLoop<'_, PrivateNode, TunDevice> {
 
 impl<N: GatewayNode, D: PacketDevice> GatewayLoop<'_, N, D> {
     /// Adopts the policy file when it changed, revoking sessions whose grant
-    /// changed. A policy that moves the gateway, or that fails to load, is
-    /// ignored.
+    /// changed. Links still waiting for their identity are kept: the new
+    /// policy is checked when they identify. A policy that moves the
+    /// gateway, or that fails to load, is ignored.
     fn reload_policy_if_changed(&mut self) {
         let modified = fs::metadata(&self.gateway.policy_file)
             .and_then(|metadata| metadata.modified())
@@ -288,7 +289,7 @@ impl<N: GatewayNode, D: PacketDevice> GatewayLoop<'_, N, D> {
             {
                 let node = self.node;
                 self.sessions.retain(|link_id, entry| {
-                    let unchanged = entry.identity.is_some_and(|identity| {
+                    let unchanged = entry.identity.is_none_or(|identity| {
                         replacement.grant(&identity) == entry.grant.as_ref()
                     });
                     if !unchanged {

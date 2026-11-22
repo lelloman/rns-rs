@@ -1246,16 +1246,45 @@ fn policy_reload_revokes_only_changed_grants() {
 }
 
 #[test]
-fn policy_reload_revokes_removed_clients_and_unidentified_links() {
+fn policy_reload_revokes_removed_clients() {
     let mut fixture = Fixture::docker();
     let mut gateway = fixture.gateway();
     activate(&mut gateway, LINK_A, SPLIT, &["198.18.0.0/24"], &[]);
-    link_up(&mut gateway, LINK_B);
     let without_split = policy_toml("10.77.0.2").replace(&hex(&SPLIT), &hex(&STRANGER));
     rewrite_policy(&mut gateway, &without_split);
     assert_eq!(state(&gateway, LINK_A), None);
-    // A Link still waiting for its identity has no grant to keep.
-    assert_eq!(state(&gateway, LINK_B), None);
+    assert!(gateway.node.torn_down(LINK_A));
+}
+
+#[test]
+fn policy_reload_keeps_links_waiting_for_their_identity() {
+    let mut fixture = Fixture::docker();
+    let mut gateway = fixture.gateway();
+    link_up(&mut gateway, LINK_A);
+    link_up(&mut gateway, LINK_B);
+    // LINK_B's hello arrives before its identity and is buffered.
+    control(&mut gateway, LINK_B, hello(&["198.18.0.0/24"]));
+    let moved_split = policy_toml("10.77.0.2")
+        .replace(&hex(&SPLIT), &hex(&STRANGER))
+        .replace(&hex(&DISABLED), &hex(&SPLIT));
+    rewrite_policy(&mut gateway, &moved_split);
+    assert_eq!(state(&gateway, LINK_A), Some(GatewayState::PendingIdentity));
+    assert_eq!(state(&gateway, LINK_B), Some(GatewayState::PendingIdentity));
+    assert!(gateway.node.teardowns.borrow().is_empty());
+    // They are checked against the new policy once they identify: SPLIT
+    // now has the disabled grant, STRANGER has SPLIT's old one.
+    identify(&mut gateway, LINK_A, SPLIT);
+    assert_rejected(&gateway, LINK_A, 1);
+    assert_eq!(state(&gateway, LINK_A), None);
+    identify(&mut gateway, LINK_B, STRANGER);
+    let accept = only_control(&gateway, LINK_B);
+    let ControlMessage::ServerAccept {
+        assigned_address, ..
+    } = accept
+    else {
+        panic!("expected an accept, got {accept:?}");
+    };
+    assert_eq!(assigned_address, addr("10.77.0.3"));
 }
 
 #[test]
