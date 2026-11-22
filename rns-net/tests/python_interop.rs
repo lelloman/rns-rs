@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use rns_core::packet::RawPacket;
 use rns_core::types::{DestHash, IdentityHash, LinkId, PacketHash};
 use rns_crypto::identity::Identity;
-use rns_crypto::OsRng;
+use rns_crypto::{OsRng, Rng};
 use rns_net::{
     interface::TcpClientConfig, AnnouncedIdentity, Callbacks, Destination, InterfaceConfig,
     InterfaceId, NodeConfig, RnsNode, MODE_FULL,
@@ -641,7 +641,8 @@ def resource_concluded(resource):
     if resource.status == RNS.Resource.COMPLETE:
         resource.data.seek(0)
         data = resource.data.read()
-        emit("python_resource_received", sha256=hashlib.sha256(data).hexdigest(), size=len(data), app_flag=getattr(resource, "app_flag", None))
+        emit("python_resource_received", sha256=hashlib.sha256(data).hexdigest(), size=len(data), app_flag=getattr(resource, "app_flag", None),
+             compressed=resource.compressed)
     else:
         emit("python_resource_failed", status=resource.status)
 
@@ -1031,6 +1032,38 @@ fn python_rns_bidirectional_tcp_interop() {
         assert_eq!(python_received_resource["app_flag"], true);
     } else {
         assert!(python_received_resource["app_flag"].is_null());
+    }
+
+    // Payloads large enough to be screened before compression: random data
+    // goes out uncompressed, text compressed, and upstream takes both.
+    let size = 600 * 1024;
+    let mut random = vec![0u8; size];
+    OsRng.fill_bytes(&mut random);
+    let text: Vec<u8> = b"upstream accepts compressed and uncompressed resources\n"
+        .iter()
+        .copied()
+        .cycle()
+        .take(size)
+        .collect();
+    for (payload, compressed) in [(random, false), (text, true)] {
+        node.send_resource_with_options(
+            link_id,
+            payload.clone(),
+            None,
+            rns_net::ResourceSendOptions {
+                auto_compress: true,
+                app_flag: false,
+            },
+        )
+        .expect("Rust should send a Resource to Python");
+        let received = python.wait_for_event(TIMEOUT, |event| {
+            event["event"] == "python_resource_received" && event["size"] == size
+        });
+        assert_eq!(
+            received["sha256"],
+            hex(&rns_core::hash::full_hash(&payload))
+        );
+        assert_eq!(received["compressed"], compressed);
     }
 
     node.shutdown();

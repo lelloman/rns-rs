@@ -22,6 +22,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use super::compressor::Bzip2Compressor;
+use super::resource_compressor::ResourceCompressor;
 use rns_core::channel::{Channel, Sequence};
 use rns_core::constants;
 use rns_core::link::{LinkAction, LinkEngine, LinkMode};

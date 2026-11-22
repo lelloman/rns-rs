@@ -72,7 +72,7 @@ impl SegmentBuild {
             None,
             self.sdu,
             &TokenEncrypt(token),
-            &Bzip2Compressor,
+            &ResourceCompressor,
             &mut rns_crypto::OsRng,
             self.now,
             self.auto_compress,
