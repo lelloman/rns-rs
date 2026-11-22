@@ -1833,6 +1833,81 @@ fn test_ws_upgrade_with_wrong_token_gets_401_before_body() {
     server.shutdown();
 }
 
+/// Send a WebSocket upgrade for `/ws<query>` with `extra` header lines and
+/// return the response head (up to the blank line).
+fn ws_upgrade_head(port: u16, query: &str, extra: &str) -> String {
+    let mut stream = connect_raw(port);
+    let head = format!(
+        "GET /ws{} HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
+         Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Sec-WebSocket-Version: 13\r\n{}\r\n",
+        query, extra
+    );
+    stream.write_all(head.as_bytes()).unwrap();
+    let mut response = Vec::new();
+    let mut buf = [0u8; 1024];
+    while !response.windows(4).any(|w| w == b"\r\n\r\n") {
+        match stream.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => response.extend_from_slice(&buf[..n]),
+        }
+    }
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+#[test]
+fn test_ws_upgrade_accepts_bearer_header() {
+    let server = start_test_server_with_auth("test-secret-token");
+    let head = ws_upgrade_head(
+        server.port,
+        "",
+        "Authorization: Bearer test-secret-token\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 101 "), "{}", head);
+    assert!(!head.contains("Sec-WebSocket-Protocol"), "{}", head);
+    server.shutdown();
+}
+
+#[test]
+fn test_ws_upgrade_accepts_bearer_subprotocol() {
+    let server = start_test_server_with_auth("test-secret-token");
+    let head = ws_upgrade_head(
+        server.port,
+        "",
+        "Sec-WebSocket-Protocol: rns-ctl, rns-ctl.bearer.test-secret-token\r\n",
+    );
+    assert!(head.starts_with("HTTP/1.1 101 "), "{}", head);
+    assert!(
+        head.contains("Sec-WebSocket-Protocol: rns-ctl\r\n"),
+        "{}",
+        head
+    );
+    assert!(!head.contains("test-secret-token"), "{}", head);
+    server.shutdown();
+}
+
+#[test]
+fn test_ws_upgrade_without_or_with_wrong_token_gets_401() {
+    let server = start_test_server_with_auth("test-secret-token");
+    for extra in [
+        "",
+        "Authorization: Bearer wrong-token\r\n",
+        "Sec-WebSocket-Protocol: rns-ctl, rns-ctl.bearer.wrong-token\r\n",
+    ] {
+        let head = ws_upgrade_head(server.port, "", extra);
+        assert!(head.starts_with("HTTP/1.1 401 "), "{}: {}", extra, head);
+    }
+    server.shutdown();
+}
+
+#[test]
+fn test_ws_upgrade_ignores_token_in_query_string() {
+    let server = start_test_server_with_auth("test-secret-token");
+    let head = ws_upgrade_head(server.port, "?token=test-secret-token", "");
+    assert!(head.starts_with("HTTP/1.1 401 "), "{}", head);
+    server.shutdown();
+}
+
 #[test]
 fn test_connections_beyond_cap_get_503() {
     let server = start_test_server();
