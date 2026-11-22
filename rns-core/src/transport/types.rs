@@ -18,6 +18,15 @@ pub const DEFAULT_MAX_PATH_DESTINATIONS: usize = 8192;
 /// table stays in the low megabytes.
 pub const DEFAULT_MAX_REVERSE_ENTRIES: usize = 65536;
 
+/// Default for [`TransportConfig::max_link_entries`].
+///
+/// A link relayed by this node keeps its entry until 15 minutes
+/// (`LINK_TIMEOUT`) after its last packet, or, while its proof is pending,
+/// a few seconds per hop. The cap holds ~36 new links per second each kept
+/// alive the full timeout, beyond what a transport node relays. An entry
+/// takes a couple of hundred bytes, so a full table stays under 10 MB.
+pub const DEFAULT_MAX_LINK_ENTRIES: usize = 32768;
+
 /// Shared, immutable packet bytes, cheap to clone into several actions.
 pub type PacketBytes = Arc<[u8]>;
 
@@ -592,6 +601,11 @@ pub struct TransportConfig {
     /// of forwarded packets back. At the cap, expired entries are culled and
     /// then the oldest are evicted. Upstream has no cap.
     pub max_reverse_entries: usize,
+    /// Maximum number of entries in the link table, the links this node
+    /// relays. At the cap, entries the periodic cull would remove go first,
+    /// then links whose proof is pending, then validated ones, oldest first
+    /// within each. Upstream has no cap.
+    pub max_link_entries: usize,
     /// Retention timeout for tunnel-known destinations, in seconds.
     pub destination_timeout_secs: f64,
     /// Retention timeout for announce retransmission state, in seconds.
@@ -637,6 +651,7 @@ mod tests {
             max_path_destinations: DEFAULT_MAX_PATH_DESTINATIONS,
             max_tunnel_destinations_total: usize::MAX,
             max_reverse_entries: crate::transport::types::DEFAULT_MAX_REVERSE_ENTRIES,
+            max_link_entries: crate::transport::types::DEFAULT_MAX_LINK_ENTRIES,
             destination_timeout_secs: crate::constants::DESTINATION_TIMEOUT,
             announce_table_ttl_secs: crate::constants::ANNOUNCE_TABLE_TTL,
             announce_table_max_bytes: crate::constants::ANNOUNCE_TABLE_MAX_BYTES,
@@ -667,6 +682,7 @@ mod tests {
         assert_eq!(cfg.max_path_destinations, DEFAULT_MAX_PATH_DESTINATIONS);
         assert_eq!(cfg.max_tunnel_destinations_total, usize::MAX);
         assert_eq!(cfg.max_reverse_entries, DEFAULT_MAX_REVERSE_ENTRIES);
+        assert_eq!(cfg.max_link_entries, DEFAULT_MAX_LINK_ENTRIES);
         assert_eq!(
             cfg.destination_timeout_secs,
             crate::constants::DESTINATION_TIMEOUT

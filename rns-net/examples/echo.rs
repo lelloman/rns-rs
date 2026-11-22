@@ -189,6 +189,7 @@ fn main() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             max_reverse_entries: rns_core::transport::types::DEFAULT_MAX_REVERSE_ENTRIES,
+            max_link_entries: rns_core::transport::types::DEFAULT_MAX_LINK_ENTRIES,
             known_destinations_ttl: std::time::Duration::from_secs(48 * 60 * 60),
             known_destinations_max_entries: 8192,
             announce_table_ttl: std::time::Duration::from_secs(
@@ -298,6 +299,7 @@ fn main() {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             max_reverse_entries: rns_core::transport::types::DEFAULT_MAX_REVERSE_ENTRIES,
+            max_link_entries: rns_core::transport::types::DEFAULT_MAX_LINK_ENTRIES,
             known_destinations_ttl: std::time::Duration::from_secs(48 * 60 * 60),
             known_destinations_max_entries: 8192,
             announce_table_ttl: std::time::Duration::from_secs(

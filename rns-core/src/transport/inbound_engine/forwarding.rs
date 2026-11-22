@@ -197,6 +197,7 @@ impl TransportEngine {
                 ctx.now,
                 proof_timeout,
             );
+            self.enforce_link_table_cap(&link_id, ctx.now, actions);
             self.routes.links.insert(link_id, link_entry);
             actions.push(TransportAction::LinkRequestReceived {
                 link_id,

@@ -316,6 +316,9 @@ struct LinkRoutes {
     reverse_cap_evict_count: usize,
     /// Links relayed by this node.
     links: tables::LinkTable,
+    /// How many link entries were evicted to keep the link table within
+    /// its cap.
+    link_cap_evict_count: usize,
     /// Whether the next LRPROOF for this link carries a valid signature, as
     /// checked by the caller with the destination's identity
     /// ([`TransportEngine::set_lrproof_verdict`]).

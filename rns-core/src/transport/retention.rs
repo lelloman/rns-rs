@@ -14,6 +14,10 @@ const ANNOUNCE_CAP_EVICT_BATCH_DIVISOR: usize = 32;
 /// one below the cap), so the next inserts find room without another pass.
 const REVERSE_CAP_EVICT_BATCH_DIVISOR: usize = 32;
 
+/// At the link table cap, evict down to `cap - cap / DIVISOR` (at least one
+/// below the cap), so the next inserts find room without another pass.
+const LINK_CAP_EVICT_BATCH_DIVISOR: usize = 32;
+
 impl TransportEngine {
     pub(crate) fn insert_discovery_pr_tag(&mut self, unique_tag: [u8; 32]) -> bool {
         self.path_requests
@@ -190,6 +194,78 @@ impl TransportEngine {
         for (_, hash) in candidates.into_iter().take(excess) {
             self.routes.reverse.remove(&hash);
             self.routes.reverse_cap_evict_count += 1;
+        }
+    }
+
+    /// Make room for a link entry for `link_id` when the link table is at
+    /// `max_link_entries`; below the cap, or when the entry replaces one
+    /// already there, this does nothing. Each evicted entry is reported in
+    /// `actions` as a [`TransportAction::LinkClosed`], as the periodic cull
+    /// reports the entries it removes.
+    #[inline]
+    pub(crate) fn enforce_link_table_cap(
+        &mut self,
+        link_id: &[u8; 16],
+        now: f64,
+        actions: &mut Vec<TransportAction>,
+    ) {
+        if self.routes.links.len() >= self.config.max_link_entries
+            && !self.routes.links.contains_key(link_id)
+        {
+            self.evict_link_entries(now, actions);
+        }
+    }
+
+    /// Bring a full link table down to its low-water mark in one pass, in
+    /// this order:
+    /// - entries the periodic cull would remove: their link is over;
+    /// - links whose proof is pending: no traffic flows over them yet, and
+    ///   a link request flood can only add these;
+    /// - validated links, which carry live traffic.
+    ///
+    /// Oldest first within each, so a validated link goes by its last
+    /// traffic. Only the batch is removed, so stale entries left over still
+    /// go through the periodic cull, which rediscovers paths for unproven
+    /// links; doing that here would let a flood trigger path requests.
+    #[cold]
+    #[inline(never)]
+    fn evict_link_entries(&mut self, now: f64, actions: &mut Vec<TransportAction>) {
+        let cap = self.config.max_link_entries;
+        let low_water = cap.saturating_sub((cap / LINK_CAP_EVICT_BATCH_DIVISOR).max(1));
+        let excess = self.routes.links.len().saturating_sub(low_water);
+        if excess == 0 {
+            return;
+        }
+        type Candidate = (u8, f64, [u8; 16]);
+        let interfaces = &self.interfaces;
+        let mut candidates: Vec<Candidate> = self
+            .routes
+            .links
+            .iter()
+            .map(|(link_id, entry)| {
+                let rank = if jobs::link_entry_is_stale(entry, interfaces, now) {
+                    0
+                } else if entry.validated {
+                    2
+                } else {
+                    1
+                };
+                (rank, entry.timestamp, *link_id)
+            })
+            .collect();
+        // By rank, then oldest first; among equally old, link id order.
+        let evict_first = |a: &Candidate, b: &Candidate| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.total_cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+        };
+        if excess < candidates.len() {
+            candidates.select_nth_unstable_by(excess - 1, evict_first);
+        }
+        for (_, _, link_id) in candidates.into_iter().take(excess) {
+            self.routes.links.remove(&link_id);
+            self.routes.link_cap_evict_count += 1;
+            actions.push(TransportAction::LinkClosed { link_id });
         }
     }
 
