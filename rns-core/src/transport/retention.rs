@@ -78,25 +78,26 @@ impl TransportEngine {
     /// `max_path_destinations`; below the cap this does nothing, and expiry
     /// and the never-used pool trim are left to the periodic table cull.
     ///
-    /// At the cap, the table is culled as the periodic job does, then, if
-    /// still above the low-water mark, the oldest destinations are evicted
-    /// down to it in one pass. Evicting a batch instead of a single entry
-    /// keeps a flood of new destinations at the cap from culling and
-    /// scanning the whole table on every insert.
+    /// At the cap, expired, unavailable, lingering and excessive-hops paths
+    /// are culled as the periodic job does, without trimming the never-used
+    /// pool (that keeps upstream's cadence; trimming it here dropped all but
+    /// `PATH_POOL_UNUSED_MAX` never-used paths each time the cap was hit).
+    /// Then, if still above the low-water mark, destinations are evicted down
+    /// to it in one pass: never-used ones first, oldest first. Evicting a
+    /// batch instead of a single entry keeps a flood of new destinations at
+    /// the cap from culling and scanning the whole table on every insert.
     pub(crate) fn enforce_path_destination_cap(&mut self, now: f64) {
         let cap = self.config.max_path_destinations;
         if self.paths.table.len() < cap {
             return;
         }
         let unused_path_linger = self.unused_path_linger();
-        // The cap is not upstream's, so neither is its cadence: trim the
-        // never-used pool here whenever the cap is reached.
         jobs::cull_path_table(
             &mut self.paths.table,
             &self.interfaces,
             now,
             unused_path_linger,
-            Some(jobs::UnusedPoolLimits::UPSTREAM),
+            None,
             self.policy.hop_limiter,
         );
         let low_water = cap.saturating_sub((cap / PATH_CAP_EVICT_BATCH_DIVISOR).max(1));
@@ -104,21 +105,29 @@ impl TransportEngine {
         if excess == 0 {
             return;
         }
-        let mut candidates: Vec<(f64, u8, [u8; 16])> = self
+        let mut candidates: Vec<(bool, f64, u8, [u8; 16])> = self
             .paths
             .table
             .iter()
             .filter_map(|(dest_hash, path_set)| {
-                path_set
-                    .primary()
-                    .map(|primary| (primary.timestamp, primary.hops, *dest_hash))
+                path_set.primary().map(|primary| {
+                    (
+                        primary.used != 0.0,
+                        primary.timestamp,
+                        primary.hops,
+                        *dest_hash,
+                    )
+                })
             })
             .collect();
-        // Oldest first; among equally old, more hops first, then hash order.
-        let oldest_first = |a: &(f64, u8, [u8; 16]), b: &(f64, u8, [u8; 16])| {
-            a.0.total_cmp(&b.0)
-                .then_with(|| b.1.cmp(&a.1))
-                .then_with(|| a.2.cmp(&b.2))
+        // Never-used first, then oldest; among equally old, more hops first,
+        // then hash order.
+        type Candidate = (bool, f64, u8, [u8; 16]);
+        let oldest_first = |a: &Candidate, b: &Candidate| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.total_cmp(&b.1))
+                .then_with(|| b.2.cmp(&a.2))
+                .then_with(|| a.3.cmp(&b.3))
         };
         let evict = excess.min(candidates.len());
         if evict == 0 {
@@ -127,7 +136,7 @@ impl TransportEngine {
         if evict < candidates.len() {
             candidates.select_nth_unstable_by(evict - 1, oldest_first);
         }
-        for (_, _, dest_hash) in candidates.into_iter().take(evict) {
+        for (_, _, _, dest_hash) in candidates.into_iter().take(evict) {
             self.paths.table.remove(&dest_hash);
             self.paths.states.remove(&dest_hash);
             self.paths.cap_evict_count += 1;

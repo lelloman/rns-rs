@@ -4298,6 +4298,39 @@ fn new_path_destinations_below_cap_are_kept_until_periodic_cull() {
     assert_eq!(engine.path_table_count(), constants::PATH_POOL_UNUSED_MAX);
 }
 
+/// Reaching the destination cap evicts a batch of destinations, never-used
+/// and oldest first, but does not trim the never-used pool down to its
+/// target, which would drop most of a table of fresh paths at once.
+#[test]
+fn path_destination_cap_does_not_trim_never_used_pool() {
+    let cap = 4096usize;
+    let mut config = make_config(true);
+    config.max_path_destinations = cap;
+    let mut engine = TransportEngine::new(config);
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    assert!(cap > constants::PATH_POOL_UNUSED_MAX);
+
+    let used_dest = numbered_dest(0);
+    let mut used = make_path_entry(1000.0, 2, InterfaceId(1), [0x11; 16]);
+    used.used = 1000.0;
+    engine.upsert_path_destination(used_dest, used, 1000.0);
+    let count = cap as u32 + 1000;
+    for i in 1..count {
+        let now = 1000.0 + f64::from(i) * 0.001;
+        engine.upsert_path_destination(
+            numbered_dest(i),
+            make_path_entry(now, 2, InterfaceId(1), [0x11; 16]),
+            now,
+        );
+    }
+    assert!(engine.path_table_count() <= cap);
+    assert!(engine.path_table_count() >= cap - cap / 32);
+    // The oldest destination was in use, so never-used ones went first.
+    assert!(engine.has_path(&used_dest));
+    assert!(!engine.has_path(&numbered_dest(1)));
+    assert!(engine.has_path(&numbered_dest(count - 1)));
+}
+
 fn insert_unused_paths(engine: &mut TransportEngine, from: u32, count: u32, now: f64) {
     for i in from..from + count {
         engine.upsert_path_destination(
