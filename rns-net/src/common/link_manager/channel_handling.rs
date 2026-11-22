@@ -268,7 +268,8 @@ impl LinkManager {
     /// A part of a channel message the peer sends in parts. Once all of it
     /// is in, the channel takes it as if it had come in one packet, and the
     /// peer gets its receipt, `CHANNEL_PART_ACK`, sent like the proof of a
-    /// channel packet whether or not the channel had it already.
+    /// channel packet whether or not the channel had it already, and not
+    /// when the channel drops it as ahead of its receive window.
     pub(super) fn receive_channel_part(
         &mut self,
         link_id: &LinkId,
@@ -299,7 +300,7 @@ impl LinkManager {
             );
             return Vec::new();
         }
-        let chan_actions = channel.receive(&raw, time::now());
+        let (chan_actions, prove) = channel.receive_and_prove(&raw, time::now());
         link.channel_messages_received += chan_actions
             .iter()
             .filter(|action| {
@@ -310,6 +311,9 @@ impl LinkManager {
             })
             .count() as u64;
         let mut actions = self.process_channel_actions(link_id, chan_actions, rng);
+        if !prove {
+            return actions;
+        }
         let framed = rns_core::holepunch::encode_signal(
             rns_core::holepunch::CHANNEL_PART_ACK,
             &encode_channel_part_ack(part.sequence),
