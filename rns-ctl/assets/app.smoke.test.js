@@ -183,7 +183,23 @@ function createErrorResponse(status, error) {
   };
 }
 
-function makeUiHarness() {
+function fakeStorage(initial = {}) {
+  const items = new Map(Object.entries(initial));
+  return {
+    items,
+    getItem(key) {
+      return items.has(key) ? items.get(key) : null;
+    },
+    setItem(key, value) {
+      items.set(key, String(value));
+    },
+    removeItem(key) {
+      items.delete(key);
+    },
+  };
+}
+
+function makeUiHarness(options = {}) {
   const document = new FakeDocument();
   const source = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
   const ids = Array.from(source.matchAll(/getElementById\("([^"]+)"\)/g), (match) => match[1]);
@@ -193,6 +209,9 @@ function makeUiHarness() {
   }
 
   const calls = [];
+  const replacedUrls = [];
+  const localStorage = fakeStorage(options.localStorage);
+  const sessionStorage = fakeStorage(options.sessionStorage);
   const state = {
     node: {
       server_mode: "supervised",
@@ -487,13 +506,16 @@ function makeUiHarness() {
   const context = {
     console,
     document,
-    window: { location: { search: "" } },
-    localStorage: {
-      getItem() {
-        return "";
-      },
-      setItem() {},
+    window: {
+      location: { pathname: "/", search: options.search || "", hash: options.hash || "" },
     },
+    history: {
+      replaceState(_state, _title, url) {
+        replacedUrls.push(url);
+      },
+    },
+    localStorage,
+    sessionStorage,
     URLSearchParams,
     fetch: fetchStub,
     setInterval() {
@@ -504,7 +526,7 @@ function makeUiHarness() {
 
   vm.runInNewContext(source, context, { filename: "app.js" });
 
-  return { document, calls, state };
+  return { document, calls, state, replacedUrls, localStorage, sessionStorage };
 }
 
 async function flushUi() {
@@ -539,6 +561,32 @@ test("app.js renders operator state on initial refresh", async () => {
     .map((call) => call.url);
   assert(getPaths.includes("/api/stats/packets/series?window=24h&bucket=1h"));
   assert(getPaths.includes("/api/stats/links?window=24h&bucket=1h&limit=5"));
+});
+
+test("app.js takes the token from the fragment and clears it from the URL", async () => {
+  const { document, calls, replacedUrls, sessionStorage } = makeUiHarness({
+    hash: "#token=frag-secret",
+  });
+  await flushUi();
+
+  assert.equal(document.getElementById("token").value, "frag-secret");
+  assert.equal(sessionStorage.getItem("rnsctl_token"), "frag-secret");
+  assert.deepEqual(replacedUrls, ["/"]);
+  const nodeCall = calls.find((call) => call.url === "/api/node");
+  assert.equal(nodeCall.options.headers.Authorization, "Bearer frag-secret");
+});
+
+test("app.js reads a legacy query token once and strips it", async () => {
+  const { document, replacedUrls, sessionStorage, localStorage } = makeUiHarness({
+    search: "?token=old-secret&x=1",
+    localStorage: { rnsctl_token: "stale" },
+  });
+  await flushUi();
+
+  assert.equal(document.getElementById("token").value, "old-secret");
+  assert.equal(sessionStorage.getItem("rnsctl_token"), "old-secret");
+  assert.equal(localStorage.getItem("rnsctl_token"), null);
+  assert.deepEqual(replacedUrls, ["/?x=1"]);
 });
 
 test("app.js validate, save, and apply actions hit config endpoints", async () => {

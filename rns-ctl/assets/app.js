@@ -116,9 +116,59 @@ let latestTelemetry = {
   system: null,
 };
 
-const params = new URLSearchParams(window.location.search);
-const initialToken = params.get("token") || localStorage.getItem("rnsctl_token") || "";
-tokenInput.value = initialToken;
+// The token lives in sessionStorage and arrives in the URL fragment
+// (`/#token=...`), which browsers never send to the server or proxies.
+const TOKEN_KEY = "rnsctl_token";
+
+function storageGet(storage) {
+  try {
+    return storage.getItem(TOKEN_KEY) || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function storeToken(token) {
+  try {
+    if (token) sessionStorage.setItem(TOKEN_KEY, token);
+    else sessionStorage.removeItem(TOKEN_KEY);
+  } catch (error) {
+    // Storage unavailable: the token lasts as long as the page.
+  }
+}
+
+function takeInitialToken() {
+  const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  // `?token=` is read once for old bookmarks; it already reached the server
+  // with this load, so it is dropped from the address bar like the fragment.
+  const query = new URLSearchParams(window.location.search);
+  const fromUrl = fragment.get("token") || query.get("token") || "";
+  if (fragment.has("token") || query.has("token")) {
+    fragment.delete("token");
+    query.delete("token");
+    const search = query.toString();
+    const hash = fragment.toString();
+    history.replaceState(
+      null,
+      "",
+      window.location.pathname + (search ? `?${search}` : "") + (hash ? `#${hash}` : ""),
+    );
+  }
+  // Older versions kept the token in localStorage; move it to the session.
+  const legacy = storageGet(localStorage);
+  if (legacy) {
+    try {
+      localStorage.removeItem(TOKEN_KEY);
+    } catch (error) {
+      // Nothing to clean up if storage is unavailable.
+    }
+  }
+  const token = fromUrl || storageGet(sessionStorage) || legacy;
+  storeToken(token);
+  return token;
+}
+
+tokenInput.value = takeInitialToken();
 
 function fmtSeconds(value) {
   if (value == null) return "-";
@@ -1114,7 +1164,7 @@ async function refresh() {
 }
 
 saveButton.addEventListener("click", () => {
-  localStorage.setItem("rnsctl_token", tokenInput.value.trim());
+  storeToken(tokenInput.value.trim());
   refresh();
 });
 configCandidateEl.addEventListener("input", () => {

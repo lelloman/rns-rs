@@ -661,6 +661,18 @@ fn test_no_auth_ui_serves_app_shell() {
     server.shutdown();
 }
 
+#[test]
+fn test_ui_shell_is_served_without_a_token_when_auth_is_on() {
+    // The UI takes its token from the URL fragment, which never reaches the
+    // server, so the page and its assets must load without one.
+    let server = start_test_server_with_auth("test-secret-token");
+    for path in ["/", "/ui", "/assets/app.js", "/assets/app.css"] {
+        assert_eq!(http_get(server.port, path).status, 200, "{}", path);
+    }
+    assert_eq!(http_get(server.port, "/api/info").status, 401);
+    server.shutdown();
+}
+
 // ─── Step 3b: Auth ──────────────────────────────────────────────────────────
 
 #[test]
