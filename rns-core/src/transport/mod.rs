@@ -311,6 +311,9 @@ struct AnnounceState {
 struct LinkRoutes {
     /// Where to send proofs of forwarded packets back to.
     reverse: tables::ReverseTable,
+    /// How many reverse entries were evicted to keep the reverse table
+    /// within its cap.
+    reverse_cap_evict_count: usize,
     /// Links relayed by this node.
     links: tables::LinkTable,
     /// Whether the next LRPROOF for this link carries a valid signature, as

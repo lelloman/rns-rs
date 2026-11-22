@@ -28,6 +28,7 @@ impl TransportEngine {
             },
             routes: LinkRoutes {
                 reverse: tables::ReverseTable::default(),
+                reverse_cap_evict_count: 0,
                 links: tables::LinkTable::new(),
                 lrproof_verdict: None,
             },

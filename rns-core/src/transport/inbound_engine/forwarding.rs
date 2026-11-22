@@ -206,6 +206,7 @@ impl TransportEngine {
         } else {
             let (trunc_hash, reverse_entry) =
                 create_reverse_entry(&ctx.packet, outbound_interface, ctx.iface, ctx.now);
+            self.enforce_reverse_table_cap(&trunc_hash, ctx.now);
             self.routes.reverse.insert(trunc_hash, reverse_entry);
         }
 

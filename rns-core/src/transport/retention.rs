@@ -10,6 +10,10 @@ const PATH_CAP_EVICT_BATCH_DIVISOR: usize = 32;
 /// cull and sort.
 const ANNOUNCE_CAP_EVICT_BATCH_DIVISOR: usize = 32;
 
+/// At the reverse table cap, evict down to `cap - cap / DIVISOR` (at least
+/// one below the cap), so the next inserts find room without another pass.
+const REVERSE_CAP_EVICT_BATCH_DIVISOR: usize = 32;
+
 impl TransportEngine {
     pub(crate) fn insert_discovery_pr_tag(&mut self, unique_tag: [u8; 32]) -> bool {
         self.path_requests
@@ -140,6 +144,52 @@ impl TransportEngine {
             self.paths.table.remove(&dest_hash);
             self.paths.states.remove(&dest_hash);
             self.paths.cap_evict_count += 1;
+        }
+    }
+
+    /// Make room for a reverse entry for `trunc_hash` when the reverse table
+    /// is at `max_reverse_entries`; below the cap, or when the entry replaces
+    /// one already there, this does nothing.
+    #[inline]
+    pub(crate) fn enforce_reverse_table_cap(&mut self, trunc_hash: &[u8; 16], now: f64) {
+        if self.routes.reverse.len() >= self.config.max_reverse_entries
+            && !self.routes.reverse.contains_key(trunc_hash)
+        {
+            self.evict_reverse_entries(now);
+        }
+    }
+
+    /// Bring a full reverse table down to its low-water mark: entries the
+    /// periodic cull would remove go first, then the oldest. An entry only
+    /// routes the proof of a forwarded packet back, which comes soon after
+    /// the packet or not at all, so the oldest are the least likely to be
+    /// needed. Evicting a batch keeps a flood of forwarded packets at the
+    /// cap from scanning the whole table on every insert.
+    #[cold]
+    #[inline(never)]
+    fn evict_reverse_entries(&mut self, now: f64) {
+        let cap = self.config.max_reverse_entries;
+        jobs::cull_reverse_table(&mut self.routes.reverse, &self.interfaces, now);
+        let low_water = cap.saturating_sub((cap / REVERSE_CAP_EVICT_BATCH_DIVISOR).max(1));
+        let excess = self.routes.reverse.len().saturating_sub(low_water);
+        if excess == 0 {
+            return;
+        }
+        let mut candidates: Vec<(f64, [u8; 16])> = self
+            .routes
+            .reverse
+            .iter()
+            .map(|(hash, entry)| (entry.timestamp, *hash))
+            .collect();
+        // Oldest first; among equally old, hash order.
+        let oldest_first =
+            |a: &(f64, [u8; 16]), b: &(f64, [u8; 16])| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1));
+        if excess < candidates.len() {
+            candidates.select_nth_unstable_by(excess - 1, oldest_first);
+        }
+        for (_, hash) in candidates.into_iter().take(excess) {
+            self.routes.reverse.remove(&hash);
+            self.routes.reverse_cap_evict_count += 1;
         }
     }
 

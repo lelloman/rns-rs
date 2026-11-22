@@ -215,6 +215,7 @@ pub(super) fn node_config_from(
         max_discovery_pr_tags: reticulum.max_discovery_pr_tags,
         max_path_destinations: reticulum.max_path_destinations,
         max_tunnel_destinations_total: reticulum.max_tunnel_destinations_total,
+        max_reverse_entries: reticulum.max_reverse_entries,
         known_destinations_ttl: Duration::from_secs(reticulum.known_destinations_ttl),
         known_destinations_max_entries: reticulum.known_destinations_max_entries,
         announce_table_ttl: Duration::from_secs(reticulum.announce_table_ttl),

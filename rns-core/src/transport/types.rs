@@ -9,6 +9,15 @@ use crate::constants;
 /// Default for [`TransportConfig::max_path_destinations`].
 pub const DEFAULT_MAX_PATH_DESTINATIONS: usize = 8192;
 
+/// Default for [`TransportConfig::max_reverse_entries`].
+///
+/// A reverse entry is made for each packet this node forwards outside a
+/// link and lives `REVERSE_TIMEOUT` (180 s), so the cap holds a sustained
+/// ~360 forwarded packets per second, well above what a transport node
+/// relays outside links. An entry takes a few tens of bytes, so a full
+/// table stays in the low megabytes.
+pub const DEFAULT_MAX_REVERSE_ENTRIES: usize = 65536;
+
 /// Shared, immutable packet bytes, cheap to clone into several actions.
 pub type PacketBytes = Arc<[u8]>;
 
@@ -579,6 +588,10 @@ pub struct TransportConfig {
     pub max_path_destinations: usize,
     /// Maximum number of destination hashes retained across all tunnel entries.
     pub max_tunnel_destinations_total: usize,
+    /// Maximum number of entries in the reverse table, which routes proofs
+    /// of forwarded packets back. At the cap, expired entries are culled and
+    /// then the oldest are evicted. Upstream has no cap.
+    pub max_reverse_entries: usize,
     /// Retention timeout for tunnel-known destinations, in seconds.
     pub destination_timeout_secs: f64,
     /// Retention timeout for announce retransmission state, in seconds.
@@ -623,6 +636,7 @@ mod tests {
             max_discovery_pr_tags: crate::constants::MAX_PR_TAGS,
             max_path_destinations: DEFAULT_MAX_PATH_DESTINATIONS,
             max_tunnel_destinations_total: usize::MAX,
+            max_reverse_entries: crate::transport::types::DEFAULT_MAX_REVERSE_ENTRIES,
             destination_timeout_secs: crate::constants::DESTINATION_TIMEOUT,
             announce_table_ttl_secs: crate::constants::ANNOUNCE_TABLE_TTL,
             announce_table_max_bytes: crate::constants::ANNOUNCE_TABLE_MAX_BYTES,
@@ -652,6 +666,7 @@ mod tests {
         assert_eq!(cfg.max_discovery_pr_tags, crate::constants::MAX_PR_TAGS);
         assert_eq!(cfg.max_path_destinations, DEFAULT_MAX_PATH_DESTINATIONS);
         assert_eq!(cfg.max_tunnel_destinations_total, usize::MAX);
+        assert_eq!(cfg.max_reverse_entries, DEFAULT_MAX_REVERSE_ENTRIES);
         assert_eq!(
             cfg.destination_timeout_secs,
             crate::constants::DESTINATION_TIMEOUT

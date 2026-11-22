@@ -134,6 +134,7 @@ pub(super) fn transport_config(
         max_discovery_pr_tags: config.max_discovery_pr_tags,
         max_path_destinations: config.max_path_destinations,
         max_tunnel_destinations_total: config.max_tunnel_destinations_total,
+        max_reverse_entries: config.max_reverse_entries,
         destination_timeout_secs: config.known_destinations_ttl.as_secs_f64(),
         announce_table_ttl_secs: config.announce_table_ttl.as_secs_f64(),
         announce_table_max_bytes: config.announce_table_max_bytes,

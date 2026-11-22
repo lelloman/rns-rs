@@ -219,6 +219,9 @@ pub struct ReticulumSection {
     pub max_path_destinations: usize,
     /// Maximum number of destinations retained across tunnel-known paths.
     pub max_tunnel_destinations_total: usize,
+    /// Maximum number of reverse table entries (proof routes of forwarded
+    /// packets).
+    pub max_reverse_entries: usize,
     /// TTL for recalled known destinations without an active path, in seconds.
     pub known_destinations_ttl: u64,
     /// Maximum number of recalled known destinations retained.
@@ -363,6 +366,7 @@ impl Default for ReticulumSection {
             max_discovery_pr_tags: rns_core::constants::MAX_PR_TAGS,
             max_path_destinations: rns_core::transport::types::DEFAULT_MAX_PATH_DESTINATIONS,
             max_tunnel_destinations_total: usize::MAX,
+            max_reverse_entries: rns_core::transport::types::DEFAULT_MAX_REVERSE_ENTRIES,
             known_destinations_ttl: 48 * 60 * 60,
             known_destinations_max_entries: 8192,
             ratchet_expiry: rns_core::constants::RATCHET_EXPIRY,

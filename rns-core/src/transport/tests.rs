@@ -18,6 +18,7 @@ pub(super) fn make_config(transport_enabled: bool) -> TransportConfig {
         max_discovery_pr_tags: constants::MAX_PR_TAGS,
         max_path_destinations: usize::MAX,
         max_tunnel_destinations_total: usize::MAX,
+        max_reverse_entries: crate::transport::types::DEFAULT_MAX_REVERSE_ENTRIES,
         destination_timeout_secs: constants::DESTINATION_TIMEOUT,
         announce_table_ttl_secs: constants::ANNOUNCE_TABLE_TTL,
         announce_table_max_bytes: constants::ANNOUNCE_TABLE_MAX_BYTES,
@@ -5409,6 +5410,7 @@ fn test_issue4_external_data_to_1hop_via_transport_works() {
         max_discovery_pr_tags: constants::MAX_PR_TAGS,
         max_path_destinations: usize::MAX,
         max_tunnel_destinations_total: usize::MAX,
+        max_reverse_entries: crate::transport::types::DEFAULT_MAX_REVERSE_ENTRIES,
         destination_timeout_secs: constants::DESTINATION_TIMEOUT,
         announce_table_ttl_secs: constants::ANNOUNCE_TABLE_TTL,
         announce_table_max_bytes: constants::ANNOUNCE_TABLE_MAX_BYTES,
@@ -8431,4 +8433,142 @@ fn announce_reaching_pathfinder_m_hops_is_not_sent_on() {
     now += constants::PATHFINDER_G + constants::PATHFINDER_RW + 1.0;
     engine.tick(now, &mut rng);
     assert_eq!(engine.announce_table_count(), 0);
+}
+
+/// A transit node with a path to `TRANSIT_DEST` out of interface 2, and a
+/// cap of `cap` reverse entries.
+fn transit_engine_with_reverse_cap(cap: usize) -> TransportEngine {
+    let mut config = make_config(true);
+    config.max_reverse_entries = cap;
+    let mut engine = TransportEngine::new(config);
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+    engine.inject_path(
+        TRANSIT_DEST,
+        make_path_entry(1000.0, 2, InterfaceId(2), [0x29; 16]),
+    );
+    engine
+}
+
+const TRANSIT_DEST: [u8; 16] = [0xB7; 16];
+
+/// A data packet addressed to `TRANSIT_DEST` through this node, distinct
+/// for each `n`; returns it with the key of its reverse entry.
+fn transit_data_packet(n: u32) -> (RawPacket, [u8; 16]) {
+    let packet = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_2,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_TRANSPORT,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        },
+        0,
+        &TRANSIT_DEST,
+        Some(&[0x42; 16]),
+        constants::CONTEXT_NONE,
+        &n.to_be_bytes(),
+    )
+    .unwrap();
+    let key = packet.get_truncated_hash();
+    (packet, key)
+}
+
+fn forward_transit_data(engine: &mut TransportEngine, n: u32, now: f64) -> [u8; 16] {
+    let (packet, key) = transit_data_packet(n);
+    let actions = engine.handle_inbound(
+        InboundFrame::new(&packet.raw, InterfaceId(1), now),
+        &mut rns_crypto::FixedRng::new(&[0x44; 32]),
+    );
+    assert!(actions.iter().any(|action| matches!(
+        action,
+        TransportAction::SendOnInterface { interface, .. } if *interface == InterfaceId(2)
+    )));
+    key
+}
+
+/// Below its cap the reverse table keeps an entry for every forwarded
+/// packet, and evicts nothing.
+#[test]
+fn reverse_table_below_cap_keeps_every_entry() {
+    let cap = 256usize;
+    let mut engine = transit_engine_with_reverse_cap(cap);
+    let keys: Vec<_> = (0..cap as u32)
+        .map(|n| forward_transit_data(&mut engine, n, 1000.0 + f64::from(n) * 0.01))
+        .collect();
+    assert_eq!(engine.reverse_table_count(), cap);
+    assert_eq!(engine.reverse_cap_evict_count(), 0);
+    assert!(keys
+        .iter()
+        .all(|key| engine.routes.reverse.contains_key(key)));
+}
+
+/// At the cap, entries the periodic cull would remove go first, and only
+/// then are live entries evicted.
+#[test]
+fn reverse_table_cap_culls_expired_entries_before_evicting() {
+    let cap = 256usize;
+    let mut engine = transit_engine_with_reverse_cap(cap);
+    let half = cap as u32 / 2;
+    let old: Vec<_> = (0..half)
+        .map(|n| forward_transit_data(&mut engine, n, 1000.0))
+        .collect();
+    let recent: Vec<_> = (half..cap as u32)
+        .map(|n| forward_transit_data(&mut engine, n, 1150.0))
+        .collect();
+    assert_eq!(engine.reverse_table_count(), cap);
+
+    let now = 1000.0 + constants::REVERSE_TIMEOUT + 1.0;
+    let newest = forward_transit_data(&mut engine, cap as u32, now);
+    assert_eq!(engine.reverse_cap_evict_count(), 0);
+    assert!(old
+        .iter()
+        .all(|key| !engine.routes.reverse.contains_key(key)));
+    assert!(recent
+        .iter()
+        .all(|key| engine.routes.reverse.contains_key(key)));
+    assert!(engine.routes.reverse.contains_key(&newest));
+    assert_eq!(engine.reverse_table_count(), cap - half as usize + 1);
+}
+
+/// A flood of forwarded packets inside the reverse timeout stays within the
+/// cap: the oldest entries are evicted, a batch at a time, so most inserts
+/// at the cap find room without another pass over the table.
+#[test]
+fn reverse_table_flood_stays_within_cap() {
+    let cap = 256usize;
+    let mut engine = transit_engine_with_reverse_cap(cap);
+    let count = 4000u32;
+    let mut keys = Vec::new();
+    let mut eviction_passes = 0usize;
+    for n in 0..count {
+        let before = engine.reverse_cap_evict_count();
+        keys.push(forward_transit_data(
+            &mut engine,
+            n,
+            1000.0 + f64::from(n) * 0.01,
+        ));
+        if engine.reverse_cap_evict_count() != before {
+            eviction_passes += 1;
+        }
+        assert!(engine.reverse_table_count() <= cap);
+    }
+    assert_eq!(
+        engine.reverse_cap_evict_count(),
+        count as usize - engine.reverse_table_count()
+    );
+    // Oldest out, newest in.
+    let kept = engine.reverse_table_count();
+    assert!(keys[..keys.len() - kept]
+        .iter()
+        .all(|key| !engine.routes.reverse.contains_key(key)));
+    assert!(keys[keys.len() - kept..]
+        .iter()
+        .all(|key| engine.routes.reverse.contains_key(key)));
+    // Each pass makes room for cap / 32 inserts, so the passes, each one
+    // scan of the table, grow with the flood, not with the flood times the
+    // table size.
+    let batch = cap / 32;
+    assert!(eviction_passes <= (count as usize - cap) / batch + 1);
+    assert!(eviction_passes >= (count as usize - cap) / batch);
 }
