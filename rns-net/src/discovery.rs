@@ -537,9 +537,11 @@ pub(crate) fn generate_discovery_stamp(
     use std::sync::atomic::Ordering;
 
     let infohash = sha256(packed_data);
-    let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
+    let workblock = std::sync::Arc::new(stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS));
 
-    let stamp = search(SearchPool::Dedicated, |stop| {
+    let search_workblock = std::sync::Arc::clone(&workblock);
+    let stamp = search(SearchPool::Dedicated, move |stop| {
+        let workblock = &search_workblock;
         let mut rng = OsRng;
         let mut nonce = [0u8; STAMP_SIZE];
         loop {
@@ -547,7 +549,7 @@ pub(crate) fn generate_discovery_stamp(
                 return None;
             }
             rng.fill_bytes(&mut nonce);
-            if stamp_valid(&nonce, stamp_cost, &workblock) {
+            if stamp_valid(&nonce, stamp_cost, workblock) {
                 return Some(nonce);
             }
         }
