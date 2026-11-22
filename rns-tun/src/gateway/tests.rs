@@ -817,6 +817,72 @@ fn reconnect_on_a_new_link_gets_a_fresh_session() {
     assert_eq!(client_receives(&gateway, LINK_B, &mut client), vec![reply]);
 }
 
+#[test]
+fn reconnect_before_the_old_link_closes_replaces_the_old_session() {
+    let mut fixture = Fixture::docker();
+    let mut gateway = fixture.gateway();
+    let mut old = activate(&mut gateway, LINK_A, FULL, &["0.0.0.0/0"], &["198.18.0.53"]);
+    // The client reconnects before the gateway notices the old Link is gone.
+    let epoch = epoch_of(&negotiate(&mut gateway, LINK_B, FULL, &["0.0.0.0/0"]));
+    // Until the new session is active, the old one still gets the traffic.
+    let early = packet("198.18.0.10", "10.77.0.2", 84);
+    gateway.forward_tun_packet(&early);
+    assert_eq!(client_receives(&gateway, LINK_A, &mut old), vec![early]);
+    assert!(!gateway.node.torn_down(LINK_A));
+    control(&mut gateway, LINK_B, ready(epoch, &["198.18.0.53"]));
+    assert_eq!(
+        only_control(&gateway, LINK_B),
+        ControlMessage::ServerReady {
+            session_epoch: epoch
+        }
+    );
+    assert_eq!(state(&gateway, LINK_A), None);
+    assert!(gateway.node.torn_down(LINK_A));
+    assert!(!gateway.node.torn_down(LINK_B));
+    let mut new = Client {
+        epoch,
+        transport: PacketTransport::new(
+            epoch,
+            addr("10.77.0.2"),
+            addr("10.77.0.1"),
+            vec![cidr("0.0.0.0/0")],
+            1280,
+            1,
+        )
+        .unwrap(),
+    };
+    for _ in 0..8 {
+        let reply = packet("198.18.0.10", "10.77.0.2", 84);
+        gateway.forward_tun_packet(&reply);
+        assert_eq!(client_receives(&gateway, LINK_B, &mut new), vec![reply]);
+    }
+    assert!(gateway.node.take_fragments(LINK_A).is_empty());
+    // The old Link closing later leaves the new session alone.
+    event(
+        &mut gateway,
+        NodeEvent::LinkClosed {
+            link_id: LINK_A,
+            reason: None,
+        },
+    );
+    assert_eq!(state(&gateway, LINK_B), Some(GatewayState::Active));
+}
+
+#[test]
+fn reconnect_at_active_capacity_replaces_the_old_session() {
+    let mut fixture = Fixture::new("max_pending_links = 4\nmax_active_sessions = 1");
+    let mut gateway = fixture.gateway();
+    activate(&mut gateway, LINK_A, SPLIT, &["198.18.0.0/24"], &[]);
+    activate(&mut gateway, LINK_B, SPLIT, &["198.18.0.0/24"], &[]);
+    assert_eq!(state(&gateway, LINK_A), None);
+    assert!(gateway.node.torn_down(LINK_A));
+    // Another client is still held to the capacity.
+    let epoch = epoch_of(&negotiate(&mut gateway, LINK_C, FULL, &["198.18.0.0/24"]));
+    control(&mut gateway, LINK_C, ready(epoch, &[]));
+    assert_rejected(&gateway, LINK_C, 6);
+    assert_eq!(state(&gateway, LINK_B), Some(GatewayState::Active));
+}
+
 // --- Status -------------------------------------------------------------
 
 #[test]
