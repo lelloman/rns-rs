@@ -274,12 +274,7 @@ pub(super) fn msgpack_to_pickle(value: &MsgpackValue) -> PickleValue {
 /// Server-side authentication: challenge-response.
 pub(super) fn server_auth<S: Read + Write>(stream: &mut S, auth_key: &[u8; 32]) -> io::Result<()> {
     // Generate challenge: #CHALLENGE#{sha256}<40 random bytes>
-    let mut random_bytes = [0u8; CHALLENGE_LEN];
-    // Use /dev/urandom for randomness
-    {
-        let mut f = std::fs::File::open("/dev/urandom")?;
-        f.read_exact(&mut random_bytes)?;
-    }
+    let random_bytes = challenge_random();
 
     let mut challenge_message = Vec::with_capacity(CHALLENGE_PREFIX.len() + 8 + CHALLENGE_LEN);
     challenge_message.extend_from_slice(CHALLENGE_PREFIX);
