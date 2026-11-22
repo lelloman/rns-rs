@@ -3132,6 +3132,44 @@ fn test_send_resource_auto_compress_option_controls_adv_flag() {
     );
 }
 
+/// A large incompressible resource goes out uncompressed, without the
+/// bzip2 attempt, and a compressible one compressed; both arrive intact.
+#[test]
+fn large_resource_is_compressed_only_when_compressible() {
+    let len = constants::RESOURCE_MAX_EFFICIENT_SIZE + 300 * 1024;
+    let mut random = vec![0u8; len];
+    OsRng.fill_bytes(&mut random);
+    let text: Vec<u8> = b"a resource is split into segments and parts\n"
+        .iter()
+        .copied()
+        .cycle()
+        .take(len)
+        .collect();
+    for (data, compressed) in [(random, false), (text, true)] {
+        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let mut rng = OsRng;
+        resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+        let actions = init_mgr.send_resource(&link_id, &data, None, &mut rng);
+        let adv = first_resource_advertisement(&init_mgr, &link_id, &actions);
+        assert_eq!(adv.flags.compressed, compressed);
+        assert_eq!(adv.total_segments, 2);
+
+        let (received, sender_completed, _, failures, rounds) = drive_link_manager_packets(
+            &mut init_mgr,
+            &mut resp_mgr,
+            actions,
+            'i',
+            &mut rng,
+            10_000,
+        );
+        assert!(
+            received.as_ref() == Some(&data),
+            "compressed={compressed}: not delivered in {rounds} rounds; failures={failures:?}"
+        );
+        assert!(sender_completed);
+    }
+}
+
 #[test]
 fn test_send_resource_on_inactive_link() {
     let mut mgr = LinkManager::new();

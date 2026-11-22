@@ -208,7 +208,14 @@ impl LinkManager {
         options: ResourceSendOptions,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        self.send_resource_with_compressor(link_id, data, metadata, options, &Bzip2Compressor, rng)
+        self.send_resource_with_compressor(
+            link_id,
+            data,
+            metadata,
+            options,
+            &ResourceCompressor,
+            rng,
+        )
     }
 
     pub(crate) fn send_resource_with_compressor(

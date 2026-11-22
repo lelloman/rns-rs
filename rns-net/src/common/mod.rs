@@ -9,6 +9,7 @@ pub(crate) mod event;
 pub(crate) mod interface_stats;
 pub(crate) mod link_manager;
 pub(crate) mod management;
+pub(crate) mod resource_compressor;
 pub mod time;
 pub(crate) mod tunnel_extension;
 

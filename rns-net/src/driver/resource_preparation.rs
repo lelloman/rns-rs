@@ -63,7 +63,7 @@ pub(super) struct Worker {
 impl Worker {
     fn new(wake: crate::event::EventSender) -> std::io::Result<Self> {
         Self::start(wake, |input| {
-            crate::common::compressor::Bzip2Compressor.compress(input)
+            crate::common::resource_compressor::ResourceCompressor.compress(input)
         })
     }
 
@@ -290,9 +290,14 @@ impl FoldedCompression {
     }
 
     /// Compress the next block. Returns the finished result once the input
-    /// is consumed and the stream closed, or at once when cancelled.
+    /// is consumed and the stream closed, or at once when cancelled or when
+    /// the input is not worth compressing (checked before the first block,
+    /// at less than a block's cost).
     fn step(&mut self) -> Option<(Pending, Ready)> {
-        let compressed = if self.pending.cancelled.load(Ordering::Acquire) {
+        let compressed = if self.pending.cancelled.load(Ordering::Acquire)
+            || (self.consumed == 0
+                && !crate::common::resource_compressor::worth_compressing(self.input()))
+        {
             Ok(None)
         } else {
             match self.compress_block() {

@@ -60,7 +60,7 @@ impl LinkManager {
             metadata,
             Self::resource_sdu_for_link(link),
             &encrypt_fn,
-            &Bzip2Compressor,
+            &ResourceCompressor,
             rng,
             now,
             stream.auto_compress,
