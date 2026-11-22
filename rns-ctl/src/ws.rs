@@ -28,6 +28,23 @@ pub fn is_upgrade(req: &HttpRequest) -> bool {
         .unwrap_or(false)
 }
 
+/// The WebSocket subprotocol of the event stream. A client that offers it
+/// gets it back in the handshake; browsers offer it alongside the
+/// `rns-ctl.bearer.<token>` entry that carries their token, so the server
+/// never has to echo the entry with the token.
+pub const PROTOCOL: &str = "rns-ctl";
+
+/// The subprotocols offered in the request's `Sec-WebSocket-Protocol`.
+pub fn offered_protocols(req: &HttpRequest) -> impl Iterator<Item = &str> {
+    req.headers
+        .get("sec-websocket-protocol")
+        .map(String::as_str)
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|protocol| !protocol.is_empty())
+}
+
 /// Complete the WebSocket handshake (write 101 response).
 pub fn do_handshake(stream: &mut dyn Write, req: &HttpRequest) -> io::Result<()> {
     let key = req
@@ -37,14 +54,20 @@ pub fn do_handshake(stream: &mut dyn Write, req: &HttpRequest) -> io::Result<()>
 
     let accept = compute_accept(key);
 
+    let protocol = if offered_protocols(req).any(|protocol| protocol == PROTOCOL) {
+        format!("Sec-WebSocket-Protocol: {}\r\n", PROTOCOL)
+    } else {
+        String::new()
+    };
     write!(
         stream,
         "HTTP/1.1 101 Switching Protocols\r\n\
          Upgrade: websocket\r\n\
          Connection: Upgrade\r\n\
          Sec-WebSocket-Accept: {}\r\n\
+         {}\
          \r\n",
-        accept
+        accept, protocol
     )?;
     stream.flush()
 }

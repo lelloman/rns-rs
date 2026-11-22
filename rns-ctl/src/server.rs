@@ -261,7 +261,7 @@ fn handle_ws_connection(
     ctx: &ServerContext,
 ) -> io::Result<()> {
     // Auth check on the upgrade request
-    if let Err(resp) = check_ws_auth(&req.query, &ctx.config) {
+    if let Err(resp) = check_ws_auth(req, &ctx.config) {
         return write_response(&mut stream, &resp);
     }
 

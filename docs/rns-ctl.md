@@ -64,6 +64,14 @@ with mode `0600`, replacing any previous one. It is printed once when stdout is
 a terminal and never written to the log. Clients send it as
 `Authorization: Bearer <token>`.
 
+The WebSocket upgrade takes the token the same way. Browsers, which cannot set
+that header on a WebSocket, offer it as a subprotocol instead, next to
+`rns-ctl` (which the server echoes back):
+`new WebSocket(url, ["rns-ctl", "rns-ctl.bearer." + token])`. The token must
+then consist of characters a subprotocol may contain; generated tokens (hex)
+do. A `?token=` query parameter is not accepted, since URLs end up in proxy and
+access logs.
+
 Limits: request bodies above 4 MiB get `413`, the token is checked before any
 body is read, and at most 64 concurrent connections are served (`503` beyond
 that). The port can also be set with `RNSCTL_HTTP_PORT`. Build with

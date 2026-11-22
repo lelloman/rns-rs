@@ -50,8 +50,20 @@ pub fn check_auth(
     }
 }
 
-/// Check WebSocket auth via query parameter `?token=...`.
-pub fn check_ws_auth(query: &str, config: &ControlPlaneConfigHandle) -> Result<(), HttpResponse> {
+/// Prefix of the WebSocket subprotocol that carries the bearer token:
+/// a browser, which cannot set an `Authorization` header on a WebSocket,
+/// offers `rns-ctl.bearer.<token>` together with [`crate::ws::PROTOCOL`].
+pub const WS_BEARER_PROTOCOL_PREFIX: &str = "rns-ctl.bearer.";
+
+/// Check auth on a WebSocket upgrade request.
+///
+/// The token comes from an `Authorization: Bearer <token>` header or, for
+/// browsers, from an offered subprotocol `rns-ctl.bearer.<token>`. It is not
+/// taken from the URL, which proxies and access logs record.
+pub fn check_ws_auth(
+    req: &HttpRequest,
+    config: &ControlPlaneConfigHandle,
+) -> Result<(), HttpResponse> {
     let config = read_control_plane_config(config);
     if config.disable_auth {
         return Ok(());
@@ -61,10 +73,21 @@ pub fn check_ws_auth(query: &str, config: &ControlPlaneConfigHandle) -> Result<(
         return Err(HttpResponse::unauthorized("No auth token configured"));
     };
 
-    let params = crate::http::parse_query(query);
-    match params.get("token") {
+    let token = req
+        .headers
+        .get("authorization")
+        .and_then(|val| val.strip_prefix("Bearer "))
+        .or_else(|| {
+            crate::ws::offered_protocols(req)
+                .find_map(|protocol| protocol.strip_prefix(WS_BEARER_PROTOCOL_PREFIX))
+        });
+    match token {
         Some(token) if token_matches(token, expected) => Ok(()),
-        _ => Err(HttpResponse::unauthorized("Missing or invalid token")),
+        Some(_) => Err(HttpResponse::unauthorized("Invalid token")),
+        None => Err(HttpResponse::unauthorized(
+            "Missing token: send Authorization: Bearer <token> or offer the \
+             WebSocket subprotocol rns-ctl.bearer.<token>",
+        )),
     }
 }
 
@@ -117,8 +140,8 @@ mod tests {
         let config = make_config(None, false);
         assert!(check_auth(&make_req(None), &config).is_err());
         assert!(check_auth(&make_req(Some("Bearer anything")), &config).is_err());
-        assert!(check_ws_auth("token=anything", &config).is_err());
-        assert!(check_ws_auth("", &config).is_err());
+        assert!(check_ws_auth(&make_req(Some("Bearer anything")), &config).is_err());
+        assert!(check_ws_auth(&make_req(None), &config).is_err());
     }
 
     #[test]
@@ -139,15 +162,54 @@ mod tests {
         assert!(check_auth(&make_req(None), &config).is_err());
     }
 
-    #[test]
-    fn ws_auth_valid() {
-        let config = make_config(Some("abc"), false);
-        assert!(check_ws_auth("token=abc", &config).is_ok());
+    fn make_ws_req(query: &str, headers: &[(&str, &str)]) -> HttpRequest {
+        HttpRequest {
+            method: "GET".into(),
+            path: "/ws".into(),
+            query: query.into(),
+            headers: headers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            body: Vec::new(),
+        }
     }
 
     #[test]
-    fn ws_auth_invalid() {
+    fn ws_auth_accepts_bearer_header() {
         let config = make_config(Some("abc"), false);
-        assert!(check_ws_auth("token=xyz", &config).is_err());
+        let req = make_ws_req("", &[("authorization", "Bearer abc")]);
+        assert!(check_ws_auth(&req, &config).is_ok());
+    }
+
+    #[test]
+    fn ws_auth_accepts_bearer_subprotocol() {
+        let config = make_config(Some("abc"), false);
+        let req = make_ws_req(
+            "",
+            &[("sec-websocket-protocol", "rns-ctl, rns-ctl.bearer.abc")],
+        );
+        assert!(check_ws_auth(&req, &config).is_ok());
+    }
+
+    #[test]
+    fn ws_auth_rejects_wrong_or_missing_token() {
+        let config = make_config(Some("abc"), false);
+        let wrong_header = make_ws_req("", &[("authorization", "Bearer xyz")]);
+        assert!(check_ws_auth(&wrong_header, &config).is_err());
+        let wrong_protocol = make_ws_req(
+            "",
+            &[("sec-websocket-protocol", "rns-ctl, rns-ctl.bearer.xyz")],
+        );
+        assert!(check_ws_auth(&wrong_protocol, &config).is_err());
+        let no_token = make_ws_req("", &[("sec-websocket-protocol", "rns-ctl")]);
+        assert!(check_ws_auth(&no_token, &config).is_err());
+        assert!(check_ws_auth(&make_ws_req("", &[]), &config).is_err());
+    }
+
+    #[test]
+    fn ws_auth_ignores_query_token() {
+        let config = make_config(Some("abc"), false);
+        assert!(check_ws_auth(&make_ws_req("token=abc", &[]), &config).is_err());
     }
 }
