@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// At the cap, an insert evicts down to `max - max / DIVISOR` known
+/// destinations, so the next inserts find room without another scan.
+const KNOWN_CAP_EVICT_BATCH_DIVISOR: usize = 32;
+
 /// Known destinations: the identities learned from announces, keyed by
 /// destination hash, with their retention limits and cleanup progress.
 pub(crate) struct KnownDestinations {
@@ -209,6 +213,11 @@ impl KnownDestinations {
     /// within its cap, or below it `for_insert`. Destinations with an
     /// active path in `engine`, the `local_destinations` and retained ones
     /// go last. Returns how many were evicted.
+    ///
+    /// For an insert at the cap, a batch is evicted down to
+    /// `max_entries - max_entries / KNOWN_CAP_EVICT_BATCH_DIVISOR` (at least
+    /// one below the cap) in one pass, so a flood of new destinations at the
+    /// cap does not scan the whole cache on every insert.
     pub(crate) fn enforce_cap(
         &mut self,
         for_insert: bool,
@@ -218,51 +227,49 @@ impl KnownDestinations {
         if self.max_entries == usize::MAX {
             return 0;
         }
-
-        let mut evicted = 0usize;
-        while if for_insert {
-            self.entries.len() >= self.max_entries
+        let limit = if for_insert {
+            self.max_entries.saturating_sub(1)
         } else {
-            self.entries.len() > self.max_entries
-        } {
-            let active_dests = engine.active_destination_hashes();
-            let candidate = self
-                .oldest(false, &active_dests, local_destinations)
-                .or_else(|| self.oldest(true, &active_dests, local_destinations));
-            let Some(dest_hash) = candidate else {
-                break;
-            };
+            self.max_entries
+        };
+        if self.entries.len() <= limit {
+            return 0;
+        }
+        let target = if for_insert {
+            limit.min(self.max_entries - self.max_entries / KNOWN_CAP_EVICT_BATCH_DIVISOR)
+        } else {
+            limit
+        };
+        let excess = self.entries.len() - target;
+
+        // Unprotected before protected, then least recently relevant, then
+        // hash order.
+        let mut candidates: Vec<(bool, f64, [u8; 16])> = self
+            .entries
+            .iter()
+            .map(|(dest_hash, state)| {
+                let protected = engine.has_path(dest_hash)
+                    || local_destinations.contains_key(dest_hash)
+                    || state.retained;
+                (protected, state.relevance_time(), *dest_hash)
+            })
+            .collect();
+        let least_relevant_first = |a: &(bool, f64, [u8; 16]), b: &(bool, f64, [u8; 16])| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.total_cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+        };
+        if excess < candidates.len() {
+            candidates.select_nth_unstable_by(excess - 1, least_relevant_first);
+        }
+        let mut evicted = 0usize;
+        for (_, _, dest_hash) in candidates.into_iter().take(excess) {
             if self.entries.remove(&dest_hash).is_some() {
                 evicted += 1;
                 self.cap_evict_count += 1;
-            } else {
-                break;
             }
         }
         evicted
-    }
-
-    fn oldest(
-        &self,
-        include_protected: bool,
-        active_dests: &std::collections::BTreeSet<[u8; 16]>,
-        local_destinations: &HashMap<[u8; 16], u8>,
-    ) -> Option<[u8; 16]> {
-        self.entries
-            .iter()
-            .filter(|(dest_hash, state)| {
-                include_protected
-                    || (!active_dests.contains(*dest_hash)
-                        && !local_destinations.contains_key(*dest_hash)
-                        && !state.retained)
-            })
-            .min_by(|a, b| {
-                a.1.relevance_time()
-                    .partial_cmp(&b.1.relevance_time())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| a.0.cmp(b.0))
-            })
-            .map(|(dest_hash, _)| *dest_hash)
     }
 }
 

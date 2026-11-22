@@ -10222,6 +10222,35 @@ fn known_destinations_cap_falls_back_to_oldest_overall_when_all_protected() {
     assert_eq!(driver.known.cap_evict_count, 1);
 }
 
+/// A flood of new destinations at the cap stays within it and evicts in
+/// batches, so most inserts past the cap do not scan the cache again.
+#[test]
+fn known_destinations_cap_evicts_in_batches_under_flood() {
+    let mut driver = new_test_driver();
+    driver.known.max_entries = 256;
+    let count = 2000u32;
+    let mut cap_hits = 0usize;
+    for i in 0..count {
+        let mut dest = [0u8; 16];
+        dest[..4].copy_from_slice(&i.to_be_bytes());
+        if driver.known.entries.len() >= 256 {
+            cap_hits += 1;
+        }
+        driver.upsert_known_destination(
+            dest,
+            make_announced_identity(dest, 10.0 + f64::from(i), InterfaceId(1)),
+        );
+        assert!(driver.known.entries.len() <= 256);
+        assert!(driver.known.entries.contains_key(&dest));
+    }
+    assert!(!driver.known.entries.contains_key(&[0u8; 16]));
+    assert_eq!(
+        driver.known.cap_evict_count,
+        count as usize - driver.known.entries.len()
+    );
+    assert!(cap_hits * 4 <= count as usize - 256);
+}
+
 #[test]
 fn known_destinations_cap_update_existing_entry_does_not_evict() {
     let mut driver = new_test_driver();
