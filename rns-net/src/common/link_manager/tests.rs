@@ -4770,7 +4770,7 @@ fn test_channel_message_delivery() {
 }
 
 #[test]
-fn test_channel_send_drops_packet_when_encrypt_fails() {
+fn test_channel_send_fails_and_frees_its_sequence_when_encrypt_fails() {
     let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;
     init_mgr
@@ -4780,23 +4780,53 @@ fn test_channel_send_drops_packet_when_encrypt_fails() {
         .engine
         .clear_session_for_testing();
 
-    let actions = init_mgr
+    let err = init_mgr
         .send_channel_message(&link_id, 42, b"channel data", &mut rng)
-        .expect("channel should still accept the message locally");
+        .expect_err("a message that cannot be sent must be reported");
+    assert_eq!(err, crate::ChannelSendError::NotReady);
 
+    let link = &init_mgr.links[&link_id];
     assert!(
-        actions.is_empty(),
-        "encrypt failure should suppress channel packet"
-    );
-    assert!(
-        init_mgr
-            .links
-            .get(&link_id)
-            .unwrap()
-            .pending_channel_packets
-            .is_empty(),
+        link.pending_channel_packets.is_empty(),
         "failed packet encryption must not track a pending channel proof"
     );
+    assert_eq!(
+        link.channel.as_ref().unwrap().outstanding(),
+        0,
+        "the unsent message must not hold a sequence"
+    );
+    assert_eq!((link.channel_send_ok, link.channel_send_not_ready), (0, 1));
+}
+
+#[test]
+fn test_channel_resend_that_cannot_be_sent_stays_tracked_for_a_retry() {
+    let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    init_mgr
+        .send_channel_message(&link_id, 42, b"channel data", &mut rng)
+        .expect("first send should succeed");
+    init_mgr
+        .links
+        .get_mut(&link_id)
+        .unwrap()
+        .engine
+        .clear_session_for_testing();
+
+    let actions = time_out(&mut init_mgr, &link_id, 0);
+    assert!(sent_sizes(&actions).is_empty());
+
+    let channel = init_mgr.links[&link_id].channel.as_ref().unwrap();
+    assert_eq!(channel.outstanding(), 1, "the envelope must not be dropped");
+    assert_eq!(channel.get_tries(0), Some(2));
+    // Still unsendable when its tries run out, the link goes down as on
+    // any exhausted retries.
+    let mut torn_down = false;
+    for _ in 0..rns_core::constants::CHANNEL_MAX_TRIES {
+        let actions = time_out(&mut init_mgr, &link_id, 0);
+        torn_down |= closed_reason(&actions, &link_id).is_some();
+    }
+    assert!(torn_down);
+    assert_eq!(init_mgr.link_state(&link_id), Some(LinkState::Closed));
 }
 
 #[test]

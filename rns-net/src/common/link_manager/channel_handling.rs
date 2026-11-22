@@ -41,7 +41,45 @@ impl LinkManager {
             }
         };
 
-        Ok(self.process_channel_actions(link_id, chan_actions, rng))
+        // A first send that cannot go out is taken back, as upstream does:
+        // its sequence is released for the next message, so the receiver
+        // never waits on one that was not sent, and the caller is told.
+        let mut result = Vec::new();
+        for action in chan_actions {
+            match action {
+                rns_core::channel::ChannelAction::SendOnLink {
+                    raw,
+                    sequence,
+                    resend,
+                } => {
+                    if !self.send_channel_envelope(
+                        link_id,
+                        &raw,
+                        sequence,
+                        resend,
+                        rng,
+                        &mut result,
+                    ) {
+                        log::debug!(
+                            "Link {:02x?}: channel message {} could not be sent",
+                            &link_id[..4],
+                            sequence
+                        );
+                        if let Some(link) = self.links.get_mut(link_id) {
+                            if let Some(channel) = link.channel.as_mut() {
+                                channel.cancel_send(sequence);
+                            }
+                            // Counted as sent above; it was not.
+                            link.channel_send_ok = link.channel_send_ok.saturating_sub(1);
+                            link.channel_send_not_ready += 1;
+                        }
+                        return Err(crate::ChannelSendError::NotReady);
+                    }
+                }
+                other => result.extend(self.process_channel_actions(link_id, vec![other], rng)),
+            }
+        }
+        Ok(result)
     }
 
     /// Convert ChannelActions to LinkManagerActions.
@@ -59,84 +97,24 @@ impl LinkManager {
                     sequence,
                     resend,
                 } => {
-                    // Encrypt and send as CHANNEL context, in a packet as
-                    // large as the link MTU allows. If the packet cannot be
-                    // emitted, remove the reserved channel sequence so receivers do
-                    // not stall on a gap that never reached the wire.
-                    let (encrypted, max_mtu) = match self.links.get(link_id) {
-                        // An envelope packed for a larger MTU than the
-                        // link has now (sent over a direct path the link
-                        // fell back from) goes to the peer, which runs
-                        // Direct Link, in parts that fit the link's
-                        // packets; its receipt stands for the proof.
-                        Some(link)
-                            if constants::HEADER_MINSIZE + link.engine.encrypted_len(raw.len())
-                                > link.engine.mtu() as usize =>
-                        {
-                            if link.direct_peer {
-                                result
-                                    .extend(self.send_channel_parts(link_id, &raw, sequence, rng));
-                            } else {
-                                log::debug!(
-                                    "Link {:02x?}: channel message {} too large for the link MTU {}; held",
-                                    &link_id[..4],
-                                    sequence,
-                                    link.engine.mtu()
-                                );
-                            }
-                            continue;
-                        }
-                        Some(link) => match link.engine.encrypt(&raw, rng) {
-                            Ok(encrypted) => (encrypted, link.engine.mtu() as usize),
-                            Err(_) => {
-                                if let Some(link_mut) = self.links.get_mut(link_id) {
-                                    if let Some(channel) = link_mut.channel.as_mut() {
-                                        channel.cancel_send(sequence);
-                                    }
-                                }
-                                continue;
-                            }
-                        },
-                        None => continue,
-                    };
-                    let flags = PacketFlags {
-                        header_type: constants::HEADER_1,
-                        context_flag: constants::FLAG_UNSET,
-                        transport_type: constants::TRANSPORT_BROADCAST,
-                        destination_type: constants::DESTINATION_LINK,
-                        packet_type: constants::PACKET_TYPE_DATA,
-                    };
-                    match RawPacket::pack_raw_with_hash_with_max_mtu(
-                        flags,
-                        0,
+                    // An envelope that cannot go out now stays in the
+                    // channel, as upstream keeps it: it times out and is
+                    // resent, until its tries run out and the link is torn
+                    // down. Dropping it would leave a gap in the sequence
+                    // the receiver waits on for ever.
+                    if !self.send_channel_envelope(
                         link_id,
-                        None,
-                        constants::CONTEXT_CHANNEL,
-                        &encrypted,
-                        max_mtu,
+                        &raw,
+                        sequence,
+                        resend,
+                        rng,
+                        &mut result,
                     ) {
-                        Ok((raw_bytes, packet_hash)) => {
-                            if let Some(link_mut) = self.links.get_mut(link_id) {
-                                link_mut
-                                    .pending_channel_packets
-                                    .insert(packet_hash, sequence);
-                            }
-                            result.push(LinkManagerAction::SendPacket {
-                                raw: raw_bytes.into(),
-                                dest_type: constants::DESTINATION_LINK,
-                                attached_interface: None,
-                            });
-                            if resend {
-                                self.count_resent_link_packet(&result, result.len() - 1);
-                            }
-                        }
-                        Err(_) => {
-                            if let Some(link_mut) = self.links.get_mut(link_id) {
-                                if let Some(channel) = link_mut.channel.as_mut() {
-                                    channel.cancel_send(sequence);
-                                }
-                            }
-                        }
+                        log::debug!(
+                            "Link {:02x?}: channel message {} could not be sent; kept for a retry",
+                            &link_id[..4],
+                            sequence
+                        );
                     }
                 }
                 rns_core::channel::ChannelAction::MessageReceived {
@@ -165,6 +143,80 @@ impl LinkManager {
             }
         }
         result
+    }
+
+    /// Encrypt a channel envelope and push the packet carrying it, as large
+    /// as the link MTU allows, onto `result`. Returns false when it could
+    /// not be encrypted or packed; the caller decides what becomes of the
+    /// envelope then.
+    fn send_channel_envelope(
+        &mut self,
+        link_id: &LinkId,
+        raw: &[u8],
+        sequence: Sequence,
+        resend: bool,
+        rng: &mut dyn Rng,
+        result: &mut Vec<LinkManagerAction>,
+    ) -> bool {
+        let (encrypted, max_mtu) = match self.links.get(link_id) {
+            // An envelope packed for a larger MTU than the link has now
+            // (sent over a direct path the link fell back from) goes to the
+            // peer, which runs Direct Link, in parts that fit the link's
+            // packets; its receipt stands for the proof.
+            Some(link)
+                if constants::HEADER_MINSIZE + link.engine.encrypted_len(raw.len())
+                    > link.engine.mtu() as usize =>
+            {
+                if link.direct_peer {
+                    result.extend(self.send_channel_parts(link_id, raw, sequence, rng));
+                } else {
+                    log::debug!(
+                        "Link {:02x?}: channel message {} too large for the link MTU {}; held",
+                        &link_id[..4],
+                        sequence,
+                        link.engine.mtu()
+                    );
+                }
+                return true;
+            }
+            Some(link) => match link.engine.encrypt(raw, rng) {
+                Ok(encrypted) => (encrypted, link.engine.mtu() as usize),
+                Err(_) => return false,
+            },
+            None => return true,
+        };
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_LINK,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let Ok((raw_bytes, packet_hash)) = RawPacket::pack_raw_with_hash_with_max_mtu(
+            flags,
+            0,
+            link_id,
+            None,
+            constants::CONTEXT_CHANNEL,
+            &encrypted,
+            max_mtu,
+        ) else {
+            return false;
+        };
+        if let Some(link_mut) = self.links.get_mut(link_id) {
+            link_mut
+                .pending_channel_packets
+                .insert(packet_hash, sequence);
+        }
+        result.push(LinkManagerAction::SendPacket {
+            raw: raw_bytes.into(),
+            dest_type: constants::DESTINATION_LINK,
+            attached_interface: None,
+        });
+        if resend {
+            self.count_resent_link_packet(result, result.len() - 1);
+        }
+        true
     }
 
     /// Send a channel envelope too large for the link's packets in
