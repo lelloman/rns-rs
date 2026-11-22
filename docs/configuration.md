@@ -539,6 +539,22 @@ together. As it describes, announces held on an interface are dropped when
 that interface goes away, so a client that floods new destinations and
 disconnects gets none of them into the path table.
 
+A `TCPServerInterface` accepts any number of concurrent clients, as upstream
+does. Each connected client gets its own spawned interface and receive buffer,
+so an operator of a public node may want to bound it with the rns-rs key
+`max_connections` (a positive integer); a client over the limit is accepted
+and closed at once. A `BackboneInterface` listener is already limited to 500
+clients by default, as upstream (`client_limit`); see the operator runbook.
+
+```ini
+  [[TCP Server]]
+    type = TCPServerInterface
+    enabled = yes
+    listen_ip = 0.0.0.0
+    listen_port = 4965
+    max_connections = 500
+```
+
 Any interface section accepts the Python-compatible ingress-control keys.
 This example sets custom thresholds and timings:
 
