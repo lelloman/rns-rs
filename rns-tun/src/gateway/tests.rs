@@ -646,6 +646,44 @@ fn incompatible_version_or_small_mtu_is_rejected() {
 }
 
 #[test]
+fn hello_rejects_forget_the_session_at_once() {
+    let small_mtu = ControlMessage::ClientHello {
+        versions: vec![VERSION],
+        maximum_packet_size: 575,
+        requested_routes: vec![cidr("198.18.0.0/24")],
+    }
+    .encode()
+    .unwrap();
+    // Reason 4 on a split-tunnel client, reason 5 on a full-tunnel client
+    // of a gateway without DNS servers; the hello comes both after and
+    // before the identity.
+    for (extra_config, identity, payload, reason) in [
+        ("dns_servers = [\"198.18.0.53\"]", SPLIT, small_mtu, 4),
+        ("", FULL, hello(&["0.0.0.0/0"]), 5),
+    ] {
+        for hello_first in [false, true] {
+            let mut fixture = Fixture::new(extra_config);
+            let mut gateway = fixture.gateway();
+            link_up(&mut gateway, LINK_A);
+            if hello_first {
+                control(&mut gateway, LINK_A, payload.clone());
+                assert!(identify(&mut gateway, LINK_A, identity));
+            } else {
+                identify(&mut gateway, LINK_A, identity);
+                assert!(control(&mut gateway, LINK_A, payload.clone()));
+            }
+            assert_rejected(&gateway, LINK_A, reason);
+            assert_eq!(state(&gateway, LINK_A), None);
+            // A later hello on the torn-down Link gets no answer.
+            control(&mut gateway, LINK_A, hello(&["198.18.0.0/24"]));
+            assert!(gateway.node.take_controls(LINK_A).is_empty());
+            gateway.publish_status();
+            assert!(gateway.status.snapshot().sessions.is_empty());
+        }
+    }
+}
+
+#[test]
 fn mtu_is_capped_at_1280() {
     let mut fixture = Fixture::docker();
     let mut gateway = fixture.gateway();

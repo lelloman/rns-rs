@@ -451,9 +451,9 @@ impl<N: GatewayNode, D: PacketDevice> GatewayLoop<'_, N, D> {
                     &buffered,
                     self.started.elapsed(),
                 ),
-                None => Ok(()),
+                None => Ok(HelloOutcome::Answered),
             });
-        self.keep_or_drop(link_id, result)
+        self.answer_hello(link_id, result)
     }
 
     /// Handles a control message from a session's client.
@@ -516,6 +516,7 @@ impl<N: GatewayNode, D: PacketDevice> GatewayLoop<'_, N, D> {
             entry
                 .machine
                 .receive_preidentify_hello(payload)
+                .map(|()| HelloOutcome::Answered)
                 .map_err(session_error)
         } else {
             process_hello(
@@ -528,7 +529,7 @@ impl<N: GatewayNode, D: PacketDevice> GatewayLoop<'_, N, D> {
                 self.started.elapsed(),
             )
         };
-        self.keep_or_drop(link_id, result)
+        self.answer_hello(link_id, result)
     }
 
     /// Activates a session whose client is ready, within the gateway's
@@ -614,6 +615,18 @@ impl<N: GatewayNode, D: PacketDevice> GatewayLoop<'_, N, D> {
                 );
                 self.reject_session(link_id, 2, "protocol error")
             }
+        }
+    }
+
+    /// Keeps or drops a session after its hello was handled: a hello the
+    /// gateway cannot serve rejects the session like any other reject.
+    fn answer_hello(&mut self, link_id: [u8; 16], result: io::Result<HelloOutcome>) -> Pass {
+        match result {
+            Ok(HelloOutcome::Answered) => ControlFlow::Continue(()),
+            Ok(HelloOutcome::Rejected(reason, diagnostic)) => {
+                self.reject_session(link_id, reason, diagnostic)
+            }
+            Err(error) => self.keep_or_drop(link_id, Err(error)),
         }
     }
 
@@ -703,6 +716,18 @@ fn start_transport(
     send_control(node, link_id, ready)
 }
 
+/// What became of a client hello the gateway handled without a protocol
+/// error.
+enum HelloOutcome {
+    /// Accepted, buffered until the peer identifies, or ignored as a repeat.
+    Answered,
+    /// The gateway cannot serve the hello: reject the session with this
+    /// reason and diagnostic.
+    Rejected(u16, &'static str),
+}
+
+/// Answers a hello on a negotiating session with an accept, or says why the
+/// session must be rejected.
 fn process_hello(
     node: &impl GatewayNode,
     policy: &GatewayPolicy,
@@ -711,9 +736,9 @@ fn process_hello(
     entry: &mut SessionEntry,
     payload: &[u8],
     now: Duration,
-) -> io::Result<()> {
+) -> io::Result<HelloOutcome> {
     if entry.machine.state() != GatewayState::Negotiating {
-        return Ok(());
+        return Ok(HelloOutcome::Answered);
     }
     let ControlMessage::ClientHello {
         versions,
@@ -728,8 +753,7 @@ fn process_hello(
         ));
     };
     if !versions.contains(&VERSION) || maximum_packet_size < 576 {
-        reject(node, link_id, 4, "no compatible protocol or MTU");
-        return Ok(());
+        return Ok(HelloOutcome::Rejected(4, "no compatible protocol or MTU"));
     }
     let identity = entry
         .identity
@@ -745,8 +769,10 @@ fn process_hello(
         Vec::new()
     };
     if accepted_routes.iter().any(|route| route.prefix_len() == 0) && dns.is_empty() {
-        reject(node, link_id, 5, "gateway has no full-tunnel DNS servers");
-        return Ok(());
+        return Ok(HelloOutcome::Rejected(
+            5,
+            "gateway has no full-tunnel DNS servers",
+        ));
     }
     let epoch = random_nonzero();
     let mtu = maximum_packet_size.min(1280);
@@ -769,7 +795,7 @@ fn process_hello(
     entry.accepted_routes = accepted_routes;
     entry.advertised_dns = dns;
     entry.mtu = mtu;
-    Ok(())
+    Ok(HelloOutcome::Answered)
 }
 
 fn random_nonzero() -> u64 {
