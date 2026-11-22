@@ -183,6 +183,7 @@ fn main() {
         max_path_destinations: 256,
         max_tunnel_destinations_total: 128,
         max_reverse_entries: 512,
+        max_link_entries: 64,
         destination_timeout_secs: 24.0 * 60.0 * 60.0,
         announce_table_ttl_secs: rns_core::constants::ANNOUNCE_TABLE_TTL,
         announce_table_max_bytes: rns_core::constants::ANNOUNCE_TABLE_MAX_BYTES,

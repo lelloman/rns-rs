@@ -19,6 +19,7 @@ pub(super) fn make_config(transport_enabled: bool) -> TransportConfig {
         max_path_destinations: usize::MAX,
         max_tunnel_destinations_total: usize::MAX,
         max_reverse_entries: crate::transport::types::DEFAULT_MAX_REVERSE_ENTRIES,
+        max_link_entries: crate::transport::types::DEFAULT_MAX_LINK_ENTRIES,
         destination_timeout_secs: constants::DESTINATION_TIMEOUT,
         announce_table_ttl_secs: constants::ANNOUNCE_TABLE_TTL,
         announce_table_max_bytes: constants::ANNOUNCE_TABLE_MAX_BYTES,
@@ -5411,6 +5412,7 @@ fn test_issue4_external_data_to_1hop_via_transport_works() {
         max_path_destinations: usize::MAX,
         max_tunnel_destinations_total: usize::MAX,
         max_reverse_entries: crate::transport::types::DEFAULT_MAX_REVERSE_ENTRIES,
+        max_link_entries: crate::transport::types::DEFAULT_MAX_LINK_ENTRIES,
         destination_timeout_secs: constants::DESTINATION_TIMEOUT,
         announce_table_ttl_secs: constants::ANNOUNCE_TABLE_TTL,
         announce_table_max_bytes: constants::ANNOUNCE_TABLE_MAX_BYTES,
@@ -8571,4 +8573,190 @@ fn reverse_table_flood_stays_within_cap() {
     let batch = cap / 32;
     assert!(eviction_passes <= (count as usize - cap) / batch + 1);
     assert!(eviction_passes >= (count as usize - cap) / batch);
+}
+
+/// A transit node with a path to `TRANSIT_DEST` out of interface 2, and a
+/// cap of `cap` link entries.
+fn transit_engine_with_link_cap(cap: usize) -> TransportEngine {
+    let mut config = make_config(true);
+    config.max_link_entries = cap;
+    let mut engine = TransportEngine::new(config);
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    engine.register_interface(make_interface(2, constants::MODE_FULL));
+    engine.inject_path(
+        TRANSIT_DEST,
+        make_path_entry(1000.0, 2, InterfaceId(2), [0x29; 16]),
+    );
+    engine
+}
+
+/// Forward a link request to `TRANSIT_DEST`, distinct for each `n`;
+/// returns its link id and the link ids reported closed.
+fn forward_transit_link_request(
+    engine: &mut TransportEngine,
+    n: u32,
+    now: f64,
+) -> ([u8; 16], Vec<[u8; 16]>) {
+    let mut payload = vec![0x5A; constants::LINK_ECPUBSIZE];
+    payload[..4].copy_from_slice(&n.to_be_bytes());
+    let request = RawPacket::pack(
+        PacketFlags {
+            header_type: constants::HEADER_2,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_TRANSPORT,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_LINKREQUEST,
+        },
+        0,
+        &TRANSIT_DEST,
+        Some(&[0x42; 16]),
+        constants::CONTEXT_NONE,
+        &payload,
+    )
+    .unwrap();
+    let actions = engine.handle_inbound(
+        InboundFrame::new(&request.raw, InterfaceId(1), now),
+        &mut rns_crypto::FixedRng::new(&[0x45; 32]),
+    );
+    let link_id = actions
+        .iter()
+        .find_map(|action| match action {
+            TransportAction::LinkRequestReceived { link_id, .. } => Some(*link_id),
+            _ => None,
+        })
+        .expect("link request is forwarded");
+    let closed = actions
+        .iter()
+        .filter_map(|action| match action {
+            TransportAction::LinkClosed { link_id } => Some(*link_id),
+            _ => None,
+        })
+        .collect();
+    (link_id, closed)
+}
+
+/// Below its cap the link table keeps an entry for every forwarded link
+/// request, and evicts nothing.
+#[test]
+fn link_table_below_cap_keeps_every_entry() {
+    let cap = 256usize;
+    let mut engine = transit_engine_with_link_cap(cap);
+    let mut ids = Vec::new();
+    for n in 0..cap as u32 {
+        let (link_id, closed) =
+            forward_transit_link_request(&mut engine, n, 1000.0 + f64::from(n) * 0.001);
+        assert!(closed.is_empty());
+        ids.push(link_id);
+    }
+    assert_eq!(engine.link_table_count(), cap);
+    assert_eq!(engine.link_cap_evict_count(), 0);
+    assert!(ids.iter().all(|id| engine.routes.links.contains_key(id)));
+}
+
+/// A flood of link requests inside the proof timeout stays within the cap:
+/// the oldest entries are evicted and reported closed, a batch at a time,
+/// so most inserts at the cap find room without another pass.
+#[test]
+fn link_table_flood_stays_within_cap() {
+    let cap = 256usize;
+    let mut engine = transit_engine_with_link_cap(cap);
+    let count = 4000u32;
+    let mut ids = Vec::new();
+    let mut closed_ids = Vec::new();
+    let mut eviction_passes = 0usize;
+    for n in 0..count {
+        let (link_id, closed) =
+            forward_transit_link_request(&mut engine, n, 1000.0 + f64::from(n) * 0.001);
+        if !closed.is_empty() {
+            eviction_passes += 1;
+        }
+        closed_ids.extend(closed);
+        ids.push(link_id);
+        assert!(engine.link_table_count() <= cap);
+        assert!(engine.routes.links.contains_key(&link_id));
+    }
+    let kept = engine.link_table_count();
+    assert_eq!(engine.link_cap_evict_count(), count as usize - kept);
+    // Oldest out and reported closed; newest in.
+    let mut evicted = ids[..ids.len() - kept].to_vec();
+    evicted.sort();
+    closed_ids.sort();
+    assert_eq!(closed_ids, evicted);
+    assert!(ids[ids.len() - kept..]
+        .iter()
+        .all(|id| engine.routes.links.contains_key(id)));
+    let batch = cap / 32;
+    assert!(eviction_passes <= (count as usize - cap) / batch + 1);
+    assert!(eviction_passes >= (count as usize - cap) / batch);
+}
+
+/// At the cap, entries the cull would remove are evicted first, then links
+/// whose proof is pending, oldest first; validated links carrying traffic
+/// outlast a flood of link requests.
+#[test]
+fn link_table_cap_evicts_stale_then_pending_before_validated() {
+    let cap = 64usize;
+    let mut engine = transit_engine_with_link_cap(cap);
+    let now = 2000.0;
+    let entry = |validated: bool, timestamp: f64| LinkEntry {
+        timestamp,
+        next_hop_transport_id: [0x29; 16],
+        next_hop_interface: InterfaceId(2),
+        remaining_hops: 2,
+        received_interface: InterfaceId(1),
+        taken_hops: 1,
+        destination_hash: TRANSIT_DEST,
+        validated,
+        proof_timeout: now + 100.0,
+        traffic: 0,
+    };
+    // Entries the cull would remove, though the newest of all: a validated
+    // link whose interface is gone, and a link whose proof is overdue.
+    let stale = [[0xE0; 16], [0xE1; 16]];
+    engine.register_link(
+        stale[0],
+        LinkEntry {
+            next_hop_interface: InterfaceId(9),
+            ..entry(true, now)
+        },
+    );
+    engine.register_link(
+        stale[1],
+        LinkEntry {
+            proof_timeout: now - 1.0,
+            ..entry(false, now)
+        },
+    );
+    let validated: Vec<[u8; 16]> = (0..40u8).map(|i| [i; 16]).collect();
+    for id in &validated {
+        engine.register_link(*id, entry(true, 100.0 + now - constants::LINK_TIMEOUT));
+    }
+    let pending: Vec<[u8; 16]> = (0..22u8).map(|i| [0x80 + i; 16]).collect();
+    for (i, id) in pending.iter().enumerate() {
+        engine.register_link(*id, entry(false, now - 10.0 + i as f64 * 0.01));
+    }
+    assert_eq!(engine.link_table_count(), cap);
+
+    let (first, closed) = forward_transit_link_request(&mut engine, 0, now);
+    let mut closed_sorted = closed.clone();
+    closed_sorted.sort();
+    assert_eq!(closed_sorted, stale);
+    assert!(engine.routes.links.contains_key(&first));
+
+    let (_, closed) = forward_transit_link_request(&mut engine, 1, now);
+    assert!(closed.is_empty());
+    let (_, closed) = forward_transit_link_request(&mut engine, 2, now);
+    assert_eq!(closed, pending[..2]);
+
+    // A flood of link requests churns pending entries only.
+    for n in 3..1000 {
+        forward_transit_link_request(&mut engine, n, now + f64::from(n) * 0.001);
+        assert!(engine.link_table_count() <= cap);
+    }
+    assert!(validated
+        .iter()
+        .all(|id| engine.routes.links.contains_key(id)));
+    assert!(pending
+        .iter()
+        .all(|id| !engine.routes.links.contains_key(id)));
 }

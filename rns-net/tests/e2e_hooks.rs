@@ -297,6 +297,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             max_reverse_entries: rns_core::transport::types::DEFAULT_MAX_REVERSE_ENTRIES,
+            max_link_entries: rns_core::transport::types::DEFAULT_MAX_LINK_ENTRIES,
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,
@@ -397,6 +398,7 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             max_reverse_entries: rns_core::transport::types::DEFAULT_MAX_REVERSE_ENTRIES,
+            max_link_entries: rns_core::transport::types::DEFAULT_MAX_LINK_ENTRIES,
             driver_event_queue_capacity: rns_net::event::DEFAULT_EVENT_QUEUE_CAPACITY,
             interface_writer_queue_capacity:
                 rns_net::interface::DEFAULT_ASYNC_WRITER_QUEUE_CAPACITY,

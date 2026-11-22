@@ -30,6 +30,7 @@ impl TransportEngine {
                 reverse: tables::ReverseTable::default(),
                 reverse_cap_evict_count: 0,
                 links: tables::LinkTable::new(),
+                link_cap_evict_count: 0,
                 lrproof_verdict: None,
             },
             packet_hashlist: PacketHashlist::with_allocation(

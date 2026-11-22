@@ -108,6 +108,11 @@ impl TransportEngine {
         self.routes.reverse.len()
     }
 
+    /// Number of link entries evicted because the link table was full.
+    pub fn link_cap_evict_count(&self) -> usize {
+        self.routes.link_cap_evict_count
+    }
+
     /// Number of reverse entries evicted because the reverse table was full.
     pub fn reverse_cap_evict_count(&self) -> usize {
         self.routes.reverse_cap_evict_count

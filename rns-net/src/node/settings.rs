@@ -169,6 +169,8 @@ pub struct NodeConfig {
     /// Maximum number of reverse table entries (proof routes of forwarded
     /// packets).
     pub max_reverse_entries: usize,
+    /// Maximum number of link table entries (links relayed by this node).
+    pub max_link_entries: usize,
     /// TTL for recalled known destinations without an active path.
     pub known_destinations_ttl: Duration,
     /// Maximum number of recalled known destinations retained.
@@ -261,6 +263,7 @@ impl Default for NodeConfig {
             max_path_destinations: rns_core::transport::types::DEFAULT_MAX_PATH_DESTINATIONS,
             max_tunnel_destinations_total: usize::MAX,
             max_reverse_entries: rns_core::transport::types::DEFAULT_MAX_REVERSE_ENTRIES,
+            max_link_entries: rns_core::transport::types::DEFAULT_MAX_LINK_ENTRIES,
             known_destinations_ttl: Duration::from_secs(48 * 60 * 60),
             known_destinations_max_entries: DEFAULT_KNOWN_DESTINATIONS_MAX_ENTRIES,
             announce_table_ttl: Duration::from_secs(rns_core::constants::ANNOUNCE_TABLE_TTL as u64),

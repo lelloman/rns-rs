@@ -130,6 +130,23 @@ pub fn cull_reverse_table(
     count
 }
 
+/// Whether the link table cull removes `entry`: a validated link after
+/// `LINK_TIMEOUT` without traffic or once an interface of it is gone, an
+/// unvalidated one once its proof timeout has passed.
+pub(crate) fn link_entry_is_stale(
+    entry: &super::tables::LinkEntry,
+    interfaces: &alloc::collections::BTreeMap<InterfaceId, super::types::InterfaceInfo>,
+    now: f64,
+) -> bool {
+    if entry.validated {
+        now > entry.timestamp + constants::LINK_TIMEOUT
+            || !interfaces.contains_key(&entry.next_hop_interface)
+            || !interfaces.contains_key(&entry.received_interface)
+    } else {
+        now > entry.proof_timeout
+    }
+}
+
 /// Cull expired entries from the link table.
 pub fn cull_link_table(
     link_table: &mut super::tables::LinkTable,
@@ -138,18 +155,8 @@ pub fn cull_link_table(
 ) -> (usize, Vec<TransportAction>) {
     let mut stale = Vec::new();
     for (link_id, entry) in link_table.iter() {
-        if entry.validated {
-            if now > entry.timestamp + constants::LINK_TIMEOUT
-                || !interfaces.contains_key(&entry.next_hop_interface)
-                || !interfaces.contains_key(&entry.received_interface)
-            {
-                stale.push(*link_id);
-            }
-        } else {
-            // Unvalidated: check proof timeout
-            if now > entry.proof_timeout {
-                stale.push(*link_id);
-            }
+        if link_entry_is_stale(entry, interfaces, now) {
+            stale.push(*link_id);
         }
     }
 

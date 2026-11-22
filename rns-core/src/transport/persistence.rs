@@ -427,6 +427,7 @@ mod tests {
             max_path_destinations: usize::MAX,
             max_tunnel_destinations_total: usize::MAX,
             max_reverse_entries: crate::transport::types::DEFAULT_MAX_REVERSE_ENTRIES,
+            max_link_entries: crate::transport::types::DEFAULT_MAX_LINK_ENTRIES,
             destination_timeout_secs: constants::DESTINATION_TIMEOUT,
             announce_table_ttl_secs: constants::ANNOUNCE_TABLE_TTL,
             announce_table_max_bytes: constants::ANNOUNCE_TABLE_MAX_BYTES,
