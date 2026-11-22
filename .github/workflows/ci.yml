@@ -306,6 +306,10 @@ jobs:
             libusb-1.0-0 pkg-config libudev-dev
 
       - name: Install espup and Espressif Rust toolchain
+        env:
+          # espup asks the GitHub API for the latest Xtensa toolchain; without
+          # a token the runner hits the unauthenticated rate limit (403).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           curl -fsSL "https://github.com/esp-rs/espup/releases/download/${ESPUP_VERSION}/espup-x86_64-unknown-linux-gnu" -o espup
           echo "${ESPUP_SHA256}  espup" | sha256sum --check --strict
