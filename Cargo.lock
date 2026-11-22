@@ -2642,6 +2642,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "subtle",
 ]
 
 [[package]]
