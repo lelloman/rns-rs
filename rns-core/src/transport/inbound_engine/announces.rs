@@ -156,16 +156,22 @@ impl TransportEngine {
     ) -> [u8; 16] {
         if let Some(transport_id) = packet.transport_id {
             if self.config.transport_enabled {
-                if let Some(announce_entry) = self.announces.table.get_mut(&packet.destination_hash)
-                {
-                    if packet.hops.checked_sub(1) == Some(announce_entry.hops) {
-                        announce_entry.local_rebroadcasts += 1;
-                        if announce_entry.retries > 0
-                            && announce_entry.local_rebroadcasts
-                                >= constants::LOCAL_REBROADCASTS_MAX
-                        {
-                            self.announces.table.remove(&packet.destination_hash);
-                        }
+                let rebroadcast_done =
+                    self.announces
+                        .table
+                        .update(&packet.destination_hash, |announce_entry| {
+                            if packet.hops.checked_sub(1) == Some(announce_entry.hops) {
+                                announce_entry.local_rebroadcasts += 1;
+                                announce_entry.retries > 0
+                                    && announce_entry.local_rebroadcasts
+                                        >= constants::LOCAL_REBROADCASTS_MAX
+                            } else {
+                                false
+                            }
+                        });
+                if let Some(rebroadcast_done) = rebroadcast_done {
+                    if rebroadcast_done {
+                        self.announces.table.remove(&packet.destination_hash);
                     }
                     if let Some(announce_entry) = self.announces.table.get(&packet.destination_hash)
                     {

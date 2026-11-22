@@ -2,7 +2,7 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use super::announce_proc::build_retransmit_announce;
-use super::tables::AnnounceEntry;
+use super::tables::AnnounceMap;
 use super::types::{InterfaceId, TransportAction};
 use crate::constants;
 
@@ -17,8 +17,8 @@ use crate::constants;
 /// `blocked_broadcasts`, by destination, for the gating that expands the
 /// broadcast to skip them.
 pub fn process_pending_announces(
-    announce_table: &mut alloc::collections::BTreeMap<[u8; 16], AnnounceEntry>,
-    held_announces: &mut alloc::collections::BTreeMap<[u8; 16], AnnounceEntry>,
+    announce_table: &mut AnnounceMap,
+    held_announces: &mut AnnounceMap,
     transport_identity_hash: &[u8; 16],
     now: f64,
     blocked_broadcasts: &mut BTreeMap<[u8; 16], BTreeSet<InterfaceId>>,
@@ -49,25 +49,25 @@ pub fn process_pending_announces(
     due.sort_by_key(|(dest_hash, hops)| (*hops, *dest_hash));
 
     for (dest_hash, _) in due {
-        let retransmit = if let Some(entry) = announce_table.get_mut(&dest_hash) {
-            entry.retransmit_timeout = now + constants::PATHFINDER_G + constants::PATHFINDER_RW;
-            entry.retries += 1;
+        let retransmit = announce_table
+            .update(&dest_hash, |entry| {
+                entry.retransmit_timeout = now + constants::PATHFINDER_G + constants::PATHFINDER_RW;
+                entry.retries += 1;
 
-            // An announce that arrived with PATHFINDER_M - 1 hops reaches
-            // PATHFINDER_M here, which no node decodes. Upstream builds the
-            // packet and `Packet.send` refuses it; the retry still counts.
-            if entry.hops >= constants::PATHFINDER_M {
-                None
-            } else {
-                let raw = build_retransmit_announce(entry, transport_identity_hash);
-                if entry.attached_interface.is_none() && !entry.blocked_interfaces.is_empty() {
-                    blocked_broadcasts.insert(dest_hash, entry.blocked_interfaces.clone());
+                // An announce that arrived with PATHFINDER_M - 1 hops reaches
+                // PATHFINDER_M here, which no node decodes. Upstream builds the
+                // packet and `Packet.send` refuses it; the retry still counts.
+                if entry.hops >= constants::PATHFINDER_M {
+                    None
+                } else {
+                    let raw = build_retransmit_announce(entry, transport_identity_hash);
+                    if entry.attached_interface.is_none() && !entry.blocked_interfaces.is_empty() {
+                        blocked_broadcasts.insert(dest_hash, entry.blocked_interfaces.clone());
+                    }
+                    Some((raw, entry.attached_interface, entry.hops))
                 }
-                Some((raw, entry.attached_interface, entry.hops))
-            }
-        } else {
-            None
-        };
+            })
+            .flatten();
 
         if let Some(held) = held_announces.remove(&dest_hash) {
             announce_table.insert(dest_hash, held);
@@ -394,9 +394,9 @@ mod tests {
     #[test]
     fn test_process_pending_retransmit() {
         let dest = [0x11; 16];
-        let mut table = BTreeMap::new();
+        let mut table = AnnounceMap::new();
         table.insert(dest, make_announce_entry(dest, 999.0, 0, 0));
-        let mut held = BTreeMap::new();
+        let mut held = AnnounceMap::new();
         let transport_hash = [0xBB; 16];
 
         let actions = process_pending_announces(
@@ -425,9 +425,9 @@ mod tests {
     #[test]
     fn test_process_pending_retry_limit_reached() {
         let dest = [0x22; 16];
-        let mut table = BTreeMap::new();
+        let mut table = AnnounceMap::new();
         table.insert(dest, make_announce_entry(dest, 999.0, 2, 0)); // retries > PATHFINDER_R(1)
-        let mut held = BTreeMap::new();
+        let mut held = AnnounceMap::new();
 
         let actions = process_pending_announces(
             &mut table,
@@ -444,11 +444,11 @@ mod tests {
     #[test]
     fn test_process_pending_local_rebroadcast_limit() {
         let dest = [0x33; 16];
-        let mut table = BTreeMap::new();
+        let mut table = AnnounceMap::new();
         // Python Transport.py:523: checks retries >= LOCAL_REBROADCASTS_MAX(2)
         let entry = make_announce_entry(dest, 999.0, 2, 0); // retries=2 >= MAX(2), retries > 0
         table.insert(dest, entry);
-        let mut held = BTreeMap::new();
+        let mut held = AnnounceMap::new();
 
         let actions = process_pending_announces(
             &mut table,
@@ -465,9 +465,9 @@ mod tests {
     #[test]
     fn test_process_pending_not_yet_time() {
         let dest = [0x44; 16];
-        let mut table = BTreeMap::new();
+        let mut table = AnnounceMap::new();
         table.insert(dest, make_announce_entry(dest, 2000.0, 0, 0)); // timeout in future
-        let mut held = BTreeMap::new();
+        let mut held = AnnounceMap::new();
 
         let actions = process_pending_announces(
             &mut table,
@@ -489,10 +489,10 @@ mod tests {
         high_hop.hops = 5;
         let mut low_hop = make_announce_entry(low_hop_dest, 999.0, 0, 0);
         low_hop.hops = 1;
-        let mut table = BTreeMap::new();
+        let mut table = AnnounceMap::new();
         table.insert(high_hop_dest, high_hop);
         table.insert(low_hop_dest, low_hop);
-        let mut held = BTreeMap::new();
+        let mut held = AnnounceMap::new();
 
         let actions = process_pending_announces(
             &mut table,
@@ -523,9 +523,9 @@ mod tests {
         held_entry.hops = 7;
         held_entry.block_rebroadcasts = false;
         held_entry.packet_data = vec![0x77; 10];
-        let mut table = BTreeMap::new();
+        let mut table = AnnounceMap::new();
         table.insert(dest, path_response);
-        let mut held = BTreeMap::new();
+        let mut held = AnnounceMap::new();
         held.insert(dest, held_entry.clone());
 
         let actions = process_pending_announces(
@@ -1304,9 +1304,9 @@ mod tests {
     #[test]
     fn retransmit_waits_until_past_its_timeout_and_reschedules() {
         let dest = [0x12; 16];
-        let mut table = BTreeMap::new();
+        let mut table = AnnounceMap::new();
         table.insert(dest, make_announce_entry(dest, 1000.0, 0, 0));
-        let mut held = BTreeMap::new();
+        let mut held = AnnounceMap::new();
         assert!(process_pending_announces(
             &mut table,
             &mut held,

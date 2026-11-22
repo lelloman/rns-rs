@@ -663,12 +663,12 @@ impl TransportEngine {
     }
 
     #[cfg(test)]
-    pub(crate) fn announce_table(&self) -> &BTreeMap<[u8; 16], AnnounceEntry> {
+    pub(crate) fn announce_table(&self) -> &tables::AnnounceMap {
         &self.announces.table
     }
 
     #[cfg(test)]
-    pub(crate) fn held_announces(&self) -> &BTreeMap<[u8; 16], AnnounceEntry> {
+    pub(crate) fn held_announces(&self) -> &tables::AnnounceMap {
         &self.announces.held
     }
 

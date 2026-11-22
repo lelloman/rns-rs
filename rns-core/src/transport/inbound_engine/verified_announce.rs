@@ -20,11 +20,13 @@ impl TransportEngine {
         if shared_medium {
             return;
         }
-        if let Some(waiting) = self.announces.table.get_mut(&packet.destination_hash) {
-            if waiting.packet_hash == packet.packet_hash {
-                waiting.blocked_interfaces.insert(iface);
-            }
-        }
+        self.announces
+            .table
+            .update(&packet.destination_hash, |waiting| {
+                if waiting.packet_hash == packet.packet_hash {
+                    waiting.blocked_interfaces.insert(iface);
+                }
+            });
     }
 
     pub(super) fn process_verified_announce(

@@ -63,6 +63,111 @@ pub struct AnnounceEntry {
     pub blocked_interfaces: BTreeSet<InterfaceId>,
 }
 
+impl AnnounceEntry {
+    /// Bytes this entry retains: the entry itself, its packet buffers and
+    /// its blocked interfaces.
+    pub fn retained_bytes(&self) -> usize {
+        core::mem::size_of::<AnnounceEntry>()
+            + self.packet_raw.capacity()
+            + self.packet_data.capacity()
+            + self.blocked_interfaces.len() * core::mem::size_of::<InterfaceId>()
+    }
+}
+
+/// Announce entries keyed by destination hash, with a running total of the
+/// bytes they retain, so the retention cap is checked without summing the
+/// table. Reads go through `Deref`; every change goes through a method that
+/// keeps the total.
+#[derive(Debug, Clone, Default)]
+pub struct AnnounceMap {
+    entries: BTreeMap<[u8; 16], AnnounceEntry>,
+    retained_bytes: usize,
+}
+
+impl core::ops::Deref for AnnounceMap {
+    type Target = BTreeMap<[u8; 16], AnnounceEntry>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+impl AnnounceMap {
+    /// An empty map.
+    pub const fn new() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            retained_bytes: 0,
+        }
+    }
+
+    /// Bytes retained by all entries ([`AnnounceEntry::retained_bytes`]).
+    pub fn retained_bytes(&self) -> usize {
+        self.retained_bytes
+    }
+
+    /// Insert or replace the entry for `dest_hash`, returning the old one.
+    pub fn insert(&mut self, dest_hash: [u8; 16], entry: AnnounceEntry) -> Option<AnnounceEntry> {
+        self.retained_bytes += entry.retained_bytes();
+        let old = self.entries.insert(dest_hash, entry);
+        if let Some(old) = &old {
+            self.retained_bytes -= old.retained_bytes();
+        }
+        old
+    }
+
+    /// Remove the entry for `dest_hash`.
+    pub fn remove(&mut self, dest_hash: &[u8; 16]) -> Option<AnnounceEntry> {
+        let old = self.entries.remove(dest_hash)?;
+        self.retained_bytes -= old.retained_bytes();
+        Some(old)
+    }
+
+    /// Change the entry for `dest_hash` in place with `f`, if there is one.
+    pub fn update<R>(
+        &mut self,
+        dest_hash: &[u8; 16],
+        f: impl FnOnce(&mut AnnounceEntry) -> R,
+    ) -> Option<R> {
+        let entry = self.entries.get_mut(dest_hash)?;
+        let before = entry.retained_bytes();
+        let result = f(entry);
+        self.retained_bytes = self.retained_bytes - before + entry.retained_bytes();
+        Some(result)
+    }
+
+    /// Keep only the entries `keep` accepts; returns how many were removed.
+    pub fn retain(&mut self, mut keep: impl FnMut(&[u8; 16], &AnnounceEntry) -> bool) -> usize {
+        let before = self.entries.len();
+        let mut released = 0usize;
+        self.entries.retain(|dest_hash, entry| {
+            let kept = keep(dest_hash, entry);
+            if !kept {
+                released += entry.retained_bytes();
+            }
+            kept
+        });
+        self.retained_bytes -= released;
+        before - self.entries.len()
+    }
+
+    /// Remove every entry.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.retained_bytes = 0;
+    }
+
+    /// Whether the running total matches the sum over the entries.
+    pub fn retained_bytes_consistent(&self) -> bool {
+        self.retained_bytes
+            == self
+                .entries
+                .values()
+                .map(AnnounceEntry::retained_bytes)
+                .sum::<usize>()
+    }
+}
+
 /// Reverse-path entries keyed by truncated packet hash.
 ///
 /// Senders can grind packets for chosen hashes, so the table's hasher must
