@@ -4258,6 +4258,73 @@ fn test_existing_path_destination_update_does_not_trigger_cap_eviction() {
     assert!(engine.has_path(&dest2));
 }
 
+fn numbered_dest(i: u32) -> [u8; 16] {
+    let mut dest = [0u8; 16];
+    dest.copy_from_slice(&crate::hash::full_hash(&i.to_be_bytes())[..16]);
+    dest
+}
+
+#[test]
+fn new_path_destinations_below_cap_are_kept_until_periodic_cull() {
+    let mut config = make_config(true);
+    config.max_path_destinations = crate::transport::types::DEFAULT_MAX_PATH_DESTINATIONS;
+    let mut engine = TransportEngine::new(config);
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+
+    // More never-used paths than the unused pool target, but below the cap:
+    // inserting them must not cull anything.
+    let count = (constants::PATH_POOL_UNUSED_MAX + 500) as u32;
+    for i in 0..count {
+        let now = 1000.0 + f64::from(i) * 0.001;
+        engine.upsert_path_destination(
+            numbered_dest(i),
+            make_path_entry(now, 2, InterfaceId(1), [0x11; 16]),
+            now,
+        );
+    }
+    assert_eq!(engine.path_table_count(), count as usize);
+    assert_eq!(engine.path_destination_cap_evict_count(), 0);
+
+    // The periodic cull trims the never-used pool to its target.
+    let mut rng = rns_crypto::FixedRng::new(&[0x42; 32]);
+    let _ = engine.tick(1000.0 + constants::TABLES_CULL_INTERVAL + 10.0, &mut rng);
+    assert_eq!(engine.path_table_count(), constants::PATH_POOL_UNUSED_MAX);
+}
+
+#[test]
+fn path_destination_cap_holds_under_flood_of_used_paths() {
+    let cap = 256usize;
+    let mut config = make_config(true);
+    config.max_path_destinations = cap;
+    let mut engine = TransportEngine::new(config);
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+
+    // Used paths survive the cull, so every insert at the cap must evict.
+    let count = 2000u32;
+    let mut at_cap_inserts = 0usize;
+    for i in 0..count {
+        let now = 1000.0 + f64::from(i);
+        let mut entry = make_path_entry(now, 2, InterfaceId(1), [0x11; 16]);
+        entry.used = now;
+        if engine.path_table_count() == cap {
+            at_cap_inserts += 1;
+        }
+        engine.upsert_path_destination(numbered_dest(i), entry, now);
+        assert!(engine.path_table_count() <= cap);
+        assert!(engine.has_path(&numbered_dest(i)));
+    }
+    // The oldest destinations were evicted, the newest kept.
+    assert!(!engine.has_path(&numbered_dest(0)));
+    assert!(engine.has_path(&numbered_dest(count - 2)));
+    assert_eq!(
+        engine.path_destination_cap_evict_count(),
+        count as usize - engine.path_table_count()
+    );
+    // Eviction makes room in batches, so most inserts past the cap find
+    // room without another whole-table cull and scan.
+    assert!(at_cap_inserts * 4 <= count as usize - cap);
+}
+
 #[test]
 fn outbound_rejects_packets_at_pathfinder_hop_limit() {
     let mut engine = TransportEngine::new(make_config(true));
