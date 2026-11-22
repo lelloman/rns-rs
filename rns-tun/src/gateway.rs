@@ -533,7 +533,9 @@ impl<N: GatewayNode, D: PacketDevice> GatewayLoop<'_, N, D> {
     }
 
     /// Activates a session whose client is ready, within the gateway's
-    /// session capacity and only with the DNS servers it was offered.
+    /// session capacity and only with the DNS servers it was offered. A
+    /// session that becomes active replaces the client's older active
+    /// sessions, which do not count against the capacity.
     fn on_client_ready(
         &mut self,
         link_id: [u8; 16],
@@ -541,11 +543,17 @@ impl<N: GatewayNode, D: PacketDevice> GatewayLoop<'_, N, D> {
         dns_servers: &[Ipv4Addr],
         active_count: usize,
     ) -> Pass {
+        let address = self
+            .sessions
+            .get(&link_id)
+            .and_then(|entry| entry.grant.as_ref())
+            .map(|grant| grant.address);
+        let replaced = address.map_or(0, |address| self.stale_sessions(link_id, address).count());
         let Some(entry) = self.sessions.get_mut(&link_id) else {
             return NEXT_PASS;
         };
-        if entry.machine.state() != GatewayState::Active
-            && active_count >= self.gateway.max_active_sessions
+        let was_active = entry.machine.state() == GatewayState::Active;
+        if !was_active && active_count.saturating_sub(replaced) >= self.gateway.max_active_sessions
         {
             log::warn!(
                 "rntun gateway rejected session at capacity: link={}",
@@ -561,7 +569,47 @@ impl<N: GatewayNode, D: PacketDevice> GatewayLoop<'_, N, D> {
             return self.reject_session(link_id, 3, "DNS configuration mismatch");
         }
         let result = start_transport(self.node, &self.policy, link_id, entry, session_epoch);
+        if result.is_ok() && !was_active {
+            if let Some(address) = address {
+                self.retire_stale_sessions(link_id, address);
+            }
+        }
         self.keep_or_drop(link_id, result)
+    }
+
+    /// The active sessions other than `link_id` that hold `address`: older
+    /// sessions of the same client (addresses are unique per identity),
+    /// typically on a Link that has not timed out yet after the client
+    /// reconnected.
+    fn stale_sessions(
+        &self,
+        link_id: [u8; 16],
+        address: Ipv4Addr,
+    ) -> impl Iterator<Item = &[u8; 16]> {
+        self.sessions.iter().filter_map(move |(candidate, entry)| {
+            let stale = *candidate != link_id
+                && entry.machine.state() == GatewayState::Active
+                && entry
+                    .grant
+                    .as_ref()
+                    .is_some_and(|grant| grant.address == address);
+            stale.then_some(candidate)
+        })
+    }
+
+    /// Closes and forgets the sessions that the newly active `link_id`
+    /// replaces, so that `address` has one active session to route to.
+    fn retire_stale_sessions(&mut self, link_id: [u8; 16], address: Ipv4Addr) {
+        let stale: Vec<[u8; 16]> = self.stale_sessions(link_id, address).copied().collect();
+        for stale_link in stale {
+            log::warn!(
+                "rntun gateway session replaced by a newer one: link={} replacement={}",
+                hex(&stale_link),
+                hex(&link_id)
+            );
+            let _ = self.node.teardown_link(stale_link);
+            self.sessions.remove(&stale_link);
+        }
     }
 
     /// Writes a client's packet to the TUN device.
