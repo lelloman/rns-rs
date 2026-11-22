@@ -45,6 +45,8 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
+# Constant-time comparison of the HTTP bearer token.
+subtle = { version = "2.6", default-features = false }
 env_logger = "0.11"
 rustls = { version = "0.23", optional = true }
 

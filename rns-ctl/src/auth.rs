@@ -1,5 +1,20 @@
 use crate::http::{HttpRequest, HttpResponse};
 use crate::state::{read_control_plane_config, ControlPlaneConfigHandle};
+use subtle::ConstantTimeEq;
+
+/// Whether `given` is the configured token `expected`, in time that does not
+/// depend on where they differ.
+///
+/// Both are hashed first and the fixed-size digests compared in constant
+/// time, so neither a differing byte nor a differing length shows up as an
+/// earlier return. Hashing takes time proportional to each input's length;
+/// the attacker knows their own, and the configured token's length only
+/// moves the time in whole SHA-256 blocks.
+fn token_matches(given: &str, expected: &str) -> bool {
+    let given = rns_crypto::sha256::sha256(given.as_bytes());
+    let expected = rns_crypto::sha256::sha256(expected.as_bytes());
+    given.ct_eq(&expected).into()
+}
 
 /// Check authentication on an HTTP request.
 /// Returns Ok(()) if authenticated, Err(response) with 401 if not.
@@ -22,7 +37,7 @@ pub fn check_auth(
     match auth_header {
         Some(val) => {
             if let Some(token) = val.strip_prefix("Bearer ") {
-                if token == expected {
+                if token_matches(token, expected) {
                     Ok(())
                 } else {
                     Err(HttpResponse::unauthorized("Invalid token"))
@@ -48,7 +63,7 @@ pub fn check_ws_auth(query: &str, config: &ControlPlaneConfigHandle) -> Result<(
 
     let params = crate::http::parse_query(query);
     match params.get("token") {
-        Some(token) if token == expected => Ok(()),
+        Some(token) if token_matches(token, expected) => Ok(()),
         _ => Err(HttpResponse::unauthorized("Missing or invalid token")),
     }
 }
@@ -78,6 +93,17 @@ mod tests {
             headers,
             body: Vec::new(),
         }
+    }
+
+    #[test]
+    fn token_matches_only_the_same_token() {
+        assert!(token_matches("secret", "secret"));
+        assert!(token_matches("", ""));
+        assert!(!token_matches("secreT", "secret"));
+        assert!(!token_matches("xecret", "secret"));
+        assert!(!token_matches("secre", "secret"));
+        assert!(!token_matches("secrets", "secret"));
+        assert!(!token_matches("", "secret"));
     }
 
     #[test]
