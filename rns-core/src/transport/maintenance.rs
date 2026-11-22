@@ -293,19 +293,29 @@ impl TransportEngine {
     }
 
     fn cull_tick_tables(&mut self, ctx: &mut TickCtx<'_>) {
+        // Upstream defers the first never-used pool check by a full interval
+        // from start (Transport.py:537-538); the first tick stands in for it.
+        let pool_size_last_checked = *self.timers.pool_size_last_checked.get_or_insert(ctx.now);
         if ctx.now <= self.timers.tables_last_culled + constants::TABLES_CULL_INTERVAL {
             return;
         }
 
+        // Upstream trims the never-used pool only on culls where its pool
+        // check is due (Transport.py:1182, 1201, 1223-1232).
+        let check_unused =
+            ctx.now > pool_size_last_checked + constants::PATH_POOL_SIZE_CHECK_INTERVAL;
         let unused_path_linger = self.unused_path_linger();
         jobs::cull_path_table(
             &mut self.paths.table,
             &self.interfaces,
             ctx.now,
             unused_path_linger,
-            jobs::UnusedPoolLimits::UPSTREAM,
+            check_unused.then_some(jobs::UnusedPoolLimits::UPSTREAM),
             self.policy.hop_limiter,
         );
+        if check_unused {
+            self.timers.pool_size_last_checked = Some(ctx.now);
+        }
         jobs::cull_reverse_table(&mut self.routes.reverse, &self.interfaces, ctx.now);
         self.rediscover_unproven_link_paths(ctx.now);
         let (_culled, link_closed_actions) =

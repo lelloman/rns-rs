@@ -4285,10 +4285,66 @@ fn new_path_destinations_below_cap_are_kept_until_periodic_cull() {
     assert_eq!(engine.path_table_count(), count as usize);
     assert_eq!(engine.path_destination_cap_evict_count(), 0);
 
-    // The periodic cull trims the never-used pool to its target.
+    // The periodic cull trims the never-used pool to its target once its
+    // pool check is due.
     let mut rng = rns_crypto::FixedRng::new(&[0x42; 32]);
-    let _ = engine.tick(1000.0 + constants::TABLES_CULL_INTERVAL + 10.0, &mut rng);
+    let start = 1010.0;
+    let _ = engine.tick(start, &mut rng);
+    assert_eq!(engine.path_table_count(), count as usize);
+    let _ = engine.tick(
+        start + constants::PATH_POOL_SIZE_CHECK_INTERVAL + 1.0,
+        &mut rng,
+    );
     assert_eq!(engine.path_table_count(), constants::PATH_POOL_UNUSED_MAX);
+}
+
+fn insert_unused_paths(engine: &mut TransportEngine, from: u32, count: u32, now: f64) {
+    for i in from..from + count {
+        engine.upsert_path_destination(
+            numbered_dest(i),
+            make_path_entry(now, 2, InterfaceId(1), [0x11; 16]),
+            now,
+        );
+    }
+}
+
+#[test]
+fn periodic_cull_trims_never_used_pool_only_when_check_is_due() {
+    let mut engine = TransportEngine::new(make_config(true));
+    engine.register_interface(make_interface(1, constants::MODE_FULL));
+    let mut rng = rns_crypto::FixedRng::new(&[0x42; 32]);
+    let pool_max = constants::PATH_POOL_UNUSED_MAX;
+    let interval = constants::PATH_POOL_SIZE_CHECK_INTERVAL;
+
+    // The first tick starts the clock: the first pool check is due a whole
+    // interval later.
+    let start = 100.0;
+    let _ = engine.tick(start, &mut rng);
+    insert_unused_paths(&mut engine, 0, pool_max as u32 + 10, start);
+    let expired = [0xEE; 16];
+    let mut expiring = make_path_entry(start, 2, InterfaceId(1), [0x11; 16]);
+    expiring.expires = start + 1.0;
+    engine.upsert_path_destination(expired, expiring, start);
+
+    // A 5 s cull before the check is due removes expired paths but leaves
+    // the never-used pool over its target.
+    let _ = engine.tick(start + constants::TABLES_CULL_INTERVAL + 1.0, &mut rng);
+    assert!(!engine.has_path(&expired));
+    assert_eq!(engine.path_table_count(), pool_max + 10);
+    let _ = engine.tick(start + interval, &mut rng);
+    assert_eq!(engine.path_table_count(), pool_max + 10);
+
+    // Once due, the pool is trimmed to its target.
+    let checked = start + interval + constants::TABLES_CULL_INTERVAL + 1.0;
+    let _ = engine.tick(checked, &mut rng);
+    assert_eq!(engine.path_table_count(), pool_max);
+
+    // The next check is due a whole interval after that one.
+    insert_unused_paths(&mut engine, 100_000, 10, checked);
+    let _ = engine.tick(checked + constants::TABLES_CULL_INTERVAL + 1.0, &mut rng);
+    assert_eq!(engine.path_table_count(), pool_max + 10);
+    let _ = engine.tick(checked + interval + 1.0, &mut rng);
+    assert_eq!(engine.path_table_count(), pool_max);
 }
 
 #[test]

@@ -84,12 +84,14 @@ impl TransportEngine {
             return;
         }
         let unused_path_linger = self.unused_path_linger();
+        // The cap is not upstream's, so neither is its cadence: trim the
+        // never-used pool here whenever the cap is reached.
         jobs::cull_path_table(
             &mut self.paths.table,
             &self.interfaces,
             now,
             unused_path_linger,
-            jobs::UnusedPoolLimits::UPSTREAM,
+            Some(jobs::UnusedPoolLimits::UPSTREAM),
             self.policy.hop_limiter,
         );
         let low_water = cap.saturating_sub((cap / PATH_CAP_EVICT_BATCH_DIVISOR).max(1));

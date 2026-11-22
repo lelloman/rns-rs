@@ -411,6 +411,11 @@ pub const PATH_POOL_UNUSED_MIN: usize = 512;
 /// by one per extra used path, down to `PATH_POOL_UNUSED_MIN`.
 pub const PATH_POOL_USED_TARGET: usize = 2048;
 
+/// How often the periodic table cull trims the never-used path pool
+/// (seconds, upstream `Transport.pool_size_check_interval`, e24d2073). The
+/// first check is due this long after start; other culls leave the pool be.
+pub const PATH_POOL_SIZE_CHECK_INTERVAL: f64 = 300.0;
+
 /// Interfaces with a known bitrate below this many bits per second are slow:
 /// never-used paths learnt on them linger `PATH_SLOW_LINGER_FACTOR` times
 /// longer and are culled last when the unused pool exceeds its target.
