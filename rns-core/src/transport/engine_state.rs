@@ -88,6 +88,7 @@ impl TransportEngine {
             timers: JobTimers {
                 announces_last_checked: 0.0,
                 tables_last_culled: 0.0,
+                pool_size_last_checked: None,
             },
         }
     }

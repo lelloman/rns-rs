@@ -462,6 +462,9 @@ impl PathRequestState {
 struct JobTimers {
     announces_last_checked: f64,
     tables_last_culled: f64,
+    /// When the never-used path pool was last checked; set by the first
+    /// table cull, which stands in for upstream's start.
+    pool_size_last_checked: Option<f64>,
 }
 
 /// The core transport/routing engine.

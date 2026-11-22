@@ -183,25 +183,30 @@ fn is_slow_interface(
 /// or by the never-used pool cap (upstream 5bd93ad9).
 /// Never-used paths expire after `unused_path_linger`, multiplied by
 /// `PATH_SLOW_LINGER_FACTOR` on slow interfaces, where paths are expensive to
-/// relearn. When the never-used pool exceeds its target, entries on fast
-/// interfaces are removed before entries on slow ones, each group ordered by
-/// expiry ascending so the earliest-expiring ones go first. Removing the
-/// newest entries instead would keep stale paths and discard fresh ones.
+/// relearn. With `pool` given, the never-used pool is trimmed to its target:
+/// entries on fast interfaces are removed before entries on slow ones, each
+/// group ordered by expiry ascending so the earliest-expiring ones go first,
+/// then by destination hash as upstream's sort key does (Transport.py:1202,
+/// 1226). Removing the newest entries instead would keep stale paths and
+/// discard fresh ones. Without `pool` the pool is left as it is, as upstream
+/// does on passes where its pool check is not due.
 pub fn cull_path_table(
     path_table: &mut alloc::collections::BTreeMap<[u8; 16], super::tables::PathSet>,
     interfaces: &alloc::collections::BTreeMap<InterfaceId, super::types::InterfaceInfo>,
     now: f64,
     unused_path_linger: f64,
-    pool: UnusedPoolLimits,
+    pool: Option<UnusedPoolLimits>,
     hop_limiter: u8,
 ) -> usize {
     // Upstream counts used paths over the whole table before removing stale
     // ones, and sizes the never-used pool from that count.
-    let used_count = path_table
-        .values()
-        .map(|ps| ps.iter().filter(|p| p.used != 0.0).count())
-        .sum();
-    let unused_pool_target = pool.target(used_count);
+    let unused_pool_target = pool.map(|pool| {
+        let used_count = path_table
+            .values()
+            .map(|ps| ps.iter().filter(|p| p.used != 0.0).count())
+            .sum();
+        pool.target(used_count)
+    });
     let mut culled = 0usize;
     let mut unused: alloc::vec::Vec<(u8, f64, [u8; 16], [u8; 16])> = alloc::vec::Vec::new();
     for (dest_hash, ps) in path_table.iter_mut() {
@@ -224,6 +229,9 @@ pub fn cull_path_table(
                 && p.hops <= hop_limiter
         });
         culled += before - ps.len();
+        if unused_pool_target.is_none() {
+            continue;
+        }
         for path in ps.iter() {
             if path.used == 0.0 {
                 let slow = u8::from(is_slow_interface(interfaces, &path.receiving_interface));
@@ -231,11 +239,16 @@ pub fn cull_path_table(
             }
         }
     }
+    let unused_pool_target = unused_pool_target.unwrap_or(usize::MAX);
     if unused.len() > unused_pool_target {
         let remove_count = unused.len() - unused_pool_target;
-        unused.sort_by(|a, b| {
+        // Upstream sorts (slow, expiry, destination hash) tuples; the next
+        // hop orders the paths of one destination.
+        unused.sort_unstable_by(|a, b| {
             a.0.cmp(&b.0)
-                .then_with(|| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal))
+                .then_with(|| a.1.total_cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+                .then_with(|| a.3.cmp(&b.3))
         });
         for (_, _, dest_hash, next_hop) in unused.into_iter().take(remove_count) {
             if let Some(ps) = path_table.get_mut(&dest_hash) {
@@ -600,7 +613,7 @@ mod tests {
             &interfaces,
             200.0,
             99_999.0,
-            pool,
+            Some(pool),
             crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 2);
@@ -724,7 +737,7 @@ mod tests {
             &interfaces,
             600.0,
             crate::constants::UNUSED_PATH_LINGER,
-            UnusedPoolLimits::UPSTREAM,
+            Some(UnusedPoolLimits::UPSTREAM),
             crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 1);
@@ -763,7 +776,7 @@ mod tests {
         };
         let now = 100.0 + crate::constants::UNUSED_PATH_LINGER + 1.0;
         let cull = |table: &mut BTreeMap<[u8; 16], super::super::tables::PathSet>,
-                    pool: UnusedPoolLimits| {
+                    pool: Option<UnusedPoolLimits>| {
             cull_path_table(
                 table,
                 &interfaces,
@@ -784,12 +797,12 @@ mod tests {
         table.insert([0x05; 16], path(1, 1, 200.0));
         // Interface gone.
         table.insert([0x06; 16], path(0, 3, 99_999.0));
-        cull(&mut table, UnusedPoolLimits::fixed(2048));
+        cull(&mut table, Some(UnusedPoolLimits::fixed(2048)));
         let kept: Vec<u8> = table.keys().map(|key| key[0]).collect();
         assert_eq!(kept, vec![0x01, 0x02, 0x04]);
 
         // The never-used pool cap removes instance-local paths too.
-        cull(&mut table, UnusedPoolLimits::fixed(0));
+        cull(&mut table, Some(UnusedPoolLimits::fixed(0)));
         assert!(table.is_empty());
     }
 
@@ -843,7 +856,7 @@ mod tests {
             &interfaces,
             200.0,
             crate::constants::UNUSED_PATH_LINGER,
-            UnusedPoolLimits::fixed(2048),
+            Some(UnusedPoolLimits::fixed(2048)),
             4,
         );
         assert_eq!(count, 2);
@@ -860,7 +873,7 @@ mod tests {
             &interfaces,
             200.0,
             crate::constants::UNUSED_PATH_LINGER,
-            UnusedPoolLimits::fixed(2048),
+            Some(UnusedPoolLimits::fixed(2048)),
             crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 0);
@@ -880,7 +893,7 @@ mod tests {
             &interfaces,
             300.0,
             100.0,
-            UnusedPoolLimits::fixed(2048),
+            Some(UnusedPoolLimits::fixed(2048)),
             crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 1);
@@ -903,7 +916,7 @@ mod tests {
             &interfaces,
             200.0,
             9999.0,
-            UnusedPoolLimits::fixed(2),
+            Some(UnusedPoolLimits::fixed(2)),
             crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 1);
@@ -933,7 +946,7 @@ mod tests {
                 &interfaces,
                 200.0,
                 9999.0,
-                UnusedPoolLimits::fixed(2),
+                Some(UnusedPoolLimits::fixed(2)),
                 crate::constants::HOP_LIMITER
             ),
             3
@@ -947,7 +960,7 @@ mod tests {
                 &interfaces,
                 200.0,
                 9999.0,
-                UnusedPoolLimits::fixed(2),
+                Some(UnusedPoolLimits::fixed(2)),
                 crate::constants::HOP_LIMITER
             ),
             0
@@ -972,7 +985,7 @@ mod tests {
             &interfaces,
             200.0,
             9999.0,
-            UnusedPoolLimits::fixed(2),
+            Some(UnusedPoolLimits::fixed(2)),
             crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 1);
@@ -1038,7 +1051,7 @@ mod tests {
             &interfaces,
             now,
             linger,
-            UnusedPoolLimits::fixed(2048),
+            Some(UnusedPoolLimits::fixed(2048)),
             crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 3);
@@ -1052,7 +1065,7 @@ mod tests {
                 &interfaces,
                 before_factored,
                 linger,
-                UnusedPoolLimits::fixed(2048),
+                Some(UnusedPoolLimits::fixed(2048)),
                 crate::constants::HOP_LIMITER
             ),
             0
@@ -1063,7 +1076,7 @@ mod tests {
                 &interfaces,
                 before_factored + 1.0,
                 linger,
-                UnusedPoolLimits::fixed(2048),
+                Some(UnusedPoolLimits::fixed(2048)),
                 crate::constants::HOP_LIMITER
             ),
             1
@@ -1086,7 +1099,7 @@ mod tests {
                 &interfaces,
                 499.0,
                 10.0,
-                UnusedPoolLimits::fixed(2048),
+                Some(UnusedPoolLimits::fixed(2048)),
                 crate::constants::HOP_LIMITER
             ),
             0
@@ -1097,7 +1110,7 @@ mod tests {
                 &interfaces,
                 501.0,
                 10.0,
-                UnusedPoolLimits::fixed(2048),
+                Some(UnusedPoolLimits::fixed(2048)),
                 crate::constants::HOP_LIMITER
             ),
             1
@@ -1138,7 +1151,7 @@ mod tests {
             &interfaces,
             200.0,
             99_999.0,
-            UnusedPoolLimits::fixed(3),
+            Some(UnusedPoolLimits::fixed(3)),
             crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 2);
@@ -1154,7 +1167,7 @@ mod tests {
             &interfaces,
             200.0,
             99_999.0,
-            UnusedPoolLimits::fixed(2),
+            Some(UnusedPoolLimits::fixed(2)),
             crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 1);
@@ -1166,7 +1179,7 @@ mod tests {
             &interfaces,
             200.0,
             99_999.0,
-            UnusedPoolLimits::fixed(1),
+            Some(UnusedPoolLimits::fixed(1)),
             crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 1);
@@ -1216,7 +1229,7 @@ mod tests {
             &interfaces,
             1100.0,
             crate::constants::UNUSED_PATH_LINGER,
-            UnusedPoolLimits::UPSTREAM,
+            Some(UnusedPoolLimits::UPSTREAM),
             crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 0);
@@ -1339,7 +1352,7 @@ mod tests {
             &interfaces,
             200.0,
             9999.0,
-            UnusedPoolLimits::fixed(1),
+            Some(UnusedPoolLimits::fixed(1)),
             crate::constants::HOP_LIMITER,
         );
         assert_eq!(count, 1);
