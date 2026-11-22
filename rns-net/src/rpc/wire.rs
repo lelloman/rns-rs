@@ -7,8 +7,9 @@ use super::*;
 pub(super) const MAX_MESSAGE: usize = 64 * 1024 * 1024;
 
 /// Largest message accepted before the request: challenges and their
-/// answers are tens of bytes.
-pub(super) const MAX_HANDSHAKE_MESSAGE: usize = 1024;
+/// answers are tens of bytes. Upstream's `multiprocessing.connection`
+/// refuses anything larger than 256 bytes during the handshake too.
+pub(super) const MAX_HANDSHAKE_MESSAGE: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SessionPhase {
@@ -286,8 +287,9 @@ pub(super) fn server_auth<S: Read + Write>(stream: &mut S, auth_key: &[u8; 32]) 
 
     send_bytes(stream, &challenge_message)?;
 
-    // Read response (max 256 bytes)
-    let response = recv_bytes(stream)?;
+    // Read response; nothing larger than a handshake message is allocated
+    // before the peer has authenticated.
+    let response = recv_bytes_max(stream, MAX_HANDSHAKE_MESSAGE)?;
 
     // Verify response
     // The message to HMAC is everything after #CHALLENGE# (i.e. {sha256}<random>)
@@ -348,38 +350,35 @@ pub(super) fn send_bytes<S: Write>(stream: &mut S, data: &[u8]) -> io::Result<()
     stream.flush()
 }
 
-/// Receive bytes with 4-byte big-endian length prefix.
+/// Receive bytes with 4-byte big-endian length prefix, up to [`MAX_MESSAGE`].
 pub(super) fn recv_bytes<S: Read>(stream: &mut S) -> io::Result<Vec<u8>> {
+    recv_bytes_max(stream, MAX_MESSAGE)
+}
+
+/// Receive one length-prefixed message, refusing it before allocating
+/// anything when its announced length is over `max`.
+pub(super) fn recv_bytes_max<S: Read>(stream: &mut S, max: usize) -> io::Result<Vec<u8>> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf)?;
     let len = i32::from_be_bytes(len_buf);
 
-    if len < 0 {
+    let len = if len < 0 {
         // Extended format: 8-byte length
         let mut len8_buf = [0u8; 8];
         stream.read_exact(&mut len8_buf)?;
-        let len = u64::from_be_bytes(len8_buf) as usize;
-        if len > 64 * 1024 * 1024 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "message too large",
-            ));
-        }
-        let mut buf = vec![0u8; len];
-        stream.read_exact(&mut buf)?;
-        Ok(buf)
+        u64::from_be_bytes(len8_buf)
     } else {
-        let len = len as usize;
-        if len > 64 * 1024 * 1024 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "message too large",
-            ));
-        }
-        let mut buf = vec![0u8; len];
-        stream.read_exact(&mut buf)?;
-        Ok(buf)
+        len as u64
+    };
+    if len > max as u64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "message too large",
+        ));
     }
+    let mut buf = vec![0u8; len as usize];
+    stream.read_exact(&mut buf)?;
+    Ok(buf)
 }
 
 /// Client-side authentication: answer the server's challenge.
@@ -393,7 +392,7 @@ pub(super) fn answer_challenge<S: Read + Write>(
     auth_key: &[u8; 32],
 ) -> io::Result<()> {
     // Read challenge
-    let challenge = recv_bytes(stream)?;
+    let challenge = recv_bytes_max(stream, MAX_HANDSHAKE_MESSAGE)?;
 
     let Some(message) = challenge.strip_prefix(CHALLENGE_PREFIX) else {
         return Err(io::Error::new(
@@ -407,7 +406,7 @@ pub(super) fn answer_challenge<S: Read + Write>(
     send_bytes(stream, &response)?;
 
     // Read welcome/failure
-    let result = recv_bytes(stream)?;
+    let result = recv_bytes_max(stream, MAX_HANDSHAKE_MESSAGE)?;
     if result == WELCOME {
         Ok(())
     } else {

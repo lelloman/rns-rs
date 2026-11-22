@@ -194,6 +194,56 @@ fn auth_failure_wrong_key() {
 }
 
 #[test]
+fn unauthenticated_huge_length_is_refused_before_reading_it() {
+    // No header is followed by a body: had the server tried to read (and
+    // so allocate) one, it would fail with a timeout instead.
+    let mut extended = (-1i32).to_be_bytes().to_vec();
+    extended.extend_from_slice(&(MAX_MESSAGE as u64).to_be_bytes());
+    let headers = [
+        (MAX_MESSAGE as i32).to_be_bytes().to_vec(),
+        ((MAX_HANDSHAKE_MESSAGE + 1) as i32).to_be_bytes().to_vec(),
+        extended,
+    ];
+    for header in headers {
+        let (server, mut client) = tcp_pair();
+        let key = derive_auth_key(b"test-private-key");
+        let (event_tx, _event_rx) = crate::event::channel();
+        let handler = thread::spawn(move || handle_connection(server, &key, &event_tx));
+
+        let challenge = recv_bytes(&mut client).unwrap();
+        assert!(challenge.starts_with(CHALLENGE_PREFIX));
+        client.write_all(&header).unwrap();
+
+        let error = handler.join().unwrap().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        // The connection is closed without a welcome.
+        let mut buf = [0u8; 1];
+        assert_eq!(client.read(&mut buf).unwrap(), 0);
+    }
+}
+
+#[test]
+fn oversized_challenge_is_refused_by_the_client() {
+    let (mut server, mut client) = tcp_pair();
+    let mut challenge = CHALLENGE_PREFIX.to_vec();
+    challenge.resize(MAX_HANDSHAKE_MESSAGE + 1, 0);
+    send_bytes(&mut server, &challenge).unwrap();
+    let error = client_auth(&mut client, &derive_auth_key(b"k")).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+}
+
+#[test]
+fn handshake_accepts_messages_up_to_the_upstream_limit() {
+    let message = vec![7u8; MAX_HANDSHAKE_MESSAGE];
+    let mut input = (message.len() as i32).to_be_bytes().to_vec();
+    input.extend_from_slice(&message);
+    assert_eq!(
+        recv_bytes_max(&mut io::Cursor::new(input), MAX_HANDSHAKE_MESSAGE).unwrap(),
+        message
+    );
+}
+
+#[test]
 fn rpc_connection_closes_after_a_failed_request() {
     // Upstream closes the RPC connection in a `finally` block; here the
     // stream is owned by `handle_connection` and dropped on every return.
