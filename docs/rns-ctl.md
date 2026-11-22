@@ -72,6 +72,14 @@ then consist of characters a subprotocol may contain; generated tokens (hex)
 do. A `?token=` query parameter is not accepted, since URLs end up in proxy and
 access logs.
 
+The built-in UI page loads without a token and sends it on its API calls in
+the `Authorization` header. To open it with the token filled in, put the token
+in the URL fragment, which browsers never send to the server:
+`http://localhost:8080/#token=<token>`. The page keeps the token in
+`sessionStorage` for the tab and removes it from the address bar. An old
+`/?token=` link still fills it in once, but that token has already been sent to
+the server and any proxy with the request; use the fragment instead.
+
 Limits: request bodies above 4 MiB get `413`, the token is checked before any
 body is read, and at most 64 concurrent connections are served (`503` beyond
 that). The port can also be set with `RNSCTL_HTTP_PORT`. Build with
