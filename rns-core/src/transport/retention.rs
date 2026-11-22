@@ -1,5 +1,10 @@
 use super::*;
 
+/// At the path destination cap, evict down to `cap - cap / DIVISOR` (at
+/// least one below the cap), so the next inserts find room without another
+/// cull.
+const PATH_CAP_EVICT_BATCH_DIVISOR: usize = 32;
+
 impl TransportEngine {
     pub(crate) fn insert_discovery_pr_tag(&mut self, unique_tag: [u8; 32]) -> bool {
         self.path_requests
@@ -64,8 +69,18 @@ impl TransportEngine {
         }
     }
 
+    /// Make room for a new destination when the path table is at
+    /// `max_path_destinations`; below the cap this does nothing, and expiry
+    /// and the never-used pool trim are left to the periodic table cull.
+    ///
+    /// At the cap, the table is culled as the periodic job does, then, if
+    /// still above the low-water mark, the oldest destinations are evicted
+    /// down to it in one pass. Evicting a batch instead of a single entry
+    /// keeps a flood of new destinations at the cap from culling and
+    /// scanning the whole table on every insert.
     pub(crate) fn enforce_path_destination_cap(&mut self, now: f64) {
-        if self.config.max_path_destinations == usize::MAX {
+        let cap = self.config.max_path_destinations;
+        if self.paths.table.len() < cap {
             return;
         }
         let unused_path_linger = self.unused_path_linger();
@@ -77,31 +92,39 @@ impl TransportEngine {
             jobs::UnusedPoolLimits::UPSTREAM,
             self.policy.hop_limiter,
         );
-        while self.paths.table.len() >= self.config.max_path_destinations {
-            let Some(dest_hash) = self.oldest_path_destination() else {
-                break;
-            };
-            self.paths.table.remove(&dest_hash);
-            self.paths.states.remove(&dest_hash);
-            self.paths.cap_evict_count += 1;
+        let low_water = cap.saturating_sub((cap / PATH_CAP_EVICT_BATCH_DIVISOR).max(1));
+        let excess = self.paths.table.len().saturating_sub(low_water);
+        if excess == 0 {
+            return;
         }
-    }
-
-    fn oldest_path_destination(&self) -> Option<[u8; 16]> {
-        self.paths
+        let mut candidates: Vec<(f64, u8, [u8; 16])> = self
+            .paths
             .table
             .iter()
             .filter_map(|(dest_hash, path_set)| {
                 path_set
                     .primary()
-                    .map(|primary| (*dest_hash, primary.timestamp, primary.hops))
+                    .map(|primary| (primary.timestamp, primary.hops, *dest_hash))
             })
-            .min_by(|a, b| {
-                a.1.partial_cmp(&b.1)
-                    .unwrap_or(core::cmp::Ordering::Equal)
-                    .then_with(|| b.2.cmp(&a.2))
-            })
-            .map(|(dest_hash, _, _)| dest_hash)
+            .collect();
+        // Oldest first; among equally old, more hops first, then hash order.
+        let oldest_first = |a: &(f64, u8, [u8; 16]), b: &(f64, u8, [u8; 16])| {
+            a.0.total_cmp(&b.0)
+                .then_with(|| b.1.cmp(&a.1))
+                .then_with(|| a.2.cmp(&b.2))
+        };
+        let evict = excess.min(candidates.len());
+        if evict == 0 {
+            return;
+        }
+        if evict < candidates.len() {
+            candidates.select_nth_unstable_by(evict - 1, oldest_first);
+        }
+        for (_, _, dest_hash) in candidates.into_iter().take(evict) {
+            self.paths.table.remove(&dest_hash);
+            self.paths.states.remove(&dest_hash);
+            self.paths.cap_evict_count += 1;
+        }
     }
 
     pub(crate) fn announce_entry_size_bytes(entry: &AnnounceEntry) -> usize {
