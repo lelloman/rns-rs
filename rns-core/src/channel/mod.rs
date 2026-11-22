@@ -155,22 +155,33 @@ impl Channel {
     ///
     /// Returns `MessageReceived` for contiguous sequences starting from
     /// `next_rx_sequence`.
-    pub fn receive(&mut self, raw: &[u8], _now: f64) -> Vec<ChannelAction> {
+    pub fn receive(&mut self, raw: &[u8], now: f64) -> Vec<ChannelAction> {
+        self.receive_and_prove(raw, now).0
+    }
+
+    /// [`Self::receive`], also telling whether the packet that carried the
+    /// envelope is to be proven. It is not when the envelope is ahead of
+    /// the receive window and dropped: proven, it would count as delivered
+    /// and never be resent, and the stream would stop at the gap. Left
+    /// unproven, it is resent and taken once the window has moved. An
+    /// envelope taken, already had, or behind the window is proven, so its
+    /// sender stops resending it.
+    pub fn receive_and_prove(&mut self, raw: &[u8], _now: f64) -> (Vec<ChannelAction>, bool) {
         let (_msgtype, sequence, _payload) = match unpack_envelope(raw) {
             Ok(r) => r,
-            Err(_) => return Vec::new(),
+            Err(_) => return (Vec::new(), true),
         };
 
         // Reject sequences behind or more than one maximum receive window
         // ahead. Wrapping subtraction gives the forward modular distance and
         // handles the 0xffff -> 0 boundary without a separate branch.
         if self.is_outside_rx_window(sequence) {
-            return Vec::new();
+            return (Vec::new(), !self.is_ahead_of_rx_window(sequence));
         }
 
         // Reject duplicates
         if self.rx_ring.iter().any(|e| e.sequence == sequence) {
-            return Vec::new();
+            return (Vec::new(), true);
         }
 
         // Emplace in sorted order
@@ -184,7 +195,7 @@ impl Channel {
         self.emplace_rx(envelope);
 
         // Collect contiguous messages
-        self.collect_contiguous()
+        (self.collect_contiguous(), true)
     }
 
     /// Cancel a send that did not reach the link layer.
@@ -342,6 +353,13 @@ impl Channel {
 
     fn is_outside_rx_window(&self, sequence: Sequence) -> bool {
         sequence.wrapping_sub(self.next_rx_sequence) > CHANNEL_WINDOW_MAX_FAST
+    }
+
+    /// Whether `sequence`, outside the receive window, is ahead of it
+    /// rather than behind: the sequence space is split in half around the
+    /// next expected sequence.
+    fn is_ahead_of_rx_window(&self, sequence: Sequence) -> bool {
+        sequence.wrapping_sub(self.next_rx_sequence) < 0x8000
     }
 
     fn emplace_rx(&mut self, envelope: Envelope) {
@@ -762,6 +780,36 @@ mod tests {
             .receive(&pack_envelope(0x01, behind, b"behind"), 1.2)
             .is_empty());
         assert_eq!(ch.rx_ring.len(), 1);
+    }
+
+    #[test]
+    fn envelopes_ahead_of_the_receive_window_are_not_proven() {
+        let mut ch = Channel::new(0.1);
+        ch.next_rx_sequence = 0xFFF0;
+        let next = ch.next_rx_sequence;
+        let edge = next.wrapping_add(CHANNEL_WINDOW_MAX_FAST);
+        let prove = |ch: &mut Channel, sequence: Sequence| {
+            ch.receive_and_prove(&pack_envelope(0x01, sequence, b"m"), 1.0)
+                .1
+        };
+
+        // Ahead of the window, across the wrap: dropped and not proven.
+        assert!(!prove(&mut ch, edge.wrapping_add(1)));
+        assert!(!prove(&mut ch, next.wrapping_add(0x7FFF)));
+        assert!(ch.rx_ring.is_empty());
+        // Within the window: taken and proven, and again when repeated.
+        assert!(prove(&mut ch, edge));
+        assert!(prove(&mut ch, edge));
+        assert_eq!(ch.rx_ring.len(), 1);
+        // Already delivered, behind the window: proven.
+        assert!(prove(&mut ch, next.wrapping_sub(1)));
+        assert!(prove(&mut ch, next.wrapping_add(0x8000)));
+        // Taken and delivered.
+        let (actions, proven) = ch.receive_and_prove(&pack_envelope(0x01, next, b"m"), 1.0);
+        assert_eq!(actions.len(), 1);
+        assert!(proven);
+        // Not an envelope: proven as before.
+        assert!(ch.receive_and_prove(&[0x01], 1.0).1);
     }
 
     #[test]

@@ -4830,6 +4830,50 @@ fn test_channel_resend_that_cannot_be_sent_stays_tracked_for_a_retry() {
 }
 
 #[test]
+fn channel_packet_ahead_of_the_receive_window_is_not_proven() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    // Whether the responder proves the CHANNEL packet carrying `sequence`.
+    let mut proven = |sequence: u16| {
+        let envelope = rns_core::channel::envelope::pack_envelope(42, sequence, b"data");
+        let actions = init_mgr.process_channel_actions(
+            &link_id,
+            vec![rns_core::channel::ChannelAction::SendOnLink {
+                raw: envelope,
+                sequence,
+                resend: false,
+            }],
+            &mut rng,
+        );
+        let raw = extract_any_send_packet(&actions);
+        let pkt = RawPacket::unpack(&raw).unwrap();
+        resp_mgr
+            .handle_local_delivery(
+                pkt.destination_hash,
+                &raw,
+                pkt.packet_hash,
+                rns_core::transport::types::InterfaceId(0),
+                &mut rng,
+            )
+            .iter()
+            .any(|action| match action {
+                LinkManagerAction::SendPacket { raw, .. } => {
+                    RawPacket::unpack(raw).unwrap().flags.packet_type
+                        == constants::PACKET_TYPE_PROOF
+                }
+                _ => false,
+            })
+    };
+
+    let beyond = rns_core::constants::CHANNEL_WINDOW_MAX_FAST + 1;
+    assert!(!proven(beyond), "a dropped message must be resent");
+    assert!(proven(1), "a message within the window is proven");
+    assert!(proven(1), "so is a duplicate");
+    assert!(proven(0));
+    assert!(proven(0), "and one already delivered");
+}
+
+#[test]
 fn test_channel_proof_reopens_send_window() {
     let (mut init_mgr, resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;

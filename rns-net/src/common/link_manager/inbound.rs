@@ -614,10 +614,13 @@ impl LinkManager {
         rng: &mut dyn Rng,
         out: &mut Vec<LinkManagerAction>,
     ) {
-        // Feed plaintext to channel
+        // Feed plaintext to channel. A message it drops as ahead of its
+        // receive window is not proven, so the sender resends it.
+        let mut prove = true;
         if let Some(link) = self.links.get_mut(&link_id) {
             if let Some(ref mut channel) = link.channel {
-                let chan_actions = channel.receive(&plaintext, time::now());
+                let chan_actions;
+                (chan_actions, prove) = channel.receive_and_prove(&plaintext, time::now());
                 link.channel_messages_received += chan_actions
                     .iter()
                     .filter(|action| {
@@ -631,7 +634,9 @@ impl LinkManager {
                 out.extend(self.process_channel_actions(&link_id, chan_actions, rng));
             }
         }
-        out.extend(self.build_link_packet_proof(&link_id, &packet_hash));
+        if prove {
+            out.extend(self.build_link_packet_proof(&link_id, &packet_hash));
+        }
         self.recycle_plaintext(plaintext);
     }
 
