@@ -4,8 +4,8 @@
 //! proof-of-work stamps over `destination_hash || public_key || name_hash`,
 //! persisted per destination under `storage/stamps/<hash>.dstamp`.
 //!
-//! Stamp searches run on threads in this process (a rayon scope or scoped
-//! threads, see `SearchPool`), never in forked worker processes as
+//! Stamp searches run on threads in this process (a rayon scope or threads
+//! of their own, see `SearchPool`), never in forked worker processes as
 //! upstream's `multiprocessing` jobs do. So the deadlock upstream patched in
 //! 0123133e cannot occur here: a CPython child forked while another thread
 //! held the buffered-stdin lock deadlocked in `multiprocessing`'s
@@ -23,6 +23,9 @@ use rns_core::constants;
 use rns_core::stamp::{
     link_request_stamp_material, stamp_valid, stamp_value, stamp_workblock, StampCost, StampValue,
 };
+
+#[cfg(feature = "engine-parallel")]
+mod dedicated;
 
 /// Per-destination stamp files.
 #[derive(Debug, Clone)]
@@ -220,9 +223,24 @@ pub(crate) fn set_worker_limits(max_workers: Option<usize>, niceness: i32) {
 /// most `max_workers`.
 #[cfg(feature = "engine-parallel")]
 fn search_workers(available: usize) -> usize {
-    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let cores = cores();
     let max_workers = MAX_WORKERS.load(std::sync::atomic::Ordering::Relaxed);
     worker_count(cores, available, (max_workers > 0).then_some(max_workers))
+}
+
+/// The CPUs this process may run on, read once: reading them parses the
+/// cgroup files on Linux, every time.
+#[cfg(feature = "engine-parallel")]
+fn cores() -> usize {
+    static CORES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CORES.get_or_init(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
+}
+
+/// How many workers a dedicated search uses: one per CPU, within
+/// upstream's limits.
+#[cfg(feature = "engine-parallel")]
+fn dedicated_workers() -> usize {
+    search_workers(cores())
 }
 
 /// Upstream's stamp job size for `cores`, capped by `max_workers` and by
@@ -252,7 +270,8 @@ pub(crate) enum SearchPool {
     /// rayon's global pool, one worker per thread in it.
     Rayon,
     /// Threads of its own, one per CPU: a search that may run until a
-    /// deadline does not hold up the searches on the rayon pool.
+    /// deadline does not hold up the searches on the rayon pool. The
+    /// threads park between searches and are reused (see `dedicated`).
     Dedicated,
 }
 
@@ -266,8 +285,8 @@ pub(crate) enum SearchPool {
 /// See docs/engines.md.
 pub(crate) fn search<T, F>(pool: SearchPool, grind: F) -> Option<T>
 where
-    T: Send,
-    F: Fn(&std::sync::atomic::AtomicBool) -> Option<T> + Sync,
+    T: Send + 'static,
+    F: Fn(&std::sync::atomic::AtomicBool) -> Option<T> + Send + Sync + 'static,
 {
     use std::sync::atomic::AtomicBool;
 
@@ -276,6 +295,9 @@ where
         use std::sync::atomic::Ordering;
         use std::sync::Mutex;
 
+        if pool == SearchPool::Dedicated {
+            return dedicated::search(dedicated_workers(), grind);
+        }
         let stop = AtomicBool::new(false);
         let result = Mutex::new(None);
         let work = || {
@@ -289,22 +311,11 @@ where
                 }
             }
         };
-        match pool {
-            SearchPool::Rayon => rayon::scope(|scope| {
-                for _ in 0..search_workers(rayon::current_num_threads()) {
-                    scope.spawn(|_| work());
-                }
-            }),
-            SearchPool::Dedicated => {
-                let workers =
-                    search_workers(std::thread::available_parallelism().map_or(1, |n| n.get()));
-                std::thread::scope(|scope| {
-                    for _ in 0..workers {
-                        scope.spawn(work);
-                    }
-                });
+        rayon::scope(|scope| {
+            for _ in 0..search_workers(rayon::current_num_threads()) {
+                scope.spawn(|_| work());
             }
-        }
+        });
         result
             .into_inner()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -323,7 +334,11 @@ where
 /// least `stamp_cost`. The parallel engine grinds on one dedicated thread per
 /// core, as upstream grinds stamped keys in a process per core; the threads
 /// are not taken from the rayon pool, so a grind that runs until its deadline
-/// cannot hold up the stamper's announce and path request stamps. The compact
+/// cannot hold up the stamper's announce and path request stamps. Unlike
+/// upstream, which grinds keys below `KEYSTAMP_POOLING_THRESHOLD` (10) in
+/// one process, every cost is ground on those threads: they are parked
+/// between searches, and handing a grind to them costs about as much as
+/// five attempts on one thread. The compact
 /// engine grinds on the calling thread (see [`search`]). Gives up and returns
 /// `None` once `deadline` passes, mirroring upstream's `LINK_STAMP_TIMEOUT`
 /// watchdog. This is unbounded work and must not run on the driver thread.
@@ -342,7 +357,7 @@ pub(crate) fn generate_stamped_link_keys(
     let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::generate(&mut OsRng);
     let material =
         link_request_stamp_material(destination_hash, &sig_prv.public_key().public_bytes());
-    let (prv, _public, value) = search(SearchPool::Dedicated, |stop| {
+    let (prv, _public, value) = search(SearchPool::Dedicated, move |stop| {
         rns_crypto::identity::generate_stamped_key_until(
             &mut OsRng,
             &material,
@@ -402,8 +417,10 @@ pub(crate) fn generate_stamp_until(
         return None;
     }
 
-    let workblock = stamp_workblock(material, expand_rounds);
-    let stamp = search(SearchPool::Rayon, |stop| {
+    let workblock = std::sync::Arc::new(stamp_workblock(material, expand_rounds));
+    let search_workblock = std::sync::Arc::clone(&workblock);
+    let stamp = search(SearchPool::Rayon, move |stop| {
+        let workblock = &search_workblock;
         let mut rng = OsRng;
         // Draw OS randomness in batches: one getrandom(2) call per attempt
         // dominated the grind, well ahead of the hash.
@@ -432,7 +449,7 @@ pub(crate) fn generate_stamp_until(
                 nonce.copy_from_slice(candidate);
             }
             next_nonce += size;
-            if stamp_valid(&nonce, stamp_cost, &workblock) {
+            if stamp_valid(&nonce, stamp_cost, workblock) {
                 return Some(nonce);
             }
         }
@@ -447,13 +464,15 @@ mod tests {
 
     /// The threads `search` ran `grind` on, for `pool`.
     fn search_threads(pool: SearchPool) -> Vec<std::thread::ThreadId> {
-        let threads = std::sync::Mutex::new(Vec::new());
-        let found = search(pool, |_| {
-            threads.lock().unwrap().push(std::thread::current().id());
+        let threads = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = std::sync::Arc::clone(&threads);
+        let found = search(pool, move |_| {
+            seen.lock().unwrap().push(std::thread::current().id());
             Some(())
         });
         assert_eq!(found, Some(()));
-        threads.into_inner().unwrap()
+        let threads = threads.lock().unwrap().clone();
+        threads
     }
 
     #[cfg(not(feature = "engine-parallel"))]
@@ -500,17 +519,18 @@ mod tests {
     #[cfg(all(feature = "engine-parallel", target_os = "linux"))]
     #[test]
     fn parallel_engine_search_threads_run_at_the_worker_niceness() {
-        let niceness = std::sync::Mutex::new(Vec::new());
-        search(SearchPool::Dedicated, |_| {
+        let niceness = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = std::sync::Arc::clone(&niceness);
+        search(SearchPool::Dedicated, move |_| {
             // SAFETY: no pointers; reads the calling thread's priority.
             let value = unsafe {
                 let tid = libc::syscall(libc::SYS_gettid) as libc::id_t;
                 libc::getpriority(libc::PRIO_PROCESS, tid)
             };
-            niceness.lock().unwrap().push(value);
+            seen.lock().unwrap().push(value);
             Some(())
         });
-        let niceness = niceness.into_inner().unwrap();
+        let niceness = niceness.lock().unwrap().clone();
         assert!(!niceness.is_empty());
         // The test process may already run at some niceness; a search
         // thread runs at least at the default.
@@ -679,5 +699,60 @@ mod tests {
         assert_eq!(other.get(&dest), lr_cost);
         other.set_enforced(true);
         assert!(costs.enforced());
+    }
+
+    #[cfg(feature = "engine-parallel")]
+    #[test]
+    fn dedicated_search_threads_are_reused() {
+        // Other tests search on the same threads at the same time, so this
+        // only checks that far fewer threads ran than searches started.
+        let searches = 10;
+        let mut threads = Vec::new();
+        for _ in 0..searches {
+            threads.extend(search_threads(SearchPool::Dedicated));
+        }
+        threads.sort_by_key(|id| format!("{id:?}"));
+        threads.dedup();
+        assert!(
+            threads.len() < searches * dedicated_workers(),
+            "{} threads for {searches} searches",
+            threads.len()
+        );
+        assert!(dedicated::parked() <= dedicated_workers());
+    }
+
+    #[test]
+    fn stamped_link_keys_after_a_timed_out_grind() {
+        use std::time::{Duration, Instant};
+        // Cost 100 is unattainable: the grind runs until its deadline.
+        assert!(generate_stamped_link_keys(
+            &[0x60; 16],
+            StampCost::from_whole(100),
+            Instant::now() + Duration::from_millis(100)
+        )
+        .is_none());
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(30);
+        assert!(
+            generate_stamped_link_keys(&[0x61; 16], StampCost::from_whole(4), deadline).is_some()
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn concurrent_stamped_link_keys_both_complete() {
+        use std::time::{Duration, Instant};
+        // A grind running until its deadline does not hold up another one.
+        let timeout = Duration::from_millis(1500);
+        let started = Instant::now();
+        let long = std::thread::spawn(move || {
+            generate_stamped_link_keys(&[0x62; 16], StampCost::from_whole(100), started + timeout)
+        });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let short = generate_stamped_link_keys(&[0x63; 16], StampCost::from_whole(6), deadline);
+        assert!(short.is_some());
+        assert!(started.elapsed() < timeout, "{:?}", started.elapsed());
+        assert!(long.join().unwrap().is_none());
+        assert!(started.elapsed() >= timeout);
     }
 }
