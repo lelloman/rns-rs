@@ -542,8 +542,9 @@ disconnects gets none of them into the path table.
 A `TCPServerInterface` accepts any number of concurrent clients, as upstream
 does. Each connected client gets its own spawned interface and receive buffer,
 so an operator of a public node may want to bound it with the rns-rs key
-`max_connections` (a positive integer); a client over the limit is accepted
-and closed at once. A `BackboneInterface` listener is already limited to 500
+`max_connections` (a non-negative integer, where 0 means no limit; any other
+value is logged and the interface is skipped). A client over the limit is
+accepted and closed at once. A `BackboneInterface` listener is already limited to 500
 clients by default, as upstream (`client_limit`); see the operator runbook.
 
 ```ini

@@ -556,7 +556,8 @@ impl InterfaceFactory for TcpServerFactory {
             .get("listen_port")
             .and_then(|v| v.parse().ok())
             .unwrap_or(4242);
-        let max_connections = params.get("max_connections").and_then(|v| v.parse().ok());
+        // 0 means no limit, as when set at runtime.
+        let max_connections = super::parse_max_connections(params)?.filter(|&max| max > 0);
         let (bitrate, fixed_mtu) = super::parse_tcp_rate_params(params)?;
         let flush_after = super::parse_flush_after(params)?;
         let mut config = TcpServerConfig {
@@ -1345,6 +1346,27 @@ mod tests {
             "expected no InterfaceUp for rejected connection, got {:?}",
             result
         );
+    }
+
+    fn parsed_max_connections(value: &str) -> Result<Option<usize>, InterfaceConfigError> {
+        let params = HashMap::from([("max_connections".to_string(), value.to_string())]);
+        let config = TcpServerFactory.parse_config("srv", InterfaceId(1), &params)?;
+        let config = config.into_any().downcast::<TcpServerConfig>().unwrap();
+        Ok(config.max_connections)
+    }
+
+    #[test]
+    fn max_connections_zero_means_no_limit() {
+        assert_eq!(parsed_max_connections("0").unwrap(), None);
+        assert_eq!(parsed_max_connections(" 3 ").unwrap(), Some(3));
+    }
+
+    #[test]
+    fn invalid_max_connections_is_a_config_error() {
+        for value in ["-1", "many", ""] {
+            let err = parsed_max_connections(value).unwrap_err().to_string();
+            assert!(err.contains("max_connections"), "{value:?}: {err}");
+        }
     }
 
     #[test]
