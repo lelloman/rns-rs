@@ -116,10 +116,7 @@ pub(super) fn parse_client_limit(
     } else {
         client_limit
     };
-    match params
-        .get("max_connections")
-        .and_then(|v| v.trim().parse::<usize>().ok())
-    {
+    match crate::interface::parse_max_connections(params)? {
         Some(0) => Ok(None),
         Some(max) => Ok(Some(max)),
         None => Ok(Some(client_limit)),

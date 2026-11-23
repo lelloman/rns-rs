@@ -189,6 +189,14 @@ fn max_connections_takes_precedence_over_client_limit() {
 }
 
 #[test]
+fn invalid_max_connections_is_a_config_error() {
+    let err = parse_client_limit(&limit_params(&[("max_connections", "lots")]))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("max_connections"), "{err}");
+}
+
+#[test]
 fn fast_flap_defaults_match_upstream() {
     assert_eq!(BackboneFastFlapConfig::default(), test_fast_flap_config());
 }

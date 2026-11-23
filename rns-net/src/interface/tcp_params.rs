@@ -114,6 +114,25 @@ pub(crate) fn parse_flush_after(
     }
 }
 
+/// The `max_connections` key of a TCP or Backbone listener: `Ok(None)` when
+/// absent, else the value, where 0 means no limit (as at runtime).
+#[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
+pub(crate) fn parse_max_connections(
+    params: &std::collections::HashMap<String, String>,
+) -> Result<Option<usize>, super::InterfaceConfigError> {
+    params
+        .get("max_connections")
+        .map(|raw| {
+            raw.trim().parse::<usize>().map_err(|_| {
+                super::InterfaceConfigError::invalid_value(
+                    "max_connections",
+                    format!("invalid max_connections '{raw}' (expected a non-negative integer)"),
+                )
+            })
+        })
+        .transpose()
+}
+
 /// Hardware MTU of a TCP interface: `fixed_mtu` when configured, else
 /// upstream's autoconfiguration tier for its bitrate ([`tcp_bitrate`]).
 /// Below the lowest tier upstream sets no hardware MTU, which leaves links

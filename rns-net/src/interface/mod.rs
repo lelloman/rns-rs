@@ -74,6 +74,8 @@ pub use listener_control::ListenerControl;
 pub use loop_writer::LoopEgress;
 #[cfg(feature = "iface-backbone")]
 pub(crate) use tcp_params::auto_mtu_for_bitrate;
+#[cfg(any(feature = "iface-tcp", feature = "iface-backbone"))]
+pub(crate) use tcp_params::parse_max_connections;
 #[cfg(feature = "iface-tcp")]
 pub(crate) use tcp_params::{
     parse_flush_after, parse_tcp_rate_params, tcp_bitrate, tcp_hardware_mtu, DEFAULT_FLUSH_AFTER,
