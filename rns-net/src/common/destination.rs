@@ -23,12 +23,16 @@ pub enum GroupKeyError {
     DecryptionFailed,
 }
 
+impl std::error::Error for GroupKeyError {}
+
 /// Error returned when configuring a destination request-size limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaxRequestSizeError {
     /// Maximum accepted request sizes cannot be negative.
     Negative,
 }
+
+impl std::error::Error for MaxRequestSizeError {}
 
 impl core::fmt::Display for MaxRequestSizeError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

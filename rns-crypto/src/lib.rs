@@ -190,3 +190,15 @@ pub(crate) fn aws_lc_init() {
     // SAFETY: takes no arguments; sets up aws-lc's CPU feature detection.
     INIT.call_once(|| unsafe { aws_lc_sys::CRYPTO_library_init() });
 }
+
+#[cfg(all(test, feature = "std"))]
+mod error_impl_tests {
+    fn is_error<E: std::error::Error>() {}
+
+    #[test]
+    fn public_errors_implement_std_error() {
+        is_error::<crate::hkdf::HkdfError>();
+        is_error::<crate::pkcs7::PadError>();
+        is_error::<crate::token::TokenError>();
+    }
+}

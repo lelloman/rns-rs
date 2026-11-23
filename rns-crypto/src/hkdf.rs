@@ -15,6 +15,9 @@ pub enum HkdfError {
     InvalidLength,
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for HkdfError {}
+
 impl fmt::Display for HkdfError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

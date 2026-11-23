@@ -236,6 +236,9 @@ pub enum HolePunchError {
     NoDerivedKey,
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for HolePunchError {}
+
 impl fmt::Display for HolePunchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

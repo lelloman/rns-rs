@@ -183,6 +183,9 @@ pub enum LinkError {
     NoSessionKey,
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for LinkError {}
+
 impl fmt::Display for LinkError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

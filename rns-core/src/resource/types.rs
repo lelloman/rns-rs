@@ -169,6 +169,9 @@ pub enum ResourceError {
     PartCountMismatch,
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for ResourceError {}
+
 impl fmt::Display for ResourceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

@@ -87,6 +87,19 @@ pub enum Base64Error {
     InvalidPadding,
 }
 
+impl core::fmt::Display for Base64Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Base64Error::InvalidByte(byte) => write!(f, "invalid base64 byte 0x{byte:02x}"),
+            Base64Error::InvalidLength => write!(f, "invalid base64 length"),
+            Base64Error::InvalidPadding => write!(f, "invalid base64 padding"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for Base64Error {}
+
 const INVALID: u8 = 0xff;
 
 /// A base64 alphabet: the 64 characters it encodes with, and the
