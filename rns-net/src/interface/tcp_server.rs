@@ -22,9 +22,6 @@ use crate::interface::stream_read::{
 };
 use crate::interface::{lock_or_recover, ListenerControl, Writer};
 
-/// Upstream `TCPInterface.HW_MTU` inherited by spawned server clients.
-const HW_MTU: usize = 262_144;
-
 /// Configuration for a TCP server interface.
 ///
 /// Start from [`TcpServerConfig::new`] or `default()`: the config also
@@ -460,7 +457,7 @@ impl ListenerSource {
                 name: name.clone(),
                 tx: self.tx.clone(),
                 active_connections: Arc::clone(&self.active_connections),
-                decoder: hdlc::Decoder::reticulum(HW_MTU, self.ifac_size),
+                decoder: hdlc::Decoder::reticulum(super::tcp_frame_limit(self.mtu), self.ifac_size),
                 control: self.control.clone(),
             }),
         )

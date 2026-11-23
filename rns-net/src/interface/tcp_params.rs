@@ -133,6 +133,20 @@ pub(crate) fn parse_max_connections(
         .transpose()
 }
 
+/// Upstream `TCPInterface.HW_MTU`: the hardware MTU a TCP interface starts
+/// from before autoconfiguration.
+#[cfg(feature = "iface-tcp")]
+pub(crate) const TCP_BASE_HW_MTU: usize = 262_144;
+
+/// Largest frame (before IFAC) a TCP interface reads. Upstream drops frames
+/// above the interface's hardware MTU, so a `fixed_mtu` or 1 Gbps interface
+/// takes 512 KiB frames; rns-rs never reads less than [`TCP_BASE_HW_MTU`],
+/// the limit it has always applied.
+#[cfg(feature = "iface-tcp")]
+pub(crate) fn tcp_frame_limit(hardware_mtu: u32) -> usize {
+    (hardware_mtu as usize).max(TCP_BASE_HW_MTU)
+}
+
 /// Hardware MTU of a TCP interface: `fixed_mtu` when configured, else
 /// upstream's autoconfiguration tier for its bitrate ([`tcp_bitrate`]).
 /// Below the lowest tier upstream sets no hardware MTU, which leaves links
