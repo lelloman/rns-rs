@@ -53,6 +53,9 @@ pub enum ChannelError {
     InvalidEnvelope,
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for ChannelError {}
+
 impl fmt::Display for ChannelError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

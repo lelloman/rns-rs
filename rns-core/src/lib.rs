@@ -40,3 +40,21 @@ pub mod stamp;
 /// Path table, announce handling and packet routing.
 pub mod transport;
 pub mod types;
+
+#[cfg(all(test, feature = "std"))]
+mod error_impl_tests {
+    fn is_error<E: std::error::Error>() {}
+
+    #[test]
+    fn public_errors_implement_std_error() {
+        is_error::<crate::buffer::BufferError>();
+        is_error::<crate::buffer::DecompressError>();
+        is_error::<crate::channel::ChannelError>();
+        is_error::<crate::destination::DestinationError>();
+        is_error::<crate::encoding::Base64Error>();
+        is_error::<crate::holepunch::HolePunchError>();
+        is_error::<crate::link::LinkError>();
+        is_error::<crate::resource::ResourceError>();
+        is_error::<crate::transport::tunnel::TunnelError>();
+    }
+}

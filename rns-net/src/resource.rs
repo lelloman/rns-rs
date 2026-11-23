@@ -28,6 +28,20 @@ pub enum ResourceTransferError {
     Cancelled,
 }
 
+impl std::fmt::Display for ResourceTransferError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResourceTransferError::Source(reason) => write!(f, "resource source failed: {reason}"),
+            ResourceTransferError::Protocol(reason) => {
+                write!(f, "resource transfer failed: {reason}")
+            }
+            ResourceTransferError::Cancelled => write!(f, "resource transfer cancelled"),
+        }
+    }
+}
+
+impl std::error::Error for ResourceTransferError {}
+
 /// Options for an outgoing Resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourceSendOptions {

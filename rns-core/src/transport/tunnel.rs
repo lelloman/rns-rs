@@ -96,6 +96,9 @@ pub enum TunnelError {
     InvalidPublicKey,
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for TunnelError {}
+
 impl core::fmt::Display for TunnelError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

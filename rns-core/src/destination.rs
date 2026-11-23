@@ -13,6 +13,9 @@ pub enum DestinationError {
     DotInAspect,
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for DestinationError {}
+
 impl fmt::Display for DestinationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

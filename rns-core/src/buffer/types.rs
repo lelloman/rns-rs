@@ -13,6 +13,18 @@ pub enum DecompressError {
     TooLarge,
 }
 
+impl fmt::Display for DecompressError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DecompressError::InvalidData => write!(f, "invalid compressed data"),
+            DecompressError::TooLarge => write!(f, "decompressed data exceeds the size limit"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for DecompressError {}
+
 /// Compression trait for buffer operations (`no_std` compatible).
 pub trait Compressor {
     /// Compress `data`; `None` when it cannot be compressed.
@@ -57,6 +69,9 @@ pub enum BufferError {
     /// Compressed data could not be decompressed within the limit.
     DecompressionFailed,
 }
+
+#[cfg(feature = "std")]
+impl std::error::Error for BufferError {}
 
 impl fmt::Display for BufferError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -125,6 +125,19 @@ pub mod fuzz {
 mod test_support;
 
 #[cfg(test)]
+mod error_impl_tests {
+    fn is_error<E: std::error::Error>() {}
+
+    #[test]
+    fn public_errors_implement_std_error() {
+        is_error::<crate::GroupKeyError>();
+        is_error::<crate::MaxRequestSizeError>();
+        is_error::<crate::ResourceTransferError>();
+        is_error::<crate::event::SendProbeError>();
+    }
+}
+
+#[cfg(test)]
 mod module_initialization_tests {
     #[test]
     fn profiler_is_available_from_the_crate_root_without_late_imports() {

@@ -535,6 +535,21 @@ pub enum SendProbeError {
     PackFailed,
 }
 
+impl std::fmt::Display for SendProbeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SendProbeError::UnknownIdentity => write!(f, "no known identity for the destination"),
+            SendProbeError::PayloadTooLarge { max } => {
+                write!(f, "probe payload exceeds {max} bytes")
+            }
+            SendProbeError::EncryptFailed => write!(f, "encrypting the probe failed"),
+            SendProbeError::PackFailed => write!(f, "packing the probe failed"),
+        }
+    }
+}
+
+impl std::error::Error for SendProbeError {}
+
 /// Responses to queries.
 #[derive(Debug)]
 #[allow(

@@ -10,6 +10,9 @@ pub enum PadError {
     EmptyInput,
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for PadError {}
+
 impl fmt::Display for PadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

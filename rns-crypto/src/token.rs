@@ -27,6 +27,9 @@ pub enum TokenError {
     DecryptionFailed,
 }
 
+#[cfg(feature = "std")]
+impl std::error::Error for TokenError {}
+
 impl fmt::Display for TokenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
