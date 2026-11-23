@@ -109,14 +109,68 @@ struct OutgoingSplitTransfer {
     current_total_parts: usize,
 }
 
+/// How an outgoing Resource sent segment by segment reports its end and
+/// progress.
+#[derive(Clone, Copy)]
+enum StreamReport {
+    /// A reader transfer: the stream actions of its id.
+    Transfer(ResourceTransferId),
+    /// A buffered send: the actions of a buffered Resource, as if every
+    /// segment had been built when it was sent.
+    Buffered,
+}
+
 struct OutgoingStreamTransfer {
-    transfer_id: ResourceTransferId,
+    report: StreamReport,
     reader: Box<dyn Read + Send>,
     remaining: u64,
     declared_length: u64,
     metadata_overhead: u64,
     auto_compress: bool,
     app_flag: bool,
+}
+
+impl OutgoingStreamTransfer {
+    /// The id stream actions report, `None` for a buffered send.
+    fn transfer_id(&self) -> Option<ResourceTransferId> {
+        match self.report {
+            StreamReport::Transfer(id) => Some(id),
+            StreamReport::Buffered => None,
+        }
+    }
+
+    /// The action reporting that the last segment was proved.
+    fn completed(&self, link_id: LinkId) -> LinkManagerAction {
+        match self.report {
+            StreamReport::Transfer(transfer_id) => LinkManagerAction::ResourceStreamCompleted {
+                link_id,
+                transfer_id,
+            },
+            StreamReport::Buffered => LinkManagerAction::ResourceCompleted { link_id },
+        }
+    }
+
+    /// The action reporting that the transfer failed with `error`, if any.
+    /// A buffered send reports a protocol or source failure as a buffered
+    /// Resource failure, and a cancellation not at all: buffered Resources
+    /// report none when their link closes, and a rejection already reports
+    /// its own failure.
+    fn failed(&self, link_id: LinkId, error: ResourceTransferError) -> Option<LinkManagerAction> {
+        match (self.report, error) {
+            (StreamReport::Transfer(transfer_id), error) => {
+                Some(LinkManagerAction::ResourceStreamFailed {
+                    link_id,
+                    transfer_id,
+                    error,
+                })
+            }
+            (StreamReport::Buffered, ResourceTransferError::Cancelled) => None,
+            (
+                StreamReport::Buffered,
+                ResourceTransferError::Protocol(error) | ResourceTransferError::Source(error),
+            ) => Some(LinkManagerAction::ResourceFailed { link_id, error }),
+        }
+    }
 }
 
 /// Response produced by an application request handler.

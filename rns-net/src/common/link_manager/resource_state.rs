@@ -172,12 +172,8 @@ impl LinkManager {
             link.incoming_resources
                 .retain(|r| r.status < rns_core::resource::ResourceStatus::Complete);
             link.outgoing_splits.clear();
-            all_actions.extend(link.outgoing_streams.drain().map(|(_, stream)| {
-                LinkManagerAction::ResourceStreamFailed {
-                    link_id: *link_id,
-                    transfer_id: stream.transfer_id,
-                    error: ResourceTransferError::Cancelled,
-                }
+            all_actions.extend(link.outgoing_streams.drain().filter_map(|(_, stream)| {
+                stream.failed(*link_id, ResourceTransferError::Cancelled)
             }));
             link.incoming_splits.clear();
 

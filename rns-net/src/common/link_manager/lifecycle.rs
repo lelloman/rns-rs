@@ -176,13 +176,12 @@ impl LinkManager {
                     failed_splits.push(sender.original_hash);
                     if let Some(stream) = link.outgoing_streams.remove(&sender.original_hash) {
                         // As when a proof fails it: the stream reports the failure.
-                        all_actions.push(LinkManagerAction::ResourceStreamFailed {
-                            link_id: *link_id,
-                            transfer_id: stream.transfer_id,
-                            error: ResourceTransferError::Protocol(
+                        all_actions.extend(stream.failed(
+                            *link_id,
+                            ResourceTransferError::Protocol(
                                 rns_core::resource::ResourceError::Timeout.to_string(),
                             ),
-                        });
+                        ));
                         sender_actions.extend(actions.into_iter().filter(|action| {
                             !matches!(action, rns_core::resource::ResourceAction::Failed(_))
                         }));

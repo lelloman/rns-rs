@@ -146,11 +146,7 @@ impl LinkManager {
                     .retain(|s| !s.flags.split || s.original_hash != original_hash);
                 link.outgoing_splits.remove(&original_hash);
                 let mut actions = self.process_resource_actions(&link_id, cancel, rng);
-                actions.push(LinkManagerAction::ResourceStreamFailed {
-                    link_id,
-                    transfer_id: stream.transfer_id,
-                    error,
-                });
+                actions.extend(stream.failed(link_id, error));
                 actions
             }
         }
@@ -205,39 +201,102 @@ impl LinkManager {
         options: ResourceSendOptions,
         rng: &mut dyn Rng,
     ) -> Vec<LinkManagerAction> {
-        let Some(link) = self.links.get_mut(link_id) else {
-            return vec![LinkManagerAction::ResourceStreamFailed {
+        self.start_segmented_resource(
+            link_id,
+            StreamReport::Transfer(transfer_id),
+            reader,
+            declared_length,
+            metadata,
+            options,
+            rng,
+        )
+    }
+
+    /// Start sending a buffered Resource. One that fits a segment is built
+    /// at once. A larger one is sent like a reader transfer, each segment
+    /// built while the one before it is in flight instead of all of them
+    /// before the first is advertised, and reports its progress, completion
+    /// and failure as a buffered Resource.
+    pub(crate) fn send_owned_resource(
+        &mut self,
+        link_id: &LinkId,
+        data: Vec<u8>,
+        metadata: Option<Vec<u8>>,
+        options: ResourceSendOptions,
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
+        let metadata_overhead = metadata.as_ref().map_or(0, |value| 3 + value.len());
+        if metadata_overhead.saturating_add(data.len()) <= constants::RESOURCE_MAX_EFFICIENT_SIZE {
+            return self.send_resource_with_options(
+                link_id,
+                &data,
+                metadata.as_deref(),
+                options,
+                rng,
+            );
+        }
+        let declared_length = data.len() as u64;
+        self.start_segmented_resource(
+            link_id,
+            StreamReport::Buffered,
+            Box::new(std::io::Cursor::new(data)),
+            declared_length,
+            metadata,
+            options,
+            rng,
+        )
+    }
+
+    /// Start a Resource read from `reader` segment by segment, reporting
+    /// as `report` says.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is an independent property of the transfer"
+    )]
+    fn start_segmented_resource(
+        &mut self,
+        link_id: &LinkId,
+        report: StreamReport,
+        reader: Box<dyn Read + Send>,
+        declared_length: u64,
+        metadata: Option<Vec<u8>>,
+        options: ResourceSendOptions,
+        rng: &mut dyn Rng,
+    ) -> Vec<LinkManagerAction> {
+        // A transfer that cannot start: a reader transfer reports it, a
+        // buffered send logs it, as buffered sends always have.
+        let not_started = |error: ResourceTransferError| match report {
+            StreamReport::Transfer(transfer_id) => vec![LinkManagerAction::ResourceStreamFailed {
                 link_id: *link_id,
                 transfer_id,
-                error: ResourceTransferError::Protocol("link does not exist".into()),
-            }];
+                error,
+            }],
+            StreamReport::Buffered => {
+                log::debug!("Failed to create ResourceSender: {}", error);
+                Vec::new()
+            }
+        };
+        let Some(link) = self.links.get_mut(link_id) else {
+            return not_started(ResourceTransferError::Protocol(
+                "link does not exist".into(),
+            ));
         };
         if link.engine.state() != LinkState::Active {
-            return vec![LinkManagerAction::ResourceStreamFailed {
-                link_id: *link_id,
-                transfer_id,
-                error: ResourceTransferError::Protocol("link is not active".into()),
-            }];
+            return not_started(ResourceTransferError::Protocol("link is not active".into()));
         }
 
         let metadata_overhead = metadata.as_ref().map(|value| 3 + value.len()).unwrap_or(0);
         let Some(logical_size) = declared_length.checked_add(metadata_overhead as u64) else {
-            return vec![LinkManagerAction::ResourceStreamFailed {
-                link_id: *link_id,
-                transfer_id,
-                error: ResourceTransferError::Protocol("resource length overflow".into()),
-            }];
+            return not_started(ResourceTransferError::Protocol(
+                "resource length overflow".into(),
+            ));
         };
         if usize::try_from(logical_size).is_err()
             || metadata_overhead > constants::RESOURCE_MAX_EFFICIENT_SIZE
         {
-            return vec![LinkManagerAction::ResourceStreamFailed {
-                link_id: *link_id,
-                transfer_id,
-                error: ResourceTransferError::Protocol(
-                    "resource length cannot be represented by this platform".into(),
-                ),
-            }];
+            return not_started(ResourceTransferError::Protocol(
+                "resource length cannot be represented by this platform".into(),
+            ));
         }
 
         let first_capacity = constants::RESOURCE_MAX_EFFICIENT_SIZE - metadata_overhead;
@@ -247,7 +306,7 @@ impl LinkManager {
             1 + remaining_after_first.div_ceil(constants::RESOURCE_MAX_EFFICIENT_SIZE as u64);
         let now = time::now();
         let mut stream = OutgoingStreamTransfer {
-            transfer_id,
+            report,
             reader,
             remaining: declared_length,
             declared_length,
@@ -266,13 +325,7 @@ impl LinkManager {
             now,
         ) {
             Ok(sender) => sender,
-            Err(error) => {
-                return vec![LinkManagerAction::ResourceStreamFailed {
-                    link_id: *link_id,
-                    transfer_id,
-                    error,
-                }]
-            }
+            Err(error) => return not_started(error),
         };
         let original_hash = first.original_hash;
         let current_total_parts = first.total_parts();
