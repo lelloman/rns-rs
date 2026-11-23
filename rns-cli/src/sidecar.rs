@@ -242,6 +242,9 @@ impl RuntimeConfig {
     }
 }
 
+/// Largest provider frame accepted: 16 times the bridge's default byte budget.
+const MAX_PROVIDER_FRAME: usize = 64 * 1024 * 1024;
+
 /// The next envelope from the provider bridge, or `None` when none arrived
 /// before the read timeout.
 pub(crate) fn read_provider_envelope(
@@ -261,9 +264,44 @@ pub(crate) fn read_provider_envelope(
         Err(err) => return Err(err),
     }
     let len = u32::from_be_bytes(len_buf) as usize;
-    let mut buf = vec![0u8; len];
-    stream.read_exact(&mut buf)?;
+    if len > MAX_PROVIDER_FRAME {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("provider frame of {len} bytes exceeds {MAX_PROVIDER_FRAME}"),
+        ));
+    }
+    // Grow with the bytes that actually arrive rather than trusting the header.
+    let mut buf = Vec::new();
+    stream.by_ref().take(len as u64).read_to_end(&mut buf)?;
+    if buf.len() != len {
+        return Err(io::ErrorKind::UnexpectedEof.into());
+    }
     let envelope: ProviderEnvelope = decode_provider_envelope(&buf)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     Ok(Some(envelope))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+
+    #[test]
+    fn oversized_provider_frame_is_rejected_without_allocating() {
+        let (mut tx, mut rx) = UnixStream::pair().unwrap();
+        tx.write_all(&u32::MAX.to_be_bytes()).unwrap();
+        let err = read_provider_envelope(&mut rx).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn truncated_provider_frame_is_an_eof() {
+        let (mut tx, mut rx) = UnixStream::pair().unwrap();
+        tx.write_all(&16u32.to_be_bytes()).unwrap();
+        tx.write_all(&[0u8; 4]).unwrap();
+        drop(tx);
+        let err = read_provider_envelope(&mut rx).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
 }
