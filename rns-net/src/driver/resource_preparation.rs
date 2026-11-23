@@ -455,13 +455,9 @@ impl Driver {
         // No new rejection policy: unsupported or saturated work uses the existing
         // synchronous path, after earlier buffered sends on this link are installed.
         self.finish_resource_preparations_for(&link);
-        let actions = self.link_manager.send_resource_with_options(
-            &link,
-            &data,
-            metadata.as_deref(),
-            options,
-            &mut self.rng,
-        );
+        let actions =
+            self.link_manager
+                .send_owned_resource(&link, data, metadata, options, &mut self.rng);
         self.dispatch_link_actions(actions);
     }
 

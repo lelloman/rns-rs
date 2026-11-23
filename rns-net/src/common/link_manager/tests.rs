@@ -2651,6 +2651,11 @@ fn a_decryption_fed_for_a_resource_that_ends_early_is_dropped() {
 struct StreamRun {
     received: Option<Vec<u8>>,
     completed: bool,
+    /// The sender reported completion as a buffered Resource.
+    buffered_completed: bool,
+    /// Progress the sender reported as a buffered Resource and as a stream.
+    buffered_progress: usize,
+    stream_progress: usize,
     /// Proofs that found the next segment already prepared.
     prepared_at_proof: usize,
     /// Idle turns the receiving side spent decrypting parts ahead.
@@ -2674,6 +2679,7 @@ fn drive_stream_with_idle_work(
         })
         .collect();
     let (mut received, mut completed, mut prepared_at_proof) = (None, false, 0);
+    let (mut buffered_completed, mut buffered_progress, mut stream_progress) = (false, 0, 0);
     let mut receiver_idle_turns = 0;
     let mut later_segment_window_max = Vec::new();
     for _ in 0..30_000 {
@@ -2727,6 +2733,13 @@ fn drive_stream_with_idle_work(
                     }
                     LinkManagerAction::ResourceReceived { data, .. } => received = Some(data),
                     LinkManagerAction::ResourceStreamCompleted { .. } => completed = true,
+                    LinkManagerAction::ResourceCompleted { .. } if target_source == 'i' => {
+                        buffered_completed = true
+                    }
+                    LinkManagerAction::ResourceProgress { .. } if target_source == 'i' => {
+                        buffered_progress += 1
+                    }
+                    LinkManagerAction::ResourceStreamProgress { .. } => stream_progress += 1,
                     LinkManagerAction::ResourceFailed { error, .. } => panic!("{error}"),
                     LinkManagerAction::ResourceStreamFailed { error, .. } => panic!("{error:?}"),
                     _ => {}
@@ -2749,6 +2762,9 @@ fn drive_stream_with_idle_work(
     StreamRun {
         received,
         completed,
+        buffered_completed,
+        buffered_progress,
+        stream_progress,
         prepared_at_proof,
         receiver_idle_turns,
         later_segment_window_max,
@@ -2802,21 +2818,134 @@ fn streaming_resource_prepares_the_next_segment_while_awaiting_the_proof() {
 }
 
 #[test]
-fn stream_segment_timeout_drops_the_prepared_segment_and_fails_the_stream_once() {
+fn owned_split_resource_builds_each_segment_while_the_one_before_is_in_flight() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+    let data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE * 3 + 777);
+    let initial = init_mgr.send_owned_resource(
+        &link_id,
+        data.clone(),
+        None,
+        ResourceSendOptions {
+            auto_compress: false,
+            ..ResourceSendOptions::default()
+        },
+        &mut rng,
+    );
+    // Only the first of the four segments is built before it is advertised.
+    assert_eq!(init_mgr.links[&link_id].outgoing_resources.len(), 1);
+    assert_eq!(init_mgr.links[&link_id].outgoing_streams.len(), 1);
+    let run =
+        drive_stream_with_idle_work(&mut init_mgr, &mut resp_mgr, &link_id, initial, &mut rng);
+    assert_eq!(run.received, Some(data));
+    // Reported as a buffered Resource, not as a stream.
+    assert!(run.buffered_completed);
+    assert!(!run.completed);
+    assert!(run.buffered_progress > 0);
+    assert_eq!(run.stream_progress, 0);
+    if LinkManager::builds_segments() {
+        assert_eq!(run.prepared_at_proof, 0);
+    } else {
+        assert_eq!(run.prepared_at_proof, 3);
+    }
+    assert!(init_mgr.links[&link_id].outgoing_resources.is_empty());
+    assert!(init_mgr.links[&link_id].outgoing_streams.is_empty());
+}
+
+#[test]
+fn owned_resource_in_one_segment_is_built_at_once() {
+    let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    let data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE - 3 - 4);
+    init_mgr.send_owned_resource(
+        &link_id,
+        data,
+        Some(vec![1, 2, 3, 4]),
+        ResourceSendOptions::default(),
+        &mut rng,
+    );
+    assert_eq!(init_mgr.links[&link_id].outgoing_resources.len(), 1);
+    assert!(init_mgr.links[&link_id].outgoing_streams.is_empty());
+}
+
+#[test]
+fn owned_split_resource_timeout_fails_once_as_a_buffered_resource() {
     let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
     let mut rng = OsRng;
     resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
     let data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE * 2);
-    let mut pending: Vec<LinkManagerAction> = init_mgr.send_resource_stream(
+    let initial = init_mgr.send_owned_resource(
         &link_id,
-        ResourceTransferId(9),
-        Box::new(std::io::Cursor::new(data.clone())),
-        data.len() as u64,
+        data,
         None,
-        false,
+        ResourceSendOptions {
+            auto_compress: false,
+            ..ResourceSendOptions::default()
+        },
         &mut rng,
     );
-    // Run until the first segment is fully sent; its proof is withheld.
+    send_first_segment_withholding_its_proof(&mut init_mgr, &mut resp_mgr, initial, &mut rng);
+    assert!(init_mgr.run_idle_work(&mut rng).is_empty());
+    let link = init_mgr.links.get_mut(&link_id).unwrap();
+    let in_flight = link
+        .outgoing_resources
+        .iter_mut()
+        .find(|s| s.status == rns_core::resource::ResourceStatus::AwaitingProof)
+        .unwrap();
+    in_flight.retries_left = 0;
+    in_flight.last_part_sent = 0.0;
+    let actions = init_mgr.tick(&mut rng);
+    let failures: Vec<_> = actions
+        .iter()
+        .filter_map(|a| match a {
+            LinkManagerAction::ResourceFailed { error, .. } => Some(error.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        failures,
+        [rns_core::resource::ResourceError::Timeout.to_string()]
+    );
+    assert!(!actions
+        .iter()
+        .any(|a| matches!(a, LinkManagerAction::ResourceStreamFailed { .. })));
+    let link = &init_mgr.links[&link_id];
+    assert!(link.outgoing_resources.is_empty());
+    assert!(link.outgoing_streams.is_empty());
+    assert!(link.outgoing_splits.is_empty());
+}
+
+#[test]
+fn owned_split_resource_reports_no_failure_when_cancelled() {
+    let (mut init_mgr, _resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    init_mgr.send_owned_resource(
+        &link_id,
+        deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE * 2),
+        None,
+        ResourceSendOptions::default(),
+        &mut rng,
+    );
+    assert_eq!(init_mgr.links[&link_id].outgoing_streams.len(), 1);
+    // As a buffered Resource: cancelling all transfers reports no failure.
+    let actions = init_mgr.cancel_all_resources(&mut rng);
+    assert!(!actions.iter().any(|a| matches!(
+        a,
+        LinkManagerAction::ResourceFailed { .. } | LinkManagerAction::ResourceStreamFailed { .. }
+    )));
+    assert!(init_mgr.links[&link_id].outgoing_streams.is_empty());
+}
+
+/// Deliver the packets of a split Resource that `initial` starts until its
+/// first segment is fully sent, withholding the receiver's proof of it.
+fn send_first_segment_withholding_its_proof(
+    init_mgr: &mut LinkManager,
+    resp_mgr: &mut LinkManager,
+    initial: Vec<LinkManagerAction>,
+    rng: &mut dyn Rng,
+) {
+    let mut pending = initial;
     for _ in 0..10_000 {
         if init_mgr.has_idle_work() {
             break;
@@ -2832,7 +2961,7 @@ fn stream_segment_timeout_drops_the_prepared_segment_and_fails_the_stream_once()
                 &raw,
                 pkt.packet_hash,
                 rns_core::transport::types::InterfaceId(0),
-                &mut rng,
+                rng,
             ) {
                 let LinkManagerAction::SendPacket { raw, .. } = reply else {
                     continue;
@@ -2846,13 +2975,31 @@ fn stream_segment_timeout_drops_the_prepared_segment_and_fails_the_stream_once()
                     &raw,
                     pkt.packet_hash,
                     rns_core::transport::types::InterfaceId(0),
-                    &mut rng,
+                    rng,
                 ));
             }
         }
         pending = next;
     }
     assert!(init_mgr.has_idle_work());
+}
+
+#[test]
+fn stream_segment_timeout_drops_the_prepared_segment_and_fails_the_stream_once() {
+    let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+    let mut rng = OsRng;
+    resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
+    let data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE * 2);
+    let initial = init_mgr.send_resource_stream(
+        &link_id,
+        ResourceTransferId(9),
+        Box::new(std::io::Cursor::new(data.clone())),
+        data.len() as u64,
+        None,
+        false,
+        &mut rng,
+    );
+    send_first_segment_withholding_its_proof(&mut init_mgr, &mut resp_mgr, initial, &mut rng);
     assert!(init_mgr.run_idle_work(&mut rng).is_empty());
     // The next segment is prepared: among the senders, or on the builder.
     let original_hash = init_mgr.links[&link_id].outgoing_resources[0].original_hash;

@@ -103,23 +103,32 @@ impl LinkManager {
             });
         }
         if let Some((received, total)) = progress_update {
-            if let Some((stream, transferred)) = progress_stream_hash.and_then(|hash| {
-                self.links.get(link_id).and_then(|link| {
-                    link.outgoing_streams.get(&hash).map(|stream| {
-                        let transferred = if total == 0 {
-                            0
-                        } else {
-                            stream.declared_length.saturating_mul(received as u64) / total as u64
-                        };
-                        (stream, transferred.min(stream.declared_length))
+            if let Some((transfer_id, declared_length, transferred)) = progress_stream_hash
+                .and_then(|hash| {
+                    self.links.get(link_id).and_then(|link| {
+                        // A buffered send reports the progress of its parts below.
+                        link.outgoing_streams.get(&hash).and_then(|stream| {
+                            let transfer_id = stream.transfer_id()?;
+                            let transferred = if total == 0 {
+                                0
+                            } else {
+                                stream.declared_length.saturating_mul(received as u64)
+                                    / total as u64
+                            };
+                            Some((
+                                transfer_id,
+                                stream.declared_length,
+                                transferred.min(stream.declared_length),
+                            ))
+                        })
                     })
                 })
-            }) {
+            {
                 out.push(LinkManagerAction::ResourceStreamProgress {
                     link_id: *link_id,
-                    transfer_id: stream.transfer_id,
+                    transfer_id,
                     transferred,
-                    total: stream.declared_length,
+                    total: declared_length,
                 });
             } else {
                 out.push(LinkManagerAction::ResourceProgress {
@@ -278,7 +287,7 @@ impl LinkManager {
                                         link.outgoing_streams.insert(original_hash, stream);
                                     }
                                     Err(error) => {
-                                        stream_failure = Some((stream.transfer_id, error));
+                                        stream_failure = stream.failed(*link_id, error);
                                         link.outgoing_splits.remove(&original_hash);
                                     }
                                 }
@@ -286,10 +295,7 @@ impl LinkManager {
                         } else {
                             link.outgoing_splits.remove(&original_hash);
                             if let Some(stream) = link.outgoing_streams.remove(&original_hash) {
-                                actions.push(LinkManagerAction::ResourceStreamCompleted {
-                                    link_id: *link_id,
-                                    transfer_id: stream.transfer_id,
-                                });
+                                actions.push(stream.completed(*link_id));
                             } else {
                                 actions.push(LinkManagerAction::ResourceCompleted {
                                     link_id: *link_id,
@@ -304,11 +310,12 @@ impl LinkManager {
                     if let Some(original_hash) = failed_split {
                         link.outgoing_splits.remove(&original_hash);
                         if let Some(stream) = link.outgoing_streams.remove(&original_hash) {
-                            actions.push(LinkManagerAction::ResourceStreamFailed {
-                                link_id: *link_id,
-                                transfer_id: stream.transfer_id,
-                                error: ResourceTransferError::Protocol(e.to_string()),
-                            });
+                            actions.extend(
+                                stream.failed(
+                                    *link_id,
+                                    ResourceTransferError::Protocol(e.to_string()),
+                                ),
+                            );
                             continue;
                         }
                     }
@@ -321,13 +328,7 @@ impl LinkManager {
             }
         }
 
-        if let Some((transfer_id, error)) = stream_failure {
-            actions.push(LinkManagerAction::ResourceStreamFailed {
-                link_id: *link_id,
-                transfer_id,
-                error,
-            });
-        }
+        actions.extend(stream_failure);
 
         if let Some(request_id) = completed_request_id {
             let default_deadline = Self::request_response_deadline(link, now);
@@ -365,11 +366,7 @@ impl LinkManager {
                     if let Some(link) = self.links.get_mut(link_id) {
                         link.outgoing_splits.remove(&original_hash);
                         if let Some(stream) = link.outgoing_streams.remove(&original_hash) {
-                            actions.push(LinkManagerAction::ResourceStreamFailed {
-                                link_id: *link_id,
-                                transfer_id: stream.transfer_id,
-                                error,
-                            });
+                            actions.extend(stream.failed(*link_id, error));
                         }
                     }
                 }
@@ -378,13 +375,10 @@ impl LinkManager {
                     if let Some(link) = self.links.get_mut(link_id) {
                         link.outgoing_splits.remove(&original_hash);
                         if let Some(stream) = link.outgoing_streams.remove(&original_hash) {
-                            actions.push(LinkManagerAction::ResourceStreamFailed {
-                                link_id: *link_id,
-                                transfer_id: stream.transfer_id,
-                                error: ResourceTransferError::Protocol(
-                                    "stream segment build lost".into(),
-                                ),
-                            });
+                            actions.extend(stream.failed(
+                                *link_id,
+                                ResourceTransferError::Protocol("stream segment build lost".into()),
+                            ));
                         }
                     }
                 }
@@ -486,11 +480,7 @@ impl LinkManager {
             })
             .collect();
         if let Some(stream) = link.outgoing_streams.remove(&sender.original_hash) {
-            actions.push(LinkManagerAction::ResourceStreamFailed {
-                link_id: *link_id,
-                transfer_id: stream.transfer_id,
-                error: ResourceTransferError::Cancelled,
-            });
+            actions.extend(stream.failed(*link_id, ResourceTransferError::Cancelled));
         }
         actions
     }
@@ -520,11 +510,7 @@ impl LinkManager {
         let actions = link
             .outgoing_streams
             .drain()
-            .map(|(_, stream)| LinkManagerAction::ResourceStreamFailed {
-                link_id: *link_id,
-                transfer_id: stream.transfer_id,
-                error: ResourceTransferError::Cancelled,
-            })
+            .filter_map(|(_, stream)| stream.failed(*link_id, ResourceTransferError::Cancelled))
             .collect();
         link.incoming_splits.clear();
         link.pending_requests.clear();

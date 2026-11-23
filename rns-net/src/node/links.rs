@@ -117,11 +117,14 @@ impl RnsNode {
     /// prepare compression on a node-owned worker. Its admission budget is eight
     /// jobs and 8 MiB of owned input capacity plus reserved compressed output.
     /// Codec workspace and the running job's temporary input are additional.
-    /// Saturation, small/split Resources and worker startup failure use synchronous
+    /// Saturation, small Resources and worker startup failure use synchronous
     /// preparation, preserving earlier buffered sends on the same link. This
     /// improves responsiveness for eligible sends; it does not provide a latency
-    /// bound under overload. Reader transfers and request responses keep their
-    /// existing synchronous preparation paths.
+    /// bound under overload. A Resource larger than one segment is sent like
+    /// [`RnsNode::send_resource_reader`]: each segment is prepared while the one
+    /// before it is in flight, not all of them before the first is sent, and it
+    /// still reports through the buffered Resource callbacks. Request responses
+    /// keep their existing synchronous preparation path.
     pub fn send_resource_with_auto_compress(
         &self,
         link_id: [u8; 16],
