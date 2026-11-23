@@ -16,9 +16,6 @@ use crate::hdlc;
 use crate::interface::stream_read::{read_stream_frames, StreamRead};
 use crate::interface::{lock_or_recover, wait_while_active, ListenerControl, Writer};
 
-/// Upstream `TCPInterface.HW_MTU`.
-const HW_MTU: usize = 262_144;
-
 /// Configuration for a TCP client interface.
 ///
 /// Start from [`TcpClientConfig::new`] or `default()`: the config also
@@ -313,7 +310,13 @@ impl ClientLink {
     fn serve(self: &Arc<Self>, stream: TcpStream) -> io::Result<()> {
         let source = ReaderSource {
             stream,
-            decoder: hdlc::Decoder::reticulum(HW_MTU, self.ifac_size),
+            decoder: hdlc::Decoder::reticulum(
+                super::tcp_frame_limit(super::tcp_hardware_mtu(
+                    self.config.bitrate,
+                    self.config.fixed_mtu,
+                )),
+                self.ifac_size,
+            ),
             link: Arc::clone(self),
         };
         self.tx.register_source(
@@ -931,7 +934,7 @@ mod tests {
         ));
 
         // IFAC bytes are part of the on-wire frame allowance.
-        let maximum_valid = vec![0x33; HW_MTU + ifac_size];
+        let maximum_valid = vec![0x33; crate::interface::tcp_params::TCP_BASE_HW_MTU + ifac_size];
         server_stream
             .write_all(&hdlc::frame(&maximum_valid))
             .unwrap();
@@ -942,13 +945,41 @@ mod tests {
 
         // An oversized frame is discarded and cannot poison the next frame.
         server_stream
-            .write_all(&hdlc::frame(&vec![0x44; HW_MTU + ifac_size + 1]))
+            .write_all(&hdlc::frame(&vec![
+                0x44;
+                crate::interface::tcp_params::TCP_BASE_HW_MTU + ifac_size
+                    + 1
+            ]))
             .unwrap();
         let recovery = vec![0x55; rns_core::constants::HEADER_MINSIZE + 1];
         server_stream.write_all(&hdlc::frame(&recovery)).unwrap();
         assert!(matches!(
             rx.recv_timeout(Duration::from_secs(5)).unwrap(),
             Event::Frame { data, .. } if data == recovery.into()
+        ));
+    }
+
+    #[test]
+    fn reader_takes_frames_up_to_a_larger_hardware_mtu() {
+        // A 512 KiB fixed_mtu negotiates 512 KiB links, so frames above
+        // upstream's 262,144-byte base must be read, as upstream does.
+        let port = find_free_port();
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).unwrap();
+        let (tx, rx) = crate::event::channel();
+        let mut config = make_config(port);
+        config.fixed_mtu = Some(524_288);
+        let _writer = start(config, tx).unwrap();
+        let (mut server_stream, _) = listener.accept().unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Event::InterfaceUp(_, _, _)
+        ));
+
+        let large = vec![0x66; 524_288];
+        server_stream.write_all(&hdlc::frame(&large)).unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Event::Frame { data, .. } if data == large.into()
         ));
     }
 

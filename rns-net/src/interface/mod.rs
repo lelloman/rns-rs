@@ -78,7 +78,8 @@ pub(crate) use tcp_params::auto_mtu_for_bitrate;
 pub(crate) use tcp_params::parse_max_connections;
 #[cfg(feature = "iface-tcp")]
 pub(crate) use tcp_params::{
-    parse_flush_after, parse_tcp_rate_params, tcp_bitrate, tcp_hardware_mtu, DEFAULT_FLUSH_AFTER,
+    parse_flush_after, parse_tcp_rate_params, tcp_bitrate, tcp_frame_limit, tcp_hardware_mtu,
+    DEFAULT_FLUSH_AFTER,
 };
 pub use type_hints::InterfaceKind;
 pub(crate) use type_hints::{shared_medium_hint, tunnels_allowed};
