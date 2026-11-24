@@ -29,20 +29,27 @@
 //!    twice, or records drawn from a small set, which have random byte
 //!    distributions. A 1 MiB payload is flagged at five repeats, which a
 //!    repeated run of about 100 bytes yields on average.
-//! 3. Samples: no [`SAMPLE_SIZE`] window at the start, middle or end shrinks
-//!    at all under bzip2: the compressor's own judgement, for structure of
-//!    any other kind that runs through the payload.
+//! 3. Short repetition: the [`WORD_SIZE`]-byte strings seen twice at
+//!    content-defined anchors number at most one per [`WORD_REPEAT_SPAN`]
+//!    bytes. This catches records or tokens shorter than
+//!    [`FINGERPRINT_SIZE`] drawn from a set of up to about 65,536, such as
+//!    columns of 32-bit identifiers: their byte distributions are random
+//!    and their 16-byte strings rarely repeat, yet bzip2 shrinks them by
+//!    7 % to 70 %. Its limit is set between the data either side of it
+//!    rather than derived like the others: a 1 MiB payload of random data
+//!    shows about 8 such repeats (20 in 200 trials), already-compressed
+//!    files (archives, images, video) up to about 100, and such token data
+//!    from about 480.
 //!
 //! So the attempt is skipped only when neither skewed distributions nor
 //! repeated strings anywhere in the payload could save a thousandth of it,
-//! a fifth of what bzip2 adds to data it cannot compress, and bzip2 cannot
-//! shrink the sampled windows. Compressible data can still pass only with
-//! structure of another kind (strings under 16 bytes repeated with flat
-//! byte frequencies, say) confined to the unsampled regions. A false
-//! positive costs the full attempt, as before.
+//! a fifth of what bzip2 adds to data it cannot compress, and short strings
+//! repeat no more than in already-compressed data. Compressible data can
+//! still pass only with structure of another kind. A false positive costs
+//! the full attempt, as before.
 //!
-//! On a 1 MiB segment of random data the checks take about an eighth of the
-//! time of the bzip2 attempt they replace, most of it the samples.
+//! On a 1 MiB segment of random data the checks take about a thirtieth of
+//! the time of the bzip2 attempt they replace.
 
 use rns_core::buffer::{Compressor, DecompressError};
 
@@ -51,8 +58,10 @@ use super::FastHashSet;
 
 /// Payloads below this size are always compressed in full.
 pub(crate) const SCREEN_MIN_SIZE: usize = 256 * 1024;
-/// Size of each window compressed as a sample.
-const SAMPLE_SIZE: usize = 16 * 1024;
+/// Length of the short strings whose repetition is looked for.
+const WORD_SIZE: usize = 4;
+/// Bytes of payload per repeated short string allowed: 256 in 1 MiB.
+const WORD_REPEAT_SPAN: u64 = 4 * 1024;
 /// Chunk over which byte distributions are measured.
 const CHUNK_SIZE: usize = 4 * 1024;
 /// Mean chi-square of a chunk of random bytes (255 degrees of freedom).
@@ -93,23 +102,7 @@ pub(crate) fn worth_compressing(data: &[u8]) -> bool {
     data.len() < SCREEN_MIN_SIZE
         || has_skewed_bytes(data)
         || has_repeated_strings(data)
-        || has_compressible_sample(data)
-}
-
-/// Whether bzip2 shrinks a window at the start, middle or end of `data`.
-fn has_compressible_sample(data: &[u8]) -> bool {
-    let middle = (data.len() / 2).saturating_sub(SAMPLE_SIZE / 2);
-    let end = data.len().saturating_sub(SAMPLE_SIZE);
-    [0, middle, end].into_iter().any(|start| {
-        let window = data.get(start..start + SAMPLE_SIZE).unwrap_or(data);
-        // Level 1: within one 100 kB block, the output size is the same at
-        // every level, and the codec's workspace is the smallest.
-        let mut encoder = bzip2::read::BzEncoder::new(window, bzip2::Compression::fast());
-        let mut compressed = Vec::with_capacity(window.len() + window.len() / 64 + 64);
-        // A failed sample says nothing; leave the decision to the full attempt.
-        std::io::Read::read_to_end(&mut encoder, &mut compressed).is_err()
-            || compressed.len() < window.len()
-    })
+        || has_repeated_words(data)
 }
 
 /// Distances of the byte differences whose distribution is checked, 0
@@ -236,6 +229,37 @@ fn has_repeated_strings(data: &[u8]) -> bool {
     false
 }
 
+/// Whether more than one [`WORD_SIZE`]-byte string per
+/// [`WORD_REPEAT_SPAN`] bytes of `data` is seen twice at content-defined
+/// anchors.
+///
+/// As in [`has_repeated_strings`], a position is an anchor when a hash of
+/// the string ending there has its top four bits zero, so each copy of a
+/// repeated string has the same anchors, one string in 16 on average. On
+/// random data the anchored strings take 2^28 values, so 1 MiB of it
+/// repeats about 8 by chance.
+fn has_repeated_words(data: &[u8]) -> bool {
+    const ANCHOR_BITS: u32 = ANCHOR_SPACING.trailing_zeros();
+    let limit = data.len() as u64 / WORD_REPEAT_SPAN;
+    let mut seen: FastHashSet<u32> = FastHashSet::default();
+    seen.reserve(data.len() / ANCHOR_SPACING as usize);
+    let mut repeats = 0;
+    let mut word: u32 = 0;
+    for (index, &byte) in data.iter().enumerate() {
+        word = (word << 8) | u32::from(byte);
+        if index + 1 >= WORD_SIZE
+            && u64::from(word).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> (u64::BITS - ANCHOR_BITS) == 0
+            && !seen.insert(word)
+        {
+            repeats += 1;
+            if repeats > limit {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,8 +317,7 @@ mod tests {
 
     const SEGMENT: usize = rns_core::constants::RESOURCE_MAX_EFFICIENT_SIZE;
 
-    /// An offset in the gap between the start and middle samples, away from
-    /// chunk boundaries.
+    /// An offset inside the payload, away from chunk boundaries.
     const GAP: usize = SEGMENT / 4 + 1234;
 
     #[test]
@@ -353,16 +376,15 @@ mod tests {
         }
     }
 
-    /// Random data with `region` written at `offset`, outside every sample.
+    /// Random data with `region` written at `offset`.
     fn random_with(region: &[u8], offset: usize, seed: u64) -> Vec<u8> {
         let mut data = random_bytes(SEGMENT, seed);
         data[offset..offset + region.len()].copy_from_slice(region);
-        assert!(!has_compressible_sample(&data));
         data
     }
 
     #[test]
-    fn compressible_region_between_samples_is_found() {
+    fn compressible_region_is_found() {
         let base64ish: Vec<u8> = random_bytes(64 * 1024, 8)
             .iter()
             .map(|b| {
@@ -404,7 +426,7 @@ mod tests {
 
     #[test]
     fn signal_like_data_is_found() {
-        // 8-bit steps of up to 32 between the samples; 16-bit values with
+        // 8-bit steps of up to 32 in a region; 16-bit values with
         // steps of up to 600, spread through the whole payload.
         let region = walk(64 * 1024, 16, 1, 32);
         let data = random_with(&region, GAP, 17);
@@ -418,9 +440,9 @@ mod tests {
     }
 
     #[test]
-    fn short_repeated_strings_between_samples_are_found() {
-        // 16-byte random tokens from a set of 1000, placed between samples:
-        // the byte distributions are those of random data.
+    fn repeated_strings_in_a_region_are_found() {
+        // 16-byte random tokens from a set of 1000 in a region: the byte
+        // distributions are those of random data.
         let dictionary = random_bytes(16 * 1000, 19);
         let picks = random_bytes(64 * 1024 / 16 * 2, 20);
         let region: Vec<u8> = picks
@@ -451,16 +473,15 @@ mod tests {
 
     #[test]
     fn repetition_at_a_distance_is_found() {
-        // A random 300 KiB repeated: no sample shrinks, yet bzip2 halves it
-        // when both copies share a block.
+        // A random 300 KiB repeated: bzip2 halves it when both copies share
+        // a block.
         let half = random_bytes(300 * 1024, 12);
         let data = [half.as_slice(), half.as_slice()].concat();
-        assert!(!has_compressible_sample(&data));
         assert!(has_repeated_strings(&data));
         assert!(bzip2_shrinks(&data));
         assert!(worth_compressing(&data));
 
-        // A 32 KiB run copied between the samples.
+        // A 32 KiB run copied within the payload.
         let mut data = random_bytes(SEGMENT, 13);
         let run = data[GAP..GAP + 32 * 1024].to_vec();
         data[GAP + 100_000..GAP + 100_000 + 32 * 1024].copy_from_slice(&run);
@@ -468,8 +489,8 @@ mod tests {
         assert!(bzip2_shrinks(&data));
     }
 
-    /// Wherever a compressible region lies outside the samples, a payload
-    /// that bzip2 would shrink is compressed. The regions are just large
+    /// Wherever a compressible region lies, a payload that bzip2 would
+    /// shrink is compressed. The regions are just large
     /// enough for bzip2 to shrink the payload.
     #[test]
     fn no_shrinkable_payload_is_skipped() {
@@ -483,16 +504,10 @@ mod tests {
             ("hex", hex),
         ];
         for (name, region) in regions {
-            let last = SEGMENT - SAMPLE_SIZE - region.len() - 1;
-            let mut offsets: Vec<usize> =
-                (SAMPLE_SIZE + 1..last).step_by(97 * 1024 + 333).collect();
+            let last = SEGMENT - region.len();
+            let mut offsets: Vec<usize> = (0..last).step_by(97 * 1024 + 333).collect();
             offsets.push(last);
             for offset in offsets {
-                if offset + region.len() > SEGMENT / 2 - SAMPLE_SIZE / 2
-                    && offset < SEGMENT / 2 + SAMPLE_SIZE / 2
-                {
-                    continue;
-                }
                 let data = random_with(&region, offset, 15);
                 assert!(worth_compressing(&data), "{name} at {offset}");
                 assert!(
@@ -504,11 +519,46 @@ mod tests {
     }
 
     #[test]
-    fn skew_and_repeat_checks_pass_random_data() {
-        for seed in 20..28 {
+    fn every_check_passes_random_data() {
+        for seed in 20..60 {
             let data = random_bytes(SEGMENT, seed);
             assert!(!has_skewed_bytes(&data), "seed {seed}");
             assert!(!has_repeated_strings(&data), "seed {seed}");
+            assert!(!has_repeated_words(&data), "seed {seed}");
+        }
+        for (len, seed) in [(SCREEN_MIN_SIZE, 60), (SEGMENT / 2 + 5, 61)] {
+            assert!(!has_repeated_words(&random_bytes(len, seed)), "len {len}");
+        }
+    }
+
+    /// `len` bytes of `token`-byte random tokens drawn from a set of `set`.
+    fn tokens(len: usize, token: usize, set: usize, seed: u64) -> Vec<u8> {
+        let dictionary = random_bytes(token * set, seed);
+        random_bytes(len / token * 4 + 8, seed + 1)
+            .chunks(4)
+            .flat_map(|pick| {
+                let index = u32::from_le_bytes([pick[0], pick[1], pick[2], pick[3]]) as usize % set;
+                dictionary[index * token..index * token + token].to_vec()
+            })
+            .take(len)
+            .collect()
+    }
+
+    #[test]
+    fn short_tokens_from_a_limited_set_are_compressed() {
+        // Tokens shorter than the 16-byte strings, with random byte
+        // distributions: only the short strings show their repetition.
+        for (token, set) in [(4, 65_536), (6, 4096), (8, 65_536), (12, 65_536)] {
+            let data = tokens(SEGMENT, token, set, 70 + token as u64);
+            assert!(!has_skewed_bytes(&data), "{token} of {set}");
+            assert!(!has_repeated_strings(&data), "{token} of {set}");
+            assert!(has_repeated_words(&data), "{token} of {set}");
+            assert!(bzip2_shrinks(&data), "{token} of {set} is not a real case");
+            assert_eq!(
+                ResourceCompressor.compress(&data),
+                Bzip2Compressor.compress(&data),
+                "{token} of {set}"
+            );
         }
     }
 }
