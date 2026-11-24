@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -54,8 +55,17 @@ fn free_port() -> u16 {
 
 /// A shared instance of its own name: the RPC client tries the abstract
 /// socket `\0rns/<instance_name>/rpc` first, so tests running side by side
-/// must not share one.
-fn write_daemon_config(dir: &Path, rpc_port: u16) {
+/// must not share one. A node that finds its name taken attaches to that
+/// instance as a client, so the name comes from this process and a counter,
+/// not from `rpc_port`: [`free_port`] may hand two tests the same port.
+/// Returns the instance name.
+fn write_daemon_config(dir: &Path, rpc_port: u16) -> String {
+    static NEXT_INSTANCE: AtomicUsize = AtomicUsize::new(0);
+    let instance_name = format!(
+        "rnid-test-{}-{}",
+        std::process::id(),
+        NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed)
+    );
     fs::write(
         dir.join("config"),
         format!(
@@ -63,7 +73,7 @@ fn write_daemon_config(dir: &Path, rpc_port: u16) {
 [reticulum]
 enable_transport = False
 share_instance = Yes
-instance_name = rnid-test-{rpc_port}
+instance_name = {instance_name}
 instance_control_port = {rpc_port}
 
 # rnid stamps its announce (upstream 51fa8413) and exits 0.25 s after
@@ -77,13 +87,14 @@ destination_cost = 2
         ),
     )
     .unwrap();
+    instance_name
 }
 
-fn wait_for_rpc(port: u16) {
+fn wait_for_rpc(instance_name: &str, port: u16) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         // Where the daemon serves RPC: its abstract socket on Linux.
-        let addr = rns_net::rpc::RpcAddr::local(format!("rnid-test-{port}"), port);
+        let addr = rns_net::rpc::RpcAddr::local(instance_name, port);
         if addr.accepts_connections().is_ok() {
             return;
         }
@@ -258,9 +269,9 @@ fn rnid_matches_upstream() {
 fn request_identity_over_rpc_encrypts_and_retains_all_matching_destinations() {
     let dir = tempdir();
     let rpc_port = free_port();
-    write_daemon_config(dir.path(), rpc_port);
+    let instance_name = write_daemon_config(dir.path(), rpc_port);
     let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
-    wait_for_rpc(rpc_port);
+    wait_for_rpc(&instance_name, rpc_port);
 
     let identity = Identity::new(&mut OsRng);
     let identity_hash = *identity.hash();
@@ -328,9 +339,9 @@ fn request_identity_over_rpc_encrypts_and_retains_all_matching_destinations() {
 fn request_identity_over_rpc_validates_required_signer_by_destination_hash() {
     let dir = tempdir();
     let rpc_port = free_port();
-    write_daemon_config(dir.path(), rpc_port);
+    let instance_name = write_daemon_config(dir.path(), rpc_port);
     let node = RnsNode::from_config(Some(dir.path()), Box::new(NoopCallbacks)).unwrap();
-    wait_for_rpc(rpc_port);
+    wait_for_rpc(&instance_name, rpc_port);
 
     let identity = Identity::new(&mut OsRng);
     let identity_hash = *identity.hash();
@@ -381,10 +392,10 @@ impl Callbacks for AnnounceRecorder {
 fn announce_sends_the_identity_destination_through_the_shared_instance() {
     let dir = tempdir();
     let rpc_port = free_port();
-    write_daemon_config(dir.path(), rpc_port);
+    let instance_name = write_daemon_config(dir.path(), rpc_port);
     let (tx, rx) = std::sync::mpsc::channel();
     let _node = RnsNode::from_config(Some(dir.path()), Box::new(AnnounceRecorder(tx))).unwrap();
-    wait_for_rpc(rpc_port);
+    wait_for_rpc(&instance_name, rpc_port);
 
     let identity = Identity::new(&mut OsRng);
     let private_rid = dir.path().join("announcer.rid");
