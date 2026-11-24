@@ -485,6 +485,20 @@ impl PathSet {
         blobs
     }
 
+    /// Whether [`PathSet::upsert`] would keep a path through a next hop not
+    /// yet in the set, with `hops` and `timestamp`, rather than drop it at
+    /// capacity because it ranks below every stored path.
+    pub fn would_keep_new_path(&self, hops: u8, timestamp: f64) -> bool {
+        // The new path is pushed last and the sort is stable, so every stored
+        // path ranking the same or better stays ahead of it.
+        let ranked_ahead = self
+            .paths
+            .iter()
+            .filter(|p| p.hops < hops || (p.hops == hops && p.timestamp >= timestamp))
+            .count();
+        ranked_ahead < self.capacity
+    }
+
     /// Find the path entry that matches a given `next_hop`, if any.
     pub fn find_by_next_hop(&self, next_hop: &[u8; 16]) -> Option<&PathEntry> {
         self.paths.iter().find(|p| &p.next_hop == next_hop)
