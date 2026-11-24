@@ -801,9 +801,9 @@ try:
             if rust_destination is None:
                 emit("python_link_error", reason="rust destination is unknown")
             else:
-                rust_link = RNS.Link(rust_destination)
-                rust_link.set_link_established_callback(link_established)
-                rust_link.set_link_closed_callback(link_closed)
+                # The constructor sends the link request: callbacks set after
+                # it returns can miss a proof that comes back first.
+                rust_link = RNS.Link(rust_destination, established_callback=link_established, closed_callback=link_closed)
                 emit("python_link_requested", link_id=rust_link.link_id.hex() if getattr(rust_link, "link_id", None) else None)
         elif command == "send_resource_rust":
             if rust_link is None:
