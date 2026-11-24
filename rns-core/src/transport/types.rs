@@ -547,9 +547,11 @@ pub enum UnresponsivePathRecovery {
     /// replaces an unresponsive path only through the path's own next hop,
     /// over more hops, or, unlike upstream, over the same or fewer hops;
     /// through another next hop it is rejected. A replacement accepted only
-    /// because the path is unresponsive is not rebroadcast. An announce
-    /// through another next hop is stored as an alternative path, which a
-    /// single-path table keeps only when it ranks first. Emission times
+    /// because the path is unresponsive is not rebroadcast. A new announce
+    /// through another next hop is stored as an alternative path, and
+    /// rejected when the destination's paths are full and it ranks below
+    /// all of them. An announce stored on any of the destination's paths is
+    /// rejected through every other next hop. Emission times
     /// more than `MAX_EMISSION_TIME_SKEW_SECS` in the future are
     /// distrusted.
     #[default]

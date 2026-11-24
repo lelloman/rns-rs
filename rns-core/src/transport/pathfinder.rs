@@ -336,10 +336,13 @@ pub enum MultiPathDecision {
 /// be stored as an alternative, or be rejected.
 ///
 /// - No existing `PathSet` → `ReplacePrimary` (first path for this dest)
+/// - Random blob stored on a path through another next hop → `Reject`, or
+///   `ReplacePrimary` for a shorter route with `prefer_shorter_path`
 /// - Same `next_hop` exists in the set → delegate to `should_update_path`
 ///   against **that** specific path entry
 /// - New `next_hop` → accept as `AddAlternative` if the blob is genuinely
-///   new (not in any stored path's blobs) and emission timestamp is valid
+///   new (not in any stored path's blobs), the emission timestamp is valid
+///   and the set keeps the path rather than drop it at capacity
 #[allow(
     clippy::too_many_arguments,
     reason = "each argument is a distinct input of the announce acceptance decision, on the announce hot path"
@@ -438,8 +441,28 @@ pub fn decide_announce_multipath_with_gravity(
         return MultiPathDecision::ReplacePrimary;
     }
 
+    let all_blobs = path_set.all_random_blobs();
+
+    // An announce already stored on any of the destination's paths, as
+    // upstream's single path holds every random blob it accepted. A copy that
+    // looped back through the network, whichever next hop it now arrives
+    // through, is rejected rather than taken and rebroadcast again.
+    let same_next_hop = path_set.find_by_next_hop(next_hop);
+    let seen_on_another_path = all_blobs.contains(random_blob)
+        && same_next_hop.is_none_or(|path| !path.random_blobs.contains(random_blob));
+    if seen_on_another_path {
+        return known_announce_decision(
+            path_set,
+            &all_blobs,
+            announce_hops,
+            announce_emitted_ts,
+            now,
+            prefer_shorter_path,
+        );
+    }
+
     // Check if there's already a path with the same next_hop
-    if let Some(existing_path) = path_set.find_by_next_hop(next_hop) {
+    if let Some(existing_path) = same_next_hop {
         let decision = should_update_path(
             Some(existing_path),
             announce_hops,
@@ -455,36 +478,53 @@ pub fn decide_announce_multipath_with_gravity(
             PathDecision::Reject => MultiPathDecision::Reject,
         }
     } else {
-        // New next_hop — check if blob is genuinely new across all paths
-        let all_blobs = path_set.all_random_blobs();
-        let blob_is_new = !all_blobs.contains(random_blob);
-
-        if !blob_is_new {
-            // An announce already seen, over fewer hops than the primary
-            // path, through another next hop: the same emission reaching
-            // this node by a shorter route. `prefer_shorter_path` takes it,
-            // as `should_update_path` does for the same next hop; otherwise
-            // a newer copy that first arrived over a long route pins that
-            // route until the next announce. Upstream keeps the path, so
-            // without the option the announce is rejected.
-            let shorter = path_set
-                .primary()
-                .is_some_and(|primary| announce_hops < primary.hops);
-            let not_older = trusted_emission_time(announce_emitted_ts, now)
-                >= trusted_timebase_from_random_blobs(&all_blobs, now);
-            if prefer_shorter_path && shorter && not_older {
-                return MultiPathDecision::ReplacePrimary;
-            }
-            return MultiPathDecision::Reject;
-        }
-
+        // New next_hop with a genuinely new blob.
         // Deliberate deviation from Transport.py: see MAX_EMISSION_TIME_SKEW_SECS.
         let max_timebase = trusted_timebase_from_random_blobs(&all_blobs, now);
-        if trusted_emission_time(announce_emitted_ts, now) >= max_timebase {
+        if trusted_emission_time(announce_emitted_ts, now) < max_timebase {
+            return MultiPathDecision::Reject;
+        }
+        // An alternative that ranks below every stored path at capacity
+        // would be dropped as soon as it is stored. It is rejected instead:
+        // taking it would rebroadcast an announce the table does not keep,
+        // and forget its random blob, so every later copy of it, looped
+        // through the network over ever more hops, would be taken and
+        // rebroadcast again.
+        if path_set.would_keep_new_path(announce_hops, now) {
             MultiPathDecision::AddAlternative
         } else {
             MultiPathDecision::Reject
         }
+    }
+}
+
+/// Decision for an announce whose random blob is already stored on one of
+/// the destination's paths, arriving through a next hop that has not
+/// stored it.
+///
+/// An announce already seen, over fewer hops than the primary path: the same
+/// emission reaching this node by a shorter route. `prefer_shorter_path`
+/// takes it, as `should_update_path` does for the same next hop; otherwise a
+/// newer copy that first arrived over a long route pins that route until the
+/// next announce. Upstream keeps the path, so without the option the
+/// announce is rejected.
+fn known_announce_decision(
+    path_set: &PathSet,
+    all_blobs: &[[u8; 10]],
+    announce_hops: u8,
+    announce_emitted_ts: u64,
+    now: f64,
+    prefer_shorter_path: bool,
+) -> MultiPathDecision {
+    let shorter = path_set
+        .primary()
+        .is_some_and(|primary| announce_hops < primary.hops);
+    let not_older = trusted_emission_time(announce_emitted_ts, now)
+        >= trusted_timebase_from_random_blobs(all_blobs, now);
+    if prefer_shorter_path && shorter && not_older {
+        MultiPathDecision::ReplacePrimary
+    } else {
+        MultiPathDecision::Reject
     }
 }
 
@@ -1043,6 +1083,73 @@ mod tests {
             decide_announce_multipath(Some(&ps), 1, 100, &blob, &[0xCC; 16], false, 1000.0, true),
             MultiPathDecision::Reject
         );
+    }
+
+    #[test]
+    fn alternative_the_set_would_drop_at_capacity_is_rejected() {
+        // vps-us keeps one path per destination. A newer announce looped
+        // back over 20 hops through another neighbour was taken as an
+        // alternative, dropped by the full set, and still rebroadcast; its
+        // blob was not kept, so each further looped copy was taken again.
+        let primary_blob = make_blob(100);
+        let looped_blob = make_blob(200);
+        let decide = |ps: &PathSet, hops| {
+            decide_announce_multipath(
+                Some(ps),
+                hops,
+                200,
+                &looped_blob,
+                &[0xCC; 16],
+                false,
+                1000.0,
+                false,
+            )
+        };
+
+        let mut stored = make_path_entry(3, &[primary_blob], 9999.0);
+        stored.timestamp = 900.0;
+        let full = PathSet::from_single(stored.clone(), 1);
+        assert_eq!(decide(&full, 20), MultiPathDecision::Reject);
+        // Over the same hops the newer path outranks the stored one.
+        assert_eq!(decide(&full, 3), MultiPathDecision::AddAlternative);
+        assert_eq!(decide(&full, 2), MultiPathDecision::AddAlternative);
+
+        // With room in the set the longer alternative is kept.
+        let roomy = PathSet::from_single(stored, 2);
+        assert_eq!(decide(&roomy, 20), MultiPathDecision::AddAlternative);
+    }
+
+    #[test]
+    fn announce_stored_on_another_path_is_rejected_through_a_known_next_hop() {
+        // vps-eu keeps four paths per destination. A newer announce stored
+        // on an alternative came back, looped over more hops, through the
+        // primary path's next hop, which had not stored its blob. It was
+        // taken as a newer announce for that path and rebroadcast.
+        let old_blob = make_blob(100);
+        let new_blob = make_blob(200);
+        let mut ps = PathSet::from_single(make_path_entry(3, &[old_blob], 9999.0), 4);
+        let mut alternative = make_path_entry(5, &[new_blob], 9999.0);
+        alternative.next_hop = [0xCC; 16];
+        ps.upsert(alternative);
+
+        let decide = |hops, prefer| {
+            decide_announce_multipath(
+                Some(&ps),
+                hops,
+                200,
+                &new_blob,
+                &[0xAA; 16],
+                false,
+                1000.0,
+                prefer,
+            )
+        };
+        assert_eq!(decide(9, false), MultiPathDecision::Reject);
+        assert_eq!(decide(9, true), MultiPathDecision::Reject);
+        // A shorter route still wins with prefer_shorter_path, as it does
+        // through a new next hop.
+        assert_eq!(decide(2, true), MultiPathDecision::ReplacePrimary);
+        assert_eq!(decide(2, false), MultiPathDecision::Reject);
     }
 
     #[test]

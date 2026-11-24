@@ -912,10 +912,11 @@ fn unresponsive_path_recovery_native_and_upstream() {
         case(Upstream, B, 1000, 2, (B, 2, 1), false),
         case(Native, B, 1000, 2, (B, 2, 2), false),
         // A newer announce through another next hop, over more hops:
-        // upstream replaces the path; rns-rs adds an alternative, which a
-        // single-path table drops.
+        // upstream replaces the path; rns-rs would add an alternative that a
+        // single-path table drops, so it rejects the announce and does not
+        // rebroadcast it.
         case(Upstream, A, 1001, 4, (B, 4, 2), true),
-        case(Native, A, 1001, 4, (A, 2, 1), true),
+        case(Native, A, 1001, 4, (A, 2, 1), false),
         // An expired path and the same announce again: upstream only takes
         // a new announce for an expired path.
         Case {
@@ -1051,10 +1052,11 @@ fn upstream_recovery_decides_every_path_update_as_upstream() {
     };
     let cases = [
         // A newer announce through another next hop, over more hops:
-        // upstream takes it; rns-rs adds an alternative, which a
-        // single-path table drops.
+        // upstream takes it; rns-rs would add an alternative that a
+        // single-path table drops, so it rejects the announce and does not
+        // rebroadcast it.
         case(Upstream, 1001, 4, (B, 4, 2), true),
-        case(Native, 1001, 4, (A, 2, 1), true),
+        case(Native, 1001, 4, (A, 2, 1), false),
         // ... with room for two paths.
         Case {
             max_paths: 2,

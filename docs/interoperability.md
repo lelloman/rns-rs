@@ -98,10 +98,14 @@ unresponsive, because rns-rs keeps announces through another next hop as
 alternative paths:
 
 - A newer announce through another next hop is added as an alternative
-  path. With one path per destination it is kept only when it ranks first
-  (no more hops than the path), so a newer announce over more hops through
-  another neighbour leaves the path as it was (it is still rebroadcast);
-  upstream takes it.
+  path. When the destination's paths are at `max_paths_per_destination`, it
+  is taken only if it ranks above one of them (with one path per
+  destination: no more hops than the path). Otherwise it is rejected and
+  not rebroadcast, and the path stays as it was; upstream takes it.
+- An announce already stored on any of the destination's paths is
+  rejected through every other next hop, as upstream rejects an announce
+  its single path has heard. Only `prefer_shorter_path` takes such an
+  announce, over a shorter route.
 - An announce through another next hop emitted before the path's newest
   random blob is rejected, even for an expired path, where upstream takes
   any announce it has not heard.
