@@ -2506,7 +2506,8 @@ fn streaming_resource_reads_one_segment_at_a_time_and_receives_to_disk() {
         },
     );
 
-    let data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE * 2 + 12345);
+    let data = deterministic_bytes(constants::RESOURCE_MAX_EFFICIENT_SIZE * 4 + 12345);
+    let length = data.len();
     let bytes_read = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let reader = CountingReader {
         inner: std::io::Cursor::new(data.clone()),
@@ -2542,7 +2543,7 @@ fn streaming_resource_reads_one_segment_at_a_time_and_receives_to_disk() {
     );
     assert_eq!(
         bytes_read.load(std::sync::atomic::Ordering::Relaxed),
-        constants::RESOURCE_MAX_EFFICIENT_SIZE * 2 + 12345
+        length
     );
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
 }

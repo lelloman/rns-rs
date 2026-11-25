@@ -258,7 +258,7 @@ impl LinkManager {
                             } else if self
                                 .segment_builder
                                 .as_ref()
-                                .is_some_and(|b| b.has(&(*link_id, original_hash)))
+                                .is_some_and(|b| b.has(link_id, &original_hash))
                             {
                                 take_built = Some((original_hash, total_parts));
                             } else if let Some(mut stream) =
