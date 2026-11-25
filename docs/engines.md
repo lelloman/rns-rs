@@ -109,6 +109,10 @@ the same either way; only where it runs changes.
 have: TCP interfaces write a buffered frame once it has waited 25 µs instead
 of at the end of the driver's pass (`flush_after_us` overrides either), and
 link proofs may be verified in batches on worker threads.
+`segment-lookahead` (opt-in, either engine with helper threads) builds up to
+four segments of a streamed Resource ahead on four threads once a link takes
+segments faster than one thread builds them; without it, one segment is
+built ahead on one thread.
 `x25519-aws-lc` and `ed25519-aws-lc` stay `rns-crypto` features usable with
 either engine. They bring a C and CMake build dependency, so they are opt-in
 even for parallel builds; release builds of `rnsd` and `rns-server` turn

@@ -39,6 +39,12 @@ engine-parallel = ["rns-crypto/ed25519-batch", "dep:rayon"]
 # work, services, interface I/O) instead of running that work on the
 # driver loop.
 compact-threads = []
+# Build up to four segments of a streamed Resource ahead, on four threads,
+# once the link takes segments faster than one thread builds them (about
+# 130 MB/s); without it, one segment ahead on one thread. Costs up to three
+# more segments (about 6 MiB) held per such stream. Engines with a segment
+# builder only (`engine-parallel` or `compact-threads`).
+segment-lookahead = []
 # X25519 on aws-lc (rns-crypto's `x25519-aws-lc`): about twice as fast.
 x25519-aws-lc = ["rns-crypto/x25519-aws-lc"]
 # Ed25519 signing on aws-lc (rns-crypto's `ed25519-aws-lc`): about twice as
