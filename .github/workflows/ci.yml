@@ -121,6 +121,18 @@ jobs:
           done
           exit 1
 
+      # Configuring the build resolves its Gradle plugins, a download that
+      # fails now and then on a runner; retry it before the build needs them.
+      - name: Resolve Gradle plugins
+        working-directory: rns-tun-android
+        run: |
+          for attempt in 1 2 3 4 5; do
+            ./gradlew help --quiet && exit 0
+            echo "Gradle plugin resolution attempt $attempt failed; retrying"
+            sleep $((attempt * 15))
+          done
+          exit 1
+
       - name: Test and assemble Android client
         working-directory: rns-tun-android
         run: ./gradlew testDebugUnitTest assembleDebug
