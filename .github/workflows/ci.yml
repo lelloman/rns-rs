@@ -231,6 +231,7 @@ jobs:
         run: |
           cargo test -p rns-net
           cargo test -p rns-net --features compact-threads
+          cargo test -p rns-net --lib --features engine-parallel,segment-lookahead link_manager
           # The BLE RNode transport is not a default feature (it links libdbus).
           cargo test -p rns-net --lib --features iface-rnode-ble rnode
 

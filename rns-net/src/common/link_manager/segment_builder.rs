@@ -11,11 +11,12 @@
 //! whole segment's transfer earlier.
 //!
 //! On a fast link building a segment takes longer than sending one, and the
-//! proof arrives while the next segment is still being built. Once that
-//! happens the stream builds [`FAST_SEGMENT_LOOKAHEAD`] segments ahead, each
-//! on a thread of its own; the driver still reads them from the stream in
-//! order. On a slow link the next segment is always ready in time and only
-//! one is held ahead. The parallel engine only.
+//! proof arrives while the next segment is still being built. With the
+//! `segment-lookahead` feature, once that happens the stream builds
+//! [`FAST_SEGMENT_LOOKAHEAD`] segments ahead, each on a thread of its own;
+//! the driver still reads them from the stream in order. On a slow link the
+//! next segment is always ready in time and only one is held ahead. Engines
+//! with helper threads only.
 use super::*;
 use rns_core::resource::ResourceSender;
 use std::sync::{mpsc, Arc, Mutex};
@@ -23,8 +24,12 @@ use std::sync::{mpsc, Arc, Mutex};
 /// Segments built ahead of the one being transferred for a stream whose
 /// proof came before the next segment was built, and threads building them.
 /// With 1 MiB segments, each about 8 ms to build, four keep up with a link
-/// of about 500 MB/s.
-const FAST_SEGMENT_LOOKAHEAD: u64 = 4;
+/// of about 500 MB/s. One without the `segment-lookahead` feature.
+const FAST_SEGMENT_LOOKAHEAD: u64 = if cfg!(feature = "segment-lookahead") {
+    4
+} else {
+    1
+};
 
 /// A stream's segment: its link, original hash and segment index.
 type Key = (LinkId, [u8; 32], u64);
