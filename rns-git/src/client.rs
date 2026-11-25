@@ -17,6 +17,8 @@ use crate::util::{
 use crate::{git, Error, Result};
 
 const LINK_IDENTIFY_SETTLE_DELAY: Duration = Duration::from_millis(750);
+/// Link requests sent before giving up on a destination; see [`establish_link`].
+const LINK_ESTABLISHMENT_ATTEMPTS: usize = 2;
 const NOT_IDENTIFIED_RETRY_DELAY: Duration = Duration::from_millis(750);
 const NOT_IDENTIFIED_RETRIES: usize = 5;
 
@@ -323,17 +325,26 @@ impl SyncClient {
             .map_err(|_| Error::msg("failed to recall destination identity"))?
             .ok_or_else(|| Error::msg("destination identity is unknown"))?;
         let (_, sig_pub) = rns_crypto::identity::split_key(&recalled.public_key);
-        let link_id = node
-            .create_link(dest_hash, sig_pub)
-            .map_err(|_| Error::msg("failed to create RNS link"))?;
-        eprintln!("Establishing link...");
         let hops = node.hops_to(&dest).unwrap_or(None).unwrap_or(1);
-        let link_timeout =
-            Duration::from_secs_f64(rns_core::link::keepalive::compute_establishment_timeout(
+        let link_timeout = configured_timeout.max(Duration::from_secs_f64(
+            rns_core::link::keepalive::compute_establishment_timeout(
                 rns_core::constants::LINK_ESTABLISHMENT_TIMEOUT_PER_HOP,
                 hops,
-            ));
-        wait_for_link(&state, link_id, configured_timeout.max(link_timeout))?;
+            ),
+        ));
+        let link_id = establish_link(
+            LINK_ESTABLISHMENT_ATTEMPTS,
+            || {
+                eprintln!("Establishing link...");
+                node.create_link(dest_hash, sig_pub)
+                    .map_err(|_| Error::msg("failed to create RNS link"))
+            },
+            |link_id| wait_for_link(&state, link_id, link_timeout),
+            |link_id| {
+                eprintln!("Link establishment timed out; retrying.");
+                let _ = node.teardown_link(link_id);
+            },
+        )?;
         eprintln!("Link established.");
 
         let private_key = client_identity
@@ -472,6 +483,34 @@ impl Callbacks for SharedCallbacks {
         if received >= total {
             progress.started_at = None;
             progress.last_percent = None;
+        }
+    }
+}
+
+/// Create a link and wait for it, up to `attempts` times. A failed link is
+/// torn down with `abandon` before the next attempt.
+///
+/// The first link request to a destination that has been idle can go
+/// unanswered on public routes while one sent right after it is answered:
+/// on 2026-11-25 the first link to the rgit server got no reply within 60
+/// seconds from both rns-rs and Python RNS 1.6.1, and the following links
+/// were established in under 2 seconds.
+fn establish_link(
+    attempts: usize,
+    mut create: impl FnMut() -> Result<[u8; 16]>,
+    mut wait: impl FnMut([u8; 16]) -> Result<()>,
+    mut abandon: impl FnMut([u8; 16]),
+) -> Result<[u8; 16]> {
+    let mut attempt = 1;
+    loop {
+        let link_id = create()?;
+        match wait(link_id) {
+            Ok(()) => return Ok(link_id),
+            Err(err) if attempt >= attempts => return Err(err),
+            Err(_) => {
+                abandon(link_id);
+                attempt += 1;
+            }
         }
     }
 }
@@ -712,6 +751,49 @@ mod tests {
     use std::io::{BufRead, BufReader};
     use std::process::{Child, Command, Stdio};
     use std::sync::mpsc;
+
+    #[test]
+    fn link_establishment_retries_once_after_a_timeout() {
+        let mut created = Vec::new();
+        let mut abandoned = Vec::new();
+        let link = establish_link(
+            2,
+            || {
+                created.push(created.len() as u8);
+                Ok([created.len() as u8; 16])
+            },
+            |link_id| {
+                if link_id[0] == 1 {
+                    Err(Error::msg("link establishment timed out"))
+                } else {
+                    Ok(())
+                }
+            },
+            |link_id| abandoned.push(link_id[0]),
+        )
+        .unwrap();
+        assert_eq!(link, [2; 16]);
+        assert_eq!(created.len(), 2);
+        assert_eq!(abandoned, vec![1]);
+    }
+
+    #[test]
+    fn link_establishment_gives_up_after_the_last_attempt() {
+        let mut created = 0;
+        let mut abandoned = 0;
+        let err = establish_link(
+            2,
+            || {
+                created += 1;
+                Ok([created; 16])
+            },
+            |_| Err(Error::msg("link establishment timed out")),
+            |_| abandoned += 1,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("timed out"));
+        assert_eq!((created, abandoned), (2, 1));
+    }
 
     #[test]
     fn parses_fetch_command() {
