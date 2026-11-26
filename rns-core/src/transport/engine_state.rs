@@ -18,6 +18,7 @@ impl TransportEngine {
                 table: BTreeMap::new(),
                 states: BTreeMap::new(),
                 cap_evict_count: 0,
+                accepted_emissions: BTreeMap::new(),
             },
             announces: AnnounceState {
                 table: tables::AnnounceMap::new(),

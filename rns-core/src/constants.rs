@@ -333,6 +333,11 @@ pub const PATHFINDER_RW: f64 = 0.5;
 /// Path expiry = 7 days (seconds)
 pub const PATHFINDER_E: f64 = 604800.0;
 
+/// How many destinations' newest accepted announce emission a node keeps
+/// after their paths are removed (native path mode). About twice the
+/// destinations a public backbone node hears in a week.
+pub const ACCEPTED_EMISSIONS_MAX: usize = 65536;
+
 // --- Path expiry by interface mode ---
 
 /// Access Point path expiry = 1 day

@@ -326,6 +326,7 @@ impl TransportEngine {
             jobs::cull_link_table(&mut self.routes.links, &self.interfaces, ctx.now);
         ctx.actions.extend(link_closed_actions);
         jobs::cull_path_states(&mut self.paths.states, &self.paths.table);
+        jobs::cull_accepted_emissions(&mut self.paths.accepted_emissions, ctx.now);
         self.cull_blackholed(ctx.now);
         // Upstream drops a path request gate, and a discovery path request,
         // only once its timeout has passed.

@@ -551,7 +551,11 @@ pub enum UnresponsivePathRecovery {
     /// through another next hop is stored as an alternative path, and
     /// rejected when the destination's paths are full and it ranks below
     /// all of them. An announce stored on any of the destination's paths is
-    /// rejected through every other next hop. Emission times
+    /// rejected through every other next hop. Once a destination's path is
+    /// removed, an announce emitted no later than the newest one a path was
+    /// stored from is rejected, except path responses, announces from local
+    /// clients and announces for a path being requested (see
+    /// `pathfinder::is_forgotten_announce_copy`). Emission times
     /// more than `MAX_EMISSION_TIME_SKEW_SECS` in the future are
     /// distrusted.
     #[default]

@@ -292,6 +292,18 @@ struct PathTables {
     /// How many destinations were evicted to keep the path table within
     /// its cap.
     cap_evict_count: usize,
+    /// The newest announce emission time stored as a path, per destination,
+    /// kept after the path itself is removed (native path mode). See
+    /// [`pathfinder::is_forgotten_announce_copy`].
+    accepted_emissions: BTreeMap<[u8; 16], AcceptedEmission>,
+}
+
+/// The newest announce emission a destination's path was stored from, and
+/// when it was stored.
+#[derive(Debug, Clone, Copy)]
+struct AcceptedEmission {
+    emitted: u64,
+    stored_at: f64,
 }
 
 /// Announces waiting for retransmission and the per-destination and
