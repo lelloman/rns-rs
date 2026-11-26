@@ -2,6 +2,7 @@
 //! table and local clients.
 
 use super::*;
+use crate::transport::types::UnresponsivePathRecovery;
 
 impl TransportEngine {
     /// Upstream da368e05: a copy of the announce waiting in the announce
@@ -55,6 +56,7 @@ impl TransportEngine {
         let rate_blocked = self.announce_rate_blocked(&ctx);
         let (expires, announce_entry) =
             self.store_announced_path(&ctx, &mp_decision, rate_blocked, rng, actions);
+        self.remember_accepted_emission(&ctx);
         self.store_announced_tunnel_path(&ctx, expires);
 
         // Re-apply the path-state reset after storing the path entry so any transient
@@ -158,6 +160,18 @@ impl TransportEngine {
         let existing_set = self.paths.table.get(&ctx.packet.destination_hash);
         let was_unknown_destination = existing_set.is_none_or(|ps| ps.is_empty());
 
+        if was_unknown_destination && self.is_forgotten_announce_copy(ctx) {
+            log::trace!(target: crate::logging::PATHING_LOG_TARGET,
+                "Announce:path decision REJECT (copy of a removed path's announce) for dest={:02x}{:02x}{:02x}{:02x}..",
+                ctx.packet.destination_hash[0],
+                ctx.packet.destination_hash[1],
+                ctx.packet.destination_hash[2],
+                ctx.packet.destination_hash[3],
+            );
+            self.record_announce_heard_while_waiting(ctx.packet, ctx.iface);
+            return None;
+        }
+
         // Reset stale path state before first-path installation so path-state handling
         // cannot race ahead of the path table for previously unknown destinations.
         if was_unknown_destination {
@@ -225,6 +239,59 @@ impl TransportEngine {
             );
         }
         Some(mp_decision)
+    }
+
+    /// Whether, in native path mode, the announce is a copy of one this node
+    /// already stored as its destination's path, which has since been
+    /// removed (see [`pathfinder::is_forgotten_announce_copy`]). Path
+    /// responses, announces from local clients and announces for a
+    /// destination whose path is being requested are taken as before.
+    fn is_forgotten_announce_copy(&self, ctx: &VerifiedAnnounceCtx<'_>) -> bool {
+        let destination_hash = &ctx.packet.destination_hash;
+        if self.config.unresponsive_path_recovery != UnresponsivePathRecovery::Native
+            || ctx.packet.context == constants::CONTEXT_PATH_RESPONSE
+            || self.serves_local_client(ctx.iface)
+            || self.path_requests.gates.contains_key(destination_hash)
+            || self.path_requests.discovery.contains_key(destination_hash)
+            || self
+                .path_requests
+                .pending_local
+                .contains_key(destination_hash)
+        {
+            return false;
+        }
+        pathfinder::is_forgotten_announce_copy(
+            self.paths
+                .accepted_emissions
+                .get(destination_hash)
+                .map(|accepted| accepted.emitted),
+            ctx.announce_emitted,
+            ctx.now,
+        )
+    }
+
+    /// Remember the newest emission time a destination's path was stored
+    /// from, for [`Self::is_forgotten_announce_copy`] once the path is gone.
+    fn remember_accepted_emission(&mut self, ctx: &VerifiedAnnounceCtx<'_>) {
+        if self.config.unresponsive_path_recovery != UnresponsivePathRecovery::Native {
+            return;
+        }
+        let emitted = pathfinder::trusted_emission_time(ctx.announce_emitted, ctx.now);
+        if emitted == 0 {
+            return;
+        }
+        let accepted = self
+            .paths
+            .accepted_emissions
+            .entry(ctx.packet.destination_hash)
+            .or_insert(AcceptedEmission {
+                emitted,
+                stored_at: ctx.now,
+            });
+        if emitted >= accepted.emitted {
+            accepted.emitted = emitted;
+            accepted.stored_at = ctx.now;
+        }
     }
 
     /// Whether the announce rate limit of the receiving interface blocks

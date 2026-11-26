@@ -1650,3 +1650,97 @@ fn local_link_request_needing_a_clamp_in_a_mode_not_enabled_is_dropped() {
         }
     }
 }
+
+/// Native path mode: once a destination's path is removed (expired, culled
+/// as never used, or its interface gone), a copy of the announce it was
+/// stored from, looped back over any number of hops, is neither taken as a
+/// new path nor rebroadcast. A newer announce, a path response, and a copy
+/// heard while the path is being requested are taken, and upstream mode
+/// takes the copy as Transport.py does.
+#[test]
+fn copy_of_a_removed_paths_announce() {
+    use super::local_client_announce_tests::announce_with_random_blob;
+    use crate::transport::tests::make_random_blob;
+    use crate::transport::types::UnresponsivePathRecovery::{self, Native, Upstream};
+    struct Case {
+        recovery: UnresponsivePathRecovery,
+        context: u8,
+        emitted: u64,
+        requested: bool,
+        taken: bool,
+    }
+    let case = |recovery, emitted, taken| Case {
+        recovery,
+        context: constants::CONTEXT_NONE,
+        emitted,
+        requested: false,
+        taken,
+    };
+    let cases = [
+        case(Native, 1000, false),
+        case(Native, 999, false),
+        case(Native, 1001, true),
+        case(Upstream, 1000, true),
+        Case {
+            context: constants::CONTEXT_PATH_RESPONSE,
+            ..case(Native, 1000, true)
+        },
+        Case {
+            requested: true,
+            ..case(Native, 1000, true)
+        },
+    ];
+    for case in cases {
+        let label = format!(
+            "{:?} context {} emitted {} requested {}",
+            case.recovery, case.context, case.emitted, case.requested
+        );
+        let mut engine = TransportEngine::new(make_config(true));
+        engine.register_interface(make_interface(1, constants::MODE_FULL));
+        engine.register_interface(make_interface(2, constants::MODE_FULL));
+        engine.config.unresponsive_path_recovery = case.recovery;
+        let first = announce_with_random_blob(
+            14,
+            false,
+            constants::HEADER_2,
+            1,
+            constants::CONTEXT_NONE,
+            &make_random_blob(1000),
+        );
+        let dest = first.destination_hash;
+        receive(&mut engine, &first, 1);
+        assert!(engine.paths.table.contains_key(&dest), "{label}");
+        engine.paths.table.remove(&dest);
+        engine.announces.table.remove(&dest);
+        if case.requested {
+            engine.path_requests.gates.insert(dest, 1000.0);
+        }
+
+        let copy = announce_with_random_blob(
+            14,
+            false,
+            constants::HEADER_2,
+            40,
+            case.context,
+            &make_random_blob(case.emitted),
+        );
+        receive(&mut engine, &copy, 2);
+        let path = engine
+            .paths
+            .table
+            .get(&dest)
+            .and_then(|paths| paths.primary());
+        assert_eq!(
+            path.map(|path| path.hops),
+            case.taken.then_some(41),
+            "{label}"
+        );
+        if case.context == constants::CONTEXT_NONE && !case.requested {
+            assert_eq!(
+                engine.announces.table.contains_key(&dest),
+                case.taken,
+                "{label}"
+            );
+        }
+    }
+}

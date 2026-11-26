@@ -332,6 +332,29 @@ pub fn cull_path_states(
     count
 }
 
+/// Forget accepted emissions stored more than `PATHFINDER_E` ago, the
+/// longest a path stored from them lives, and the oldest beyond
+/// `ACCEPTED_EMISSIONS_MAX`. Returns how many were removed.
+pub(super) fn cull_accepted_emissions(
+    accepted: &mut BTreeMap<[u8; 16], super::AcceptedEmission>,
+    now: f64,
+) -> usize {
+    let before = accepted.len();
+    accepted.retain(|_, emission| now < emission.stored_at + constants::PATHFINDER_E);
+    if accepted.len() > constants::ACCEPTED_EMISSIONS_MAX {
+        let surplus = accepted.len() - constants::ACCEPTED_EMISSIONS_MAX;
+        let mut oldest: Vec<(f64, [u8; 16])> = accepted
+            .iter()
+            .map(|(dest, emission)| (emission.stored_at, *dest))
+            .collect();
+        oldest.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        for (_, dest) in oldest.into_iter().take(surplus) {
+            accepted.remove(&dest);
+        }
+    }
+    before - accepted.len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::tables::*;
@@ -1364,5 +1387,37 @@ mod tests {
         );
         assert_eq!(count, 1);
         assert_eq!(table[&[0x61; 16]].len(), 1);
+    }
+
+    /// Accepted emissions are kept for `PATHFINDER_E` after they were
+    /// stored, and the oldest beyond `ACCEPTED_EMISSIONS_MAX` are dropped.
+    #[test]
+    fn cull_accepted_emissions_by_age_and_count() {
+        use super::super::AcceptedEmission;
+        let now = constants::PATHFINDER_E + 1000.0;
+        let mut accepted = BTreeMap::new();
+        let stored = |stored_at| AcceptedEmission {
+            emitted: 1,
+            stored_at,
+        };
+        accepted.insert([1; 16], stored(999.0));
+        accepted.insert([2; 16], stored(1001.0));
+        assert_eq!(cull_accepted_emissions(&mut accepted, now), 1);
+        assert!(accepted.contains_key(&[2; 16]));
+
+        let mut accepted = BTreeMap::new();
+        for i in 0..constants::ACCEPTED_EMISSIONS_MAX + 2 {
+            let mut dest = [0; 16];
+            dest[..8].copy_from_slice(&(i as u64).to_be_bytes());
+            accepted.insert(dest, stored(now - i as f64));
+        }
+        assert_eq!(cull_accepted_emissions(&mut accepted, now), 2);
+        assert_eq!(accepted.len(), constants::ACCEPTED_EMISSIONS_MAX);
+        let oldest = constants::ACCEPTED_EMISSIONS_MAX as u64 + 1;
+        for i in [oldest, oldest - 1] {
+            let mut dest = [0; 16];
+            dest[..8].copy_from_slice(&i.to_be_bytes());
+            assert!(!accepted.contains_key(&dest));
+        }
     }
 }

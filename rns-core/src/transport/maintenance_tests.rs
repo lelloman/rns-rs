@@ -55,6 +55,7 @@ fn prefilter_keeps_every_announce_with_multiple_paths_or_shorter_preference() {
         table: BTreeMap::new(),
         states: BTreeMap::new(),
         cap_evict_count: 0,
+        accepted_emissions: BTreeMap::new(),
     };
     paths
         .table

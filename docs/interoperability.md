@@ -109,6 +109,18 @@ alternative paths:
 - An announce through another next hop emitted before the path's newest
   random blob is rejected, even for an expired path, where upstream takes
   any announce it has not heard.
+- After a destination's path is removed (expired, culled as never used,
+  or its interface gone), an announce emitted no later than the newest one
+  a path was stored from is rejected and not rebroadcast. Upstream forgets
+  the path's random blobs with it, so the next copy of an old announce,
+  looped through the network over any number of hops, becomes a new path
+  and is rebroadcast; on the public backbone this keeps old announces
+  circulating and rebuilds about a third of a relay's paths with inflated
+  hop counts. Path responses, announces from local clients and announces
+  for a destination whose path is being requested are taken as before, so
+  a removed path is found again through a path request. The newest
+  emission is kept for up to `PATHFINDER_E` (a week) for at most
+  `ACCEPTED_EMISSIONS_MAX` destinations.
 
 `unresponsive_path_recovery = upstream` decides every path update as
 upstream does, against the destination's primary path, and an accepted

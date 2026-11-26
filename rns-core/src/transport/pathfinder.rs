@@ -79,6 +79,30 @@ pub fn trusted_timebase_from_random_blobs(blobs: &[[u8; 10]], now: f64) -> u64 {
         .unwrap_or(0)
 }
 
+/// Whether an announce for a destination with no stored path is a copy of
+/// an announce the node already stored as that destination's path
+/// (`unresponsive_path_recovery = native` only).
+///
+/// Removing a path also forgets the random blobs it held: when it expires,
+/// when its interface goes away, or when it is culled as never used. The next
+/// copy of the same announce, looped through the network over any number of
+/// hops up to `PATHFINDER_M`, would then be taken as a first path and
+/// rebroadcast, and every other node that also removed its path does the
+/// same, so old announces keep circulating and paths are rebuilt from them
+/// with inflated hop counts. Upstream behaves that way; native path mode
+/// instead remembers the newest emission time it stored a path from
+/// (`known_emitted`) and rejects an announce emitted no later than that. The
+/// caller exempts path responses and announces it waits for, so a removed
+/// path can still be found again through a path request.
+pub fn is_forgotten_announce_copy(
+    known_emitted: Option<u64>,
+    announce_emitted: u64,
+    now: f64,
+) -> bool {
+    known_emitted
+        .is_some_and(|known| known > 0 && trusted_emission_time(announce_emitted, now) <= known)
+}
+
 /// The emission time path selection compares under `recovery`: with
 /// `native`, [`trusted_emission_time`]; with `upstream`, `emitted` itself,
 /// as upstream has no plausibility filter.
