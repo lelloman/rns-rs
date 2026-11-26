@@ -2,7 +2,8 @@ use std::fs::{self, OpenOptions};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -31,15 +32,35 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
 const FILE_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
 static HARNESS_START_LOCK: Mutex<()> = Mutex::new(());
 
+/// Ports handed to test daemons: below Linux's ephemeral range (32768 and
+/// up by default), so that no outgoing connection, from this test or any
+/// other running at the same time, takes one as its source port between the
+/// reservation's release and the daemon binding it. A port bound with
+/// `127.0.0.1:0` came from that range, and was lost that way now and then
+/// ("Address already in use", or a daemon that never came up).
+const TEST_PORTS: std::ops::Range<u32> = 20_000..32_000;
+
 struct TcpPortReservation {
     listener: TcpListener,
 }
 
 impl TcpPortReservation {
+    /// The next port of [`TEST_PORTS`] that nothing holds, held until
+    /// dropped. Each process starts at an offset of its own and goes through
+    /// the range in turn, so tests here never get the same port twice.
     fn new() -> Self {
-        Self {
-            listener: TcpListener::bind("127.0.0.1:0").expect("reserve TCP test port"),
+        static NEXT: OnceLock<AtomicU32> = OnceLock::new();
+        let span = TEST_PORTS.end - TEST_PORTS.start;
+        let next =
+            NEXT.get_or_init(|| AtomicU32::new(std::process::id().wrapping_mul(7919) % span));
+        for _ in 0..span {
+            let port = TEST_PORTS.start + next.fetch_add(1, Ordering::Relaxed) % span;
+            let port = u16::try_from(port).expect("test ports fit in u16");
+            if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
+                return Self { listener };
+            }
         }
+        panic!("no free TCP test port in {TEST_PORTS:?}");
     }
 
     fn port(&self) -> u16 {
