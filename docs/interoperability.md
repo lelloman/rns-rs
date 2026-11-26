@@ -23,9 +23,9 @@ reason. The records live in [docs/upstream-parity/](upstream-parity/README.md):
 - `-rgit` and `-rgit-N` suffixes mark advancements of the development tip that
   did not change the upstream version number.
 
-Old audits are never rewritten. The daily operator report
-(`scripts/vps_daily_report.py`) checks the upstream repository for drift and
-opens a new `reticulum-next-audit.md` when commits appear. The full workflow
+Old audits are never rewritten. The daily operator report checks the
+upstream repositories for drift with `scripts/check_upstream_drift.py`, and
+a new `reticulum-next-audit.md` is opened when commits appear. The full workflow
 and per-commit integration rules are in the
 [parity README](upstream-parity/README.md).
 

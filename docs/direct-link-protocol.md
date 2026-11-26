@@ -49,9 +49,10 @@ nodes remains as a fallback.
 
 - A and B have an **established Reticulum link** (they can exchange messages).
 - B has answered A's capability query (see [Signalling](#signalling)).
-- A has a connection (e.g. TCP) to a facilitator node T.
-- T is **publicly reachable** on a UDP port and supports the STUN facilitation
-  protocol.
+- A knows the address of a facilitator T (`probe_addr`).
+- T is **publicly reachable** on a UDP port and answers the probe protocol A
+  uses: RNSP (an rns-rs facilitator, `probe_port`) or, with
+  `probe_protocol = stun`, a STUN Binding request.
 
 ## Signalling
 

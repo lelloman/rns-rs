@@ -11,14 +11,16 @@ cargo build --release -p rns-cli
 ls target/release/rn*
 ```
 
-All tools accept `--config DIR` to select the config directory (default
-`~/.reticulum`) and connect to the running `rnsd` through its shared instance.
+All tools accept `--config DIR` to select the Reticulum config directory
+(default `~/.reticulum`) and connect to the running `rnsd` through its shared
+instance. `rnsh` is the exception: its `--config` names its own config
+directory, and `--rnsconfig` the Reticulum one.
 
 | Tool | Purpose | More |
 |------|---------|------|
 | `rnsd` | The node daemon | below |
 | `rnstatus` | Interface status, traffic counters, attach/detach/reload | [rnstatus](rnstatus.md) |
-| `rnpath` | Display and manage the path table, request paths | `rnpath --help`; `rnpath -t -u` shows and sorts by last path use; `-t` marks each path after its hop count ` (R)` responsive, ` (u)` unresponsive or ` (?)` unknown, and `-j` gives each entry's `state` (0 unknown, 1 unresponsive, 2 responsive); `-t` adds next hops with `-V` and expiry times with `-E`, and shows only used paths with `-a` and paths of at least a destination value with `-M`; `rnpath -A` fetches the path table, rate table and link distribution and, as upstream since its analysis was withdrawn, prints `Not yet implemented` (`--capture PATH` is accepted and not used); `rnpath <hash> -w 30` requests a path and waits up to 30 s |
+| `rnpath` | Display and manage the path table, request paths | below |
 | `rnprobe` | Send a probe packet to a destination and measure RTT | `rnprobe --help` |
 | `rnid` | Identity creation, inspection, encryption, and signatures | `rnid --help`; `rnid -i ID -a app.aspect` announces the identity's destination |
 | `rnsh` | Remote shell over a Reticulum link | [rnsh](rnsh.md) |
@@ -51,7 +53,9 @@ Every tool's `--help` and its errors for invalid command lines are upstream's
 byte for byte, printed as argparse does at the terminal's width (tests
 compare them with upstream's own parsers, `tests/fixtures/argparse`). Options
 only this implementation has are accepted but not listed: `-c` for
-`--config`, and the ones each tool's page names.
+`--config` (`rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnir` and `rnpkg`),
+`rnpath --identity PATH` for `-i`, `rnprobe --count N` for `-n/--probes`,
+`rnid -Z` for `-U/--base256`, and the ones each tool's section or page names.
 
 In service mode the log goes to `<config dir>/logfile`, rotated at 5 MiB with
 one archive kept, and the configured log level is used as is. In the
@@ -66,6 +70,19 @@ when the input ends (Ctrl-D, or stdin closed or at `/dev/null`) it prints
 rnsd does. Statements entered at the prompt are not run; each one gets a
 message on stderr saying so. SIGINT and SIGTERM stop it as they stop
 upstream's.
+
+## `rnpath`
+
+- `rnpath -t` lists the path table. After its hop count each path is marked
+  ` (R)` responsive, ` (u)` unresponsive or ` (?)` unknown; `-j` gives each
+  entry's `state` instead (0 unknown, 1 unresponsive, 2 responsive).
+- With `-t`, `-u` shows and sorts by last path use, `-V` adds next hops, `-E`
+  expiry times, `-a` shows only used paths, and `-M VALUE` only paths of at
+  least that destination value.
+- `rnpath <hash> -w 30` requests a path and waits up to 30 s.
+- `rnpath -A` fetches the path table, rate table and link distribution and,
+  as upstream since its analysis was withdrawn, prints `Not yet implemented`.
+  `--capture PATH` is accepted and not used.
 
 ## `rncp`
 
@@ -90,7 +107,8 @@ rnx --interactive [options] <destination>
 ```
 
 Key options: `-l/--listen`, `-x/--interactive`, `-a/--allowed HASH`
-(repeatable), `-n/--noauth`, `-N/--noid`, `-b/--no-announce`,
+(repeatable), `-n/--noauth` (or `--no-auth`), `-N/--noid` (or `--no-id`),
+`-b/--no-announce`,
 `-d/--detailed`, `-m/--mirror` to mirror the remote exit status,
 `-w/--timeout`, `-W/--result-timeout`, `--stdin TEXT`, `--stdout BYTES`,
 `--stderr BYTES`, `-i/--identity PATH`, `-p/--print-identity`.
@@ -125,7 +143,7 @@ cargo build --release -p rns-rnodeconf
 target/release/rnodeconf -i /dev/ttyUSB0
 ```
 
-Implemented so far:
+Options, by group:
 
 - `-i` shows the device information: product, model, firmware version,
   hardware revision, serial number, modem chip, frequency range, maximum TX
@@ -165,7 +183,6 @@ Implemented so far:
 - Bluetooth: `-b` on, `-B` off, `-p` pairing mode until Enter is pressed.
 - WiFi: `-w` mode (`OFF`, `AP` or `STATION`), `--channel`, `--ssid`,
   `--psk`, `--ip` and `--nm` (`NONE` deletes a value or returns to DHCP).
-
 - Firmware: `-u` updates a provisioned device to the latest release (or
   `--fw-version`), refusing an installed or older version unless `-U`
   is given. Release information and packages come from the RNode firmware
@@ -178,7 +195,6 @@ Implemented so far:
   AVR board with a cached `rnode_firmware.hex` of `--fw-version`, then
   bootstraps its EEPROM; upstream's `-f` fails with a Python error past
   its version check unless the autoinstall wizard runs it.
-
 - `-e` copies the firmware off a provisioned ESP32 RNode into
   `~/.config/rnodeconf/extracted/`, and `--use-extracted` installs it on
   another board of the same type. Upstream reads the flash with a copy of
@@ -190,7 +206,6 @@ Implemented so far:
   installed esptool the same way when a package carries none. Upstream's
   `-e` fails with a Python error on a port it does not list, such as a
   pseudo-terminal; this one uses the port as given.
-
 - `-a` runs upstream's autoinstall wizard: choose the port (from a menu
   when none is given), the kind of device and its model, confirm, and it
   fetches the firmware, creates the signing keys if missing, flashes the
@@ -202,10 +217,10 @@ Every option is implemented and compared with upstream's Python
 `rnodeconf` against fake devices, release sites and flashers, and the
 device information, configuration, settings, update and autoinstall paths
 have been run on real Heltec LoRa32 v3 boards (see the
-[surface record](upstream-parity/reticulum-1.6.0-surface-parity.md)). The crate's tests run the tool against a fake
-RNode on a pseudo-terminal, and the interop CI jobs run upstream's Python
-`rnodeconf` against the same fake device and require the same output and the
-same frames sent.
+[surface record](upstream-parity/reticulum-1.6.0-surface-parity.md)). The
+crate's tests run the tool against a fake RNode on a pseudo-terminal, and the
+interop CI jobs run upstream's Python `rnodeconf` against the same fake device
+and require the same output and the same frames sent.
 
 ## Examples in `rns-net`
 
@@ -219,7 +234,9 @@ cargo run -p rns-net --example rnsd          # a minimal daemon built on the pub
 RUST_LOG=info cargo run -p rns-net --example rnode_lora -- /dev/ttyUSB0   # log LoRa traffic from an RNode
 ```
 
-`rnode_hil` and `weave_hil` are opt-in hardware-in-the-loop runners.
+`rnode_hil` and `weave_hil` are opt-in hardware-in-the-loop runners;
+`repro_issue_2` connects to a running shared instance as a local client and
+reports the interface it comes up as.
 
 ## Related
 

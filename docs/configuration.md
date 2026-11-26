@@ -63,10 +63,10 @@ error; see [Building](building.md#selecting-interfaces).
 | `packet_hashlist_max_entries` | `250000` | Size of the bounded dedup table |
 | `packet_hashlist_allocation` | `lazy` | `lazy` grows the table with the packets seen, up to `packet_hashlist_max_entries`; `eager` holds the full table's memory from startup |
 | `link_mtu_discovery` | `yes` | Set to `no` to omit MTU signalling from outbound link requests |
-| `unresponsive_path_recovery` | `native` | How an announce may update a destination's path, including one marked unresponsive: `native` keeps rns-rs's rules, `upstream` decides every path update as upstream Transport.py does, trusting any announce emission time as upstream does (`native` distrusts one more than a day in the future). Any other value is an error. rns-rs only; see [Interoperability](interoperability.md#unresponsive-path-recovery) |
+| `unresponsive_path_recovery` | `native` | How an announce may update a destination's path, including one marked unresponsive: `native` keeps rns-rs's rules (alternative paths, and a copy of an announce already stored on a path is rejected through every other next hop, so looped copies are not taken or rebroadcast), `upstream` decides every path update as upstream Transport.py does, trusting any announce emission time as upstream does (`native` distrusts one more than a day in the future). Any other value is an error. rns-rs only; see [Interoperability](interoperability.md#unresponsive-path-recovery) |
 | `underlay_mark` | unset | Linux `SO_MARK` for owned IP sockets, see below |
-| `probe_port`, `probe_source_rate`, `probe_source_burst`, `probe_total_rate`, `probe_addr`, `direct_connect_policy`, `direct_connect_allowed_identities`, `direct_connect_allow_private_endpoints`, `direct_connect_reupgrade`, `direct_connect_reupgrade_attempts`, `direct_connect_reupgrade_delay`, `direct_connect_reupgrade_max_delay` | | [Direct Link](direct-link.md) |
-| `autoconnect_policy`, `autoconnect_discovered_interfaces`, `autoconnect_discovered_interfaces_disable_caps`, `interface_discovery_sources`, `default_gravity`, `autoconnect_interface_mode`, `autoconnect_interface_gravity`, `autoconnect_announces_to_internal`, `autoconnect_unverified_implementations` | | [Interface Discovery](interface-discovery.md) |
+| `probe_port`, `probe_source_rate`, `probe_source_burst`, `probe_total_rate`, `probe_addr`, `probe_protocol`, `direct_connect_policy`, `direct_connect_allowed_identities`, `direct_connect_allow_private_endpoints`, `direct_connect_reupgrade`, `direct_connect_reupgrade_attempts`, `direct_connect_reupgrade_delay`, `direct_connect_reupgrade_max_delay` | | [Direct Link](direct-link.md) |
+| `discover_interfaces`, `required_discovery_value`, `autoconnect_policy`, `autoconnect_discovered_interfaces`, `autoconnect_discovered_interfaces_disable_caps`, `interface_discovery_sources`, `default_gravity`, `autoconnect_interface_mode`, `autoconnect_interface_gravity`, `autoconnect_announces_to_internal`, `autoconnect_unverified_implementations` | | [Interface Discovery](interface-discovery.md) |
 | `blackhole_sources`, `blackhole_update_interval` | | [Blackholes](#blackholes) |
 
 Log levels run from `0` (critical only) to `8` (extreme); `7` adds path
@@ -96,9 +96,11 @@ link requests is the smaller of the two ends' hardware MTUs.
 A TCP interface buffers outgoing frames while the driver handles what it
 received and writes them out together once it has handled everything, so a
 burst leaves in few writes. On a busy connection the peer can sit idle while a
-long pass runs. `flush_after_us` (an rns-rs extension, unset by default) also
-writes buffered frames as soon as a new frame finds the oldest one has waited
-that many microseconds:
+long pass runs. `flush_after_us` (an rns-rs extension) also writes buffered
+frames as soon as a new frame finds the oldest one has waited that many
+microseconds. Builds with the parallel engine, the default for `rns-server`,
+`rnsd` and `rns-ctl`, use 25 when the key is unset; other builds wait for the
+end of the pass. `off` waits for the end of the pass in any build:
 
 ```ini
 [[Backbone link]]
@@ -186,11 +188,11 @@ already stamped whenever the destination announced a non-zero cost
 (`Transport.STAMP_LRS`, on again since upstream `a8cc6cb2`, which removed the
 `stamp_lrs` option; a leftover `stamp_lrs` line is ignored). Costs and values
 are fractional, as upstream reads them with `as_float` since `796ef2d4`.
-`max_workers` and `worker_niceness` (upstream `16621a78`) apply to builds with
-the parallel engine, which the `rns-server`, `rnsd` and utility binaries use;
-the compact engine grinds on the calling thread. They
-are clamped to 0-100 (`lr_cost` to 0-40), and the timeouts are floored at
-20 ms.
+They are clamped to 0-100 (`lr_cost` to 0-40), and the timeouts
+are floored at 20 ms. `max_workers` and `worker_niceness` (upstream
+`16621a78`) apply to builds with the parallel engine, which the `rns-server`,
+`rnsd` and utility binaries use; the compact engine grinds on the calling
+thread.
 The published blackhole list destination (`publish_blackhole`) does not use
 `lr_cost`: as upstream since `426673e9`, link requests to it cost 5.25.
 An invalid boolean or number is a configuration error. The defaults are the
@@ -199,8 +201,8 @@ constants in `rns-core/src/constants.rs`, which mirror the upstream
 
 With these defaults a node validates inbound announce and path request stamps,
 records announced link costs and stamps what it emits, but refuses nothing
-for lack of a stamp. Stamped link request keys are ground on a worker thread so the
-driver stays responsive. Discovery announces have their own per-interface
+for lack of a stamp. Stamped link request keys are ground on a worker thread
+so the driver stays responsive. Discovery announces have their own per-interface
 `discovery_stamp_value`, described in
 [Interface Discovery](interface-discovery.md#advertised-locations).
 
@@ -239,9 +241,9 @@ instance's. A node with no stamp store, such as a client started with
 directory, announces unstamped: it has nowhere to keep a stamp.
 
 The emission switches are also runtime config keys, so a running node can be
-switched to unstamped emission and back without a restart. `global.stamp_link_requests`
-(`Transport.STAMP_LRS`, on by default) has no config option and can only be
-changed at runtime. `enforce_stamps` is split into two keys:
+switched to unstamped emission and back without a restart.
+`global.stamp_link_requests` (`Transport.STAMP_LRS`, on by default) has no
+config option and can only be changed at runtime. `enforce_stamps` is split into two keys:
 `global.stamps_enforced` (`Transport.STAMPS_ENFORCED`) drops received announces
 and path requests whose stamp is below the required cost, and
 `global.lr_stamps_enforced` does the same for link requests (see below):
@@ -286,9 +288,9 @@ earlier versions as integers load unchanged.
 
 A stamped announce carries the destination's link request cost: the value set
 with `RnsNode::set_link_cost` (upstream `Destination.set_link_cost`, clamped to
-`0..=40`), or `lr_cost` (12.5 by default). The cost is fractional and travels in the last two
-bytes of the stamp extension, the 1/256 fraction followed by the whole part,
-so 14.2 is announced and recalled as 14.19921875. Releases before upstream
+`0..=40`), or `lr_cost` (12.5 by default). The cost is fractional and travels
+in the last two bytes of the stamp extension, the 1/256 fraction followed by
+the whole part, so 14.2 is announced and recalled as 14.19921875. Releases before upstream
 `796ef2d4` (including the 1.6.0 development tips up to `a8cc6cb2`) use a
 one-byte cost; the two formats do not read each other, so a stamped announce
 from such a node is accepted as unstamped with the extension left in its app
@@ -299,7 +301,8 @@ to the local `lr_cost`, fraction included; an announced cost of 0 still means
 unstamped. Responders only check it when
 `global.lr_stamps_enforced` (upstream `Transport.LR_STAMPS_ENFORCED`, off by
 default) is on, dropping link requests whose stamp is below the destination's
-cost; the key applies immediately and resets to the compile-time default.
+cost; the key applies immediately and, like the others, resets to the value
+from the `[stamps]` section (`enforce_stamps`).
 Upstream `796ef2d4` writes this check as `LR_STAMPS_ENFORCED and
 stamp_valid(...)`, which would drop the valid requests instead; rns-rs drops
 the invalid ones, as the error upstream raises describes.
@@ -544,8 +547,9 @@ does. Each connected client gets its own spawned interface and receive buffer,
 so an operator of a public node may want to bound it with the rns-rs key
 `max_connections` (a non-negative integer, where 0 means no limit; any other
 value is logged and the interface is skipped). A client over the limit is
-accepted and closed at once. A `BackboneInterface` listener is already limited to 500
-clients by default, as upstream (`client_limit`); see the operator runbook.
+accepted and closed at once. A `BackboneInterface` listener is already
+limited to 500 clients by default, as upstream (`client_limit`); see the
+operator runbook.
 
 ```ini
   [[TCP Server]]
@@ -608,8 +612,8 @@ received announce at once, and its bytes as filtered; when it is released
 they count again, as received or filtered traffic (upstream `29dc449a`).
 
 Ingress control is on by default for Auto, Backbone, TCP client/server, UDP,
-and I2P interfaces, and off for local, serial, KISS, RNode, and Pipe-style
-interfaces. Dynamic interfaces spawned by a server inherit the full
+and I2P interfaces, and off for the others (local, serial, KISS, RNode,
+Pipe, and Weave). Dynamic interfaces spawned by a server inherit the full
 ingress-control config of their parent.
 
 ## Linux socket marking

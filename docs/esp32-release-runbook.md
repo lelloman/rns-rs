@@ -119,12 +119,17 @@ Fix the issue on a branch, merge to `master`, then either:
   `xtensa-esp32s3-espidf` target is not in upstream rustup). The `espup`
   version and its SHA-256, and the `ldproxy` and `espflash` versions, are
   pinned in the `env:` block at the top of the workflow; update the version
-  and checksum together when bumping them. Third-party actions are pinned
-  to commit SHAs.
+  and checksum together when bumping them, and keep the `espup` and `ldproxy`
+  pins of the `ESP32 Firmware Clippy` job in `ci.yml` the same. Third-party
+  actions are pinned to commit SHAs.
 - The build job runs with read-only repository access; only the publish job
-  can create the release and write the attestation
+  can create the release and write the attestation. The publish job checks
+  `SHA256SUMS` again before attesting and releasing
 - The firmware embeds the git commit hash and count via `build.rs`, so the
   workflow checks out with full history (`fetch-depth: 0`)
 - The flashable `.bin` is a merged image created by
-  `espflash save-image --chip esp32s3 --merge`, containing the bootloader,
-  partition table, and application at their correct flash offsets
+  `espflash save-image --chip esp32s3 --merge --partition-table
+  rns-esp32/partitions.csv --flash-size 8mb`, containing the bootloader,
+  partition table, and application at their correct flash offsets. The
+  firmware is built for 8 MB flash with its own partition table; without
+  them espflash assumes a 1 MB app partition, which the firmware outgrew

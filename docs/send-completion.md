@@ -1,4 +1,4 @@
-# Issue #152: local transmission completion
+# Send completion semantics
 
 The async/try API pairs report successful transmission only when the selected
 interface writers have written the complete frame to their underlying transports. Neither promises
@@ -10,6 +10,7 @@ node.send_on_link(link_id, payload, context).await?;
 
 // Do not wait for capacity. QueueFull means nothing was admitted.
 let receipt = node.try_send_on_link(link_id, payload, context)?;
+// receipt.packet_hash() is Some once the driver has built the packet.
 receipt.await?; // Exactly the same transmission result as send_on_link().
 
 let hash = node.send_packet(&destination, &data).await?;
@@ -37,17 +38,22 @@ can use the `try_*` receipt's `wait()` (never from a driver callback).
 Packet and announcement success means every selected local interface writer
 completed its write. An error is returned only after all selected writes have
 settled; it may mean partial transmission across interfaces. No eligible route
-returns `TransmissionError::NoRoute`, not success. This does not wait for remote
+returns `LinkSendError::NoRoute`, not success. This does not wait for remote
 delivery, proofs, or announcement relays. Original hops-zero announcements keep
 their normal routing policy; relay bandwidth throttling is unchanged. Shared
 client replay state is stored with the admitted announcement, so queue rejection
-or cancellation before admission cannot update replay state.
+or cancellation before admission cannot update replay state. An announcement
+that needs a stamp goes to the stamper first; its future or receipt resolves
+once the stamped announcement has been written, or with
+`LinkSendError::Interrupted` if a newer announcement for the same destination
+replaces it in the stamp queue.
 
 The configured driver event capacity bounds outstanding confirmed Link,
 packet, and announcement sends together across driver events, pending interface
 frames, and writes in progress. Broadcast fanout holds one admission slot until
 all selected writes settle. Packet/announcement sends do not affect Link counters.
-The async API waits for admission; the try API returns QueueFull immediately.
+The async API waits for admission; the try API returns
+`LinkSendError::QueueFull` immediately.
 The driver retains accepted frames when a writer queue is full, preserving
 their per-interface order and continuing to process other events. Writer
 capacity notifications wake pending work. Completion releases admission space.
@@ -100,7 +106,7 @@ tests exercise full admission capacity, async wakeups, cancellation, writer
 flush/error handling, and shutdown. KISS/RNode tests verify that confirmed
 sends wait for flow-control readiness before completing.
 
-## Original reproduction (2026-09-08)
+## Original reproduction of issue #152 (2026-09-08)
 
 Before the fix, the old synchronous API reported success for every send:
 

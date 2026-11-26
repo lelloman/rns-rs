@@ -73,7 +73,9 @@ Things to keep in mind:
   build, so building other workspace packages in the same command can enable
   their interfaces too.
 - `--no-default-features` removes the implicit full interface set from these
-  two packages; omit it to keep the full build.
+  two packages; omit it to keep the full build. It also drops `engine-parallel`
+  and `aws-lc`, so the commands above build the compact engine on pure-Rust
+  cryptography; add those features back to keep them.
 - Feature selection reduces compiled code. It does not change queue limits or
   protocol behaviour on the interfaces that remain.
 
@@ -113,6 +115,9 @@ See [Hooks](hooks.md) for what the backends do at runtime.
 
 | Feature | Package | Effect |
 |---------|---------|--------|
+| `engine-parallel` | `rns-net`, `rns-cli`, `rns-ctl`, `rns-server` | The parallel engine; on by default in the binaries. Without it, the compact engine (see [Engines](engines.md)) |
+| `compact-threads` | `rns-net` | Compact engine with its helper threads kept instead of folded into the driver loop |
+| `segment-lookahead` | `rns-net`, `rns-cli` | Build streamed Resource segments further ahead on fast links |
 | `tls` | `rns-ctl` | TLS for the HTTP/WebSocket server (compiles in rustls) |
 | `std` | `rns-crypto`, `rns-core` | On by default. Disable for `no_std` |
 | `espidf` | `rns-crypto` | ESP-IDF crypto backend. Fails on normal hosts; used only by `rns-esp32` |

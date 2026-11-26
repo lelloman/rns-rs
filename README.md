@@ -28,7 +28,7 @@ direct UDP path through NAT.
 cargo build --release --bin rns-server
 mkdir -p ~/.reticulum
 cargo run --release --bin rnsd -- --exampleconfig > ~/.reticulum/config
-# edit ~/.reticulum/config and enable at least one interface, then:
+# edit ~/.reticulum/config and enable the interfaces you need, then:
 ./target/release/rns-server start --config ~/.reticulum
 ```
 

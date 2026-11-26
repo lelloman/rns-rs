@@ -34,11 +34,11 @@ Optional extended coverage also verifies:
 8. Resource transfers at caller-selected size boundaries in both directions,
    including byte-for-byte SHA-256 validation and completion timing;
 9. repeated link establishment in both directions to expose intermittent proof
-   routing, stale link-table entries and timing-sensitive failures.
+   routing, stale link-table entries and timing-sensitive failures;
 10. concurrent link establishment and concurrent bidirectional Resources on the
     same link;
 11. reproducible additional delay, jitter and bandwidth pressure on both
-    local-to-VPS connections through disposable user-space proxies.
+    local-to-VPS connections through disposable user-space proxies;
 12. forced Backbone TCP disconnections followed by assertions that both
     interfaces reconnect and fresh links, Channels and Resources still work.
 
@@ -59,14 +59,17 @@ base64
 sha256sum
 ```
 
-Build a current `rns-server` first:
+Build a current `rns-server` and `rns-ctl` first; the script uses `rns-ctl`
+for daemon status checks:
 
 ```bash
 cargo build --release --bin rns-server --features rns-hooks-native
+cargo build --release --bin rns-ctl
 ```
 
-The script uses `target/release/rns-server` by default. If that binary is not
-present, it falls back to `rns-server` from `PATH`.
+The script uses `target/release/rns-server` and `target/release/rns-ctl` by
+default. If a binary is not present, it falls back to the one on `PATH`.
+`--bin` and `--ctl-bin` (or `RNS_SERVER_BIN` and `RNS_CTL_BIN`) select others.
 
 ## Daily Check
 
@@ -248,7 +251,7 @@ includes:
 - durable supervised process logs;
 - the wrapper stdout/stderr log for each local server;
 - deterministic Resource payloads and file-backed API request bodies for any
-  requested Resource sweep.
+  requested Resource sweep;
 - impairment-proxy logs when controlled delay, jitter or rate limiting is used.
 
 The script always stops both local `rns-server` processes on exit unless the

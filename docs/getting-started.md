@@ -37,8 +37,9 @@ does: `{"get": "known_destinations"}` answers upstream's dict, destination hash
 to `[last_heard, packet_hash, public_key, app_data, used, stamp, stamp_value,
 lr_cost]`. This implementation's own list, with hops, receiving interface and
 retention per entry, is `{"get": "known_destination_entries"}`
-(`RpcClient::known_destinations`). Legacy msgpack and per-file storage is imported on first start; the
-older file stores remain the fallback if SQLite cannot be opened.
+(`RpcClient::known_destinations`). Legacy msgpack and per-file storage is
+imported on first start; the older file stores remain the fallback if SQLite
+cannot be opened.
 
 A node started without a `config` file writes upstream's default one (an
 `AutoInterface`, no transport) and runs with it, as Python Reticulum does.
@@ -50,9 +51,10 @@ mkdir -p ~/.reticulum
 cargo run --release --bin rnsd -- --exampleconfig > ~/.reticulum/config
 ```
 
-The example enables no interfaces. Uncomment or add at least one. A TCP client
-connecting to a public transport node is the simplest way to join an existing
-network:
+The example enables only the `Default Interface`, an `AutoInterface` that
+finds peers on the local network; the other interfaces in it are disabled.
+Enable or add the ones you need. A TCP client connecting to a public
+transport node is the simplest way to join an existing network:
 
 ```ini
 [reticulum]
@@ -72,8 +74,7 @@ network:
 
 The file uses the same format and keys as Python Reticulum, so an existing
 Python config works unchanged. See [Configuration](configuration.md) for the
-rns-rs specific keys. A missing `config` file is treated as empty, which gives
-a node with no interfaces.
+rns-rs specific keys.
 
 ## 3. Start the node
 
@@ -85,7 +86,8 @@ On startup `rns-server`:
 
 - launches `rnsd` with the config directory;
 - launches the `rns-sentineld` and `rns-statsd` sidecars when built with a hook
-  backend;
+  backend (for example `--features rns-hooks-native`; the plain build above
+  has none);
 - serves the control plane and built-in UI on `127.0.0.1:8080`;
 - generates a bearer token and writes it to `<config dir>/http-token` (mode
   `0600`); it is never written to the logs.

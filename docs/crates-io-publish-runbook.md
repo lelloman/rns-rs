@@ -51,12 +51,13 @@ It has its own release process — see
 Important detail:
 
 - `rns-crypto` uses `version.workspace = true`, so its released version comes
-  from the root [Cargo.toml](/home/lelloman/lelloprojects/rns-rs/Cargo.toml)
+  from the root [Cargo.toml](../Cargo.toml), whose `[workspace.dependencies]`
+  also pin the `rns-crypto`, `rns-core`, `rns-net` and `rns-hooks` versions
+  that crates using `.workspace = true` depend on
 - the other published crates use explicit crate-local versions
-- crates inheriting `publish.workspace = true` are not publishable while the
-  workspace has `publish = false`; before a crates.io release, make sure every
-  crate in the release set is publishable and `cargo publish --dry-run` confirms
-  the manifest state
+- the workspace sets `publish = false`, so a crate is publishable only with its
+  own `publish = ["crates-io"]` (see the end of step 3); `cargo publish
+  --dry-run` confirms the manifest state
 
 ## 3. Bump versions
 
@@ -65,19 +66,19 @@ constraints that must move with them.
 
 Files commonly involved:
 
-- [Cargo.toml](/home/lelloman/lelloprojects/rns-rs/Cargo.toml)
-- [rns-crypto/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-crypto/Cargo.toml)
-- [rns-core/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-core/Cargo.toml)
-- [rns-net/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-net/Cargo.toml)
-- [rns-cli/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-cli/Cargo.toml)
-- [rns-git/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-git/Cargo.toml)
-- [rns-ctl/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-ctl/Cargo.toml)
-- [rns-hooks/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-hooks/Cargo.toml)
-- [rns-stats-hook/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-stats-hook/Cargo.toml)
-- [rns-sentinel-hook/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-sentinel-hook/Cargo.toml)
-- [rns-server/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-server/Cargo.toml)
-- [rns-hooks/sdk/rns-hooks-sdk/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-hooks/sdk/rns-hooks-sdk/Cargo.toml)
-- [rns-hooks/sdk/rns-hooks-abi/Cargo.toml](/home/lelloman/lelloprojects/rns-rs/rns-hooks/sdk/rns-hooks-abi/Cargo.toml)
+- [Cargo.toml](../Cargo.toml)
+- [rns-crypto/Cargo.toml](../rns-crypto/Cargo.toml)
+- [rns-core/Cargo.toml](../rns-core/Cargo.toml)
+- [rns-net/Cargo.toml](../rns-net/Cargo.toml)
+- [rns-cli/Cargo.toml](../rns-cli/Cargo.toml)
+- [rns-git/Cargo.toml](../rns-git/Cargo.toml)
+- [rns-ctl/Cargo.toml](../rns-ctl/Cargo.toml)
+- [rns-hooks/Cargo.toml](../rns-hooks/Cargo.toml)
+- [rns-stats-hook/Cargo.toml](../rns-stats-hook/Cargo.toml)
+- [rns-sentinel-hook/Cargo.toml](../rns-sentinel-hook/Cargo.toml)
+- [rns-server/Cargo.toml](../rns-server/Cargo.toml)
+- [rns-hooks/sdk/rns-hooks-sdk/Cargo.toml](../rns-hooks/sdk/rns-hooks-sdk/Cargo.toml)
+- [rns-hooks/sdk/rns-hooks-abi/Cargo.toml](../rns-hooks/sdk/rns-hooks-abi/Cargo.toml)
 
 Then refresh the lockfile:
 

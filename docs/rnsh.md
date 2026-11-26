@@ -46,14 +46,23 @@ Useful identity and access options:
 
 - `-i, --identity PATH` selects the identity file.
 - `-a, --allowed HASH` allows a specific initiator identity hash. Repeat it for
-  multiple identities.
+  multiple identities, or list them one per line in `allowed_identities` in
+  the rnsh config directory.
 - `-n, --no-auth` allows any initiator identity.
 - `-N, --no-id` skips initiator identification.
 
+## Config Directories
+
+`-c, --config DIR` selects the rnsh config directory, which holds
+`allowed_identities` and the logs. By default it is `~/.config/rnsh` when that
+exists, otherwise `~/.rnsh`. `--rnsconfig DIR` selects the Reticulum config
+directory (default `~/.reticulum`).
+
 ## Logging
 
-`rnsh` writes utility logs to the rnsh config directory. Verbosity is controlled
-with `-v` and `-q`. Both modes default to INFO. Initiator logs include path
+`rnsh` writes utility logs to the rnsh config directory: `logfile` in listener
+mode, `logfile.initiator` in initiator mode. Verbosity is controlled with
+`-v` and `-q`. Both modes default to INFO. Initiator logs include path
 requests, link establishment, the connected peer version and session
 completion. Listener logs include identity authentication or denial and remote
 command execution; an identification callback received after the version

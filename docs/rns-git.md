@@ -2,23 +2,25 @@
 
 `rns-git` provides Git transport tools over Reticulum:
 
-- `rngit`: repository server
+- `rngit`: repository server, and client commands that manage repositories,
+  releases, work documents and permissions on a server
 - `git-remote-rns`: Git remote helper for `rns://` URLs
+- `rngcs`: signs and verifies Git commits with a Reticulum identity
 
 ## Server Setup
 
-Initialize the default server config:
+Start the server:
 
 ```bash
 cargo run -p rns-git --bin rngit
 ```
 
-The first run creates `~/.config/rngit/server_config` and exits. Edit the config,
-then start the server again:
-
-```bash
-cargo run -p rns-git --bin rngit
-```
+The first run writes a default `server_config` into the rngit directory and
+starts serving with those defaults. Stop it, edit the config, then start it
+again. The rngit directory is the one given with `-c/--config DIR`, else
+`$RNGIT_CONFIG`, else `~/.config/rngit` (under `$XDG_CONFIG_HOME` when set),
+or `~/.rngit` when only that exists. `--rnsconfig DIR` selects the Reticulum
+config directory.
 
 Print the repository destination and client identity:
 
@@ -27,13 +29,19 @@ cargo run -p rns-git --bin rngit -- --print-identity
 cargo run -p rns-git --bin rngit -- --print-identity --base256
 ```
 
-Important config paths:
+Important `server_config` settings:
 
-- `repositories_dir`: bare repositories served by `rngit`
-- `identity_path`: repository server identity
-- `client_identity_path`: local client identity used by the helper
-- `allow_read`, `allow_write`, `allow_create`, `allow_stats`, `allow_release`,
-  `allow_interact`, `allow_propose`, and `allow_admin`: repository ACL rules.
+- `[repositories] path`: bare repositories served by `rngit` (default
+  `repositories`). Relative paths are resolved against the rngit directory.
+- `[rngit] identity`: repository server identity (default
+  `repositories_identity`)
+- `[rngit] client_identity`: the operator's client identity, which
+  `--print-identity` shows beside the server's (default `client_identity`).
+  The client commands and `git-remote-rns` use `[client] identity` in
+  `client_config`, by default the same file.
+- `[access]` `read`, `write`, `create`, `stats`, `release`, `interact`,
+  `propose`, and `admin`: repository ACL rules (default `read = all`, the
+  others `none`).
   Creating a missing repository requires create access; pushing to an existing
   repository requires write access. Stats pages require stats access. Release
   creation and deletion require release access, while release listing and
@@ -71,8 +79,8 @@ Important config paths:
     stamp_value = 25.0
     link_cost = 18.0
   ```
-- `node_name` and `[pages] serve_nomadnet`: optional Nomad Network page node
-  with built-in Micron repository browser pages. Repository `README.md` files
+- `[rngit] node_name` and `[pages] serve_nomadnet`: optional Nomad Network page
+  node with built-in Micron repository browser pages. Repository `README.md` files
   are rendered to Micron, and `README.mu` files are served as Micron content.
   Markdown tables are rendered with Micron box-drawing table output, including
   escaped pipe support, empty cells, alignment markers, and link/code/emphasis
@@ -121,15 +129,13 @@ Important config paths:
   [1.6.1 rgit-2 audit](upstream-parity/reticulum-1.6.1-rgit-2-audit.md).
   On older rns-git builds, set `media_conversion = no` under `[pages]` (or
   run without ImageMagick installed) until the node is updated.
-  Text blob pages and Markdown fenced code blocks are syntax-highlighted by
-  default when the file extension or fence language is supported.
-  Markdown fenced code blocks tagged `rawmu` are passed through as raw Micron
-  instead of being escaped or syntax-highlighted; use this only for repository
-  content that intentionally needs native Micron markup.
-  Build with `--no-default-features` to disable syntax highlighting and render
-  plain escaped literal blocks instead. Set `record_stats = yes` in `[rngit]`
-  to persist front/group/repository page views plus successful fetch and push
-  counters in the server config directory `stats` file. Use
+  Text blob pages and Markdown fenced code blocks are rendered as plain
+  escaped literal blocks. Markdown fenced code blocks tagged `rawmu` are
+  passed through as raw Micron instead of being escaped; use this only for
+  repository content that intentionally needs native Micron markup.
+  Set `record_stats = yes` in `[rngit]` to persist front/group/repository
+  page views plus successful fetch and push counters in the server config
+  directory `stats` file. Use
   `stats_ignore_identities` to exclude specific 16-byte identity hashes from
   all collection, or `stats_push_ignore_identities` to suppress only push
   counters for automation identities. Set `blocked_identities` to deny listed
@@ -147,9 +153,9 @@ Important config paths:
   `<repo>.work/`; repositories with work documents link to `/page/work.mu` and
   `/page/work_doc.mu` for active/completed documents, Markdown or Micron
   content, comments, authors, and timestamps. Custom page templates can be
-  placed in the configured
-  `templates_dir` with names such as `base.mu`, `repo.mu`, `blob.mu`,
-  `releases.mu`, `release.mu`, `work.mu`, and `work_doc.mu`.
+  placed in the configured `[pages] templates_dir` (default `templates`) with
+  names such as `base.mu`, `repo.mu`, `blob.mu`, `releases.mu`,
+  `release.mu`, `work.mu`, and `work_doc.mu`.
   Use `no_ident.mu` to customize the page shown to unidentified requesters when
   the null identity hash is listed in `blocked_identities`.
   Template variables include `{PAGE_CONTENT}`, `{NODE_NAME}`, `{VERSION}`,
@@ -244,8 +250,19 @@ git fetch origin
 git push origin main
 ```
 
-Repository names are resolved under the server `repositories_dir`. Keep names
-relative and do not include absolute paths.
+Repository names are resolved under the server's `[repositories] path`. Keep
+names relative and do not include absolute paths.
+
+The helper and the `rngit` client commands read `client_config` in the rngit
+directory, written with defaults on first use. They request a path to the
+destination and wait for it up to `[client] connect_timeout` seconds (default
+30), or the node's medium path timeout (a full-MTU round trip on its
+slowest interface) when that is longer. They then send a link request and
+wait for the link up to the same timeout, or the link establishment timeout
+for the path's hop count when that is longer. If the link is not established
+in that time, it is torn down and one more link request is sent before giving
+up. Requests on the link wait up to `[client] request_timeout` seconds
+(default 300), except where a `release` or `work` operation sets its own.
 
 ## Release Management
 
@@ -261,6 +278,8 @@ rngit release rns://<destination_hash>/<repository> create v1.0.0:./dist --local
 rngit release rns://<destination_hash>/<repository> fetch v1.0.0:artifact.tar.gz --signer <identity_hash>
 rngit release package_v1.0.0.rsm fetch v1.0.0:all --signer <identity_hash>
 rngit release package_v1.0.0.rsm fetch --offline --signer <identity_hash>
+rngit release package_v1.0.0.rsm verify v1.0.0:all --signer <identity_hash>
+rngit release rns://<destination_hash>/<repository> latest v1.0.0 --yes
 rngit release rns://<destination_hash>/<repository> delete v1.0.0 --yes
 ```
 
@@ -287,7 +306,13 @@ multiple artifact names. Supported wildcards are `*`, `?`, `[seq]`, and
 the target. The remote argument can also be a saved `.rsm` manifest; in that
 case `rngit` validates the local manifest and uses its embedded origin metadata
 to contact the release repository. Add `--offline` with a local manifest to
-validate the manifest and local artifact files without opening a network link.
+validate the manifest and local artifact files without opening a network link;
+`verify` is `fetch --offline`. Without a target, `fetch` and `verify` take
+`latest:all`.
+
+`latest TAG --yes` marks that release as the repository's latest. Like
+`create` and `delete`, it requires release access; `delete` also requires
+`--yes`.
 
 ## Work Documents
 
@@ -336,8 +361,25 @@ the author's identity hash, so later edits or tampering invalidate attribution.
 Unsigned or locally unvalidated documents remain readable, but should not be
 treated as cryptographically attributed records.
 
+## Commit Signing
+
+`rngcs` implements the part of `ssh-keygen -Y` that Git uses for SSH
+signatures (`sign`, `find-principals`, `check-novalidate` and `verify`), with
+a Reticulum identity file as the key. Git runs it as its `gpg.ssh.program`:
+
+```bash
+git config gpg.format ssh
+git config gpg.ssh.program rngcs
+git config user.signingkey /path/to/identity
+git commit -S
+```
+
+`find-principals` prints the signer's identity hash, and `verify -I HASH`
+requires that signer.
+
 ## Logging
 
-`rngit` writes `server_log` in the server config directory. `git-remote-rns`
-writes `client_log`. Both use the utility config log level instead of daemon
+The `rngit` server writes `server_log` in the rngit directory.
+`git-remote-rns` and the `rngit` client commands write `client_log` there.
+Both use the `[logging] loglevel` of their config file instead of daemon
 defaults.

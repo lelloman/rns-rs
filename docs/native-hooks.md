@@ -180,8 +180,9 @@ need a single-file product, there are two practical approaches:
 
 - extract bundled `.so` files from the binary to a runtime directory before
   loading them;
-- add a separate built-in hook backend that links selected hooks into `rnsd`
-  and registers them directly without `dlopen`.
+- link the hooks into the binary as built-in hooks (`rns-hooks-builtin`),
+  registered by ID and loaded without `dlopen`; see
+  [Built-In Hooks](builtin-hooks.md).
 
 The second option is better for appliances, but it is a different backend from
 dynamic-library hooks.

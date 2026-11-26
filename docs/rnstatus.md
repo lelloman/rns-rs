@@ -6,10 +6,10 @@ displays statistics from a remote transport instance with `-R`.
 The status display is upstream's, byte for byte: the same lines, order,
 number formatting and quirks, rendered from the same statistics. The tests
 check it against upstream's own output (`tests/fixtures/rnstatus`, generated
-by `tests/generate_rnstatus_fixtures.py`). One difference is inherent: upstream's
-`rnstatus` connects to the shared instance as a client, so with `-a` it also
-lists its own `LocalInterface` and counts itself as a served program, while
-this one asks over RPC only.
+by `tests/generate_rnstatus_fixtures.py`). One difference is inherent:
+upstream's `rnstatus` connects to the shared instance as a client, so with
+`-a` it also lists its own `LocalInterface` and counts itself as a served
+program, while this one asks over RPC only.
 
 ```text
 usage: rnstatus [-h] [--config CONFIG] [--version] [--attach name]
@@ -77,9 +77,9 @@ For example, after editing an interface section named `Backbone`, run
 `rnstatus --reload Backbone`. Use `rnstatus --attach Backbone` to start it when
 it is not running, or `rnstatus --detach Backbone` to stop it.
 
-`--detach` also takes a tunnel id, as `-T` shows it. It names the interface a remote node's tunnel is attached to, such
-as one client of a server interface, or the interface this node synthesized
-that tunnel on. A spawned client interface has its connection closed. A
+`--detach` also takes a tunnel id, as `-T` shows it. It names the interface
+a remote node's tunnel is attached to, such as one client of a server
+interface, or the interface this node synthesized that tunnel on. A spawned client interface has its connection closed. A
 configured interface is detached as by its name.
 
 With `-T`, each interface shows a `Tunnel ID` line, in plain hexadecimal:
@@ -149,13 +149,12 @@ large, malformed, over the hop limiter or caught by the packet filter;
 announces dropped while the interface's held announces are full, of a
 blocked or not allowed destination type, failing to unpack or verify, from
 a blackholed identity, without a required stamp, held by ingress control, or
-unable to update a known path;
-and path requests that are duplicates, fail a required stamp or join one
-already in flight. A filtered frame is moved out of the received bytes and
+unable to update a known path; and path requests that are duplicates, fail a
+required stamp or join one already in flight. A filtered frame is moved out of the received bytes and
 packets. A held announce's frame is counted again when ingress control
 releases it: as received if it is then accepted, as filtered if not
-(upstream `29dc449a`). The `frx`, `ftx`, `frxs` and `ftxs` sort keys order interfaces by
-filtered bytes and rates. As upstream, nothing is counted as filtered on
+(upstream `29dc449a`). The `frx`, `ftx`, `frxs` and `ftxs` sort keys order
+interfaces by filtered bytes and rates. As upstream, nothing is counted as filtered on
 transmit, so the outbound figures stay zero.
 
 With `-l` and `-t`, a `Links` section follows (upstream `ef3e8086`): the

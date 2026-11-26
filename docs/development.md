@@ -15,10 +15,10 @@ cargo fmt --check                 # formatting
 bash scripts/lint-host.sh         # clippy, warnings are errors, native hooks enabled
 ```
 
-The lint script enables `rns-hooks` coverage but deliberately avoids
-`--all-features`: that would turn on `rns-crypto/espidf`, which pulls in
-`esp-idf-sys` and fails on a normal host. ESP32 validation is a separate lane
-under `rns-esp32/`.
+The lint script enables `rns-hooks` coverage but deliberately avoids a
+workspace-wide `--all-features`: that would turn on `rns-crypto/espidf`, which
+pulls in `esp-idf-sys` and fails on a normal host. ESP32 validation is a
+separate lane under `rns-esp32/`.
 
 ## Test layers
 
@@ -41,12 +41,17 @@ cargo test -p rns-net --features rns-hooks-wasm,rns-hooks-builtin --test e2e_hoo
 
 ### Conformance vectors
 
-Committed fixtures under `tests/fixtures/` were generated from a pinned
-Reticulum 1.4.0 checkout and keep that provenance on purpose. To regenerate:
+The crypto, protocol, transport, link, resource, IFAC and `conformance_1_4_0`
+fixtures under `tests/fixtures/` were generated from a pinned Reticulum 1.4.0
+checkout and keep that provenance on purpose. To regenerate them:
 
 ```bash
 RETICULUM_UPSTREAM_DIR=/path/to/Reticulum python3 tests/generate_vectors.py
 ```
+
+The other fixture sets (argparse, `rnstatus`, `rnid`, discovery records and
+others) have their own `tests/generate_*.py` scripts, each pinned to the
+upstream release it reads.
 
 ### Live Python interop
 
@@ -57,9 +62,18 @@ Reticulum 1.4.2, 1.5.4, 1.5.5, 1.6.0 and 1.6.1 pinned by commit and `RNS` tree h
 export RETICULUM_UPSTREAM_DIR=/path/to/Reticulum
 export PYTHONPATH=$RETICULUM_UPSTREAM_DIR
 cargo test -p rns-net --test python_interop -- --nocapture
+cargo test -p rns-net --test direct_link_python_interop -- --ignored --nocapture
 cargo test -p rns-cli --test utility_interop -- --ignored --nocapture
+cargo test -p rns-cli --test rnsd_cli -- --nocapture
+cargo test -p rns-cli --test placeholders -- --ignored --nocapture
+cargo test -p rns-rnodeconf --test rnodeconf -- --ignored --nocapture
 cargo test -p rns-git --lib -- --nocapture
+cargo test -p rns-git --test e2e python_work_lifecycle_interop -- --ignored --nocapture
 ```
+
+CI also runs `python_interop` under each engine (`--features compact-threads`
+and `--features engine-parallel`); the `Reticulum Interop` job in
+`.github/workflows/ci.yml` has the full list.
 
 rns-git's Python-peer tests skip themselves when `RNS` cannot be imported,
 unless `RETICULUM_UPSTREAM_DIR` is set, in which case they fail.
@@ -120,13 +134,13 @@ The operator scripts have their own tests, run by CI with
 
 | Job | Command or scope |
 |-----|------------------|
-| Cargo Test | WASM example build, interface-selection `cargo check`, `cargo test --workspace` (on a pull request, the crates the change reaches) |
-| Cargo Test (rns-hooks) | Workspace tests with `--features rns-hooks`, built-in hook integration tests |
+| Cargo Test | WASM example build, interface-selection and no-std `cargo check`, `cargo test --workspace` (on a pull request, the crates the change reaches), `rns-net` tests on the compact engine |
+| Cargo Test (rns-hooks) | Workspace tests with `--features rns-hooks`, `rns-hooks` with both backends, hook integration tests under each engine |
 | Cargo Test (rns-ctl tls) | `cargo test -p rns-ctl --features tls` |
 | Reticulum Interop | Live interop against five pinned Python versions |
 | Docker E2E | `./tests/docker/run-all.sh` |
 | Rustfmt, Clippy | `cargo fmt --check`, `bash scripts/lint-host.sh` |
-| ARMv7 Build Smoke | Cross-builds of `rnsd`, `rns-ctl`, and `rns-server` with and without hooks |
+| ARMv7 Build Smoke | Cross-builds of `rnsd` and `rns-ctl` with and without native hooks, and of `rns-server` with built-in hooks |
 | rns-ctl-web-smoke | `node --test rns-ctl/assets/app.smoke.test.js` for the built-in UI |
 | Android Client | `./gradlew testDebugUnitTest assembleDebug` in `rns-tun-android/` |
 | ESP32 Lockfile | `rns-esp32/Cargo.lock` is up to date |
@@ -134,9 +148,13 @@ The operator scripts have their own tests, run by CI with
 | ESP32 Firmware Clippy | `cargo clippy --features firmware --target xtensa-esp32s3-espidf --release` in `rns-esp32/` |
 | Python Tools | Compile and unit-test `scripts/` and `tests/` |
 | Upstream Badge | The README badge version matches `- Version:` in `UPSTREAM.md` |
-| RustSec audit | `cargo audit` on both lock files, weekly and on manifest changes; `deny.toml` configures `cargo-deny` |
+| RustSec audit | `cargo audit` on the workspace and ESP32 lock files, weekly and on manifest or lock file changes. `deny.toml` configures `cargo-deny` for local runs; no job runs it |
+| Fuzz | Coverage-guided fuzzing of the parsers of untrusted input, nightly and on changes to `fuzz/` |
+| Coverage, Miri (rns-core) | Nightly: line coverage against per-crate floors (`scripts/coverage-floor.py`), Miri over `rns-core` |
+| Mutants (rns-core) | Weekly mutation testing of `rns-core`, a report rather than a gate |
 
-Workflows live in `.github/workflows/`.
+Workflows live in `.github/workflows/`: `ci.yml`, `rustsec.yml`, `fuzz.yml`,
+`nightly.yml` (Coverage, Miri, Mutants) and `esp32-release.yml`.
 
 ### Which jobs a pull request runs
 
@@ -157,7 +175,7 @@ set has `rns-core` or `rns-crypto`, `rns-cli` or `rns-ctl`, and `rns-net`.
 | Job | Runs when the change reaches |
 |-----|------------------------------|
 | Cargo Test (rns-hooks) | A dependency of the hook crates, `rns-net`, `rns-cli`, `rns-ctl` or `rns-server` |
-| Reticulum Interop | A dependency of `rns-net`, `rns-cli` or `rns-rnodeconf` |
+| Reticulum Interop | A dependency of `rns-net`, `rns-cli`, `rns-rnodeconf` or `rns-git` |
 | Docker E2E | A dependency of `rns-ctl`, `rns-cli`, `rns-tun` or `rns-server`, or `tests/docker/` |
 | ARMv7 Build Smoke | A dependency of `rns-cli`, `rns-ctl` or `rns-server` |
 | Cargo Test (rns-ctl tls) | A dependency of `rns-ctl` |
@@ -176,9 +194,9 @@ set has `rns-core` or `rns-crypto`, `rns-cli` or `rns-ctl`, and `rns-net`.
   crate code starts reading another file outside its directory, add it to
   `EXTERNAL_INPUTS` in the script; `tests/test_ci_changes.py` fails until it
   is there.
-- Other `.md` files, `docs/`, `scripts/`, `tests/*.py`, `fuzz/`, the other
-  workflows, `deny.toml`, `LICENSE` and `.gitignore` run only the always-on
-  jobs.
+- Other `.md` files, `docs/`, `scripts/`, `tests/*.py`, `fuzz/`,
+  `tools/vps-history-dashboard/`, the other workflows, `deny.toml`, `LICENSE`
+  and `.gitignore` run only the always-on jobs.
 - Any other path runs everything.
 
 `python3 scripts/ci_changes.py --range BASE HEAD` shows what a range
@@ -202,9 +220,10 @@ an exploratory tool, not a regression gate.
 
 [bench/README.md](../bench/README.md) documents profiles, scenarios, the
 relay and three-node harnesses, and profiling. The `*-findings.md` files next
-to it record individual investigations (compression, allocation, HDLC
-decoding, release profile) with their measurements. Criterion microbenchmarks
-live in each crate's `benches/`.
+to it record individual investigations (compression, interface builds, link
+packet packing, ratchet search, Resource preparation, release profile) with
+their measurements. Criterion microbenchmarks live in each crate's
+`benches/`.
 
 ## Upstream tracking workflow
 
