@@ -2,10 +2,11 @@
 
 Status: Complete for `RNS-Compat/1`
 
-Version: 1.0
+Version: 1.1
 
-Compatibility baseline: Reticulum `1.4.2`, commit
-`4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`.
+Compatibility baseline: Reticulum `1.6.1`, commit
+`606a16911d64cdbcef8ea8babb85aa8fa2f78e79` (canonical `rgit/master`, three
+commits after the signed `1.6.1` tag; see [UPSTREAM.md](../UPSTREAM.md)).
 
 This document is the normative protocol specification for the wire protocol
 implemented by `rns-rs`. It describes packet formats, cryptographic framing,
@@ -42,6 +43,8 @@ medium capable of carrying binary frames with an MTU of at least 500 bytes.
 - `Packet Hash`: the SHA-256 hash of a packet's hashable part
 - `Truncated Hash`: the first 16 bytes of a SHA-256 hash
 - `Name Hash`: the first 10 bytes of SHA-256 over a destination name
+- `Stamp`: proof-of-work bytes whose SHA-256 product over a defined
+  workblock meets a cost (Section 10.2)
 
 Unless otherwise stated, all multi-byte integers are unsigned and encoded in
 network byte order.
@@ -58,7 +61,10 @@ The current protocol profile uses the following constants:
 - Signature length: 64 bytes
 - Ratchet public key length: 32 bytes
 - Token overhead: 48 bytes
-- Maximum hops: 128
+- Maximum hops: 128 (`PATHFINDER_M`)
+- Stamp length of announce and path request stamps: 14 bytes
+- Stamp extension marker: `0xC1`
+- Stamp cost cap: 100; link request cost cap: 40
 
 Current cryptographic algorithms:
 
@@ -202,6 +208,25 @@ The truncated packet hash is:
 packet_truncated_hash = packet_hash[:16]
 ```
 
+### 6.4 Packet Validity
+
+A received frame is malformed, and is dropped with a protocol violation
+counted on the receiving interface, when:
+
+- it is shorter than its header, so the transport id, destination hash or
+  context byte is incomplete
+- its data field is empty
+- its hop count is 128 (`PATHFINDER_M`) or more
+
+A node does not send a packet whose hop count is 128 or more.
+
+An `ANNOUNCE` is additionally a protocol violation, and dropped, when the
+frame exceeds the 500-byte MTU, when its payload is shorter than the 84 bytes
+of public key, name hash and random hash, or when it is a `HEADER_1` packet
+whose frame is longer than `MTU - 16` bytes. The last rule leaves room for the
+16-byte transport id a transport node inserts when it forwards the announce as
+`HEADER_2`; a node MUST NOT emit a `HEADER_1` announce that does not leave it.
+
 ## 7. Packet Contexts
 
 Defined packet contexts:
@@ -318,6 +343,107 @@ destination.
 `random_hash` is a 10-byte freshness discriminator used by transport nodes to
 reject repeated announces.
 
+### 10.1 Announce Stamp Extension
+
+An announce may carry a destination stamp in an 18-byte extension
+(`EXT_PAYLOAD_LENGTH`) at the end of `app_data`. The extension is part of
+`app_data`, so the announce signature covers it:
+
+```text
+[marker:1 = 0xc1][flags:1][stamp:14][lr_cost_fraction:1][lr_cost_anchor:1]
+```
+
+- `flags` is reserved; emitters write `0x00` and receivers ignore it.
+- `lr_cost_anchor` bit 7 is reserved to mark a longer, future extension
+  format; bits 0-6 carry the whole part of the destination's link request
+  cost (Section 11.7). `lr_cost_fraction` carries its fraction in 1/256
+  steps, so the cost is `(anchor << 8 | fraction) / 256`. 12.5 is encoded
+  `80 0c`.
+
+A receiver interprets the last 18 bytes of `app_data` as an extension only
+when `app_data` is at least that long, the first byte is `0xc1`, anchor bit 7
+is clear and the cost is at most 100. Otherwise the announce is unstamped and
+`app_data` is left as it is.
+
+The stamp is checked over the unexpanded workblock (Section 10.2):
+
+```text
+workblock = destination_hash || public_key || name_hash      (90 bytes)
+```
+
+against the destination cost of the receiving interface (`destination_cost`,
+default 23.5, `cost_to_fp` 6016). Then:
+
+- a valid stamp is removed from `app_data` (an empty remainder becomes no
+  `app_data`), and the announced link request cost is recorded for the
+  destination
+- an insufficient stamp leaves the extension in `app_data` and records no
+  link request cost
+- either way the stamp's value is recorded
+
+Stamps are not enforced at this baseline (`STAMPS_ENFORCED = false`):
+unstamped announces and announces with insufficient stamps are accepted and
+forwarded. A node that enables enforcement drops them, both for its own use
+and for transport.
+
+Since Reticulum 1.6.1 a node stamps the announces it emits by default
+(`STAMP_DESTINATIONS`). The stamp targets the destination's value, at least
+25 (`DESTINATION_VALUE`) and at most 100, and the extension carries the
+destination's link request cost: its configured cost clamped to 0-40, or
+otherwise `LR_COST` (12.5). A node that cannot hold a stamp (rns-rs without a
+stamp store, such as a client started with `RnsNode::connect_shared`)
+announces unstamped.
+
+Compatibility notes: releases without stamp support deliver the extension to
+the application as part of `app_data`; the signature still validates.
+Releases between the first stamp support and upstream `796ef2d4`, including
+the 1.6.0 development tips up to `a8cc6cb2`, use a 17-byte extension with a
+one-byte cost. The two formats do not read each other, so each treats the
+other's stamped announces as unstamped with the extension left in
+`app_data`.
+
+### 10.2 Stamp Values
+
+Announce, path request, link request and interface discovery stamps share one
+validity rule. For a stamp `s` over a workblock `w`, the stamp product is:
+
+```text
+P = SHA256(w || s)          read as a 256-bit big-endian integer
+```
+
+Costs are fixed point with 8 fractional bits. A cost `c` maps to
+`fp = clamp(floor(c * 256 + 0.5), 0, 100 * 256)` (`cost_to_fp`), so 15.8 is
+`fp` 4045, 15.80078125. A cost of `fp = 0` admits every stamp. Otherwise:
+
+```text
+(i, f) = divmod(256 * 256 - fp, 256)
+target = (TAB[f] << i) >> 33
+valid  = P <= target
+```
+
+`TAB[f] = floor(2^33 * 2^(f / 256))` for `f = 0..255`, copied verbatim from
+upstream `RNS.Stamps` as `TAB` in `rns-crypto/src/stamp_value.rs`, whose
+comma-joined decimal entries hash to
+`55ba3ce1df224895b0dfdc102eb4359fc2f5a7efefee68df0cc90c8a8ac24f48`. A
+whole cost `c` gives `target = 2^(256 - c)`: `P` has at least `c` leading
+zero bits.
+
+A stamp's value, as nodes record and report it, is the largest grid cost the
+product meets: `(lz + 1) * 256 - k` in 1/256 units, where `lz` is the number
+of leading zero bits of `P` and `k` the number of `TAB` entries at most equal
+to the 34 bits of `P` that start at its leading one bit. A product of zero
+has value 256. Comparing a recorded value with a cost is local policy; the
+wire decision is the target check.
+
+The unexpanded workblock is the material itself. An expanded workblock of
+`n` rounds is:
+
+```text
+w = concat over r in 0..n-1 of
+      HKDF-SHA256(ikm = material, salt = SHA256(material || msgpack(r)),
+                  info = none, length = 256)
+```
+
 ## 11. Link Establishment
 
 ### 11.1 Link Modes
@@ -361,6 +487,13 @@ The optional 3-byte signalling field encodes:
 
 - MTU in 21 bits
 - mode in 3 bits
+
+A LINKREQUEST payload of any length other than 64 or 67 bytes is dropped. A
+signalled MTU of 0 means the 500-byte protocol MTU. A node with link MTU
+discovery disabled (`link_mtu_discovery = no`) omits the signalling.
+
+When the destination requires a link request stamp, `link_x25519_pub` is
+itself the stamp; see Section 11.7.
 
 The `link_id` is:
 
@@ -440,6 +573,37 @@ derived_key = HKDF-SHA256(shared_key, salt=link_id, context=None, length=mode_le
 ```
 
 The link token uses that derived key directly.
+
+### 11.7 Link Request Stamps
+
+A destination's link request cost is the cost carried in its last announce
+whose stamp validated (Section 10.1). A missing cost or a cost of 0 means
+unstamped.
+
+When the initiator knows a non-zero cost for the destination, and link
+request stamping is on (`STAMP_LRS`, on by default), it generates the
+ephemeral Ed25519 key first and then searches X25519 private keys until the
+public key, taken as a stamp, meets the cost over the unexpanded workblock:
+
+```text
+workblock = destination_hash || link_ed25519_pub        (48 bytes)
+stamp     = link_x25519_pub                              (32 bytes)
+```
+
+The LINKREQUEST carries no further bytes, and `link_id` is derived as in
+Section 11.2. If no key is found within `LINK_STAMP_TIMEOUT` (15 seconds) the
+link fails without a LINKREQUEST being sent. With `ALWAYS_STAMP_LRS` (off by
+default) an initiator also stamps requests to destinations that announced no
+cost, at `LR_COST` (12.5).
+
+The responder computes the request's stamp value over the same workblock.
+Link request stamps are not enforced at this baseline
+(`LR_STAMPS_ENFORCED = false`). With enforcement on, a responder drops,
+without an LRPROOF, a request whose key does not meet the destination's own
+link request cost: its configured cost, or `LR_COST`.
+
+The blackhole list destination `rnstransport.info.blackhole` (Section 15.6)
+uses a link request cost of 5.25.
 
 ## 12. Link Data and Control
 
@@ -886,9 +1050,11 @@ destination or the link initiator was one hop away. In the last two cases it
 skips the interface the link request arrived on and marks the path
 unresponsive. A non-transport node expires the path instead, and also
 expires and re-requests it when a link it initiated is never established,
-unless it is a shared instance client. These requests are queued (at most 32)
-and sent one every half second; a request that skips an interface carries one
-tag, and with `stamp_prs` one stamp, on every other interface.
+unless it is a shared instance client. None of this applies to an
+instance-local path (0 hops), which is never rediscovered through links.
+These requests are queued (at most 32) and sent one every half second; a
+request that skips an interface carries one tag, and with `stamp_prs` one
+stamp, on every other interface.
 
 The per-interface `announces_from_internal` option controls whether announces
 received on an internal-mode interface may propagate out on the interface where
@@ -933,6 +1099,25 @@ Validated announces may be queued for retransmission with:
 - a random grace window up to 0.5 seconds
 - local rebroadcast cap of 2
 
+While an announce waits for rebroadcast, every interface on which another
+copy of it arrives (the same packet hash, which ignores hops and transport
+id) is recorded, unless the interface is a shared medium (serial, KISS, AX.25
+KISS, RNode, UDP and pipe interfaces). The rebroadcast is sent on
+every interface except the recorded ones, so a neighbour is not sent back an
+announce it has already sent. A path response bound to one interface is sent
+only there.
+
+A path update accepted only because the existing path was marked
+unresponsive (Section 15.3) updates the path table without a rebroadcast.
+A local client's path response that answers a pending path request is sent
+once, as a path response, on the interface the request came from.
+
+Which announces may update a path is a local heuristic. rns-rs keeps
+alternative paths by default and differs from upstream for unresponsive and
+alternative paths; `unresponsive_path_recovery = upstream` decides every
+path update as upstream does. See
+[Interoperability](interoperability.md#unresponsive-path-recovery).
+
 ### 15.5 Deduplication
 
 Transport nodes maintain a packet hash list for duplicate suppression.
@@ -945,6 +1130,152 @@ local policy feature, not a global protocol censorship mechanism.
 Nodes may also hold or drop announces based on interface-local ingress control
 thresholds.
 
+Announces from a blackholed identity are dropped. A tunnel synthesis from a
+blackholed transport identity tears the connection down (Section 15.8). A
+transport node may publish its blackhole list at the `SINGLE` destination
+`rnstransport.info.blackhole` of its transport identity, which requires a
+link request cost of 5.25 (Section 11.7).
+
+A node may drop received packets whose hop count, before it is incremented,
+is at or above a hop limiter: a node-wide one (`HOP_LIMITER`, by default 128,
+which adds nothing to Section 6.4) and an optional per-interface one, checked
+first. Such drops count as hop limiter hits, not protocol violations. A node
+may also drop received announces by destination type (name hash). Both are
+local policy and do not change the wire format.
+
+### 15.7 Path Requests
+
+A path request is a `DATA` packet, `HEADER_1`, `BROADCAST`, with context
+`NONE`, addressed to the `PLAIN` destination `rnstransport.path.request`.
+Its payload is:
+
+```text
+[destination_hash:16][transport_id:16][tag:16][ext:16, if stamped]
+```
+
+`transport_id` is the requesting node's transport identity hash; since
+Reticulum 1.6.0 a node always includes it. `tag` is 16 random bytes chosen by
+the originator. The legacy form `[destination_hash:16][tag:16]` is still
+accepted.
+
+Valid payload lengths are therefore 32, 48 and 64 bytes. A receiver drops a
+payload shorter than 16 bytes silently, and counts a protocol violation and
+drops a request of exactly 16 bytes (tagless) or of any other length.
+
+A receiver records each `destination_hash || tag` pair and drops a request
+whose pair it has already seen, so a request flooded across a mesh is
+processed once per node.
+
+The 16-byte extension has the layout:
+
+```text
+[marker:1 = 0xc1][flags:1][stamp:14]
+```
+
+The stamp is checked over the unexpanded workblock
+`destination_hash || tag` (32 bytes) against the path request cost of the
+receiving interface (`pr_cost`, default 15.8, `cost_to_fp` 4045), as in
+Section 10.2. `flags` is `0x00` on a stamped request. `0xff` with an all-zero
+stamp marks an unstamped request relayed by a stamp-aware node; its stamp
+fails the check. An extension with any other marker is not a stamp. As for
+announces, path request stamps are not enforced at this baseline: unstamped
+and insufficiently stamped requests are processed. A node that enables
+enforcement drops them.
+
+Since Reticulum 1.6.1 a node stamps the path requests it originates by
+default (`STAMP_PRS`), at `PR_VALUE` (15.8). A request whose stamp is not
+found within `PR_STAMP_TIMEOUT` (15 seconds) is not sent.
+
+A node that forwards a request writes its own transport id and keeps the
+original tag and extension bytes, which stay valid because the stamp does not
+cover the transport id. For a request that carries no extension, a stamping
+node:
+
+- forwarding a request from one of its local clients, stamps it itself for
+  the client's tag
+- forwarding it in a recursive path search, or to its local clients, appends
+  the `0xff` relay extension instead
+
+A destination answers a path request with an announce in context
+`PATH_RESPONSE`, sent on the interface the request arrived on.
+
+### 15.8 Tunnels
+
+A transport node may synthesize a tunnel on an interface, so that paths
+learned through it are restored when the interface reconnects. The synthesis
+is a `DATA` packet, `HEADER_1`, `BROADCAST`, addressed to the `PLAIN`
+destination `rnstransport.tunnel.synthesize` and sent only on that
+interface:
+
+```text
+[public_key:64][interface_hash:32][random_hash:16][signature:64][ext:*]
+```
+
+```text
+tunnel_id = SHA256(public_key || interface_hash)
+signature = Ed25519 over public_key || interface_hash || random_hash || ext
+```
+
+`public_key` is the sender's transport identity. Since Reticulum 1.6.1 `ext`
+is present: a MessagePack map with integer keys, those of interface
+discovery (Section 15.9):
+
+| Key | Value |
+|---:|---|
+| `0xfd` | implementation name, string (`RNS` for upstream, `rns-rs` for rns-rs) |
+| `0xfc` | implementation version, dotted numeric string |
+| `0x01` | whether the sender has transport enabled, boolean |
+| `0xfb` | destination stamp cost of the interface, float |
+| `0xfa` | path request stamp cost of the interface, float |
+
+A receiver accepts tunnel syntheses only on TCP, Backbone and I2P
+interfaces, and only one per interface. A second synthesis, a synthesis on an
+interface whose tunnel is established, a payload shorter than 176 bytes or
+longer than the 464-byte MDU, and an `ext` that does not decode, is not a
+map, lacks one of the five fields or has a field of the wrong type are
+protocol violations, and no tunnel is recorded. A bad signature, or a sender
+whose transport identity is blackholed, tears the connection down.
+
+A node that receives a synthesis with `ext` and has not synthesized on that
+interface answers with a synthesis of its own, so both ends learn each
+other's transport identity. A node that already synthesized on the interface
+only records the remote transport identity; otherwise it attaches the tunnel
+to the interface. Dialing TCP, Backbone and I2P interfaces synthesize when
+they connect, before the interface is reported up.
+
+Compatibility note: releases before 1.6.1 accept only a 176-byte synthesis,
+so they record no tunnel from a node that sends `ext`.
+
+### 15.9 Interface Discovery
+
+A discoverable interface is advertised by announces of the `SINGLE`
+destination `rnstransport.discovery.interface` bound to the node's transport
+identity. Their `app_data` is:
+
+```text
+[flags:1][payload:*]
+payload = info || stamp:32
+```
+
+With flag `0x02` the payload is instead the single-packet ciphertext
+(Section 9) of `info || stamp` to the network identity. `info` is a
+MessagePack map with integer keys, listed as `NAME` (`0xff`) to `OP_ADDR`
+(`0xf0`) in `rns-core/src/discovery.rs`; their meaning is described in
+[Interface Discovery](interface-discovery.md). Fields added since 1.4.2 are
+the implementation name and version (`0xfd`, `0xfc`), the interface's
+destination and path request costs (`0xfb`, `0xfa`, floats) and the
+operator's 16-byte LXMF address (`0xf0`).
+
+The stamp is generated over `SHA256(info)` with a 20-round expanded
+workblock (Section 10.2), at the interface's discovery stamp value (16 by
+default). A receiver accepts a stamp that meets its required value against
+the unexpanded workblock, `SHA256(info)` itself, or failing that against the
+20-round expanded one, and takes the value from the workblock it is valid
+against. Receivers ignore discovery announces with more than 127 hops.
+
+A node with transport disabled announces its discoverable interfaces only
+when `static_transport_identity` is set (Section 15.3).
+
 ## 16. Compatibility Profile
 
 This document currently specifies the `RNS-Compat/1` profile:
@@ -955,7 +1286,15 @@ This document currently specifies the `RNS-Compat/1` profile:
 - packet layout as defined in Section 6
 - explicit proofs
 - AES-256-CBC, the only enabled link mode
+- stamp extensions on announces and path requests and stamped link request
+  keys (Sections 10.1, 11.7 and 15.7), emitted by default and not enforced
+- tunnel synthesis with its extension (Section 15.8)
 - transport heuristics as defined in Section 15
+
+The stamp and tunnel synthesis extensions are backward-compatible additions
+to `RNS-Compat/1`: they change no field of an older packet, and the
+compatibility notes in Sections 10.1 and 15.8 state how older releases
+read them.
 
 Future profiles may define distinct packet layouts, AEAD-based framing, revised
 announce freshness rules, or different extension negotiation.
@@ -980,13 +1319,17 @@ This protocol provides:
 - destination authentication through signed announces
 - initiator anonymity at the transport layer
 - per-packet or per-link forward secrecy where ephemeral keys are used
+- proof-of-work costs on announces, path requests and link requests, which a
+  node can enforce to make flooding expensive
 
 Known limitations of the current compatible profile:
 
 - destination hashes remain visible in packet headers for routing
 - announce replay resistance is heuristic, not globally sequenced
 - the compatible token format uses CBC + HMAC rather than a modern AEAD
-- open networks remain susceptible to resource-exhaustion attacks
+- open networks remain susceptible to resource-exhaustion attacks; stamps
+  are not enforced at this baseline, so they only limit flooding once nodes
+  enable enforcement
 
 ## 19. Out of Scope
 
@@ -1008,7 +1351,8 @@ backward-compatible extension. Timer tuning, storage policy, CLI behavior, and
 resource buffering strategy do not change the profile when their observable
 wire behavior remains identical.
 
-Normative constants appear in Sections 3, 6, 10, 12, and 14. Transport timing,
+Normative constants appear in Sections 3, 6, 10, 11, 12, 14, and 15.7 to
+15.9. Transport timing,
 queue capacity, interface reconnection, and cache-retention values are local
 heuristics unless a section explicitly marks them as interoperable behavior.
 
@@ -1300,8 +1644,18 @@ ff010203041111111111111111111111111111111111111111111111111111111111111111aabbcc
 | Split and disk-backed Resources | `tests/fixtures/resource/split_vectors.json` and deterministic generated data | `rns-net` split-boundary, retransmission, concurrent-transfer, streaming-reader, and disk-delivery tests |
 | Request/response Resources | deterministic generated data | `rns-net` large request/response and configured-limit tests |
 | Interfaces and IFAC framing | pinned runtime fixtures | IFAC, TCP, UDP, Local, KISS, RNode, Pipe, I2P, Backbone, Weave, and Python interoperability suites |
+| Packet validity | unit tests in `rns-core/src/packet.rs` | zero-length data, hop boundary and `HEADER_1` announce room tests; driver admission tests |
+| Stamp grid, announce, path request and link request stamps | `TAB` and cost/target vectors in `rns-crypto/src/stamp_value.rs`; the Python-generated destination stamp and link cost bytes in `rns-core/src/stamp.rs` | announce and path request stamp suites; `python_rns_stamped_link_request_interop` and `python_rns_link_cost_announced_by_rust_interop` in `rns-net/tests/python_interop.rs` |
+| Tunnel synthesis | extension maps in `rns-net/src/common/tunnel_extension.rs` | tunnel driver tests; synthesis in both directions in `rns-net/tests/python_interop.rs` |
+| Interface discovery stamps | generated stamps in the `rns-core/src/discovery.rs` tests | discovery suites, stamps accepted against both workblocks |
 
-The coverage map is tied to Reticulum `1.4.2` commit
-`4fc8e03d658ed87019b8ad6c7ce7827dc76f0e45`. The upstream-parity records under
-`docs/upstream-parity/` document any later observed delta before it becomes a
-new normative baseline.
+The coverage map is tied to Reticulum `1.6.1` commit
+`606a16911d64cdbcef8ea8babb85aa8fa2f78e79`. The fixture files in the table
+predate it: they were generated against earlier releases (the newest,
+`split_vectors.json`, records `1.4.2`) and were not regenerated for this
+baseline. The layouts they pin did not change between `1.4.2` and this
+baseline. The formats added since (packet validity rules, stamps and the
+tunnel synthesis extension) are pinned by the unit vectors and live
+interoperability tests named in the table, not by fixture files. The
+upstream-parity records under `docs/upstream-parity/` document any later
+observed delta before it becomes a new normative baseline.

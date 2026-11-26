@@ -303,9 +303,9 @@ unstamped. Responders only check it when
 default) is on, dropping link requests whose stamp is below the destination's
 cost; the key applies immediately and, like the others, resets to the value
 from the `[stamps]` section (`enforce_stamps`).
-Upstream `796ef2d4` writes this check as `LR_STAMPS_ENFORCED and
-stamp_valid(...)`, which would drop the valid requests instead; rns-rs drops
-the invalid ones, as the error upstream raises describes.
+Upstream `796ef2d4` wrote this check inverted, dropping the valid requests;
+`50e939ab` fixed it, so upstream now drops only the invalid ones, as rns-rs
+does.
 
 ### Per-interface costs
 
