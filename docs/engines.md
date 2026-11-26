@@ -88,11 +88,11 @@ Defaults:
 | `rnsd` (`rns-cli`), `rns-server`, `rns-ctl daemon` | parallel | the processes that route traffic for others |
 | `rns-tun`, `rns-git` and other single-purpose products | compact | private nodes serving one application |
 
-Release packaging ships both builds of `rnsd` and `rns-server`: the default
-parallel build and a compact build for single-CPU hosts. On one CPU the
-parallel engine still works (it starts no crypto workers and does the work
-inline) but keeps its interface I/O threads, so the compact build is the
-better choice there, and the operator documentation says so.
+Release packaging (`scripts/package-rns-server-tarball.sh`) ships the
+default parallel build of `rns-server`. A compact build for single-CPU hosts
+is planned but not packaged yet. On one CPU the parallel engine still works (it starts no crypto
+workers and does the work inline) but keeps its interface I/O threads, so
+the compact build is the better choice there.
 
 The compact engine folds four groups of helpers into the driver loop by
 default: timers and housekeeping, CPU work, interface I/O, and services off
@@ -114,9 +114,9 @@ four segments of a streamed Resource ahead on four threads once a link takes
 segments faster than one thread builds them; without it, one segment is
 built ahead on one thread.
 `x25519-aws-lc` and `ed25519-aws-lc` stay `rns-crypto` features usable with
-either engine. They bring a C and CMake build dependency, so they are opt-in
-even for parallel builds; release builds of `rnsd` and `rns-server` turn
-them on.
+either engine. They bring a C and CMake build dependency, so `rns-net`
+leaves them off; `rns-cli`, `rns-ctl` and `rns-server` turn them on through
+their default `aws-lc` feature, in either engine.
 
 ## What is shared
 
@@ -228,9 +228,10 @@ build they fold with their groups.
   single-packet proof checks and signatures, encryption of deferred sends,
   and decryption for destinations that deliver decrypted (below). A job the
   full queue refuses is done inline.
-- **Interface I/O.** Each interface reads and writes on its own thread and
-  exchanges frames with the driver through lock-free queues, so socket
-  syscalls leave the driver.
+- **Interface I/O.** Each interface reads and writes on threads of its own
+  and exchanges frames with the driver through bounded queues, so socket
+  syscalls leave the driver. TCP and Backbone are the exception: the driver
+  loop serves them in both engines.
 - **Defaults.** Flush deadline 25 µs. X25519 and Ed25519 signing on aws-lc's
   assembly in `rns-cli`, `rns-ctl` and `rns-server` (their default `aws-lc`
   feature, x86_64 and aarch64 only); Ed25519 verification stays on
@@ -288,11 +289,11 @@ receiver already works this way (`prepare_assembly` / `complete_assembly`).
 | Step | Where | Crypto | Status |
 |---|---|---|---|
 | Receive link data | `LinkManager::handle_link_data_into` (`engine.decrypt_into`) | token decrypt | on the driver, in order |
-| Send link data and channel messages | `link_manager.rs` (`encrypt_into`), `channel_handling.rs` | token encrypt | on the driver |
+| Send link data and channel messages | `link_manager/outbound.rs` (`encrypt_into`), `link_manager/channel_handling.rs` | token encrypt | on the driver |
 | Prove a link packet | `build_link_packet_proof` | Ed25519 sign | done: signed on the pool, then the proof is sent |
 | Verify a link proof | `handle_link_proof` | Ed25519 verify | done: queued proofs verified as one batch (up to 8) |
-| Prove a single packet | `driver/dispatch.rs` (`maybe_generate_proof`) | Ed25519 sign | done: signed on the pool, then sent |
-| Verify a single-packet proof | `driver/dispatch.rs` (`handle_inbound_proof`) | Ed25519 verify | done: on the pool, batched with link proofs |
+| Prove a single packet | `driver/dispatch/proofs.rs` (`maybe_generate_proof`) | Ed25519 sign | done: signed on the pool, then sent |
+| Verify a single-packet proof | `driver/dispatch/proofs.rs` (`handle_inbound_proof`) | Ed25519 verify | done: on the pool, batched with link proofs |
 | Encrypt a single packet | `RnsNode::send_packet_deferred` | X25519, token encrypt | done (opt-in): on the pool; `send_packet_queued` stays on the caller's thread |
 | Decrypt a single packet for local delivery | `RnsNode::deliver_decrypted` | X25519, token decrypt | done (opt-in): on the pool |
 | Establish a link | `rns-core` link handshake | X25519, HKDF, Ed25519 | on the driver |

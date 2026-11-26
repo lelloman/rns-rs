@@ -1,4 +1,4 @@
-# Interface discovery locations
+# Interface Discovery
 
 ## Discovery sources
 
@@ -14,8 +14,8 @@ network identities listed, as upstream does:
 
 Discovery announces from other network identities are ignored. Interfaces
 already stored from a network that is not a source are left out of the
-discovered interface list (`rnstatus -d` and `-D`, and the `discovered_interfaces` RPC
-call) and removed by the periodic discovery cleanup, so they are no longer
+discovered interface list (`rnstatus -d` and `-D`, and the
+`discovered_interfaces` RPC call) and removed by the periodic discovery cleanup, so they are no longer
 auto-connected.
 
 Discovered interfaces are stored under `storage/discovery/interfaces`, one
@@ -217,7 +217,7 @@ by each discovery announce. It may be fractional, as upstream reads it with
 make announces costlier to forge and costlier to generate. Each due announce
 grinds a fresh stamp on a worker thread, so a high value costs CPU at every
 announce interval. Received discovery announces must carry a stamp of at
-least the default value or they are ignored.
+least `required_discovery_value` (16 unless set) or they are ignored.
 
 `discovery_lxmf_address` is an optional 32-character hexadecimal LXMF
 destination hash for contacting the interface operator. Remote systems retain

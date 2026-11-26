@@ -58,10 +58,13 @@ At runtime, `rns-server` resolves a config directory and uses it for:
   Product config managed through the API/UI.
 - `logs/*.log`
   Durable stdout/stderr tails for supervised processes.
-- `*.ready`
-  Explicit readiness files written by sidecars.
+- `rns-sentineld.ready`, `rns-statsd.ready`
+  Explicit readiness files written by the sidecars.
 - `stats.db`
   Default SQLite path for `rns-statsd` unless overridden.
+- `http-token`
+  The generated control-plane bearer token (mode `0600`), when no token is
+  configured and auth is enabled.
 
 ## Startup
 
@@ -115,6 +118,13 @@ Useful flags:
   Disable the embedded control plane.
 - `--dry-run`
   Print the launch plan and exit.
+- `--stats-db PATH`
+  SQLite path for `rns-statsd`, in place of `<config dir>/stats.db`.
+- `--rnsd-bin PATH`, `--sentineld-bin PATH`, `--statsd-bin PATH`
+  Advanced overrides that run a role from an external binary instead of
+  self-spawning it (see [Self-Spawn Runtime](#self-spawn-runtime)).
+- `-v`, `-q`
+  Raise or lower the log level; repeat for more.
 
 ## VPS Experiment Targets
 
@@ -331,7 +341,7 @@ After deploying routing, path discovery or backbone config changes, run the live
 manual smoke test from a workstation:
 
 ```bash
-cargo build --release --bin rns-server --features rns-hooks-native
+cargo build --release -p rns-server -p rns-ctl --features rns-hooks-native
 scripts/manual-backbone-smoke.sh
 ```
 
@@ -400,9 +410,8 @@ checkout instead of misreporting its distance from the remotes as unintegrated
 work. Run `scripts/check_upstream_drift.py`; it fetches both remotes
 independently (with one retry each), classifies each tip as `at_baseline`,
 `behind`, `ahead`, or `diverged`, and deduplicates commits reachable from either
-tip but not the baseline. A
-remote is allowed to be behind: the currently accepted rgit commit can precede
-its GitHub mirror, so requiring the baseline to be an ancestor of both tips
+tip but not the baseline. A remote is allowed to be behind: the currently
+accepted rgit commit can precede its GitHub mirror, so requiring the baseline to be an ancestor of both tips
 would incorrectly fail a current checkout.
 
 The command reports a per-remote fetch timestamp and error. If either refresh
@@ -471,11 +480,11 @@ Active audit: docs/upstream-parity/reticulum-next-audit.md
 Refresh the local refs first when an internet connection is available; the
 version check compares the remote binaries against the local `origin/master` and
 `origin/dev` refs by default. Build the local smoke-test binary before running
-the live fabric check:
+the live fabric check (the smoke test runs `rns-server` and uses `rns-ctl`):
 
 ```bash
 git fetch origin
-cargo build --release --bin rns-server --features rns-hooks-native
+cargo build --release -p rns-server -p rns-ctl --features rns-hooks-native
 
 mkdir -p data
 if ssh root@vps-eu 'test -f /var/lib/rns-node/vps_daily_reports.db'; then
@@ -538,9 +547,9 @@ longer collected; new rows store `''` and `0`. The collector used to label the
 first public interface in the node's status list as the "primary" peer, but
 that order changes as interfaces reconnect, so the label carried no
 operational meaning. Do not report it or compare it across days. Historical
-values are preserved as captured. The migration only
-clamps negative historical packet-freshness ages to zero and recomputes their
-summary maximum.
+values are preserved as captured. The migration only clamps negative
+historical packet-freshness ages to zero and recomputes their summary
+maximum.
 
 The snapshot records `/usr/local/bin/rns-server --version` and
 `/usr/local/bin/rns-ctl --version`, then reconstructs the expected binary
@@ -853,7 +862,8 @@ If the node is up but not converged:
 Common cases:
 
 - Sidecar stuck in `waiting`
-  Check the corresponding `*.ready` file expectation and the process log for RPC/provider bridge wait messages.
+  Check the corresponding `rns-sentineld.ready` or `rns-statsd.ready` file
+  and the process log for RPC/provider bridge wait messages.
 - `control_plane_reload_required`
   Apply the saved config.
 - `control_plane_restart_required`

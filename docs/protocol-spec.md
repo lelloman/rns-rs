@@ -966,8 +966,9 @@ Extensions MUST NOT silently change the meaning of core packet types or contexts
 
 `rns-rs` currently implements non-core extensions outside this document, notably:
 
-- direct UDP link upgrade
-- WASM transport hooks
+- direct UDP link upgrade ([Direct Link](direct-link-protocol.md), link
+  packet context `0x80`)
+- transport hooks (WASM, native and built-in; see [Hooks](hooks.md))
 
 These extensions are explicitly non-normative for `RNS-Compat/1`.
 

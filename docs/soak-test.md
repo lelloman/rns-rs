@@ -22,7 +22,9 @@ growth, path table churn and transfers that fail or deliver the wrong bytes.
 
 `--workers` loops each pick an operation, run it with the client utility of a
 random implementation on a random node against a target on another node, and
-pause for a random time around `--op-interval`:
+pause for a random time around `--op-interval`. The `--weight-send`,
+`--weight-fetch`, `--weight-probe` and `--weight-rnx` options (4, 2, 3 and 1
+by default) set how often each operation is picked:
 
 | Operation | What it checks |
 |-----------|----------------|
@@ -53,6 +55,7 @@ The work directory (`--workdir`, a new temporary directory by default) holds:
 | `samples.jsonl` | Process and path table samples |
 | `events.jsonl` | Topology, process exits, path table query errors |
 | `summary.json` | The final summary |
+| `ops/` | The directory of each failed or stalled operation, with the utility's output |
 | `logs/` | Output of every daemon and client program |
 | `nodes/` | Config directories, identities, listener save and jail directories |
 
@@ -70,7 +73,7 @@ Python tracebacks. The exit status is non-zero when there are anomalies.
 ## Running it
 
 ```bash
-export RETICULUM_UPSTREAM_DIR=~/Reticulum   # the default
+export RETICULUM_UPSTREAM_DIR=~/Reticulum   # the default; or pass --upstream
 scripts/mixed_mesh_soak.py --duration 10m   # a quick check
 scripts/mixed_mesh_soak.py --duration 24h --workdir /var/tmp/rns-soak \
     --seed 1 --progress-interval 1800

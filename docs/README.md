@@ -25,7 +25,7 @@ want to do, then follow the links from there. The repository
 
 | Page | Covers |
 |------|--------|
-| [CLI Tools](cli-tools.md) | `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid`, `rnsh`, `rncp`, `rnx`, `rnir`, `rnpkg`, and the sidecar daemons |
+| [CLI Tools](cli-tools.md) | `rnsd`, `rnstatus`, `rnpath`, `rnprobe`, `rnid`, `rnsh`, `rncp`, `rnx`, `rnir`, `rnpkg`, `rnodeconf`, and the sidecar daemons |
 | [rns-ctl](rns-ctl.md) | The unified control binary and its HTTP/WebSocket API |
 | [rnstatus](rnstatus.md) | Interface status and live attach/detach/reload |
 | [rnsh](rnsh.md) | Remote shell over Reticulum links |
@@ -52,13 +52,14 @@ want to do, then follow the links from there. The repository
 | [Protocol Specification](protocol-spec.md) | Normative wire protocol for `RNS-Compat/1` with conformance vectors |
 | [UPSTREAM.md](../UPSTREAM.md) | The accepted Python Reticulum baseline and every completed porting queue |
 | [Upstream Parity](upstream-parity/README.md) | Audit and acceptance records per upstream version, plus the workflow and templates |
-| [Issue 152 Reproduction](issue152-reproduction.md) | What "transmission complete" means for the send APIs |
+| [Send Completion](send-completion.md) | What "transmission complete" means for the send APIs, and the issue #152 reproduction |
 
 ## Development and releases
 
 | Page | Covers |
 |------|--------|
 | [Building](building.md) | Feature flags, interface selection, hook backends, stripping, cross-building |
+| [Engines](engines.md) | The compact and parallel node engines (`engine-parallel`, `compact-threads`) and how work is split across threads |
 | [Development](development.md) | Tests, lint, Docker end-to-end suites, interop tests, CI, benchmarks |
 | [Mixed-Mesh Soak Test](soak-test.md) | Long-running Rust and Python mesh under load: stalls, memory growth, path churn |
 | [Benchmarking](../bench/README.md) | The benchmark runner, profiles, and recorded findings |

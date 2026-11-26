@@ -13,7 +13,7 @@ cargo build --release -p rns-ctl
 | Subcommand | Role |
 |------------|------|
 | `rns-ctl daemon -c DIR` | Run the node, like `rnsd` |
-| `rns-ctl http -c DIR [...]` | Run the node and serve the HTTP/WebSocket API plus the built-in UI |
+| `rns-ctl http -c DIR [...]` | Run the node (or, with `-d`, attach to a running `rnsd`) and serve the HTTP/WebSocket API plus the built-in UI |
 | `rns-ctl status` | Interface status, like `rnstatus` |
 | `rns-ctl probe <full_name> <dest>` | Probe a destination, like `rnprobe` |
 | `rns-ctl path -t` | Path table, like `rnpath` |
@@ -38,8 +38,8 @@ a key derived from that node's `storage/transport_identity`, so they must be
 pointed at the node's config directory. Without one, they use
 `~/.reticulum`, which on a server running `rns-server` from another directory
 holds a different identity, and the call fails authentication. Each takes
-`--config PATH` (`status` also `-c`), and `rns-ctl` itself takes
-`-c/--config PATH` before the subcommand and passes it on:
+`-c/--config PATH`, and `rns-ctl` itself takes `-c/--config PATH` before the
+subcommand and passes it on:
 
 ```bash
 rns-ctl status -c /var/lib/rns-node
@@ -55,6 +55,7 @@ rns-ctl probe --config /var/lib/rns-node rnstransport.probe <destination_hash>
 rns-ctl http -c /path/to/config                  # generated token, port 8080
 rns-ctl http --token my-secret-token             # fixed token
 rns-ctl http --port 9090                         # custom port
+rns-ctl http -d -c /path/to/config               # attach to a running rnsd instead of starting a node
 rns-ctl http --disable-auth                      # no auth, for testing only
 ```
 
@@ -82,10 +83,12 @@ the server and any proxy with the request; use the fragment instead.
 
 Limits: request bodies above 4 MiB get `413`, the token is checked before any
 body is read, and at most 64 concurrent connections are served (`503` beyond
-that). The port can also be set with `RNSCTL_HTTP_PORT`. Build with
-`--features tls` for TLS. The server shuts down cleanly on `SIGINT` or
-`SIGTERM`, so `docker stop` and `systemctl stop` do not have to wait for their
-kill timeout.
+that). The server binds `127.0.0.1` unless `-H/--host` or `RNSCTL_HOST`
+says otherwise; the port can also be set with `RNSCTL_HTTP_PORT`. Build with
+`--features tls` for TLS, then pass `--tls-cert` and `--tls-key` (or
+`RNSCTL_TLS_CERT` and `RNSCTL_TLS_KEY`). The server shuts down cleanly on
+`SIGINT` or `SIGTERM`, so `docker stop` and `systemctl stop` do not have to
+wait for their kill timeout.
 
 Endpoints:
 
@@ -125,7 +128,12 @@ rns-ctl hook list --token "$RNSCTL_TOKEN"
 rns-ctl hook load <path-or-builtin-id> --point <HookPoint> --token "$RNSCTL_TOKEN" [--type wasm|native|builtin] [--priority N] [--name NAME]
 rns-ctl hook unload <name> --point <HookPoint> --token "$RNSCTL_TOKEN"
 rns-ctl hook reload <name> --point <HookPoint> --path <file-or-builtin-id> --token "$RNSCTL_TOKEN" [--type wasm|native|builtin]
+rns-ctl hook enable <name> --point <HookPoint> --token "$RNSCTL_TOKEN"
+rns-ctl hook disable <name> --point <HookPoint> --token "$RNSCTL_TOKEN"
+rns-ctl hook set-priority <name> --point <HookPoint> --priority N --token "$RNSCTL_TOKEN"
 ```
+
+It talks to `http://127.0.0.1:8080` unless `--url URL` names another server.
 
 `--type` defaults to `wasm`, or to `builtin` on builds without the WASM
 backend. Native hooks loaded at runtime must come from the configured hooks
