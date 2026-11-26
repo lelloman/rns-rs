@@ -396,10 +396,10 @@ continuing and keep only the newest complete row per host in report summaries.
 The upstream Reticulum checkout location is workstation-local. Store it in the
 gitignored file `.local/reticulum-upstream.path`; the first non-empty,
 non-comment line must be the absolute path to the local upstream Reticulum
-repository. For this workstation that file should contain:
+repository, for example:
 
 ```text
-/home/lelloman/Reticulum
+/home/operator/Reticulum
 ```
 
 The accepted Reticulum baseline is the `Normative commit` recorded in

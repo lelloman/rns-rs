@@ -89,8 +89,9 @@ Defaults:
 | `rns-tun`, `rns-git` and other single-purpose products | compact | private nodes serving one application |
 
 Release packaging (`scripts/package-rns-server-tarball.sh`) ships the
-default parallel build of `rns-server`. A compact build for single-CPU hosts
-is planned but not packaged yet. On one CPU the parallel engine still works (it starts no crypto
+default parallel build of `rns-server`; a compact build for single-CPU hosts
+is built from source without the `engine-parallel` feature (see
+[Building](building.md)). On one CPU the parallel engine still works (it starts no crypto
 workers and does the work inline) but keeps its interface I/O threads, so
 the compact build is the better choice there.
 
