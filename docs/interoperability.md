@@ -120,7 +120,9 @@ alternative paths:
   for a destination whose path is being requested are taken as before, so
   a removed path is found again through a path request. The newest
   emission is kept for up to `PATHFINDER_E` (a week) for at most
-  `ACCEPTED_EMISSIONS_MAX` destinations.
+  `ACCEPTED_EMISSIONS_MAX` destinations. It is saved with the path table,
+  in `storage/accepted_emissions`, a file of rns-rs's own that Python
+  ignores, so a restart does not let old announces back in.
 
 `unresponsive_path_recovery = upstream` decides every path update as
 upstream does, against the destination's primary path, and an accepted

@@ -893,7 +893,106 @@ where
     atomic_write(
         &storage_dir.join(ANNOUNCE_RATE_TABLE_FILE),
         &encode_announce_rate_table(&snapshot.announce_rates),
-    )
+    )?;
+
+    checkpoint();
+    let accepted_path = storage_dir.join(ACCEPTED_EMISSIONS_FILE);
+    if snapshot.accepted_emissions.is_empty() {
+        // Upstream path mode keeps none: leave no file of rns-rs's own.
+        match fs::remove_file(&accepted_path) {
+            Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
+            _ => Ok(()),
+        }
+    } else {
+        atomic_write(
+            &accepted_path,
+            &encode_accepted_emissions(&snapshot.accepted_emissions),
+        )
+    }
+}
+
+/// rns-rs's own `storage/accepted_emissions`, of native path mode; upstream
+/// has no such state and ignores the file.
+const ACCEPTED_EMISSIONS_FILE: &str = "accepted_emissions";
+const ACCEPTED_EMISSIONS_MAGIC: &[u8; 6] = b"RNSRAE";
+const ACCEPTED_EMISSIONS_VERSION: u8 = 0x01;
+const ACCEPTED_EMISSIONS_HEADER_LEN: usize = 12;
+const ACCEPTED_EMISSION_LEN: usize = 32;
+
+/// Encode accepted emissions: a 12-byte header (magic, version, zero flags,
+/// u32 little-endian entry count), then per entry the destination hash, the
+/// emission time (u64) and the time it was stored (f64), little-endian.
+fn encode_accepted_emissions(
+    accepted: &[rns_core::transport::persistence::PersistedAcceptedEmission],
+) -> Vec<u8> {
+    let mut blob =
+        Vec::with_capacity(ACCEPTED_EMISSIONS_HEADER_LEN + accepted.len() * ACCEPTED_EMISSION_LEN);
+    blob.extend_from_slice(ACCEPTED_EMISSIONS_MAGIC);
+    blob.extend_from_slice(&[ACCEPTED_EMISSIONS_VERSION, 0x00]);
+    blob.extend_from_slice(&(accepted.len() as u32).to_le_bytes());
+    for entry in accepted {
+        blob.extend_from_slice(&entry.destination_hash);
+        blob.extend_from_slice(&entry.emitted.to_le_bytes());
+        blob.extend_from_slice(&entry.stored_at.to_le_bytes());
+    }
+    blob
+}
+
+/// Decode accepted emissions; any header or size inconsistency rejects the
+/// whole file.
+fn decode_accepted_emissions(
+    blob: &[u8],
+) -> io::Result<Vec<rns_core::transport::persistence::PersistedAcceptedEmission>> {
+    use rns_core::transport::persistence::PersistedAcceptedEmission;
+
+    let bad = invalid_transport_data;
+    let Some((header, entries)) = blob.split_first_chunk::<ACCEPTED_EMISSIONS_HEADER_LEN>() else {
+        return Err(bad("accepted emissions header is truncated"));
+    };
+    let [m0, m1, m2, m3, m4, m5, version, flags, c0, c1, c2, c3] = *header;
+    if [m0, m1, m2, m3, m4, m5] != *ACCEPTED_EMISSIONS_MAGIC {
+        return Err(bad("accepted emissions magic mismatch"));
+    }
+    if version != ACCEPTED_EMISSIONS_VERSION {
+        return Err(bad("unsupported accepted emissions version"));
+    }
+    if flags != 0 {
+        return Err(bad("accepted emissions flags must be zero"));
+    }
+    let count = u32::from_le_bytes([c0, c1, c2, c3]) as usize;
+    if count.checked_mul(ACCEPTED_EMISSION_LEN) != Some(entries.len()) {
+        return Err(bad(
+            "accepted emissions size does not match its entry count",
+        ));
+    }
+    let (entries, _) = entries.as_chunks::<ACCEPTED_EMISSION_LEN>();
+    Ok(entries
+        .iter()
+        .map(|entry| {
+            let (destination_hash, rest) = entry
+                .split_first_chunk::<16>()
+                .map_or(([0; 16], &[][..]), |(hash, rest)| (*hash, rest));
+            let (emitted, rest) = rest
+                .split_first_chunk::<8>()
+                .map_or(([0; 8], &[][..]), |(emitted, rest)| (*emitted, rest));
+            let stored_at = rest.first_chunk::<8>().copied().unwrap_or_default();
+            PersistedAcceptedEmission {
+                destination_hash,
+                emitted: u64::from_le_bytes(emitted),
+                stored_at: f64::from_le_bytes(stored_at),
+            }
+        })
+        .collect())
+}
+
+fn load_accepted_emissions(
+    path: &Path,
+) -> io::Result<Vec<rns_core::transport::persistence::PersistedAcceptedEmission>> {
+    match fs::read(path) {
+        Ok(blob) => decode_accepted_emissions(&blob),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(err) => Err(err),
+    }
 }
 
 /// Upstream's `storage/announce_rate_table` (d5f1e014).
@@ -1127,11 +1226,24 @@ pub(crate) fn load_transport_state(
             Vec::new()
         }
     };
+    // Like the rate table, unreadable accepted emissions start empty.
+    let accepted_emissions =
+        match load_accepted_emissions(&storage_dir.join(ACCEPTED_EMISSIONS_FILE)) {
+            Ok(accepted) => accepted,
+            Err(err) => {
+                log::warn!(
+                    "could not load accepted emissions from storage, initialized empty: {}",
+                    err
+                );
+                Vec::new()
+            }
+        };
     Ok(TransportStateSnapshot {
         packet_hashes,
         paths,
         tunnels,
         announce_rates,
+        accepted_emissions,
     })
 }
 
@@ -1906,7 +2018,7 @@ mod tests {
 
     fn transport_snapshot() -> rns_core::transport::persistence::TransportStateSnapshot {
         use rns_core::transport::persistence::{
-            PersistedPath, PersistedTunnel, TransportStateSnapshot,
+            PersistedAcceptedEmission, PersistedPath, PersistedTunnel, TransportStateSnapshot,
         };
 
         let path = PersistedPath {
@@ -1940,6 +2052,11 @@ mod tests {
                 rate_violations: 2,
                 blocked_until: 80.5,
                 timestamps: vec![39.0, 40.5],
+            }],
+            accepted_emissions: vec![PersistedAcceptedEmission {
+                destination_hash: [0xAA; 16],
+                emitted: 1_795_700_000,
+                stored_at: 1_795_700_004.5,
             }],
         }
     }
@@ -2031,6 +2148,52 @@ mod tests {
 
         expected.announce_rates.clear();
         assert_eq!(load_transport_state(&dir).unwrap(), expected);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn accepted_emissions_reject_inconsistent_files_and_restore_empty() {
+        let dir = temp_dir();
+        let mut expected = transport_snapshot();
+        save_transport_state(&expected, &dir, false).unwrap();
+        let blob = fs::read(dir.join(ACCEPTED_EMISSIONS_FILE)).unwrap();
+        assert_eq!(
+            blob.len(),
+            ACCEPTED_EMISSIONS_HEADER_LEN + ACCEPTED_EMISSION_LEN
+        );
+        assert_eq!(
+            decode_accepted_emissions(&blob).unwrap(),
+            expected.accepted_emissions
+        );
+        let corrupt = |offset: usize, byte: u8| {
+            let mut blob = blob.clone();
+            blob[offset] = byte;
+            decode_accepted_emissions(&blob).unwrap_err().kind()
+        };
+        assert_eq!(corrupt(0, b'X'), io::ErrorKind::InvalidData); // magic
+        assert_eq!(corrupt(6, 2), io::ErrorKind::InvalidData); // version
+        assert_eq!(corrupt(7, 1), io::ErrorKind::InvalidData); // flags
+        assert_eq!(corrupt(8, 2), io::ErrorKind::InvalidData); // entry count
+        assert!(decode_accepted_emissions(&blob[..blob.len() - 1]).is_err());
+
+        fs::write(dir.join(ACCEPTED_EMISSIONS_FILE), b"not accepted emissions").unwrap();
+        expected.accepted_emissions.clear();
+        assert_eq!(load_transport_state(&dir).unwrap(), expected);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Upstream path mode keeps no accepted emissions, so no file of
+    /// rns-rs's own is left in the storage directory.
+    #[test]
+    fn no_accepted_emissions_leave_no_file() {
+        let dir = temp_dir();
+        let mut snapshot = transport_snapshot();
+        save_transport_state(&snapshot, &dir, false).unwrap();
+        assert!(dir.join(ACCEPTED_EMISSIONS_FILE).is_file());
+        snapshot.accepted_emissions.clear();
+        save_transport_state(&snapshot, &dir, false).unwrap();
+        assert!(!dir.join(ACCEPTED_EMISSIONS_FILE).exists());
+        assert_eq!(load_transport_state(&dir).unwrap(), snapshot);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -2138,8 +2301,9 @@ mod tests {
         let mut checkpoints = 0;
         save_transport_state_with_checkpoint(&snapshot, &dir, || checkpoints += 1).unwrap();
 
-        // 2 hashes + 1 route + 1 tunnel + 1 tunnel route + the rate table.
-        assert_eq!(checkpoints, 6);
+        // 2 hashes + 1 route + 1 tunnel + 1 tunnel route + the rate table
+        // + the accepted emissions.
+        assert_eq!(checkpoints, 7);
         assert!(!fs::read_dir(&dir)
             .unwrap()
             .filter_map(Result::ok)

@@ -7,8 +7,8 @@ use alloc::vec::Vec;
 
 use super::tables::{PathEntry, RateEntry};
 use super::tunnel::TunnelPath;
-use super::types::InterfaceId;
-use super::TransportEngine;
+use super::types::{InterfaceId, UnresponsivePathRecovery};
+use super::{AcceptedEmission, TransportEngine};
 use crate::constants;
 use crate::packet::RawPacket;
 
@@ -66,6 +66,19 @@ pub struct PersistedAnnounceRate {
     pub timestamps: Vec<f64>,
 }
 
+/// The newest announce emission a destination's path was stored from, kept
+/// after the path is removed. rns-rs's own state, of native path mode only:
+/// see [`super::pathfinder::is_forgotten_announce_copy`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PersistedAcceptedEmission {
+    /// Destination of the entry.
+    pub destination_hash: [u8; 16],
+    /// The announce's emission time, in seconds.
+    pub emitted: u64,
+    /// When a path was stored from it, in seconds.
+    pub stored_at: f64,
+}
+
 /// Transport state that survives a restart. Empty unless transport is enabled.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TransportStateSnapshot {
@@ -77,6 +90,9 @@ pub struct TransportStateSnapshot {
     pub tunnels: Vec<PersistedTunnel>,
     /// Entries of the announce rate table.
     pub announce_rates: Vec<PersistedAnnounceRate>,
+    /// Newest emission each destination's path was stored from (native
+    /// path mode).
+    pub accepted_emissions: Vec<PersistedAcceptedEmission>,
 }
 
 /// What [`TransportEngine::restore_persistence_snapshot`] restored.
@@ -90,6 +106,8 @@ pub struct RestoreStats {
     pub tunnels: usize,
     /// Announce rate table entries restored.
     pub announce_rates: usize,
+    /// Accepted emissions restored (native path mode).
+    pub accepted_emissions: usize,
     /// Paths, tunnel paths included, skipped as expired, without a known
     /// interface, or without a cached announce.
     pub skipped_paths: usize,
@@ -169,11 +187,23 @@ impl TransportEngine {
             })
             .collect();
 
+        let accepted_emissions = self
+            .paths
+            .accepted_emissions
+            .iter()
+            .map(|(destination_hash, accepted)| PersistedAcceptedEmission {
+                destination_hash: *destination_hash,
+                emitted: accepted.emitted,
+                stored_at: accepted.stored_at,
+            })
+            .collect();
+
         TransportStateSnapshot {
             packet_hashes,
             paths,
             tunnels,
             announce_rates,
+            accepted_emissions,
         }
     }
 
@@ -299,6 +329,31 @@ impl TransportEngine {
                 },
             );
             stats.announce_rates += 1;
+        }
+
+        // Without them, looped copies of the announces of paths removed
+        // before the restart would be taken as new paths again until each
+        // destination announced anew.
+        if self.config.unresponsive_path_recovery == UnresponsivePathRecovery::Native {
+            for restored in snapshot.accepted_emissions {
+                if restored.emitted == 0 {
+                    continue;
+                }
+                let accepted = self
+                    .paths
+                    .accepted_emissions
+                    .entry(restored.destination_hash)
+                    .or_insert(AcceptedEmission {
+                        emitted: restored.emitted,
+                        stored_at: restored.stored_at,
+                    });
+                if restored.emitted > accepted.emitted {
+                    accepted.emitted = restored.emitted;
+                    accepted.stored_at = restored.stored_at;
+                }
+            }
+            super::jobs::cull_accepted_emissions(&mut self.paths.accepted_emissions, now);
+            stats.accepted_emissions = self.paths.accepted_emissions.len();
         }
 
         stats
@@ -448,6 +503,7 @@ mod tests {
             paths: Vec::new(),
             tunnels: Vec::new(),
             announce_rates: Vec::new(),
+            accepted_emissions: Vec::new(),
         };
 
         let stats = engine.restore_persistence_snapshot(snapshot, 100.0, |_| None);
@@ -552,6 +608,7 @@ mod tests {
                 .collect(),
             tunnels: Vec::new(),
             announce_rates: Vec::new(),
+            accepted_emissions: Vec::new(),
         };
         let cache: BTreeMap<[u8; 32], Vec<u8>> = packets
             .iter()
@@ -672,6 +729,7 @@ mod tests {
             ],
             tunnels: Vec::new(),
             announce_rates: Vec::new(),
+            accepted_emissions: Vec::new(),
         };
         let mut cache = BTreeMap::new();
         cache.insert(good_packet.packet_hash, good_packet.raw.clone());
@@ -755,6 +813,46 @@ mod tests {
 
     /// Upstream d5f1e014 persists the announce rate table, so a restart
     /// keeps a blocked destination blocked until its penalty ends.
+    #[test]
+    fn accepted_emissions_survive_a_restart_in_native_path_mode() {
+        use crate::transport::types::UnresponsivePathRecovery;
+
+        let now = 2_000_000.0;
+        let accepted = |dest: u8, emitted: u64, stored_at: f64| PersistedAcceptedEmission {
+            destination_hash: [dest; 16],
+            emitted,
+            stored_at,
+        };
+        let snapshot = TransportStateSnapshot {
+            accepted_emissions: vec![
+                accepted(0x01, 1_999_000, now - 1_000.0),
+                // Stored longer ago than a path lives.
+                accepted(0x02, 1_000_000, now - constants::PATHFINDER_E - 1.0),
+                // No usable emission time.
+                accepted(0x03, 0, now),
+            ],
+            ..TransportStateSnapshot::default()
+        };
+
+        let mut native = TransportEngine::new(config(8));
+        let stats = native.restore_persistence_snapshot(snapshot.clone(), now, |_| None);
+        assert_eq!(stats.accepted_emissions, 1);
+        assert_eq!(
+            native.persistence_snapshot().accepted_emissions,
+            vec![accepted(0x01, 1_999_000, now - 1_000.0)]
+        );
+
+        let mut upstream_config = config(8);
+        upstream_config.unresponsive_path_recovery = UnresponsivePathRecovery::Upstream;
+        let mut upstream = TransportEngine::new(upstream_config);
+        let stats = upstream.restore_persistence_snapshot(snapshot, now, |_| None);
+        assert_eq!(stats.accepted_emissions, 0);
+        assert!(upstream
+            .persistence_snapshot()
+            .accepted_emissions
+            .is_empty());
+    }
+
     #[test]
     fn announce_rate_block_survives_snapshot_restore() {
         let dest = [0x3A; 16];
@@ -892,6 +990,7 @@ mod tests {
             paths,
             tunnels: Vec::new(),
             announce_rates: Vec::new(),
+            accepted_emissions: Vec::new(),
         };
         let stats =
             engine.restore_persistence_snapshot(snapshot, 500.0, |hash| cache.get(hash).cloned());
@@ -957,6 +1056,7 @@ mod tests {
             paths: vec![wrong_hash, wrong_destination, not_announce],
             tunnels: Vec::new(),
             announce_rates: Vec::new(),
+            accepted_emissions: Vec::new(),
         };
         let stats =
             engine.restore_persistence_snapshot(snapshot, 100.0, |hash| cache.get(hash).cloned());
@@ -1009,6 +1109,7 @@ mod tests {
             paths: Vec::new(),
             tunnels,
             announce_rates: Vec::new(),
+            accepted_emissions: Vec::new(),
         };
         let stats =
             engine.restore_persistence_snapshot(snapshot, 500.0, |hash| cache.get(hash).cloned());

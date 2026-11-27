@@ -30,6 +30,14 @@ pub(super) fn log_restored_tables(
             entries(stats.tunnels)
         );
     }
+    // rns-rs's own table, of native path mode.
+    if storage_dir.join("accepted_emissions").is_file() {
+        log::info!(
+            "Loaded {} accepted announce emission {} from storage",
+            stats.accepted_emissions,
+            entries(stats.accepted_emissions)
+        );
+    }
 }
 
 /// The host and port a configured TCP or Backbone client connects to, which
