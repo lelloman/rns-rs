@@ -186,7 +186,11 @@ installed.
 
 The `rns-server.service` unit must set `KillMode=mixed`. On stop, the
 supervisor asks `rnsd` to drain (up to 3 seconds) and then stops its children
-itself. With systemd's default `KillMode=control-group`, `SIGTERM` also
+itself with `SIGTERM`. `rnsd` saves its known destinations and transport state
+(path table, packet hashes, tunnels, announce rates, accepted emissions) as it
+exits, so it gets 30 seconds before `SIGKILL`; the sidecars get 2. Until
+2026-11-27 `rnsd` also got 2, was killed before it finished saving, and each
+restart loaded the transport state of the last 12-hourly save. With systemd's default `KillMode=control-group`, `SIGTERM` also
 reaches `rnsd` directly, and it shuts down on its own within a second, before
 it can finish draining or report its status. The supervisor then logs `rnsd
 drain timed out before supervisor shutdown`; on 2026-11-05 this happened on

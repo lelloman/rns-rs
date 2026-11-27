@@ -525,7 +525,7 @@ mod tests {
         drain_complete_for_shutdown, format_drain_status_detail, log_rnsd_drain_progress,
         reflect_rnsd_drain_status, request_rnsd_drain, wait_for_rnsd_drain,
     };
-    use super::process::{command_for_spec, role_from_name, shutdown_priority};
+    use super::process::{command_for_spec, role_from_name, shutdown_priority, terminate_grace};
     use super::readiness::{
         inspect_ready_file, missing_required_hooks, observe_sidecar_draining, probe_ready_file,
         ready_file_path_for_role,
@@ -1529,5 +1529,17 @@ mod tests {
         let result = result_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!(result.unwrap(), 0);
         handle.join().unwrap();
+    }
+
+    /// rnsd saves its state as it shuts down, so it is not killed after the
+    /// sidecars' short grace; its grace and the 3-second drain before it fit
+    /// within systemd's default 90-second stop timeout.
+    #[test]
+    fn rnsd_gets_time_to_save_its_state_before_it_is_killed() {
+        let drain = std::time::Duration::from_secs(3);
+        assert!(terminate_grace(Role::Rnsd) >= std::time::Duration::from_secs(30));
+        assert!(drain + terminate_grace(Role::Rnsd) < std::time::Duration::from_secs(90));
+        assert!(terminate_grace(Role::Statsd) < terminate_grace(Role::Rnsd));
+        assert!(terminate_grace(Role::Sentineld) < terminate_grace(Role::Rnsd));
     }
 }
