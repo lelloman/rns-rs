@@ -166,8 +166,20 @@ pub(crate) fn shutdown_priority(role: Role) -> u8 {
     }
 }
 
-const TERMINATE_GRACE_POLLS: usize = 20;
 const TERMINATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// How long a child has to exit after `SIGTERM` before it is killed. rnsd
+/// saves its known destinations and transport state (path table, packet
+/// hashes, tunnels, announce rates) as it shuts down, tens of megabytes on
+/// a busy transport node, so it gets far longer than the sidecars; with the
+/// 3-second drain before it, this stays within systemd's default 90-second
+/// stop timeout.
+pub(crate) fn terminate_grace(role: Role) -> Duration {
+    match role {
+        Role::Rnsd => Duration::from_secs(30),
+        Role::Statsd | Role::Sentineld => Duration::from_secs(2),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TerminationObservation {
@@ -203,7 +215,7 @@ pub(crate) fn terminate_children(
                     log::warn!(
                         "{} did not exit within {:.1}s; sent SIGKILL",
                         managed.role.display_name(),
-                        TERMINATE_GRACE_POLLS as f64 * TERMINATE_POLL_INTERVAL.as_secs_f64()
+                        terminate_grace(managed.role).as_secs_f64()
                     );
                 }
             }
@@ -243,7 +255,8 @@ pub(crate) fn terminate_child(
     }
 
     let mut drain_acknowledged = false;
-    for _ in 0..TERMINATE_GRACE_POLLS {
+    let polls = terminate_grace(managed.role).as_millis() / TERMINATE_POLL_INTERVAL.as_millis();
+    for _ in 0..polls {
         if managed.child.try_wait()?.is_some() {
             return Ok(TerminationObservation {
                 drain_acknowledged,
