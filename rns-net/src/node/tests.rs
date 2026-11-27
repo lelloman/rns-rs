@@ -1249,7 +1249,7 @@ fn known_destinations_persist_across_restart() {
 fn transport_paths_hashes_and_detached_tunnels_restore_from_upstream_files() {
     use rns_core::packet::{PacketFlags, RawPacket};
     use rns_core::transport::persistence::{
-        PersistedPath, PersistedTunnel, TransportStateSnapshot,
+        PersistedAcceptedEmission, PersistedPath, PersistedTunnel, TransportStateSnapshot,
     };
 
     let dir = tempdir().unwrap();
@@ -1317,6 +1317,19 @@ share_instance = False
                 expires: now + 1_200.0,
             }],
             announce_rates: Vec::new(),
+            accepted_emissions: vec![
+                PersistedAcceptedEmission {
+                    destination_hash: [0x91; 16],
+                    emitted: now as u64 - 3_600,
+                    stored_at: now - 3_600.0,
+                },
+                // Stored longer ago than a path lives: not restored.
+                PersistedAcceptedEmission {
+                    destination_hash: [0x92; 16],
+                    emitted: now as u64 - 800_000,
+                    stored_at: now - 800_000.0,
+                },
+            ],
         },
         &paths.storage,
         false,
@@ -1338,6 +1351,14 @@ share_instance = False
     assert_eq!(restored.tunnels.len(), 1);
     assert_eq!(restored.tunnels[0].tunnel_id, [0x71; 32]);
     assert_eq!(restored.tunnels[0].interface_hash, None);
+    assert_eq!(
+        restored.accepted_emissions,
+        vec![PersistedAcceptedEmission {
+            destination_hash: [0x91; 16],
+            emitted: now as u64 - 3_600,
+            stored_at: now - 3_600.0,
+        }]
+    );
     node.shutdown();
 }
 
